@@ -89,6 +89,13 @@ if [ "${GATE_NO_TWIN_LSP:-0}" = "1" ]; then
 else
     run_suite twin_lsp   cargo test --test twin_engine_tests "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
 fi
+# 第四件（2026-09-30 评审补）：HDL042 的**双引擎**钉子。它必须放集成 target：
+# `src/L13_namespace/**` 下的测试文件会被上面 parity 件的
+# `#[path = "../src/L13_namespace/mod.rs"]` 二次编译，那里 `crate` 是测试二进制根，
+# 没有 `Backend`/`Engine`/`client`（源码侧的参考版口径测试仍在 `--lib` 的
+# `hdl_check_graph_tests.rs` 里跑）。放在这里是因为 auto-discovery 只保证全量
+# `cargo test` 会跑到它，而本门禁只显式列件套。
+run_suite hdl042     cargo test --test hdl042_engine_tests "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
 
 echo "== gate_l13: total $((SECONDS - t_all))s, fail=$fail, logs: $LOGDIR"
 exit "$fail"
