@@ -353,6 +353,9 @@ mod hdl_blackbox_tests;
 mod calc_tests;
 
 #[cfg(test)]
+mod prelude_stdlib_tests;
+
+#[cfg(test)]
 mod debug_test;
 
 #[cfg(test)]
