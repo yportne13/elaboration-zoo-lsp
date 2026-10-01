@@ -37,7 +37,7 @@ const SECTIONS: &[Section] = &[
   Verilog 工程师: 你关心的端口、assign、always、例化、拼接都有，见 `hdl` / `hdlsig`。
 
 工具链:
-  typort check <file.typort>   # 类型检查（等价于编译）
+  typort check <file.typort>   # 类型检查，诊断打到 stderr（**不设退出码**）
   typort lsp                   # LSP server (VS Code 扩展)
   typort emit <files> --top 'adder[8]' [--out DIR]   # 落盘 Verilog
   typort build / test          # Typort.toml 工程: 生成 + 仿真 (verilator/icarus/vcs/vivado)
@@ -361,9 +361,11 @@ Stream / Flow / Fragment（SpinalHDL lib 移植, prelude 提供; 按宽度带后
         "工作流 · Workflow",
         r#"一个文件即一个程序; top-level `println(...)` 求值并打印。
 
-检查/跑通:
-   typort check examples/hdl_ops.typort          # 0 错即通过
+检查/跑通（`check` 只报告，不设退出码；门禁请用 build/test）:
+   typort check examples/hdl_ops.typort          # 诊断打到 stderr
    typort check examples/hdl/09-hierarchy.typort
+   # 注意: check 的退出码恒为 0（即使文件里有 ERROR）——脚本判失败请扫
+   #       stderr 里的 error，或改用 typort build / typort test（失败回非零码）
 
 从 .typort 到 Verilog:
    typort emit examples/hdl/01-basics.typort --top 'basicDecls[8]' --out out/

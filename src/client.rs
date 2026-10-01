@@ -10,7 +10,14 @@ use lsp_server::Connection;
 use lsp_types::{notification::ShowMessage, *};
 use notification::{LogMessage, Notification, PublishDiagnostics};
 
-/// Convert LSP Position (line, character) to byte offset in source text.
+/// Convert LSP Position (line, UTF-16 code unit) to byte offset in source text.
+///
+/// The unit must be **UTF-16**, matching what `Backend`'s `offset_to_position`
+/// (`src/lib.rs`) writes into every diagnostic range (the server declares no
+/// `offset_encoding`, so the LSP default UTF-16 applies).  Counting `char`s
+/// instead drifts by one per non-BMP character (an emoji is 2 UTF-16 units but
+/// 1 `char`) on the same line, and can fall off the end → `None`, which drops
+/// that diagnostic entirely (see `render_diagnostics_stderr`'s `filter_map`).
 fn position_to_byte_offset(text: &str, position: Position) -> Option<usize> {
     let mut offset = 0usize;
     for _ in 0..position.line {
@@ -18,17 +25,17 @@ fn position_to_byte_offset(text: &str, position: Position) -> Option<usize> {
         let newline_pos = rest.find('\n')?;
         offset += newline_pos + 1;
     }
-    // At the correct line, advance by character offset
+    // At the correct line, advance by UTF-16 code units
     let line_rest = text.get(offset..)?;
-    let mut char_count = 0u32;
-    for (i, _) in line_rest.char_indices() {
-        if char_count == position.character {
+    let mut utf16_count = 0u32;
+    for (i, ch) in line_rest.char_indices() {
+        if utf16_count == position.character {
             return Some(offset + i);
         }
-        char_count += 1;
+        utf16_count += ch.len_utf16() as u32;
     }
     // If position is at end of line
-    if char_count == position.character {
+    if utf16_count == position.character {
         Some(offset + line_rest.len())
     } else {
         None

@@ -202,6 +202,13 @@ enum Commands {
     ///
     /// Each file is parsed, type-checked, and reported with diagnostic messages
     /// (errors, warnings, notes) printed to stderr with source-context snippets.
+    ///
+    /// **Exit code**: this subcommand reports, it does not gate.  It exits 0
+    /// even when a file carries ERROR diagnostics (run one process per file and
+    /// scan stderr if a script needs a verdict, or use `build` / `test` /
+    /// `doc --deny-warnings`, which do return a non-zero code on failure).
+    /// Whether `check` *should* itself exit non-zero is a recorded design
+    /// decision, not an oversight: see docs/review-l13/a7-r2.md §5.
     #[command(visible_alias = "c")]
     Check {
         /// Source files to analyze (.typort)

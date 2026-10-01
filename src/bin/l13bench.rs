@@ -117,44 +117,17 @@ fn main() {
         .unwrap();
 }
 
-// ── prelude 源（与 mod.rs::load_prelude_state_impl 同列表）──
+// ── prelude 源（单一事实源：直接用 mod.rs 的共享表，与参考加载器 /
+//    孪生常驻 prime 同列表）──
+//
+// 旧实现是手抄的 include_str! 清单，`PRELUDE_HDL` 新增 hdl-check-graph /
+// hdl-enum / hdl-fsm 时漏同步，于是 `--workload prelude-hdl` 与
+// `--with-prelude hdl` 量的其实是 16 文件的旧 prelude（真 prelude 19 个），
+// 注释里的"同列表"随漂移失真。lib.rs 的 builtin 注册表已用同一手法（直接
+// 从共享表生成，315a6ea）根除漂移，这里照做。
 
-const CORE: &[(&str, &str)] = &[
-    ("op", include_str!("../prelude/core/op.typort")),
-    ("eq", include_str!("../prelude/core/eq.typort")),
-    ("nat", include_str!("../prelude/core/nat.typort")),
-    ("calc", include_str!("../prelude/core/calc.typort")),
-    ("bool", include_str!("../prelude/core/bool.typort")),
-    ("option", include_str!("../prelude/data/option.typort")),
-    ("result", include_str!("../prelude/data/result.typort")),
-    ("order", include_str!("../prelude/data/order.typort")),
-    ("void", include_str!("../prelude/core/void.typort")),
-    ("decidable", include_str!("../prelude/data/decidable.typort")),
-    ("vec", include_str!("../prelude/data/vec.typort")),
-    ("either", include_str!("../prelude/data/either.typort")),
-    ("list", include_str!("../prelude/data/list.typort")),
-    ("string", include_str!("../prelude/data/string.typort")),
-    ("nonempty", include_str!("../prelude/data/nonempty.typort")),
-];
-
-const HDL: &[(&str, &str)] = &[
-    ("hdl-core", include_str!("../prelude/hdl/hdl-core.typort")),
-    ("hdl-check", include_str!("../prelude/hdl/hdl-check.typort")),
-    ("hdl-types", include_str!("../prelude/hdl/hdl-types.typort")),
-    ("hdl-ops", include_str!("../prelude/hdl/hdl-ops.typort")),
-    ("hdl-clock", include_str!("../prelude/hdl/hdl-clock.typort")),
-    ("hdl-bus", include_str!("../prelude/hdl/hdl-bus.typort")),
-    ("hdl-signals", include_str!("../prelude/hdl/hdl-signals.typort")),
-    ("hdl-utils", include_str!("../prelude/hdl/hdl-utils.typort")),
-    ("hdl-stream", include_str!("../prelude/hdl/hdl-stream.typort")),
-    ("hdl-crossclock", include_str!("../prelude/hdl/hdl-crossclock.typort")),
-    ("hdl-bus-proto", include_str!("../prelude/hdl/hdl-bus-proto.typort")),
-    ("hdl-misc-io", include_str!("../prelude/hdl/hdl-misc-io.typort")),
-    ("hdl-misc", include_str!("../prelude/hdl/hdl-misc.typort")),
-    ("hdl-macros", include_str!("../prelude/hdl/hdl-macros.typort")),
-    ("hdl-verilog-compat", include_str!("../prelude/hdl/hdl-verilog-compat.typort")),
-    ("hdl-verilog", include_str!("../prelude/hdl/hdl-verilog.typort")),
-];
+const CORE: &[(&str, &str)] = L13_namespace::PRELUDE_CORE;
+const HDL: &[(&str, &str)] = L13_namespace::PRELUDE_HDL;
 
 /// 按参考版 prelude 加载口径解析一串文件（库化：[`L13_namespace::
 /// parse_prelude_files`]，与参考加载器 / 孪生 prelude 轮三方同源）。

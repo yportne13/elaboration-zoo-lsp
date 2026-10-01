@@ -268,9 +268,13 @@ impl Engine {
     /// Read an explicitly configured engine (`TYPORT_LSP_ENGINE`).  Anything
     /// other than the exact string `twin` (including unset/empty) selects the
     /// reference engine, so a typo can never silently switch engines.  This is
-    /// the general-purpose constructor's default ([`Backend::new`]) — the
-    /// guard suites exercise the twin by setting the variable, while a bare
-    /// `cargo test` stays on the reference engine.
+    /// the general-purpose constructor's default ([`Backend::new`]) — a bare
+    /// `cargo test` stays on the reference engine.  The twin guard suites do
+    /// **not** come through here: they call [`Backend::new_with_engine`] with
+    /// an explicit `Engine::Twin` (`tests/twin_engine_tests.rs`,
+    /// `tests/twin_engine_bench.rs`; no suite sets the variable), so this
+    /// constructor's `twin` branch and [`Engine::lsp_default`] are the two
+    /// engine-selection paths with no test coverage.
     ///
     /// **Not every CLI subcommand honours it**: `typort check` runs
     /// [`Backend::on_change`], a reference-only pipeline with no `self.engine`
@@ -1571,6 +1575,45 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             } else {
                 self.note_twin_fallback(&uri_str, "untrusted-error", &detail);
             }
+            return false;
+        }
+        // ── 值输出面闸（2026-09-30 追加）────────────────────────────────────
+        //
+        // 信任闸只判"错误的**类别**"，判不了"错误态下孪生算出来的**值**"。
+        // 实测反例（docs/review-l13/LEAD-probes.md F2，走真实 LSP 面
+        // `new_with_engine` + `load_prelude` + `process_file`）：
+        //
+        //     def add : Nat -> Nat -> Nat =
+        //         fun a b => match a { case zero => b
+        //                              case succ(n) => succ(add n b) }
+        //     def two : Nat = succ(succ(zero))
+        //     println(add two two)
+        //
+        // `add` 是非递归 def 却自引用 ⇒ 两版都报 `can't unify`；但参考版接着
+        // 报 `error name not in scope: add`（失败的 decl 不导出）**且不产出任何
+        // println**，孪生把失败的 `add` 当不透明 rigid 留在会话里继续求值，
+        // 于是 INFO 面板出现 `add 2 2`：用户看到"算出来了"，而参考版认定那个
+        // 名字根本不在作用域。错误类别命中白名单（`can't unify`）⇒ 旧的信任
+        // 闸放行 ⇒ 错的**结果**被当成正确结果发布，比错的诊断更糟。
+        //
+        // 判据只取证据支持的那一半：**孪生自报错误 + 又产出了 println 值**。
+        // 参考版是权威输出，回落只会变慢、不会变错（有 println 的文件在错误态
+        // 下多跑一遍参考版；错误态无 println 的常见打字路径不受影响）。INFO 面
+        // 没有语料级对拍可依赖（tests/twin_engine_tests.rs 的
+        // `twin_diagnostics_match_reference` 只覆盖到"错误+println 且两版恰好
+        // 一致"的形状），所以这里不尝试判"哪个值更对"，直接交回参考版。
+        // 若将来孪生侧把"失败 decl 的名字"按参考版口径移出作用域
+        // （bump_spine_iter/machine.rs:2822/2848/2940 一线，属 A3），本闸可撤。
+        // 注意：`parse_errs` 不计入——两引擎同一 parser、逐字节相同，
+        // 把它们也算进来会让打字期的半成品文件大规模回落（那是信任闸本来
+        // 要消除的双跑）。
+        if !errors.is_empty() && !printlns.is_empty() {
+            self.twin_tables.remove(&uri_str);
+            self.note_twin_fallback(
+                &uri_str,
+                "error-state-with-println",
+                &format!("{} error(s) + {} println value(s)", errors.len(), printlns.len()),
+            );
             return false;
         }
         let has_error = !errors.is_empty() || !parse_errs.is_empty();
@@ -3977,7 +4020,11 @@ pub fn run_lsp_server() -> std::result::Result<(), Box<dyn Error + Sync + Send>>
     let _initialization_params = match backend.init() {
         Ok(it) => it,
         Err(e) => {
-            if e.channel_is_disconnected() {
+            let disconnected = e.channel_is_disconnected();
+            // 同 main-loop 收尾：writer 通道的唯一发送端在 `backend` 里，
+            // 不先释放则 `io_threads.join()` 等 writer 线程永久挂起。
+            drop(backend);
+            if disconnected {
                 io_threads.join()?;
             }
             return Err(e.into());
@@ -4003,8 +4050,21 @@ pub fn run_lsp_server() -> std::result::Result<(), Box<dyn Error + Sync + Send>>
                 "unknown panic".to_string()
             };
             eprintln!("main loop panicked: {}", msg);
+            // 崩溃必须与正常关闭可区分——这正是 09c78e9 的修复口径，但旧实现
+            // 在这里吞掉 panic 后继续走到 `Ok(())`，宿主把真崩溃当正常关闭
+            // （反之"无 shutdown 断连"却 exit 1）。这里也**不能**先 join：
+            // main_loop 已死、无人消费消息，两个 IO 线程仍在跑，join 只会把
+            // 崩溃表现成挂起。直接回 Err，由进程退出带走线程。
+            return Err(format!("main loop panicked: {msg}").into());
         }
     }
+    // `Connection.sender` 是 writer 通道的唯一发送端，且被 `backend` 持有：
+    // 不先释放，writer 线程的 `writer_receiver.into_iter()` 永不返回（通道
+    // 未断开），下面的 join 永久挂起——正常 shutdown 后进程不退出，
+    // "shutting down server" 打不出来，编辑器只能强杀（常驻孪生 ~430MB 一起
+    // 留下）。上游 lsp-server 的示例没有这个问题，因为它的 main_loop 按值
+    // 吃掉 Connection，函数返回时发送端随手一起 drop。
+    drop(backend);
     io_threads.join()?;
 
     // Shut down gracefully.
