@@ -5367,3 +5367,54 @@ def use : Type 0 = Fine[Nat]
 "#;
     run_with_prelude(ok).unwrap_or_else(|e| panic!("合法 enum 参数化被误拒：{}", e.0.data));
 }
+
+// ── 2026-10-01 评审 A4 回归钉 ────────────────────────────────────────────────
+
+/// `preprocess` 的字符串字面量感知（旧实现把字面量里的 `//`/`/*` 当注释头：
+/// `"http://x"` 会被截成未闭合字符串 → 词法层 `string()` 失败 → 伪解析错误；
+/// `"a/*b"` 的内容被静默空白化）。现与 `L06_string::preprocess` 同语义：字面量
+/// 区间（`\` 转义）内不识别注释头；注释仍按等字节空白替换，保持 span 偏移。
+#[test]
+fn test_preprocess_string_literal_is_not_a_comment() {
+    // 字面量内的 `//` 与 `/* */` 原样保留（旧实现在这里截断/改写）。
+    let lit = "def u = \"http://x/a/*b*/c\"\n";
+    assert_eq!(preprocess(lit), lit, "字符串字面量内的注释标记必须原样保留");
+    // 字面量之后的注释照常剥离：`/**/` 换四个空格，其余不变。
+    let after = preprocess("def s = \"w\"/**/\n");
+    assert_eq!(after, "def s = \"w\"    \n");
+    // 注释体里的引号不是字符串起点（L06 blackbox `/* "unterminated */` 同款）：
+    // 引号被空白化，`*/` 之后的文本原样。
+    let quoted = preprocess("/* \"x */ y");
+    assert!(!quoted.contains('"'), "注释体里的引号必须被空白化: {quoted:?}");
+    assert!(quoted.ends_with(" y"), "`*/` 之后的文本应原样: {quoted:?}");
+    // 等字节长不变量（含多字节注释体、\r\n、未闭合块注释）。
+    for src in [
+        lit,
+        "a/**/b",
+        "// 注释\n",
+        "def s = \"a\",\n/* 块\n  注释 */ x\n",
+        "a\r\n// c\r\n",
+        "/* unclosed\n仍然剥到 EOF\n",
+    ] {
+        assert_eq!(preprocess(src).len(), src.len(), "preprocess 必须等字节长: {src:?}");
+    }
+}
+
+/// `Infer::eval` 的 `Frame::Obj` 缺名降级：该臂对「`typ` 卡住」已降级为 stuck
+/// `Val::Obj`（"eval must never crash the server on a stuck value"），但两个按名
+/// 查成员表的 `.unwrap()` 没有跟上。本钉直接喂 eval 一个 elaborator 不会产出、
+/// 但机器可构造的形态（在**枚举类型值**上投影一个不存在的成员），断言它降级而
+/// 不是 panic（修前此处 `.unwrap()` panic）。
+#[test]
+fn test_obj_projection_missing_member_degrades_instead_of_panicking() {
+    let (infer, cxt, _macros) = clone_prelude_state(true).unwrap();
+    let tm: Rc<Tm> = Tm::Obj(
+        Tm::Decl(empty_span(SmolStr::new("Nat"))).into(),
+        empty_span(SmolStr::new("no_such_member")),
+    ).into();
+    let v = infer.eval(&cxt.decl, &cxt.env, &tm);
+    match v.as_ref() {
+        Val::Obj(_, name, _) => assert_eq!(name.data, "no_such_member"),
+        other => panic!("缺名投影应降级为 stuck `Val::Obj`，实际: {:?}", other),
+    }
+}

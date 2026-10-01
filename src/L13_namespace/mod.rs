@@ -458,7 +458,9 @@ pub enum Tm {
         is_trait: bool,
     },
     Match(Rc<Tm>, Vec<(PatternDetail, Rc<Tm>)>),
-    /// Call(name, display_args, val_args, body) - body was inlined from function `name`
+    /// Call(name, args, body) - body was inlined from function `name`;
+    /// `args` is the single argument-list field (display and value arguments
+    /// both live in it).
     Call(SmolStr, List<(Rc<Tm>, Icit)>, Rc<Tm>),
     /// Display-only node produced by `quote` when an inlined helper call
     /// backs an operator method (`nat_add_helper x y` for `x + y`).
@@ -501,12 +503,15 @@ impl Drop for Tm {
         // SAFETY contract for `drain_tm`: it moves every nested `Rc<Tm>` out
         // of the shell with `ptr::read` (nested collections are replaced
         // with empty ones); every other owned field is released with
-        // `release_owned`; the caller must `forget` the shell, never drop
-        // it normally.  Leaves are left untouched.
-        fn drain_tm(t: &mut Tm, tms: &mut Vec<Rc<Tm>>) {
+        // `release_owned`; when it reports `true` the caller must `forget`
+        // the shell, never drop it normally.  Leaves are left untouched and
+        // report `false` — the caller must then drop the shell normally:
+        // `Tm::Decl`/`Tm::LiteralIntro` own a `Span<SmolStr>`/`Span<String>`,
+        // so `forget`ting an untouched leaf leaks that heap block.
+        fn drain_tm(t: &mut Tm, tms: &mut Vec<Rc<Tm>>) -> bool {
             match t {
                 Tm::Var(_) | Tm::Decl(_) | Tm::U(_) | Tm::Meta(_) | Tm::LiteralType | Tm::LiteralIntro(_) => {
-                    return;
+                    return false;
                 }
                 Tm::Obj(x, name) => {
                     let x = unsafe { std::ptr::read(x) };
@@ -597,18 +602,23 @@ impl Drop for Tm {
             }
             // The drained shell's fields were moved out; the caller
             // forgets it (a normal drop would double-release them).
+            true
         }
         let mut tms: Vec<Rc<Tm>> = Vec::new();
         let mut root = std::mem::replace(self, Tm::U(0));
-        drain_tm(&mut root, &mut tms);
-        std::mem::forget(root);
+        if drain_tm(&mut root, &mut tms) {
+            std::mem::forget(root);
+        }
         while let Some(t) = tms.pop() {
             match Rc::try_unwrap(t) {
                 Ok(mut t) => {
-                    drain_tm(&mut t, &mut tms);
-                    // The shell's fields were moved out by `drain_tm`;
-                    // forgetting it (instead of dropping) releases nothing twice.
-                    std::mem::forget(t);
+                    if drain_tm(&mut t, &mut tms) {
+                        // The shell's fields were moved out by `drain_tm`;
+                        // forgetting it (instead of dropping) releases nothing twice.
+                        std::mem::forget(t);
+                    }
+                    // An untouched leaf was not drained: it falls out of scope
+                    // and its ordinary drop releases the `Span`/`String` it owns.
                 }
                 Err(_) => continue, // shared elsewhere; count decremented only
             }
@@ -860,10 +870,14 @@ impl Drop for Val {
         // with `release_owned`, then the drained shell is forgotten
         // by the caller — a normal drop would double-release the moved-from
         // fields.  Semantics are identical to the derived drop.
-        fn drain_tm(t: &mut Tm, tms: &mut Vec<Rc<Tm>>) {
+        // Same contract as the `Tm::drop` copy of this drain: `true` means the
+        // shell was drained (caller must `forget` it), `false` means it is an
+        // untouched leaf (caller must drop it — it owns a `Span<SmolStr>` /
+        // `Span<String>`, which `forget` would leak).
+        fn drain_tm(t: &mut Tm, tms: &mut Vec<Rc<Tm>>) -> bool {
             match t {
                 Tm::Var(_) | Tm::Decl(_) | Tm::U(_) | Tm::Meta(_) | Tm::LiteralType | Tm::LiteralIntro(_) => {
-                    return;
+                    return false;
                 }
                 Tm::Obj(x, name) => {
                     let x = unsafe { std::ptr::read(x) };
@@ -950,8 +964,10 @@ impl Drop for Val {
                     release_owned(name);
                 }
             }
+            // The drained shell's fields were moved out; the caller forgets it.
+            true
         }
-        fn drain_val(v: &mut Val, vals: &mut Vec<Rc<Val>>, tms: &mut Vec<Rc<Tm>>) {
+        fn drain_val(v: &mut Val, vals: &mut Vec<Rc<Val>>, tms: &mut Vec<Rc<Tm>>) -> bool {
             match v {
                 Val::Flex(_, sp) | Val::Rigid(_, sp) => {
                     let sp = std::mem::replace(sp, List::new());
@@ -999,7 +1015,7 @@ impl Drop for Val {
                     release_owned(name);
                 }
                 Val::U(_) | Val::LiteralType | Val::LiteralIntro(_) | Val::Nat(_) => {
-                    return;
+                    return false;
                 }
                 Val::Sum(name, params, cases, _) => {
                     let params = unsafe { std::ptr::read(params) };
@@ -1045,6 +1061,7 @@ impl Drop for Val {
             }
             // The drained shell's fields were moved out; the caller
             // forgets it (a normal drop would double-release them).
+            true
         }
         if matches!(self, Val::U(_) | Val::LiteralType | Val::LiteralIntro(_) | Val::Nat(_)) {
             return;
@@ -1052,24 +1069,29 @@ impl Drop for Val {
         let mut vals: Vec<Rc<Val>> = Vec::new();
         let mut tms: Vec<Rc<Tm>> = Vec::new();
         let mut root = std::mem::replace(self, Val::U(0));
-        drain_val(&mut root, &mut vals, &mut tms);
-        std::mem::forget(root);
+        if drain_val(&mut root, &mut vals, &mut tms) {
+            std::mem::forget(root);
+        }
         loop {
             match vals.pop() {
                 Some(v) => match Rc::try_unwrap(v) {
                     Ok(mut v) => {
-                        drain_val(&mut v, &mut vals, &mut tms);
-                        // The shell's fields were moved out by `drain_val`;
-                        // dropping it would double-release them.
-                        std::mem::forget(v);
+                        if drain_val(&mut v, &mut vals, &mut tms) {
+                            // The shell's fields were moved out by `drain_val`;
+                            // dropping it would double-release them.
+                            std::mem::forget(v);
+                        }
+                        // An untouched leaf (`LiteralIntro`) was not drained:
+                        // it falls out of scope and releases its `String`.
                     }
                     Err(_) => continue, // shared elsewhere; count decremented only
                 },
                 None => match tms.pop() {
                     Some(t) => match Rc::try_unwrap(t) {
                         Ok(mut t) => {
-                            drain_tm(&mut t, &mut tms);
-                            std::mem::forget(t);
+                            if drain_tm(&mut t, &mut tms) {
+                                std::mem::forget(t);
+                            }
                         }
                         Err(_) => continue,
                     },
@@ -3254,7 +3276,13 @@ impl Infer {
                             Val::Sum(_, params, _, _) => {
                                 params.iter()
                                     .find(|(f_name, _, _, _)| f_name == &name)
-                                    .unwrap().1.clone()
+                                    .map(|x| x.1.clone())
+                                    // Same degrade as the stuck-`typ` arm below:
+                                    // a name absent from the enum's member table
+                                    // keeps the projection stuck instead of
+                                    // panicking — eval must never crash the
+                                    // server on a stuck value.
+                                    .unwrap_or_else(|| Val::Obj(a.clone(), name.clone(), List::new()).into())
                             },
                             Val::SumCase { datas, typ, .. } => {
                                 match typ.as_ref() {
@@ -3263,7 +3291,8 @@ impl Infer {
                                         .map(|x| (x.0.clone(), x.1.clone(), x.3))
                                         .chain(datas.iter().cloned())
                                         .find(|(f_name, _, _)| f_name == &name)
-                                        .unwrap().1.clone(),
+                                        .map(|x| x.1.clone())
+                                        .unwrap_or_else(|| Val::Obj(a.clone(), name.clone(), List::new()).into()),
                                     // A stuck typ (meta/rigid head) has no
                                     // field table to project from: degrade to
                                     // the generic stuck projection instead of
@@ -3988,7 +4017,11 @@ fn load_prelude_state_impl(include_hdl: bool) -> Result<PreludeState, Error> {
         let (_p_parse_t, _p_infer_t, n_decls) = if let Some((decls, parse_errs, new_exports, _expansions)) = parser::parser_with_macros(&preprocess(p), id, &global_macros) {
             let _p_parse_t = _pfile_t0.elapsed();
             for ast_err in parse_errs {
-                println!("{:?}", ast_err)
+                // stderr, not stdout: this loader runs in the CLI and in the
+                // LSP (whose stdout is the JSON-RPC channel), and the
+                // run/run_with_prelude entry points were already moved to
+                // stderr for the same reason.
+                eprintln!("{:?}", ast_err)
             }
             for (name, rules) in new_exports {
                 global_macros.insert(name, rules);
@@ -4333,112 +4366,122 @@ pub fn run_with_prelude(input: &str) -> Result<String, Error> {
     Ok(ret)
 }
 
+/// 注释剥离（行 `//`、非嵌套块 `/* */`）：注释内容按**等字节空白**替换，
+/// 保留空白字符与换行，输出与输入等字节长（parser 的 span 偏移即原始偏移）。
+///
+/// 单遍扫描 + 单输出缓冲：任何字节只写一次（旧实现逐行/逐块
+/// `reduce(|a, b| a + sep + &b)` 折叠——第 i 步重拷前 i 段全部字节，
+/// O(字节数 × 行数)；LSP 每按键跑 2 遍）。原样区间的批量拷贝仍是「拷到下一个
+/// `"` 或 `/`」，与旧实现同量级。
+///
+/// **字符串字面量感知**（与 `L06_string::preprocess` 同语义）：`"`…`"`
+/// 区间（`\` 转义下一个字符）内不识别注释头，字面量原样保留。旧行为对
+/// `//`/`/*` 做纯文本剥离，两个可判定后果——
+/// 1. `def u = "http://x"` → `//` 起整行空白化 ⇒ 字面量未闭合 ⇒ 词法层
+///    `lex::string()` 失败（`"` 退化成 Op、正文退化成 Ident）⇒ 伪解析错误；
+/// 2. `def s = "a/*b"` → `/*` 被当块注释头 ⇒ 字符串内容被**静默改写**。
+/// 未闭合的 `"` 不成词法字符串（`lex::string` 返回 `None`），故按普通字符
+/// 处理、其后的注释照常剥离，与词法器口径一致。
+///
+/// 与本文件旧「按 `/*` 切块」实现的**有意分歧**（仅限畸形输入，均已记录）：
+/// (1) 未闭合 `/*` 剥到文件尾（旧：未闭合块整体原样，注释文本留在 token 流
+///     里）；(2) 注释体里再出现 `/*` 不重切块（真正的非嵌套语义）；(3) 无
+///     `/*` 配对的孤立 `*/` 原样保留（旧：把它当注释收尾、误空白其前文本）。
+///     (1)(2) 与 L06（字符串感知版）及 L07/L08 blackbox 明示的「未闭合剥到
+///     EOF」一致。
 pub fn preprocess(s: &str) -> String {
-    // 单遍扫描 + 单输出缓冲：一次左到右扫描同时完成原「块注释 → 行注释」
-    // 两遍变换，任何字节只写一次。旧实现逐行/逐块 `reduce(|a, b| a + sep + &b)`
-    // 折叠——第 i 步重拷前 i 段全部字节，O(字节数 × 行数)（LSP 每按键跑 2 遍，
-    // perf-debt 共享层发现 1）。
-    //
-    // 与旧实现的逐字节一致性（含全部边界怪癖）：
-    // - 旧第一遍按 `/*` 切块：每块内首个 `*/` 之前的文本换等字节空白、`*/`
-    //   换两空格，其后原样；无 `*/` 的块整体原样（含 `*/` 先于任何 `/*` 的
-    //   块、嵌套 `/*` 重新切块后未闭合的前段）。这里用区间扫描完全复刻：
-    //   chunk = 相邻 `/*` 之间的文本，块内首个 `*/`（不得越过块边界——与
-    //   `/*` 跨界重叠的匹配不算，如 `a*/*b`）之前空白化。
-    // - 旧第二遍按行处理第一遍的输出：行内首个「存活」的 `//` 换两空格、
-    //   到行尾换等字节空白。这里以 line_blank 状态融合进同一遍：仅原样区
-    //   间里的 `//` 会存活（空白化区间里的 `//` 已被第一遍吃掉），触发后到
-    //   `\n` 为止全部空白化，`\n` 复位。
-    // - 空白化按 char 语义（is_whitespace 的原 char 保留、其余按 len_utf8
-    //   换空格），与旧 replace_non_ws_preserve_bytes 完全一致，保持 parser
-    //   span 字节偏移不变量；输出与旧实现逐字节一致（黄金校验：全仓
-    //   .typort 逐文件 diff + 差分模糊测试 + lib 测试）。
-    // - 不变量：输出与输入等字节长。
     let mut out = String::with_capacity(s.len());
-    // 行注释状态：触发后到 `\n` 为止输出全部空白化
-    let mut line_blank = false;
-
-    // 块注释内部区间发射：等字节空白，保留换行（并复位行注释状态）
-    fn emit_blanked(region: &str, out: &mut String, line_blank: &mut bool) {
-        for c in region.chars() {
-            if c == '\n' {
-                out.push('\n');
-                *line_blank = false;
-            } else if c.is_whitespace() {
-                out.push(c);
-            } else {
-                for _ in 0..c.len_utf8() {
-                    out.push(' ');
-                }
+    let bytes = s.as_bytes();
+    // 注释体内的一个 char：空白原样（含 `\r`），其余按 len_utf8 换等字节空格。
+    fn blank(c: char, out: &mut String) {
+        if c.is_whitespace() {
+            out.push(c);
+        } else {
+            for _ in 0..c.len_utf8() {
+                out.push(' ');
             }
         }
     }
-
-    // 原样区间发射 + 行注释融合：首个存活的 `//` 触发行空白化
-    fn emit_raw(region: &str, out: &mut String, line_blank: &mut bool) {
-        let bytes = region.as_bytes();
-        let mut j = 0usize;
-        while j < region.len() {
-            if *line_blank {
-                let c = region[j..].chars().next().unwrap();
-                if c == '\n' {
-                    out.push('\n');
-                    *line_blank = false;
-                } else if c.is_whitespace() {
-                    out.push(c);
-                } else {
-                    for _ in 0..c.len_utf8() {
-                        out.push(' ');
-                    }
-                }
-                j += c.len_utf8();
-            } else if bytes[j] == b'/' && j + 1 < bytes.len() && bytes[j + 1] == b'/' {
-                // 行注释头：`//` 换两空格，行尾前全部空白化
-                out.push_str("  ");
-                *line_blank = true;
-                j += 2;
-            } else {
-                // 批量拷贝到下一个 '/'（ASCII，必在 char 边界）；孤 '/' 原样推入
-                match bytes[j..].iter().position(|&b| b == b'/') {
-                    Some(k) if k > 0 => {
-                        out.push_str(&region[j..j + k]);
-                        j += k;
-                    }
-                    Some(_) => {
-                        out.push('/');
-                        j += 1;
-                    }
-                    None => {
-                        out.push_str(&region[j..]);
-                        j = region.len();
-                    }
-                }
-            }
-        }
-    }
-
-    // 块注释主扫描：chunk = 相邻 `/*` 之间的文本
     let mut i = 0usize;
-    loop {
-        let next_open = s[i..].find("/*").map(|p| i + p);
-        let chunk_end = next_open.unwrap_or(s.len());
-        match s[i..chunk_end].find("*/") {
-            Some(qrel) => {
-                let q = i + qrel;
-                emit_blanked(&s[i..q], &mut out, &mut line_blank);
-                // `*/` → 两空格
-                out.push_str("  ");
-                emit_raw(&s[q + 2..chunk_end], &mut out, &mut line_blank);
+    while i < s.len() {
+        // 快路径：批量拷到下一个可能开启字符串或注释的字节（`"` 或 `/`）。
+        match bytes[i..].iter().position(|&b| b == b'"' || b == b'/') {
+            Some(k) if k > 0 => {
+                // k 落在 ASCII 字节上 ⇒ 必在 char 边界。
+                out.push_str(&s[i..i + k]);
+                i += k;
+                continue;
             }
-            None => emit_raw(&s[i..chunk_end], &mut out, &mut line_blank),
+            None => {
+                out.push_str(&s[i..]);
+                break;
+            }
+            Some(_) => {}
         }
-        match next_open {
-            Some(p) => {
-                // `/*` → 两空格，下一块从标记之后开始
-                out.push_str("  ");
-                i = p + 2;
+        let c = s[i..].chars().next().unwrap(); // `"` 或 `/`
+        if c == '"' {
+            // 字符串字面量：镜像 `lex::string()` 的边界规则（`\` 跳过下一个
+            // 字符，下一个未转义 `"` 收尾）。找不到收尾 `"` 就不成字符串，
+            // 按普通字符处理（否则一个孤立 `"` 会让其后整段代码不再参与
+            // 注释剥离，比词法器更保守）。
+            let mut j = i + 1;
+            let mut close = None;
+            while j < s.len() {
+                let d = s[j..].chars().next().unwrap();
+                if d == '\\' {
+                    j += 1;
+                    if j < s.len() {
+                        j += s[j..].chars().next().unwrap().len_utf8();
+                    }
+                } else if d == '"' {
+                    close = Some(j);
+                    break;
+                } else {
+                    j += d.len_utf8();
+                }
             }
-            None => break,
+            match close {
+                Some(q) => {
+                    out.push_str(&s[i..q + 1]);
+                    i = q + 1;
+                }
+                None => {
+                    out.push('"');
+                    i += 1;
+                }
+            }
+        } else if i + 1 < s.len() && bytes[i + 1] == b'/' {
+            // 行注释：`//` 换两空格，到行尾（含 `\n`）全部空白化。
+            out.push_str("  ");
+            i += 2;
+            while i < s.len() {
+                let d = s[i..].chars().next().unwrap();
+                i += d.len_utf8();
+                if d == '\n' {
+                    out.push('\n');
+                    break;
+                }
+                blank(d, &mut out);
+            }
+        } else if i + 1 < s.len() && bytes[i + 1] == b'*' {
+            // 块注释（不嵌套）：`/*` 换两空格，到 `*/`（含）为止空白化；
+            // 未闭合则剥到文件尾。
+            out.push_str("  ");
+            i += 2;
+            while i < s.len() {
+                let d = s[i..].chars().next().unwrap();
+                if d == '*' && i + 1 < s.len() && bytes[i + 1] == b'/' {
+                    out.push_str("  ");
+                    i += 2;
+                    break;
+                }
+                i += d.len_utf8();
+                blank(d, &mut out);
+            }
+        } else {
+            // 孤立的 `/`（除法等）原样推入。
+            out.push('/');
+            i += 1;
         }
     }
     debug_assert_eq!(out.len(), s.len(), "preprocess 必须保持等字节长");
@@ -7711,14 +7754,17 @@ def main: Point = Point.create
 //   - N4/N5 probe 通过：未观察到 filter/refinement 副作用污染后续推理。
 // ============================================================================
 
-// N1: Tm::Call 注释字段名陈旧（写 4 字段，实际 3 字段）。
+// N1: Tm::Call 注释字段名陈旧（曾写 4 字段，实际 3 字段）。
 //    纯文档问题，无运行时表现 —— 由 `cargo build` 即可确认注释与 enum 不符。
+//    2026-10-01 评审 A4 已修：doc 注释改为 `Call(name, args, body)`
+//    （doc 在 mod.rs:461-463，变体定义在 :464；原注释的
+//    `display_args, val_args` 其实是同一个 args 字段）。
 #[test]
 fn test_n1_doc_field_count() {
-    // 与 src/L13_namespace/mod.rs:108 对照：
+    // 与 src/L13_namespace/mod.rs:464 对照：
     //   Call(SmolStr, List<(Rc<Tm>, Icit)>, Rc<Tm>)  ← 3 字段
-    // 注释 mod.rs:107 写 "Call(name, display_args, val_args, body)"  ← 4 字段，错的。
-    // 无运行时崩点，靠人工审阅修复。
+    // 注释（mod.rs:461-463）与之一致，本条不再是缺口。
+    // 无运行时崩点，属文档锚点；保留以记录该字段曾长期与注释脱节。
 }
 
 // N2: Tm::Call 包装仅在 body eval 为 Val::Match 时保留，否则静默丢弃。
@@ -7759,8 +7805,12 @@ fn test_n2_call_wrapper_invariant() {
 #[test]
 fn test_n3_vals_eq_ground_doc_only() {
     // 不做运行时触发 —— 实际触发需要 def 重名或 import 冲突，当前不允许。
-    // 这里仅作为文档锚点：typeclass.rs:346-352 的 vals_eq_ground_impl
-    // 对 Val::Call 分支"不比 body"的不变量未在注释中声明。
+    // 这里仅作为文档锚点：vals_eq_ground_impl 的 Val::Call 分支
+    // （现址 typeclass.rs:449-455）只比 name+args，不比 body；同处
+    // Val::Match 分支（typeclass.rs:435-448）已因"只比 scrutinee+env 长度
+    // 不健全"补上 body 的 Rc::ptr_eq，Call 分支仍依赖"同 name 同 args ⇒
+    // 同 body"这一未在注释中声明的不变量（跨文件同名 def 是它唯一可疑的
+    // 破坏面）。零断言，仅记录。
 }
 
 // N6: checked_ret 按 idx 缓存假设 → 同一 wildcard arm 在多个 GADT 分支中
@@ -7770,6 +7820,11 @@ fn test_n3_vals_eq_ground_doc_only() {
 //    捕获 `Eq(?n, 0) vs Eq(?n, ?n)` 不匹配，说明 cache 跳过的路径并非
 //    body 一致性检查的唯一兜底（leaf 处 check_pm_final 重新做 unify_pm
 //    细化 + body check 内部用细化后的 cxt 而非缓存命中即跳过类型检查）。
+//    2026-10-01 评审 A4 复核：L13 参考版**已无 `checked_ret`**
+//    （全仓 grep 只剩本测试名与 L10-L12 模块文档），arm 循环现在对每条臂
+//    无条件调 `check_pm_final`（pattern_match.rs:516）——原机制已不存在，
+//    本测试保留为"该程序不得被静默接受"的粗粒度回归钉（只断言 Err，
+//    不区分错因）。
 #[test]
 fn test_n6_checked_ret_cache_unsoundness() {
     let input = r#"
@@ -7826,7 +7881,9 @@ println (three)
 fn test_n7_sentinel_unreachable() {}
 
 // N8/N9/N10/N11: 代码可读性/性能问题，无运行时崩点可构造。
-// N10 已由 `cargo build` warning 确认（pattern_match.rs:764 `item_pats` 未使用）。
+// N10（`item_pats` 未使用警告）**已不成立**：2026-10-01 评审 A4 复核，
+// `item_pats` 现已在 pattern_match.rs:654 绑定并在 :659 被消费（全文件仅
+// 这两处），不存在该 unused 警告。
 #[test]
 fn test_n8_n9_n10_n11_doc_only() {}
 
