@@ -31,6 +31,17 @@ pub fn harness_verilog(top: &ModuleInfo, trace: bool) -> Result<String, SimError
                 p.name, p.width
             )));
         }
+        // Width 0 is a degenerate manifest value that the emitter renders as a
+        // 1-bit port (`width_range` maps w <= 1 to ""), so the two disagree;
+        // reject it instead of underflowing on `p.width - 1` below.
+        if p.width == 0 {
+            return Err(SimError::BadManifest(format!(
+                "port '{}' has width 0; the Verilog emitter declares a 1-bit port for width <= 1 \
+                 (check how the width was computed: e.g. a Verilog-compat port with an ascending \
+                 range `[0:7]` yields 1 + 0 - 7 = 0)",
+                p.name
+            )));
+        }
         let range = if p.width == 1 {
             String::new()
         } else {

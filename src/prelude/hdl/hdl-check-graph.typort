@@ -1994,11 +1994,12 @@ def ruleCdc(mname: String, decls: List[GDecl], drives: List[DriveSrc], entries: 
 // FIRST-registered def of a width-parametric module is the Phase-A round
 // whose widths are stuck at check time (designVL can FORCE them later, the
 // check must not - the phase234 red line). So the rule keeps its own
-// name -> (clock domain, ground declaration keys) record: the FIRST ground
+// name -> (clock domain, ground PORT keys) record: the FIRST ground
 // round of a name records; later ground rounds whose key set (order- and
 // duplicate-insensitive) or clock domain differs warn. Replays of one
 // parameterization always match and stay silent; reports collapse at the
-// CheckIssues line-level dedup.
+// CheckIssues line-level dedup. See isPortKind for why the keys are ports
+// (internal declarations are round-unstable).
 
 struct DeclKey {
     name: String
@@ -2009,16 +2010,40 @@ def declKeysEmpty: List[DeclKey] =
     let e: List[DeclKey] = lnil;
     e
 
+// HDL042 keys are PORT declarations only. The reported failure mode is an
+// instance connecting to the wrong port widths (designVL emits one def per
+// name), and ports are the one part of the declaration set that is stable
+// across the checker's repeated rounds - the ground gate below already
+// guarantees a round only reaches the rule when its widths are ground, and the
+// runtime round's port widths are always ground (see the HDL004 note in
+// hdl-check.typort). INTERNAL declarations are not stable: a for-loop body's
+// `let x` materializes as `x` in one round and as x_0..x_n in another (the same
+// residue that makes the leaf rules re-run every round), and their widths can
+// be ground in one round and stuck in the next. Counting them made a module
+// that was never re-parameterized look like a second registration with a
+// different signature (review-1 F1: a port-less for-loop module warned HDL042
+// twice on the twin engine while the reference engine stayed silent).
+def isPortKind(k: SigKind): Boolean = match k {
+    case kIn => true
+    case kOut => true
+    case kInOut => true
+    case kOutReg => true
+    case _ => false
+}
+
 def declKeysOf[ne: Nat](es: Vec[Expr] ne, acc: List[DeclKey]): List[DeclKey] = match es {
     case nil => acc
     case cons(h, t) =>
         match gDeclOf(h) {
             case None => declKeysOf(t, acc)
-            case Some(gd) => match gd.width {
-                case None => declKeysOf(t, acc)
-                case Some(w) => match nat_is_ground(w) {
-                    case true => declKeysOf(t, lcons (DeclKey.mk(gd.name, w)) acc)
-                    case false => declKeysOf(t, acc)
+            case Some(gd) => match isPortKind(gd.kind) {
+                case false => declKeysOf(t, acc)
+                case true => match gd.width {
+                    case None => declKeysOf(t, acc)
+                    case Some(w) => match nat_is_ground(w) {
+                        case true => declKeysOf(t, lcons (DeclKey.mk(gd.name, w)) acc)
+                        case false => declKeysOf(t, acc)
+                    }
                 }
             }
         }
