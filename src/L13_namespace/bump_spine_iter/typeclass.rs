@@ -308,11 +308,23 @@ impl Machine {
         // Phase 1（上面）是纯过滤（val_match / is_flex / head_key_v 全只
         // 读），两次 force 之间无任何状态变更——`all_params` 即
         // `forced_params`，旧实现第二遍 force_list 是纯重复（2026-09-22 移除）。
+        //
+        // 例外（cong 死锁修复，与参考版 unification.rs solve_trait 逐行
+        // 对齐）：候选唯一且存在**具体非 out 参数作证据**（唯一性由具体
+        // 参数筛出，而非"实例池只剩一个"）时不推迟——Phase 2 的 unify
+        // 把 flex 非 out 参数钉到实例参数上（Add[Self=?A, T=Nat, O=Nat]
+        // → ?A := Nat 落地，卡死投影链随之重归约）。全 flex goal（唯一
+        // 只因实例池稀缺）维持推迟——具证唯一与稀缺唯一不同质。未来解
+        // 若与具证唯一实例矛盾，说明 goal 本就无实例可配，两种时序同样
+        // 报错。
         let forced_params: &Vec<V> = &all_params;
         let has_flex_non_out = non_out_idx
             .iter()
             .any(|&i| is_flex(&self.spine, forced_params[i]));
-        if has_flex_non_out {
+        let has_concrete_non_out = non_out_idx
+            .iter()
+            .any(|&i| !is_flex(&self.spine, forced_params[i]));
+        if has_flex_non_out && (candidate_count > 1 || !has_concrete_non_out) {
             return Ok(None);
         }
         // 多候选且 out 参数 Flex → 推迟（等上下文约束 out 参数）

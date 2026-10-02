@@ -18,7 +18,7 @@ use super::env::{env_ext, env_len};
 use super::eval::{eval_iter, W};
 use super::prim::{prim_exec, Decls, Mutable, PrimId};
 use super::quote::quote_iter;
-use super::spine::{Entry, HK_DECL, HK_FLEX, MetaEntry, Spine};
+use super::spine::{Entry, HK_DECL, HK_FLEX, HK_OBJ, MetaEntry, Spine};
 use super::syntax::{
     SumDataV, Tm, V, XCell, v_clo_of, v_meta_of, v_spine_of, v_tag, v_xcell, v_xcell_of,
 };
@@ -748,7 +748,32 @@ pub(super) fn force_inner<'a>(
                             None => return v,
                         }
                     }
-                    // Rigid / Obj 头的链：卡住
+                    // 挂起选择子（cong 死锁修复）：Obj 头链——头单元经上方
+                    // 裸 Obj 臂 force 后若已重投影（字典 meta 落地成
+                    // Sum/SumCase），链上实参经 vapp1 回放后继续 force 循环；
+                    // 头未变（基座仍 flex/卡住）→ 原样返回等下次 force。
+                    // 与参考版 mod.rs force 的 Obj 臂（Val::Obj 自带 spine，
+                    // 重投影 + v_app_sp 回放一体）逐行对齐；此处拆成
+                    // 「头重投影（走 force）+ 链回放」两步是 twin 的
+                    // Obj/spine 分离表示所致。
+                    HK_OBJ => {
+                        let hd = spine.spine_head(h);
+                        let hd2 = force(bump, spine, defs, metas, decl, mutable, hd);
+                        if hd2.0 == hd.0 {
+                            return v;
+                        }
+                        args.clear();
+                        spine.collect_args(h, &mut args);
+                        let mut t = hd2;
+                        for &(a, i) in args.iter().rev() {
+                            t = vapp1(
+                                bump, spine, &mut work, &mut vals, &mut icits, defs, metas,
+                                decl, mutable, false, t, a, i,
+                            );
+                        }
+                        v = t;
+                    }
+                    // Rigid 头的链：卡住
                     _ => return v,
                 }
             }
@@ -760,11 +785,20 @@ pub(super) fn force_inner<'a>(
                 // 原生 Nat 是 WHNF（定义上 succ^n zero 的压缩表示）
                 XCell::Nat(_) => return v,
                 // force 递归进卡住投影的内层并**重建** Obj（参考版 force
-                // 的 Obj 臂；不变则原样返回）
+                // 的 Obj 臂；不变则原样返回）。挂起选择子（cong 死锁修复）：
+                // 基座 force 后落地成构造形态（字典 record/构造子）→ 就地
+                // 重投影字段（project 与 eval 的 ObjSel 同款查找）并继续
+                // force 循环；基座仍 flex/卡住 → 维持卡死 Obj 挂起等下次
+                // force。consult 的是已解 meta 的解值（未解走 taint 路径
+                // 不入 memo），"consult 未解 meta 即 taint"纪律不受影响。
                 XCell::Obj { val, name } => {
                     let v2 = force(bump, spine, defs, metas, decl, mutable, *val);
                     if v2 == *val {
                         return v;
+                    }
+                    if let Some(p) = project(v2, name) {
+                        v = p;
+                        continue;
                     }
                     return v_xcell(bump.alloc(XCell::Obj { val: v2, name }));
                 }

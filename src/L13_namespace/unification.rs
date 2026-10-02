@@ -766,10 +766,27 @@ impl Infer {
             // The Self type (or other non-out param) must be concrete to pick
             // the correct instance; otherwise val_match(Flex, pattern) always
             // succeeds and may pick the wrong instance.
-            let has_flex_non_out = params.iter().zip(&out_param).any(|((_, val, _, _), is_out)| {
-                !*is_out && matches!(self.force(&cxt.decl, val).as_ref(), Val::Flex(..))
-            });
-            if has_flex_non_out {
+            //
+            // 例外（cong 死锁修复）：候选唯一且存在**具体非 out 参数作证据**
+            //（唯一性由具体参数筛出，而非"实例池只剩一个"）时不推迟——
+            // 唯一实例没有"选错"余地，Phase 2 的 unify 反而把 flex 非 out
+            // 参数钉到实例参数上（Add[Self=?A, T=Nat, O=Nat] → ?A := Nat
+            // 落地，卡死投影链随之重归约）。全 flex goal（唯一只因实例池
+            // 稀缺，如 test9 的 Not/Xor）维持推迟——具证唯一与稀缺唯一
+            // 不同质，稀缺唯一下未来解可能换掉整个形状。未来解若与具证
+            // 唯一实例矛盾，说明 goal 本就无实例可配，两种时序同样报错。
+            let mut has_flex_non_out = false;
+            let mut has_concrete_non_out = false;
+            for ((_, val, _, _), is_out) in params.iter().zip(&out_param) {
+                if !*is_out {
+                    if matches!(self.force(&cxt.decl, val).as_ref(), Val::Flex(..)) {
+                        has_flex_non_out = true;
+                    } else {
+                        has_concrete_non_out = true;
+                    }
+                }
+            }
+            if has_flex_non_out && (candidate_count > 1 || !has_concrete_non_out) {
                 return Ok(None);
             }
             // If there are multiple matches and output params are still Flex, defer.

@@ -367,6 +367,9 @@ mod struct_refine_probe;
 #[cfg(test)]
 mod prim_safety_tests;
 
+#[cfg(test)]
+mod cong_projection_tests;
+
 type Rc<T> = std::rc::Rc<T>;
 
 // `decl.get` sits on the evaluator's hot paths (`Tm::Decl` eval arm, `v_app`,
@@ -2640,6 +2643,36 @@ impl Infer {
                 if Rc::ptr_eq(&xf, x) {
                     t.clone()
                 } else {
+                    // 挂起选择子（cong 死锁修复）：基座 force 后已落地成构造
+                    // 形态（字典 record/构造子）→ 就地重新投影字段（与
+                    // eval 的 Frame::Obj 同款查找），spine 实参经 v_app_sp
+                    // 回放后继续 force。基座仍是 flex/卡住 → 维持卡死 Obj
+                    // （挂起等待下次 force）。consult 的是已解 meta 的解值
+                    // （未解走 taint 路径），memo 纪律不受影响。
+                    let projected = match xf.as_ref() {
+                        Val::Sum(_, params, _, _) => params
+                            .iter()
+                            .find(|(f_name, _, _, _)| f_name.data == a.data)
+                            .map(|p| p.1.clone()),
+                        Val::SumCase { datas, typ, .. } => match typ.as_ref() {
+                            Val::Sum(_, params, _, _) => params
+                                .iter()
+                                .find(|(f_name, _, _, _)| f_name.data == a.data)
+                                .map(|p| p.1.clone())
+                                .or_else(|| {
+                                    datas
+                                        .iter()
+                                        .find(|(f_name, _, _)| f_name.data == a.data)
+                                        .map(|d| d.1.clone())
+                                }),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    if let Some(p) = projected {
+                        let r = self.v_app_sp(decl, p, b);
+                        return self.force(decl, &r);
+                    }
                     Val::Obj(xf, a.clone(), b.clone()).into()
                 }
             },
