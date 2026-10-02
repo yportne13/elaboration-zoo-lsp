@@ -1973,6 +1973,11 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                     },
                     Err(err) => {
                         err_collect.push((err, DiagnosticSeverity::ERROR));
+                        // A2（docs/l13-quirks-analysis-2026-10.md §3.1）：失败
+                        // decl 的名字进 failed_decls——下游引用命中时 "not in
+                        // scope" 降级为「引用了上方失败的声明」，根因不再被
+                        // 二阶错误淹没。
+                        infer.note_failed_decl(&tm);
 	                }
 	                }
 	                // 取出模式匹配分支中累积的额外类型错误，每个变成独立诊断
@@ -2569,6 +2574,9 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                 // HDL 警告锚点需在 infer 消费 tm 前取好——否则得为它深拷
                 // 整棵 Decl AST（每 decl 一次，随文件线性）。
                 let anchor = decl_span(&tm);
+                // A2（§3.1）：同上在 tm 被 catch_unwind 闭包按值消费前预取
+                // 失败名字（Err 分支只此一处可用）。
+                let failed_names = L13_namespace::failed_decl_names(&tm);
                 let inferred = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     local_infer.infer(&local_cxt, tm)
                 })) {
@@ -2596,6 +2604,9 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                     }
                     Err(err) => {
                         err_collect.push((err, DiagnosticSeverity::ERROR));
+                        // A2（§3.1）：同 on_change——失败 decl 名义集，下游
+                        // "not in scope" 降级提示。
+                        local_infer.note_failed_names(failed_names);
                     }
                 }
                 for err in local_infer.accumulated_errors.drain(..) {

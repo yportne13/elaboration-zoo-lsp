@@ -1137,6 +1137,10 @@ impl Tycker {
         user_ast: &[Decl],
     ) -> Result<(), Error> {
         self.user_errors.clear();
+        // A2 / B1B2 恢复通道随 kick 清零：常驻机跨 kick 复用，陈年失败名
+        // 会把真 not-in-scope 误降级（参考版按文件克隆 Infer 天然清零）。
+        self.machine.failed_decls.clear();
+        self.machine.accumulated_errors.clear();
         // 本 kick 起点的 FORCE_MEMO 条目数（`TYPORT_KICK_PROBE` 用）。
         // 2026-09-23 实测：LSP 路径下它只有 ~3.6 万条（HDL prelude 的 59 万条
         // 在 prime 收尾被清掉），所以"memo 太大拖慢用户段"这个假设在 LSP 口径
@@ -1255,8 +1259,19 @@ impl Tycker {
                 Ok(nc) => cxt = nc,
                 // Keep the previous cxt for subsequent decls (reference
                 // `elaborate` keeps `local_cxt` on error).
-                Err(e) => self.user_errors.push(e),
+                Err(e) => {
+                    self.user_errors.push(e);
+                    // A2（§3.1）：失败 decl 名义集——下游 "not in scope" 降级为
+                    // 「引用了上方失败的声明」（参考版 lib.rs 两个 decl 循环
+                    // Err 分支的同款调用）。
+                    self.machine.note_failed_decl(d);
+                }
             }
+            // B1/B2（§3.1）：impl 块单方法失败的排水——错误不早退也不整块判
+            // 死，经 machine.accumulated_errors 逐 decl 并入 user_errors
+            // （参考版 lib.rs 对 Infer.accumulated_errors 的逐 decl drain
+            // 同口径）。
+            self.user_errors.extend(self.machine.accumulated_errors.drain(..));
             if let Some(f0) = f0 {
                 use std::sync::atomic::Ordering::Relaxed;
                 let name = match d {

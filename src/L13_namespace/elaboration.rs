@@ -1027,6 +1027,35 @@ impl Infer {
         };
         Some(result)
     }
+    /// B2（§3.1）恢复用：trait 构造子 `Trait.mk` 的 telescope 走到第 `idx`
+    /// 个方法字段——Self 与 trait 参数以实参（`args`，构造时已 force）实例
+    /// 化，得到该方法在本次 impl 处的**精确签名**。字段间无依赖（方法签名
+    /// 只引用 Self / trait 参数），跳过前序字段时以 `U(0)` 占位实参推进；
+    /// 构造子缺失或形状不符返回 `None`（调用方按"保留原方法表达式"降级）。
+    fn trait_field_ty(&self, cxt: &Cxt, trait_full: &SmolStr, args: &[Rc<Val>], idx: usize) -> Option<Rc<Val>> {
+        let mk_key = SmolStr::new(format!("{}.mk", trait_full));
+        let (_, _, _, _, vty, _, _) = cxt.decl.get(&mk_key)?;
+        let mut ty = vty.clone();
+        for a in args {
+            let forced = self.force(&cxt.decl, &ty);
+            match forced.as_ref() {
+                Val::Pi(_, _, _, cod) => ty = self.closure_apply(&cxt.decl, cod, a.clone()),
+                _ => return None,
+            }
+        }
+        for _ in 0..idx {
+            let forced = self.force(&cxt.decl, &ty);
+            match forced.as_ref() {
+                Val::Pi(_, _, _, cod) => ty = self.closure_apply(&cxt.decl, cod, Val::U(0).into()),
+                _ => return None,
+            }
+        }
+        let forced = self.force(&cxt.decl, &ty);
+        match forced.as_ref() {
+            Val::Pi(_, _, dom, _) => Some(dom.clone()),
+            _ => None,
+        }
+    }
     pub fn infer(&mut self, cxt: &Cxt, t: Decl) -> Result<(DeclTm, Rc<Val>, Cxt), Error> {
         // Apply package prefix if active (unless the declaration itself sets the prefix)
         let t = match &t {
@@ -1546,7 +1575,12 @@ impl Infer {
                             _ => None
                         })
                         .collect();
-                    cxt.namespace = cxt.namespace.prepend((name_v, method_names, type_name.clone()));
+                    // B1（§3.1）：逐方法隔离——失败方法不整块判死。namespace
+                    // 条目仍先登记（方法体内部经 `this.m` 调兄弟方法需要在
+                    // 检查期可见），块尾若有失败方法则以**成功方法集**重建。
+                    let ns_before = cxt.namespace.clone();
+                    cxt.namespace = cxt.namespace.prepend((name_v.clone(), method_names.clone(), type_name.clone()));
+                    let mut failed_methods: Vec<SmolStr> = vec![];
                     for (decl, is_static) in methods.iter() {
                         match decl {
                             Decl::Def { name: name_d, params: p, ret_type, body } => {
@@ -1581,8 +1615,19 @@ impl Infer {
                                             .collect(),
                                         ret_type: ret_type.clone(),
                                         body: body.clone(),
-                                    })?;
-                                    cxt = t.2;
+                                    });
+                                    // B1：失败方法记入 accumulated_errors（lib.rs
+                                    // 逐 decl 排水成独立诊断），其余方法照常
+                                    // 注册；失败方法名进 failed_decls（下游裸
+                                    // `Type.m` 引用降级提示）。
+                                    match t {
+                                        Ok(t) => cxt = t.2,
+                                        Err(e) => {
+                                            self.accumulated_errors.push(e);
+                                            failed_methods.push(name_d.data.clone());
+                                            self.failed_decls.insert(SmolStr::new(format!("{}.{}", type_name, name_d.data)));
+                                        },
+                                    }
                                 } else {
                                     let static_name = format!("{}.{}", type_name, name_d.data);
                                     let t = self.infer_after_prefix(&cxt, Decl::Def {
@@ -1593,14 +1638,31 @@ impl Infer {
                                             .collect(),
                                         ret_type: ret_type.clone(),
                                         body: body.clone(),
-                                    })?;
-                                    cxt = t.2;
+                                    });
+                                    match t {
+                                        Ok(t) => cxt = t.2,
+                                        Err(e) => {
+                                            self.accumulated_errors.push(e);
+                                            self.failed_decls.insert(SmolStr::new(static_name));
+                                        },
+                                    }
                                 }
                             },
                             _ => {
                                 return Err(Error(span.map(|_| "unsupported method declaration in inherent impl".to_string()), vec![]));
                             },
                         }
+                    }
+                    // B1：namespace 条目以成功方法集重建——失败方法不再参与
+                    // `x.m` 分派（下游得到普通「无此方法」错，而非误导性的
+                    // not in scope）。已注册方法的条目不捕获 namespace 链，
+                    // 重建不影响它们。
+                    if !failed_methods.is_empty() {
+                        let ok_names: std::collections::HashSet<SmolStr> = method_names.iter()
+                            .filter(|m| !failed_methods.contains(m))
+                            .cloned()
+                            .collect();
+                        cxt.namespace = ns_before.prepend((name_v, ok_names, type_name.clone()));
                     }
                 } else {
                     // I3b: resolve the trait name through the file's namespace
@@ -1676,7 +1738,7 @@ impl Infer {
                     // that differ only in output params (e.g., Into[String] vs Into[Bool] for the same type)
                     let typ_name = SmolStr::new(format!("{:?}{:?}", trait_full, trait_param));
                     let inst = Instance {
-                        assertion: Assertion { name: trait_full.clone(), arguments: trait_param },
+                        assertion: Assertion { name: trait_full.clone(), arguments: trait_param.clone() },
                         dependencies: List::new(),
                         lvl: trait_name.to_span().map(|_| typ_name.clone()),
                     };
@@ -1766,6 +1828,15 @@ impl Infer {
                         .fold(Raw::Var(empty_span(SmolStr::new(format!("{}.mk", trait_full)))), |ret, x| {
                             Raw::App(Box::new(ret), Box::new(x), Either::Icit(Icit::Impl))
                         });
+                    // B2（§3.1）恢复用快照：一次性注册失败后按方法逐个试查
+                    // 重建，fold 消费前的 methods / 类型形状都要留底。
+                    let methods_snapshot: Vec<(Decl, bool)> = methods.clone();
+                    let synth_ret_type = trait_params.clone().into_iter()
+                        .fold(Raw::App(
+                            Raw::Var(empty_span(trait_full.clone())).into(),
+                            name.clone().into(),
+                            Either::Icit(Icit::Impl)
+                        ), |a, b| Raw::App(Box::new(a), Box::new(b), Either::Icit(Icit::Impl)));
                     // For class-generated impls the methods were already elaborated
                     // as `TypeName.method` defs by the class's inherent impl (which
                     // is expanded first). Reference those defs instead of
@@ -1778,8 +1849,8 @@ impl Infer {
                             // Operator-symbol registration (trait impl): an
                             // operator-named method whose body is a direct helper
                             // application (`helper this that`) records
-                            // (helper, arity) → operator so `quote` can restore the
-                            // infix form of the inlined helper call. Class methods
+                            // (helper, arity) → operator so `quote` can restore
+                            // the infix form of the inlined helper call. Class methods
                             // were already registered by the inherent impl.
                             if is_operator_method_name(&def_name.data) {
                                 if let Some(head) = raw_ctor_name(&body) {
@@ -1819,18 +1890,112 @@ impl Infer {
                     // in the impl header would "goto" back into this impl
                     // instead of the trait declaration (see the entry pushed
                     // above for `trait_name`).
-                    let (_, _, c) = self.infer_after_prefix(&cxt, Decl::Def {
-                        name: empty_span(typ_name),
-                        params,
-                        ret_type: trait_params.into_iter()
-                            .fold(Raw::App(
-                                Raw::Var(empty_span(trait_full)).into(),
-                                name.into(),
-                                Either::Icit(Icit::Impl)
-                            ), |a, b| Raw::App(Box::new(a), Box::new(b), Either::Icit(Icit::Impl))),
-                        body: ret,
-                    })?;
-                    cxt = c;
+                    let reg = self.infer_after_prefix(&cxt, Decl::Def {
+                        name: empty_span(typ_name.clone()),
+                        params: params.clone(),
+                        ret_type: synth_ret_type.clone(),
+                        body: ret.clone(),
+                    });
+                    match reg {
+                        Ok((_, _, c)) => { cxt = c; },
+                        Err(root) => {
+                            // B2（§3.1）部分注册：实例头已入 solver
+                            // （`impl_trait_for` 不回滚），合成记录 def 一次性
+                            // 注册失败时逐方法以 trait 签名试查，失败字段换成
+                            // 「签名类型 + 中性自引用体」的桩 def 后重试——好方
+                            // 法保真、坏方法中性，下游 `.m` 要么正常工作要么报
+                            // 普通方法级错，不再出现 "solve trait failed ...
+                            // last error: name not in scope"。根因错误经
+                            // accumulated_errors 排水成独立诊断（lib.rs 逐 decl
+                            // 取出）。
+                            self.accumulated_errors.push(root);
+                            let mut ret2 = std::iter::once(name.clone())
+                                .chain(trait_params.clone())
+                                .fold(Raw::Var(empty_span(SmolStr::new(format!("{}.mk", trait_full)))), |ret, x| {
+                                    Raw::App(Box::new(ret), Box::new(x), Either::Icit(Icit::Impl))
+                                });
+                            for (i, (decl, _)) in methods_snapshot.into_iter().enumerate() {
+                                if let Decl::Def { name: def_name, params: m_params, ret_type: _, body } = decl {
+                                    let mname = def_name.data.clone();
+                                    let method_expr = match &class_type_name {
+                                        Some(ty) if i < class_method_count =>
+                                            Raw::Var(def_name.map(|n| SmolStr::new(format!("{}.{}", ty, n)))),
+                                        _ => Raw::Lam(
+                                            def_name.map(|_| SmolStr::new("this")),
+                                            Either::Icit(Icit::Expl),
+                                            Box::new(m_params.into_iter().rev()
+                                                .fold(body, |ret, x| Raw::Lam(x.0.clone(), Either::Icit(x.2), Box::new(ret)))
+                                            )
+                                        ),
+                                    };
+                                    // 逐方法试查：字段签名可得且体检查通过 ⇒ 保
+                                    // 留原方法；否则以 `{trait}.{m}$failed` 桩
+                                    // def 顶上（`$` 不在标识符字符集，免撞名；
+                                    // 自引用体 force 恒卡住，不求值成环）。
+                                    let field_ty = self.trait_field_ty(&cxt, &trait_full, &trait_param, i);
+                                    let trial_ok = match &field_ty {
+                                        Some(ty) => self.check::<false>(&temp_cxt, method_expr.clone(), ty).is_ok(),
+                                        None => false,
+                                    };
+                                    let method_expr = if trial_ok {
+                                        method_expr
+                                    } else if let Some(field_ty) = field_ty {
+                                        let field_tm = self.quote(&cxt.decl, cxt.lvl, &field_ty);
+                                        let stub_name = SmolStr::new(format!("{}.{}$failed", trait_full, mname));
+                                        let _ = cxt.decl(
+                                            empty_span(stub_name.clone()),
+                                            Tm::Decl(empty_span(stub_name.clone())).into(),
+                                            Val::Decl(empty_span(stub_name.clone()), List::new()).into(),
+                                            field_tm,
+                                            field_ty,
+                                            None,
+                                            String::new(),
+                                        );
+                                        Raw::Var(empty_span(stub_name))
+                                    } else {
+                                        // 字段签名不可得：保留原表达式，交由重试/
+                                        // 兜底收拾。
+                                        method_expr
+                                    };
+                                    ret2 = Raw::App(
+                                        Box::new(ret2),
+                                        Box::new(method_expr),
+                                        Either::Icit(Icit::Expl),
+                                    );
+                                }
+                            }
+                            let retry = self.infer_after_prefix(&cxt, Decl::Def {
+                                name: empty_span(typ_name.clone()),
+                                params: params.clone(),
+                                ret_type: synth_ret_type.clone(),
+                                body: ret2,
+                            });
+                            match retry {
+                                Ok((_, _, c)) => { cxt = c; },
+                                Err(second) => {
+                                    self.accumulated_errors.push(second);
+                                    // 兜底：重试仍失败（字段签名不可得等罕见路
+                                    // 径）——以声明类型 + 中性自引用体登记实例
+                                    // 合成名，保 solve_trait Phase 2 查得到定义
+                                    // （下游 `.m` 得中性值，而非 "solve trait
+                                    // failed ... name not in scope"）。
+                                    if let Ok((typ_tm, _)) = self.check_universe(&cxt, synth_ret_type.clone()) {
+                                        let vtyp = self.eval(&cxt.decl, &cxt.env, &typ_tm);
+                                        let stub = empty_span(typ_name.clone());
+                                        let _ = cxt.decl(
+                                            stub.clone(),
+                                            Tm::Decl(stub.clone()).into(),
+                                            Val::Decl(stub.clone(), List::new()).into(),
+                                            typ_tm,
+                                            vtyp,
+                                            None,
+                                            String::new(),
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
                 Ok((DeclTm::TraitImpl {}, Val::U(0).into(), cxt.clone()))
             },
@@ -2476,7 +2641,18 @@ impl Infer {
                                 vec![]
                             }
                         };
-                        Err(Error(name.map(|x| format!("error name not in scope: {}", x)), fixes))
+                        // A2（§3.1）：名字属于本轮已失败的声明（失败 decl 不进
+                        // 环境）——保留可检索的 not in scope 前缀，但降级为
+                        // 「引用了上方失败的声明」指向真根因，而非让二阶
+                        // not in scope 淹没它。与孪生 machine.rs 三处终态
+                        // not-in-scope 站点逐字对齐。
+                        Err(Error(name.map(|x| {
+                            if self.failed_decls.contains(&x) {
+                                format!("error name not in scope: {} (declaration failed to elaborate above)", x)
+                            } else {
+                                format!("error name not in scope: {}", x)
+                            }
+                        }), fixes))
                     }
                 },
             },

@@ -1387,6 +1387,13 @@ pub struct Infer {
     /// Accumulated type errors from pattern match branches, reported as
     /// separate LSP diagnostics so each branch error gets its own red squiggle.
     pub accumulated_errors: Vec<Error>,
+    /// A2（docs/l13-quirks-analysis-2026-10.md §3.1）：失败 decl 的名字集——
+    /// 下游引用命中时把 "error name not in scope" 降级为「引用了上方失败的
+    /// 声明」，根因不再被二阶 not in scope 淹没。由继续型 decl 驱动
+    /// （lib.rs 两个循环 / run_with_prelude_collect）在 Err 分支调用
+    /// [`Self::note_failed_decl`] 填充；B1/B2 的失败方法名由引擎内恢复路径
+    /// 直接写入。快照不继承（逐文件/逐轮清零，同 accumulated_errors 纪律）。
+    pub failed_decls: std::collections::HashSet<SmolStr>,
     /// Operator-symbol registry: (helper function name, argument count) →
     /// operator symbol.  Populated when an impl's operator-named method
     /// (e.g. `def +(that: Nat): Nat = nat_add_helper this that`) is
@@ -1469,6 +1476,8 @@ impl Clone for Infer {
             // accumulated_errors are ephemeral per-checking-pass;
             // a clone (used for read-only analysis) starts fresh.
             accumulated_errors: Vec::new(),
+            // 同上：failed_decls 是本轮检查的临时态（A2），快照从零开始。
+            failed_decls: std::collections::HashSet::new(),
         }
     }
 }
@@ -1486,6 +1495,45 @@ impl Infer {
             .filter(|x| x.0.path_id == path_id)
             .filter(|x| x.0.contains(offset))
             .min_by_key(|x| x.0.end_offset - x.0.start_offset)
+    }
+
+    /// A2（§3.1）：把失败 decl 的名字记入 [`Infer::failed_decls`]——继续型
+    /// decl 驱动的 Err 分支调用（lib.rs on_change / elaborate_reference 与
+    /// run_with_prelude_collect）。失败 decl 不进环境（infer_after_prefix 的
+    /// clone 连同局部注册被整体丢弃），下游裸名引用会落到 "not in scope"；
+    /// 名字命中本集合时该错误降级为「引用了上方失败的声明」，指向真根因。
+    /// 记录的名字：def/enum/trait/class 本名 + enum 构造子 / trait `.mk` 的
+    /// 限定键（失败时一并缺席）。impl 块的失败方法名由 B1/B2 的引擎内恢复
+    /// 路径直接写入，不在此列。
+    pub fn note_failed_decl(&mut self, t: &parser::syntax::Decl) {
+        self.note_failed_names(failed_decl_names(t));
+    }
+
+    /// [`Self::note_failed_decl`] 的按名版：调用方在 decl 被闭包 move 走之前
+    /// 用 [`failed_decl_names`] 预取出名字（elaborate_reference 的逐 decl
+    /// catch_unwind 闭包按值消费 tm，Err 分支只能拿到预取结果）。
+    pub fn note_failed_names(&mut self, names: Vec<SmolStr>) {
+        self.failed_decls.extend(names);
+    }
+}
+
+/// A2（§3.1）：失败 decl 携带的名字集（本名 + enum 构造子 / trait `.mk`
+/// 限定键）；Package/Import/Println/Derive 无名可记。
+pub fn failed_decl_names(t: &parser::syntax::Decl) -> Vec<SmolStr> {
+    use parser::syntax::Decl;
+    match t {
+        Decl::Def { name, .. } => vec![name.data.clone()],
+        Decl::Enum { name, cases, .. } => {
+            let mut v = vec![name.data.clone()];
+            v.extend(cases.iter().map(|(c, _, _)| SmolStr::new(format!("{}.{}", name.data, c.data))));
+            v
+        }
+        Decl::TraitDecl { name, .. } => vec![
+            name.data.clone(),
+            SmolStr::new(format!("{}.mk", name.data)),
+        ],
+        Decl::Class { name, .. } => vec![name.data.clone()],
+        _ => vec![],
     }
 }
 
@@ -2108,6 +2156,7 @@ impl Infer {
             import_map: HashMap::new(),
             trait_method_cache: HashMap::new(),
             accumulated_errors: vec![],
+            failed_decls: std::collections::HashSet::new(),
             defer_println: false,
             println_jobs: vec![],
             def_replay_memo: Default::default(),
@@ -3763,6 +3812,14 @@ pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
         }
         let (x, _, new_cxt) = infer.infer_in_place(&mut cxt, tm.clone())?;
         cxt = new_cxt;
+        // B1/B2 错误恢复（docs/l13-quirks-analysis-2026-10.md §3.1）：impl/
+        // class 块内单个方法的错误走 accumulated_errors（好方法照常注册），
+        // 由驱动循环排水成诊断——lib.rs 两个循环逐 decl 排水，这里对齐：
+        // 非空即以首个错误失败，否则测试口径会把 this.unknown 之类真错误
+        // 吞成 OK。
+        if let Some(e) = infer.accumulated_errors.drain(..).next() {
+            return Err(e);
+        }
         // HDL self-check warnings: drain per decl (the module close-check
         // runs during the module class decl's own elaboration).
         for line in take_fresh_check_issues(&infer) {
@@ -4392,6 +4449,14 @@ pub fn run_with_prelude(input: &str) -> Result<String, Error> {
         }
         let (x, _, new_cxt) = infer.infer_in_place(&mut cxt, tm.clone())?;
         cxt = new_cxt;
+        // B1/B2 错误恢复（docs/l13-quirks-analysis-2026-10.md §3.1）：impl/
+        // class 块内单个方法的错误走 accumulated_errors（好方法照常注册），
+        // 由驱动循环排水成诊断——lib.rs 两个循环逐 decl 排水，这里对齐：
+        // 非空即以首个错误失败，否则测试口径会把 this.unknown 之类真错误
+        // 吞成 OK。
+        if let Some(e) = infer.accumulated_errors.drain(..).next() {
+            return Err(e);
+        }
         // HDL self-check warnings: drain per decl (the module close-check
         // runs during the module class decl's own elaboration).
         for line in take_fresh_check_issues(&infer) {

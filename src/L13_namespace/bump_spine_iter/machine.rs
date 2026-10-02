@@ -521,6 +521,17 @@ pub(crate) struct Machine {
     /// 不应为被删的表条目付费），用户段恢复 `true`。默认 `true`——bench
     /// /run 口径维持与参考版同含渲染成本的对称口径。
     pub(super) observe: bool,
+    /// A2（§3.1，参考版 `Infer.failed_decls`）：本轮失败 decl 的名字集——
+    /// 终态 not-in-scope 命中时降级为「引用了上方失败的声明」。由继续型
+    /// 驱动（`observe_user` 的 Err 分支）经 [`Self::note_failed_decl`] 填充，
+    /// B1/B2 的失败方法名由引擎内恢复路径直接写入。每 kick / 每轮清零
+    /// （常驻机跨 kick 复用，陈年条目会把真 not-in-scope 误降级）。
+    pub(super) failed_decls: FxHashSet<SmolStr>,
+    /// B1/B2（§3.1，参考版 `Infer.accumulated_errors` 的 impl 方法错通道）：
+    /// impl 块单方法失败不再整块判死——错误经此通道交给驱动（observe_user
+    /// 逐 decl 排水进 `user_errors`），块内其余方法照常注册。每 kick /
+    /// 每轮清零。
+    pub(super) accumulated_errors: Vec<Error>,
 }
 
 impl Machine {
@@ -572,6 +583,8 @@ impl Machine {
             check_issue_lines: Vec::new(),
             ctor_hover_memo: FxHashMap::default(),
             observe: true,
+            failed_decls: FxHashSet::default(),
+            accumulated_errors: Vec::new(),
         }
     }
 
@@ -594,6 +607,9 @@ impl Machine {
         // 防御性：轮界本应为空（每个 decl 的压/弹由 `infer_decl` /
         // `infer_after_prefix` 配平）。
         self.decl_stub.clear();
+        // A2 / B1B2 的恢复通道同属 per-run 状态（参考版 Infer::clone 重置面）。
+        self.failed_decls.clear();
+        self.accumulated_errors.clear();
         // 压栈工作表的峰值容量同样常驻（`SPINE_SHRINK_MIN_ENTRIES`）。
         twin_stat_record(&TWIN_STAT_SPINE, self.spine.stack.reclaim(SPINE_SHRINK_MIN_ENTRIES));
         // ── 第一组（per-run，参考版 Infer 重置面）归还档 ──
@@ -844,6 +860,87 @@ impl Machine {
         // 移除（成功路径由 `decl_reg_in` 覆盖真值后出栈）。
         self.decl_stub.push(SmolStr::new(x));
         Ok(clone_cxt(cxt))
+    }
+
+    /// A2（§3.1，参考版 `Infer::note_failed_decl`）：失败 decl 的名字记入
+    /// [`Machine::failed_decls`]——继续型驱动（`observe_user`）的 Err 分支
+    /// 调用。记录面与参考版逐字对齐：def/enum/trait/class 本名 + enum
+    /// 构造子 / trait `.mk` 限定键；impl 块的失败方法名由 B1/B2 恢复路径
+    /// 直接写入。
+    pub(super) fn note_failed_decl(&mut self, t: &Decl) {
+        use super::super::parser::syntax::Decl as PDecl;
+        let names: Vec<SmolStr> = match t {
+            PDecl::Def { name, .. } => vec![name.data.clone()],
+            PDecl::Enum { name, cases, .. } => {
+                let mut v = vec![name.data.clone()];
+                v.extend(cases.iter().map(|(c, _, _)| SmolStr::new(format!("{}.{}", name.data, c.data))));
+                v
+            },
+            PDecl::TraitDecl { name, .. } => vec![
+                name.data.clone(),
+                SmolStr::new(format!("{}.mk", name.data)),
+            ],
+            PDecl::Class { name, .. } => vec![name.data.clone()],
+            _ => vec![],
+        };
+        self.failed_decls.extend(names);
+    }
+
+    /// A2（§3.1）：终态 not-in-scope 文案——名字属于本轮已失败声明时降级为
+    /// 「引用了上方失败的声明」（保留可检索前缀；与参考版 elaboration.rs
+    /// Var 终态站点逐字对齐，三处调用点共用）。
+    fn not_in_scope_err(&self, x: &crate::parser_lib::Span<SmolStr>) -> Error {
+        if self.failed_decls.contains(&x.data) {
+            Error(
+                x.clone().map(|n| format!(
+                    "error name not in scope: {} (declaration failed to elaborate above)", n
+                )),
+                vec![],
+            )
+        } else {
+            Error(x.clone().map(|n| format!("error name not in scope: {}", n)), vec![])
+        }
+    }
+
+    /// B2（§3.1，参考版 `Infer::trait_field_ty`）：trait 构造子 `Trait.mk`
+    /// 的 telescope 走到第 `idx` 个方法字段——Self 与 trait 参数以实参
+    /// （`args`，构造时已 force）实例化，得到该方法在本次 impl 处的**精确
+    /// 签名**。字段间无依赖（方法签名只引用 Self / trait 参数），跳过前序
+    /// 字段时以 `U(0)` 占位实参推进；构造子缺失或形状不符返回 `None`。
+    fn trait_field_ty<'a>(
+        &mut self,
+        bump: &'a Bump,
+        cxt: &Cxt<'a>,
+        trait_full: &str,
+        args: &[V],
+        idx: usize,
+    ) -> Option<V> {
+        let mk = format!("{}.mk", trait_full);
+        let e = cxt.decls.get(mk.as_str())?;
+        let mut ty = e.vty;
+        for &a in args {
+            ty = self.force_v(bump, cxt, ty);
+            if v_tag(ty) != 4 {
+                return None;
+            }
+            let p = v_pi_of(ty);
+            let env = env_ext(bump, p.env, a);
+            ty = self.eval(bump, cxt, env, p.body);
+        }
+        for _ in 0..idx {
+            ty = self.force_v(bump, cxt, ty);
+            if v_tag(ty) != 4 {
+                return None;
+            }
+            let p = v_pi_of(ty);
+            let env = env_ext(bump, p.env, v_u(0));
+            ty = self.eval(bump, cxt, env, p.body);
+        }
+        ty = self.force_v(bump, cxt, ty);
+        if v_tag(ty) != 4 {
+            return None;
+        }
+        Some(v_pi_of(ty).dom)
     }
 
     /// Var 后缀 fallback 的 namespace 方法键集（按链头指针缓存）——与
@@ -2842,10 +2939,7 @@ impl Machine {
                                         && !cxt.namespaces.contains(h)
                                 }) =>
                         {
-                            return Err(Error(
-                                x.clone().map(|x| format!("error name not in scope: {}", x)),
-                                vec![],
-                            ));
+                            return Err(self.not_in_scope_err(x));
                         }
                         _ => {} // 桶已变 / 被阻头已可见 → 全量查询重查
                     }
@@ -2868,10 +2962,7 @@ impl Machine {
                             blocked_heads: Vec::new(),
                         },
                     );
-                    return Err(Error(
-                        x.clone().map(|x| format!("error name not in scope: {}", x)),
-                        vec![],
-                    ));
+                    return Err(self.not_in_scope_err(x));
                 }
                 let tail = x.data.as_str();
                 let matches: Vec<(SmolStr, V, crate::parser_lib::Span<()>)> = candidates
@@ -2961,7 +3052,7 @@ impl Machine {
                         blocked_heads: blocked,
                     },
                 );
-                Err(Error(x.clone().map(|x| format!("error name not in scope: {}", x)), vec![]))
+                Err(self.not_in_scope_err(x))
             }
 
             // 预检查项无 Raw 结构可推（`check` 在此之前拦截——参考版同款）
@@ -4066,12 +4157,17 @@ impl Machine {
                             _ => None,
                         })
                         .collect();
+                    // B1（§3.1）：逐方法隔离——失败方法不整块判死。namespace
+                    // 条目仍先登记（方法体内部经 `this.m` 调兄弟方法需要在
+                    // 检查期可见），块尾若有失败方法则以**成功方法集**重建。
+                    let ns_before = cxt.namespace;
                     cxt.namespace = Some(bump.alloc(NsCons {
                         val: name_v,
                         methods: bump.alloc_slice_fill_iter(method_names.iter().cloned()),
                         type_name: bump.alloc_str(&type_name),
                         next: cxt.namespace,
                     }));
+                    let mut failed_methods: Vec<SmolStr> = Vec::new();
                     for (decl, is_static) in methods.iter() {
                         match decl {
                             Decl::Def { name: name_d, params: p, ret_type, body } => {
@@ -4106,8 +4202,18 @@ impl Machine {
                                             .collect(),
                                         ret_type: ret_type.clone(),
                                         body: body.clone(),
-                                    })?;
-                                    cxt = t.1;
+                                    });
+                                    // B1：失败方法记入 accumulated_errors
+                                    // （observe_user 逐 decl 排水），其余方法
+                                    // 照常注册；失败方法名进 failed_decls。
+                                    match t {
+                                        Ok(t) => cxt = t.1,
+                                        Err(e) => {
+                                            self.accumulated_errors.push(e);
+                                            failed_methods.push(name_d.data.clone());
+                                            self.failed_decls.insert(SmolStr::new(format!("{}.{}", type_name, name_d.data)));
+                                        },
+                                    }
                                 } else {
                                     let static_name = format!("{}.{}", type_name, name_d.data);
                                     let t = self.infer_after_prefix(bump, &cxt, &Decl::Def {
@@ -4115,8 +4221,14 @@ impl Machine {
                                         params: params.iter().cloned().chain(p.iter().cloned()).collect(),
                                         ret_type: ret_type.clone(),
                                         body: body.clone(),
-                                    })?;
-                                    cxt = t.1;
+                                    });
+                                    match t {
+                                        Ok(t) => cxt = t.1,
+                                        Err(e) => {
+                                            self.accumulated_errors.push(e);
+                                            self.failed_decls.insert(SmolStr::new(static_name));
+                                        },
+                                    }
                                 }
                             }
                             _ => {
@@ -4128,6 +4240,21 @@ impl Machine {
                                 ));
                             }
                         }
+                    }
+                    // B1：namespace 条目以成功方法集重建——失败方法不再参与
+                    // `x.m` 分派（下游得到普通「无此方法」错）。已注册方法的
+                    // 条目不捕获 namespace 链，重建不影响它们。
+                    if !failed_methods.is_empty() {
+                        let ok_names: Vec<SmolStr> = method_names.iter()
+                            .filter(|m| !failed_methods.contains(m))
+                            .cloned()
+                            .collect();
+                        cxt.namespace = Some(bump.alloc(NsCons {
+                            val: name_v,
+                            methods: bump.alloc_slice_fill_iter(ok_names.iter().cloned()),
+                            type_name: bump.alloc_str(&type_name),
+                            next: ns_before,
+                        }));
                     }
                 } else {
                     // ── trait impl（`impl Trait for Ty`）──
@@ -4185,11 +4312,14 @@ impl Machine {
                         }
                     }
                     // 保留全部参数（含 outParam）——求解器要区分仅 out 参数
-                    // 不同的实例（Into[String] vs Into[Bool]）
+                    // 不同的实例（Into[String] vs Into[Bool]）。`trait_param_v`
+                    // 是 B2 恢复用的本机 V 形态（构造子 telescope 实例化实参），
+                    // 与导出形态逐位对齐。
                     let mut trait_param: Vec<Rc<CVal>> = {
                         let fv = self.force_v(bump, &cxt, typ_val);
                         vec![v_to_ref_val(&self.spine, &self.defs, fv)]
                     };
+                    let mut trait_param_v: Vec<V> = vec![self.force_v(bump, &cxt, typ_val)];
                     for a in trait_params.iter() {
                         let (a_checked, _) = self.infer_expr(bump, &temp_cxt, a)?;
                         let a_eval = self.eval(bump, &temp_cxt, temp_cxt.env, a_checked);
@@ -4199,6 +4329,7 @@ impl Machine {
                             &self.defs,
                             fv,
                         ));
+                        trait_param_v.push(fv);
                     }
                     let out_param = self
                         .tstate
@@ -4323,6 +4454,19 @@ impl Machine {
                                 Raw::App(Box::new(ret), Box::new(x), Either::Icit(Icit::Impl))
                             },
                         );
+                    // B2（§3.1）恢复用快照：一次性注册失败后按方法逐个试查
+                    // 重建，fold 消费前的 methods / 类型形状都要留底。
+                    let methods_snapshot: Vec<(Decl, bool)> = methods.clone();
+                    let synth_ret_type = trait_params.iter().cloned().fold(
+                        Raw::App(
+                            Box::new(Raw::Var(empty_span(trait_full.clone()))),
+                            Box::new(name.clone()),
+                            Either::Icit(Icit::Impl),
+                        ),
+                        |a, b| {
+                            Raw::App(Box::new(a), Box::new(b), Either::Icit(Icit::Impl))
+                        },
+                    );
                     // class 生成的 impl：方法已由 inherent impl 以
                     // `TypeName.method` 登记——引用这些 def 而不是把体重查
                     // 成 λ（单一 elaboration、单一语义源，方法体内可经 this
@@ -4371,22 +4515,112 @@ impl Machine {
                         }
                     }
                     // 实例本身登记为合成名 def
-                    let (_, c) = self.infer_after_prefix(bump, &cxt, &Decl::Def {
+                    let reg = self.infer_after_prefix(bump, &cxt, &Decl::Def {
                         name: empty_span(SmolStr::new(typ_name.clone())),
                         params: params.clone(),
-                        ret_type: trait_params.into_iter().fold(
-                            Raw::App(
-                                Box::new(Raw::Var(empty_span(trait_full.clone()))),
-                                Box::new(name.clone()),
-                                Either::Icit(Icit::Impl),
-                            ),
-                            |a, b| {
-                                Raw::App(Box::new(a), Box::new(b), Either::Icit(Icit::Impl))
-                            },
-                        ),
-                        body: ret,
-                    })?;
-                    cxt = c;
+                        ret_type: synth_ret_type.clone(),
+                        body: ret.clone(),
+                    });
+                    match reg {
+                        Ok((_, c)) => { cxt = c; },
+                        Err(root) => {
+                            // B2（§3.1）部分注册：实例头已入 solver
+                            // （`impl_trait_for` 不回滚），合成记录 def 一次性
+                            // 注册失败时逐方法以 trait 签名试查，失败字段换成
+                            // 「签名类型 + 中性自引用体」的桩 def 后重试——好方
+                            // 法保真、坏方法中性，下游 `.m` 要么正常工作要么报
+                            // 普通方法级错，不再出现 "solve trait failed ...
+                            // last error: name not in scope"。根因错误经
+                            // accumulated_errors 排水（observe_user 逐 decl
+                            // 并入 user_errors）。
+                            self.accumulated_errors.push(root);
+                            let mut ret2 = std::iter::once(name.clone())
+                                .chain(trait_params.iter().cloned())
+                                .fold(
+                                    Raw::Var(empty_span(SmolStr::new(format!("{}.mk", trait_full)))),
+                                    |ret, x| {
+                                        Raw::App(Box::new(ret), Box::new(x), Either::Icit(Icit::Impl))
+                                    },
+                                );
+                            for (i, (decl, _)) in methods_snapshot.into_iter().enumerate() {
+                                if let Decl::Def { name: def_name, params: m_params, ret_type: _, body } = decl {
+                                    let mname = def_name.data.clone();
+                                    let method_expr = match &class_type_name {
+                                        Some(ty) if i < class_method_count => Raw::Var(
+                                            def_name.map(|n| SmolStr::new(format!("{}.{}", ty, n))),
+                                        ),
+                                        _ => Raw::Lam(
+                                            def_name.map(|_| SmolStr::new("this")),
+                                            Either::Icit(Icit::Expl),
+                                            Box::new(
+                                                m_params
+                                                    .iter()
+                                                    .rev()
+                                                    .fold(body, |ret, x| {
+                                                        Raw::Lam(
+                                                            x.0.clone(),
+                                                            Either::Icit(x.2),
+                                                            Box::new(ret),
+                                                        )
+                                                    }),
+                                            ),
+                                        ),
+                                    };
+                                    // 逐方法试查：字段签名可得且体检查通过 ⇒
+                                    // 保留原方法；否则以 `{trait}.{m}$failed`
+                                    // 桩 def 顶上（`$` 不在标识符字符集，免撞
+                                    // 名；自引用体 force 恒卡住，不求值成环）。
+                                    let field_ty = self.trait_field_ty(bump, &cxt, trait_full.as_str(), &trait_param_v, i);
+                                    let trial_ok = match field_ty {
+                                        Some(ty) => self.check(bump, &temp_cxt, &method_expr, ty).is_ok(),
+                                        None => false,
+                                    };
+                                    let method_expr = if trial_ok {
+                                        method_expr
+                                    } else if let Some(field_ty) = field_ty {
+                                        let field_tm = self.quote(bump, &cxt, cxt.lvl, field_ty);
+                                        let stub_name = SmolStr::new(format!("{}.{}$failed", trait_full, mname));
+                                        let stub_tm = bump.alloc(Tm::Decl(bump.alloc_str(stub_name.as_str())));
+                                        let stub_val = v_xcell(bump.alloc(XCell::Decl { name: bump.alloc_str(stub_name.as_str()) }));
+                                        let _ = self.decl_reg_in(bump, &mut cxt, stub_name.as_str(), empty_span(()), stub_tm, stub_val, field_tm, field_ty, None, None);
+                                        Raw::Var(empty_span(stub_name))
+                                    } else {
+                                        // 字段签名不可得：保留原表达式，交由重试/
+                                        // 兜底收拾。
+                                        method_expr
+                                    };
+                                    ret2 = Raw::App(
+                                        Box::new(ret2),
+                                        Box::new(method_expr),
+                                        Either::Icit(Icit::Expl),
+                                    );
+                                }
+                            }
+                            let retry = self.infer_after_prefix(bump, &cxt, &Decl::Def {
+                                name: empty_span(SmolStr::new(typ_name.clone())),
+                                params: params.clone(),
+                                ret_type: synth_ret_type.clone(),
+                                body: ret2,
+                            });
+                            match retry {
+                                Ok((_, c)) => { cxt = c; },
+                                Err(second) => {
+                                    self.accumulated_errors.push(second);
+                                    // 兜底：重试仍失败（字段签名不可得等罕见路
+                                    // 径）——以声明类型 + 中性自引用体登记实例
+                                    // 合成名，保 solve_trait Phase 2 查得到定义
+                                    // （下游 `.m` 得中性值，而非 "solve trait
+                                    // failed ... name not in scope"）。
+                                    if let Ok((typ_tm, _)) = self.check_universe(bump, &cxt, &synth_ret_type) {
+                                        let vtyp = self.eval(bump, &cxt, cxt.env, typ_tm);
+                                        let stub_tm = bump.alloc(Tm::Decl(bump.alloc_str(&typ_name)));
+                                        let stub_val = v_xcell(bump.alloc(XCell::Decl { name: bump.alloc_str(&typ_name) }));
+                                        let _ = self.decl_reg_in(bump, &mut cxt, typ_name.as_str(), empty_span(()), stub_tm, stub_val, typ_tm, vtyp, None, None);
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
                 Ok((DeclOut::TraitImpl, cxt))
             }
