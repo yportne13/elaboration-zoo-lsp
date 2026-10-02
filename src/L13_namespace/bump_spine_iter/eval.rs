@@ -12,6 +12,8 @@ use std::cell::RefCell;
 
 use super::parser::syntax::Icit;
 
+use crate::L13_namespace::eval_budget;
+
 use super::env::{env_ext, env_nth, EMPTY_ENV, CloCell, Env, PiCell};
 use super::force::{force, vapp1};
 use super::prim::{def_needs_replay, nat_step_value, Decls, Mutable};
@@ -268,10 +270,14 @@ pub(super) fn eval_iter<'a>(
     vals.clear();
     icits.clear();
     work.push(W::Tm(tm0, env0));
+    // 求值预算计数器：无 deadline 时只付自增 + 掩码分支，每 2^20 次迭代
+    // 才读一次 TLS / Instant（见 eval_budget 模块头）。
+    let mut budget_ctr: u32 = 0;
     while let Some(w) = work.pop() {
         // tick 补点（backlog §3 ②）：eval 主循环体此前零 tick。
         #[cfg(feature = "sampler")]
         crate::sampler::tick();
+        eval_budget::tick(&mut budget_ctr);
         match w {
             W::Tm(Tm::Var(i), env) => {
                 vals.push(env_nth(defs, env, *i));

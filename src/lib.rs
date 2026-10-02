@@ -330,6 +330,27 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
+// ── 求值预算默认值（docs/l13-quirks-analysis-2026-10.md §4 R2/R3）──
+// observe_user 只吃用户文件（prelude 已 prime），合法文件毫秒级完成，
+// 10s 是百倍余量；参考版整文件 20s 同理。Env 可覆盖：TWIN_OBSERVE_
+// BUDGET_MS / LSP_INFER_BUDGET_MS。CLI --max-infer-ms 走 scope（外层），
+// 优先级高于这里的 scope_default 默认。
+
+fn env_budget_ms(key: &str, default: u64) -> u64 {
+    std::env::var(key).ok().and_then(|s| s.parse().ok()).unwrap_or(default)
+}
+
+fn twin_observe_budget_ms() -> u64 {
+    static V: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *V.get_or_init(|| env_budget_ms("TWIN_OBSERVE_BUDGET_MS", 10_000))
+}
+
+fn on_change_budget_ms() -> u64 {
+    static V: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *V.get_or_init(|| env_budget_ms("LSP_INFER_BUDGET_MS", 20_000))
+}
+
+
 impl ObserveSnapshot {
     /// Same rule as `Infer::hover_entry_at` / `Machine::hover_entry_at`: the
     /// smallest span on `path_id` containing `offset` wins.
@@ -1462,37 +1483,64 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         // single-threaded, so a thread-local (not a Backend field) is the
         // right home.  Reuse is keyed by prelude shape (HDL or core-only).
         let mut decline: &str = "resident-unavailable";
-        let ran = TWIN_RESIDENT.with(|slot| {
-            let mut guard = slot.borrow_mut();
-            let stale = !matches!(guard.as_ref(), Some(r) if r.include_hdl == include_hdl);
-            if stale {
-                let mut t = L13_namespace::bump_spine_iter::Tycker::new();
-                if t.prime_resident(prelude).is_err() {
-                    *guard = None;
-                    decline = "prelude-prime-failed";
-                    return false;
+        // 求值预算看门狗（docs/l13-quirks-analysis-2026-10.md §4 R2）：用户
+        // 文件里被求值的循环定义会让 observe_user 静默自旋、冻结整个
+        // 内联排水的主循环。预算内正常跑；超时 panic_any(ElabTimeout)
+        // 在此捕获——resident 半更新状态整体作废（下次 re-prime ~3.3s），
+        // 回落参考版路径（参考版 eval 同款预算，见 on_change）。
+        // AssertUnwindSafe：unwind 穿过的 RefCell/bump 状态按"废弃重 prime"
+        // 处理，不要求逻辑一致性。
+        let observe = |decline: &mut &str| {
+            TWIN_RESIDENT.with(|slot| {
+                let mut guard = slot.borrow_mut();
+                let stale = !matches!(guard.as_ref(), Some(r) if r.include_hdl == include_hdl);
+                if stale {
+                    let mut t = L13_namespace::bump_spine_iter::Tycker::new();
+                    if t.prime_resident(prelude).is_err() {
+                        *guard = None;
+                        *decline = "prelude-prime-failed";
+                        return false;
+                    }
+                    *guard = Some(TwinResident { include_hdl, tycker: t });
                 }
-                *guard = Some(TwinResident { include_hdl, tycker: t });
+                let resident = guard.as_mut().expect("resident just primed");
+                match resident.tycker.observe_user(prelude, decls) {
+                    Ok(()) => {
+                        let t = &resident.tycker;
+                        let snap = ObserveSnapshot {
+                            hover: t.hover_table().to_vec(),
+                            completion: t.completion_table().to_vec(),
+                            inlay: t.inlay_hint_table().to_vec(),
+                        };
+                        self.twin_tables.insert(uri_str.clone(), snap);
+                        true
+                    }
+                    Err(_) => {
+                        self.twin_tables.remove(&uri_str);
+                        *decline = "observe-failed";
+                        false
+                    }
+                }
+            })
+        };
+        let ran = {
+            let _budget = L13_namespace::eval_budget::scope(twin_observe_budget_ms());
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                observe(&mut decline)
+            })) {
+                Ok(r) => r,
+                Err(p) => {
+                    if L13_namespace::eval_budget::is_timeout(p.as_ref()) {
+                        TWIN_RESIDENT.with(|slot| *slot.borrow_mut() = None);
+                        self.twin_tables.remove(&uri_str);
+                        decline = "observe-timeout";
+                        false
+                    } else {
+                        std::panic::resume_unwind(p);
+                    }
+                }
             }
-            let resident = guard.as_mut().expect("resident just primed");
-            match resident.tycker.observe_user(prelude, decls) {
-                Ok(()) => {
-                    let t = &resident.tycker;
-                    let snap = ObserveSnapshot {
-                        hover: t.hover_table().to_vec(),
-                        completion: t.completion_table().to_vec(),
-                        inlay: t.inlay_hint_table().to_vec(),
-                    };
-                    self.twin_tables.insert(uri_str.clone(), snap);
-                    true
-                }
-                Err(_) => {
-                    self.twin_tables.remove(&uri_str);
-                    decline = "observe-failed";
-                    false
-                }
-            }
-        });
+        };
         if !ran {
             // 兜底：twin 这次没能拥有该文件（如 prelude 形态变化导致 resident
             // 重新 prime 失败），上一版的快照不能留（observe 失败那一支已删，
@@ -1877,6 +1925,11 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             prof.mark("clone_infer_cxt");
             let mut terms = vec![];
             let start = std::time::Instant::now();
+            // 求值预算看门狗（docs/l13-quirks-analysis-2026-10.md §4）：CLI
+            // 显式 --max-infer-ms 在外层已设时这里不动（scope_default 只兜
+            // 默认）；参考版 eval 循环里的 checkpoint 超时 panic 在下方
+            // 逐 decl catch——把挂死降级为"锚定到 decl 的诊断 + 跳过剩余"。
+            let _ref_budget = L13_namespace::eval_budget::scope_default(on_change_budget_ms());
             for tm in decls {
                 let decl_start = std::time::Instant::now();
                 let f0 = L13_namespace::FUNC_PROF.force.1.load(Ordering::Relaxed);
@@ -1884,7 +1937,30 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                 let q0 = L13_namespace::FUNC_PROF.quote.1.load(Ordering::Relaxed);
                 let u0 = L13_namespace::FUNC_PROF.unify.1.load(Ordering::Relaxed);
                 let v0 = L13_namespace::FUNC_PROF.v_app.1.load(Ordering::Relaxed);
-                match infer.infer(cxt, tm.clone()) {
+                let inferred = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    infer.infer(cxt, tm.clone())
+                })) {
+                    Ok(r) => r,
+                    Err(p) => {
+                        if L13_namespace::eval_budget::is_timeout(p.as_ref()) {
+                            let msg = format!(
+                                "elaboration timed out after {} ms (possible non-terminating definition); remaining declarations skipped",
+                                L13_namespace::eval_budget::current_budget_ms()
+                                    .unwrap_or_else(on_change_budget_ms)
+                            );
+                            err_collect.push((
+                                crate::L13_namespace::Error(
+                                    decl_span(&tm).map(|_| msg.clone()),
+                                    vec![],
+                                ),
+                                DiagnosticSeverity::ERROR,
+                            ));
+                            break;
+                        }
+                        std::panic::resume_unwind(p)
+                    }
+                };
+                match inferred {
                     Ok((x, _, new_cxt)) => {
                         if let DeclTm::Println(_, ref s, span) = x {
                             err_collect.push((
@@ -2487,11 +2563,33 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
 
             let mut err_collect = vec![];
             let mut terms = vec![];
+            // 同 on_change：参考版回落路径的求值预算看门狗（外层已设则不动）。
+            let _ref_budget = L13_namespace::eval_budget::scope_default(on_change_budget_ms());
             for tm in decls {
                 // HDL 警告锚点需在 infer 消费 tm 前取好——否则得为它深拷
                 // 整棵 Decl AST（每 decl 一次，随文件线性）。
                 let anchor = decl_span(&tm);
-                match local_infer.infer(&local_cxt, tm) {
+                let inferred = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    local_infer.infer(&local_cxt, tm)
+                })) {
+                    Ok(r) => r,
+                    Err(p) => {
+                        if L13_namespace::eval_budget::is_timeout(p.as_ref()) {
+                            let msg = format!(
+                                "elaboration timed out after {} ms (possible non-terminating definition); remaining declarations skipped",
+                                L13_namespace::eval_budget::current_budget_ms()
+                                    .unwrap_or_else(on_change_budget_ms)
+                            );
+                            err_collect.push((
+                                L13_namespace::Error(anchor.map(|_| msg.clone()), vec![]),
+                                DiagnosticSeverity::ERROR,
+                            ));
+                            break;
+                        }
+                        std::panic::resume_unwind(p)
+                    }
+                };
+                match inferred {
                     Ok((x, _, new_cxt)) => {
                         terms.push(x);
                         local_cxt = new_cxt;

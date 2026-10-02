@@ -11,6 +11,7 @@ use crate::parser_lib::Span;
 
 pub mod cxt;
 mod elaboration;
+pub mod eval_budget;
 pub mod parser;
 mod pattern_match;
 mod syntax;
@@ -354,6 +355,9 @@ mod calc_tests;
 
 #[cfg(test)]
 mod prelude_stdlib_tests;
+
+#[cfg(test)]
+mod eval_budget_tests;
 
 #[cfg(test)]
 mod bare_ctor_member_tests;
@@ -3169,7 +3173,12 @@ impl Infer {
         let mut stack: Vec<Frame> = Vec::new();
         let mut env = env.clone();
         let mut tm = tm.clone();
+        // 求值预算计数器：与孪生 eval_iter 同款（无 deadline 时近乎零成本，
+        // 见 eval_budget 模块头）。reference 版挂这里而非 force：force 是
+        // 递归实现（无限 force 循环会先炸栈而非自旋），eval 才是自旋点。
+        let mut budget_ctr: u32 = 0;
         loop {
+            eval_budget::tick(&mut budget_ctr);
             // Evaluate the current term to a value.  Composite terms push a
             // continuation frame and continue with their sub-term instead of
             // recursing.

@@ -227,6 +227,14 @@ enum Commands {
         /// Requires building with `--features sampler`.
         #[arg(long, short)]
         flamegraph: bool,
+
+        /// Per-file elaboration time budget in milliseconds
+        ///
+        /// Guards against non-terminating definitions (the engine has no
+        /// termination checker): on timeout the file's analysis aborts with
+        /// a diagnostic instead of spinning forever. Omit for unlimited.
+        #[arg(long)]
+        max_infer_ms: Option<u64>,
     },
 
     /// Start the LSP language server over stdio.
@@ -394,9 +402,9 @@ fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
             elaboration_zoo_lsp::run_lsp_server()?;
         }
 
-        Commands::Check { files, sample, flamegraph } => {
+        Commands::Check { files, sample, flamegraph, max_infer_ms } => {
             let do_sample = sample || flamegraph;
-            run_check(files, do_sample)?;
+            run_check(files, do_sample, max_infer_ms)?;
         }
 
         Commands::Emit { files, top, out, manifest } => {
@@ -672,7 +680,11 @@ fn run_test(
 }
 
 
-fn run_check(files: Vec<String>, do_sample: bool) -> Result<(), Box<dyn Error + Sync + Send>> {
+fn run_check(
+    files: Vec<String>,
+    do_sample: bool,
+    max_infer_ms: Option<u64>,
+) -> Result<(), Box<dyn Error + Sync + Send>> {
     #[cfg(feature = "sampler")]
     if do_sample {
         eprintln!("Sampling profiler enabled (backtrace)...");
@@ -709,6 +721,11 @@ fn run_check(files: Vec<String>, do_sample: bool) -> Result<(), Box<dyn Error + 
 
         // Store source text so the CLI client can render diagnostics with source context.
         source_map.insert(uri.as_str().to_string(), contents.clone());
+
+        // --max-infer-ms：外层显式预算（优先于 on_change 的 scope_default
+        // 默认值）；超时在 on_change 的逐 decl catch 里降级为诊断，这里
+        // 只需保证预算作用域覆盖该文件的整轮分析。
+        let _budget = max_infer_ms.map(elaboration_zoo_lsp::L13_namespace::eval_budget::scope);
 
         // Run the analysis pipeline (parse + infer + diagnostics).
         backend.on_change::<false>(TextDocumentItem {
