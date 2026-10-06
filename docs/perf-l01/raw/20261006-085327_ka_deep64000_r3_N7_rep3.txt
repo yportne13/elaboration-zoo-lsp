@@ -1,0 +1,66 @@
+L01 NBE bench（workload = church）
+rounds per variant = 3, only variants = cek,cek_bump,bump_iter,bump_spine_iter,bump_spine_slim,bump_spine_iter_ss
+
+== church_pair(1000) ==
+  variant                min_ms     med_ms
+  cek                     0.408      0.411
+  cek_bump                0.057      0.059
+  bump_iter               0.061      0.061
+  bump_spine_iter         0.019      0.029
+  bump_spine_iter_ss      0.018      0.018 *
+  bump_spine_slim         0.024      0.025
+
+== church_pair(2000) ==
+  variant                min_ms     med_ms
+  cek                     0.843      0.847
+  cek_bump                0.123      0.129
+  bump_iter               0.124      0.128
+  bump_spine_iter         0.037      0.038
+  bump_spine_iter_ss      0.035      0.035 *
+  bump_spine_slim         0.048      0.050
+
+== church_pair(4000) ==
+  variant                min_ms     med_ms
+  cek                     1.638      1.672
+  cek_bump                0.237      0.238
+  bump_iter               0.236      0.238
+  bump_spine_iter         0.078      0.080
+  bump_spine_iter_ss      0.068      0.069 *
+  bump_spine_slim         0.104      0.108
+
+== church_pair(8000) ==
+  variant                min_ms     med_ms
+  cek                     3.354      3.463
+  cek_bump                0.491      0.502
+  bump_iter               0.475      0.490
+  bump_spine_iter         0.158      0.165
+  bump_spine_iter_ss      0.142      0.143 *
+  bump_spine_slim         0.200      0.204
+
+== church_pair(16000) — 大 n：仅迭代变体（其余变体递归链在此规模栈溢出）==
+  variant                min_ms     med_ms
+  cek                     7.624      7.716
+  cek_bump                1.215      1.287
+  bump_iter               1.784      1.886
+  bump_spine_iter         0.465      0.655
+  bump_spine_slim         0.424      0.453
+  bump_spine_iter_ss      0.283      0.283 *
+
+== church_pair(32000) — 大 n：仅迭代变体（其余变体递归链在此规模栈溢出）==
+  variant                min_ms     med_ms
+  cek                    16.186     16.783
+  cek_bump                2.433      2.467
+  bump_iter               2.204      2.436
+  bump_spine_iter         0.866      0.934
+  bump_spine_slim         1.200      1.428
+  bump_spine_iter_ss      0.484      0.526 *
+
+== church_pair(64000) — 大 n：仅迭代变体（其余变体递归链在此规模栈溢出）==
+  variant                min_ms     med_ms
+  cek                    31.654     32.831
+  cek_bump                4.610      6.779
+  bump_iter               5.302      5.601
+  bump_spine_iter         1.324      1.330
+  bump_spine_slim         1.590      2.007
+  bump_spine_iter_ss      0.963      0.965 *
+

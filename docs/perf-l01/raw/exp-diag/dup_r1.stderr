@@ -1,0 +1,8 @@
+DIAG|dup_pair(1000)|app=57|fork_h0=12|fork_hn=0|composite_h0=30|composite_hn=0|base_h0=0|base_hn=15|apply=42|cw0=42|cw_k=15|wrap_heads=12003|steps=255
+DIAG|dup_deep(1000)|app=114|fork_h0=24|fork_hn=0|composite_h0=57|composite_hn=0|base_h0=0|base_hn=33|apply=81|cw0=81|cw_k=33|wrap_heads=24009|steps=498
+DIAG|dup_pair(2000)|app=57|fork_h0=12|fork_hn=0|composite_h0=30|composite_hn=0|base_h0=0|base_hn=15|apply=42|cw0=42|cw_k=15|wrap_heads=24003|steps=255
+DIAG|dup_deep(2000)|app=114|fork_h0=24|fork_hn=0|composite_h0=57|composite_hn=0|base_h0=0|base_hn=33|apply=81|cw0=81|cw_k=33|wrap_heads=48009|steps=498
+DIAG|dup_pair(4000)|app=57|fork_h0=12|fork_hn=0|composite_h0=30|composite_hn=0|base_h0=0|base_hn=15|apply=42|cw0=42|cw_k=15|wrap_heads=48003|steps=255
+DIAG|dup_deep(4000)|app=114|fork_h0=24|fork_hn=0|composite_h0=57|composite_hn=0|base_h0=0|base_hn=33|apply=81|cw0=81|cw_k=33|wrap_heads=96009|steps=498
+DIAG|dup_pair(8000)|app=57|fork_h0=12|fork_hn=0|composite_h0=30|composite_hn=0|base_h0=0|base_hn=15|apply=42|cw0=42|cw_k=15|wrap_heads=96003|steps=255
+DIAG|dup_deep(8000)|app=114|fork_h0=24|fork_hn=0|composite_h0=57|composite_hn=0|base_h0=0|base_hn=33|apply=81|cw0=81|cw_k=33|wrap_heads=192009|steps=498

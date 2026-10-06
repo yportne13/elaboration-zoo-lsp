@@ -1,0 +1,4 @@
+DIAG|church_pair(1000)|app=24|fork_h0=6|fork_hn=0|composite_h0=12|composite_hn=0|base_h0=0|base_hn=6|apply=18|cw0=18|cw_k=6|wrap_heads=6000|steps=111
+DIAG|church_pair(2000)|app=24|fork_h0=6|fork_hn=0|composite_h0=12|composite_hn=0|base_h0=0|base_hn=6|apply=18|cw0=18|cw_k=6|wrap_heads=12000|steps=111
+DIAG|church_pair(4000)|app=24|fork_h0=6|fork_hn=0|composite_h0=12|composite_hn=0|base_h0=0|base_hn=6|apply=18|cw0=18|cw_k=6|wrap_heads=24000|steps=111
+DIAG|church_pair(8000)|app=24|fork_h0=6|fork_hn=0|composite_h0=12|composite_hn=0|base_h0=0|base_hn=6|apply=18|cw0=18|cw_k=6|wrap_heads=48000|steps=111

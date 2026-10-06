@@ -1,0 +1,35 @@
+L01 NBE bench（workload = dup）
+rounds per variant = 50, only variants = bump_spine_iter
+
+== dup_pair(1000) — 复制强制：无记忆化时 quote 强制 C 2×/4× ==
+  variant                min_ms     med_ms
+  bump_spine_iter         0.041      0.042 *
+
+== dup_deep(1000) — 复制强制：无记忆化时 quote 强制 C 2×/4× ==
+  variant                min_ms     med_ms
+  bump_spine_iter         0.084      0.086 *
+
+== dup_pair(2000) — 复制强制：无记忆化时 quote 强制 C 2×/4× ==
+  variant                min_ms     med_ms
+  bump_spine_iter         0.087      0.088 *
+
+== dup_deep(2000) — 复制强制：无记忆化时 quote 强制 C 2×/4× ==
+  variant                min_ms     med_ms
+  bump_spine_iter         0.172      0.174 *
+
+== dup_pair(4000) — 复制强制：无记忆化时 quote 强制 C 2×/4× ==
+  variant                min_ms     med_ms
+  bump_spine_iter         0.172      0.175 *
+
+== dup_deep(4000) — 复制强制：无记忆化时 quote 强制 C 2×/4× ==
+  variant                min_ms     med_ms
+  bump_spine_iter         0.333      0.358 *
+
+== dup_pair(8000) — 复制强制：无记忆化时 quote 强制 C 2×/4× ==
+  variant                min_ms     med_ms
+  bump_spine_iter         0.351      0.356 *
+
+== dup_deep(8000) — 复制强制：无记忆化时 quote 强制 C 2×/4× ==
+  variant                min_ms     med_ms
+  bump_spine_iter         0.682      0.690 *
+

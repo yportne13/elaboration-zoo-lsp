@@ -1,0 +1,23 @@
+L01 NBE bench（workload = church）
+rounds per variant = 200, only variants = bump_spine_iter,bump_spine_iter_ss
+
+== church_pair(1000) ==
+  variant                min_ms     med_ms
+  bump_spine_iter         0.019      0.020
+  bump_spine_iter_ss      0.019      0.019 *
+
+== church_pair(2000) ==
+  variant                min_ms     med_ms
+  bump_spine_iter         0.030      0.032
+  bump_spine_iter_ss      0.030      0.030 *
+
+== church_pair(4000) ==
+  variant                min_ms     med_ms
+  bump_spine_iter         0.067      0.082
+  bump_spine_iter_ss      0.057      0.073 *
+
+== church_pair(8000) ==
+  variant                min_ms     med_ms
+  bump_spine_iter         0.143      0.156
+  bump_spine_iter_ss      0.119      0.127 *
+

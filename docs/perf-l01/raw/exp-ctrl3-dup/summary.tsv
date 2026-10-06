@@ -1,0 +1,9 @@
+workload	size	variant	min_A	min_B	ratio_B_over_A	spread_A_pct	spread_B_pct	paired_ratio_med	paired_ratio_min	paired_ratio_max	n_pairs	verdict
+dup_deep	1000	bump_spine_iter	0.0620	0.0620	1.0000	43.55	35.48	1.0000	0.9405	1.0806	21	undecided(dev=0.00%<=noise=43.55%)
+dup_deep	2000	bump_spine_iter	0.1270	0.1260	0.9921	48.03	36.51	1.0000	0.9149	1.0472	21	undecided(dev=0.79%<=noise=48.03%)
+dup_deep	4000	bump_spine_iter	0.2630	0.2620	0.9962	47.53	40.46	1.0000	0.7938	1.2948	21	undecided(dev=0.38%<=noise=47.53%)
+dup_deep	8000	bump_spine_iter	0.5410	0.5570	1.0296	35.86	39.14	1.0017	0.8592	1.1919	21	undecided(dev=2.96%<=noise=39.14%)
+dup_pair	1000	bump_spine_iter	0.0300	0.0300	1.0000	43.33	33.33	1.0000	0.7561	1.2000	21	undecided(dev=0.00%<=noise=43.33%)
+dup_pair	2000	bump_spine_iter	0.0640	0.0640	1.0000	45.31	35.94	1.0000	0.9310	1.0469	21	undecided(dev=0.00%<=noise=45.31%)
+dup_pair	4000	bump_spine_iter	0.1270	0.1270	1.0000	48.03	35.43	1.0000	0.7809	1.0469	21	undecided(dev=0.00%<=noise=48.03%)
+dup_pair	8000	bump_spine_iter	0.2650	0.2710	1.0226	47.55	36.53	1.0000	0.9233	1.2643	21	undecided(dev=2.26%<=noise=47.55%)
