@@ -2142,7 +2142,7 @@ impl Infer {
         let solved = self.meta.iter().filter(|m| matches!(m, MetaEntry::Solved(..))).count();
         let unsolved = self.meta.iter().filter(|m| matches!(m, MetaEntry::Unsolved(..))).count();
         let meta_cap = self.meta.capacity();
-        let MetaEntry_sz = std::mem::size_of::<MetaEntry>();
+        let meta_entry_sz = std::mem::size_of::<MetaEntry>();
         let hover_len = self.hover_table.len();
         let hover_cap = self.hover_table.capacity();
         let constraints_len = self.meta_contrains.len();
@@ -2384,9 +2384,9 @@ impl Infer {
                 "solved": solved,
                 "unsolved": unsolved,
                 "capacity": meta_cap,
-                "entry_size": MetaEntry_sz,
-                "vec_allocation_bytes": meta_cap * MetaEntry_sz,
-                "est_inline_bytes": total * MetaEntry_sz,
+                "entry_size": meta_entry_sz,
+                "vec_allocation_bytes": meta_cap * meta_entry_sz,
+                "est_inline_bytes": total * meta_entry_sz,
             },
 "hover_table": {
                 "len": hover_len,
@@ -2444,7 +2444,7 @@ impl Infer {
                 "decl_entries": cxt_decl_count,
             },
             "type_sizes": {
-                "MetaEntry": MetaEntry_sz,
+                "MetaEntry": meta_entry_sz,
                 "Cxt": std::mem::size_of::<cxt::Cxt>(),
                 "Infer": std::mem::size_of::<Self>(),
                 "Val": val_node_size,
