@@ -74,6 +74,19 @@ cargo build --release --bin l01bench
 
 机器：Windows x64（release profile：LTO + codegen-units=1 + mimalloc）。
 
+> **2026-10 修订（spine 预保留 4096 → 16384）**：`bump_spine_iter::normalize_imported`
+> 的一次性口径 spine 栈预保留由 4096 槽（96KB）改为 16384 槽（384KB），消除
+> 右链负载在 n ≥ 2048 时的扩容（新 malloc + memcpy + free，全在计时窗内）。
+> 实测（aarch64/Termux，`taskset -c 7`，A/B 同批交错 21 reps/侧，指标 = 每 rep
+> min 的中位数）：本机落地验收 `church_pair` n=4000 **−5.2%**、n=8000 **−7.1%**
+> （同批空对照 p95 0.00%/0.64%）；独立复核（自写三臂轮转驱动）−7.5% / −10.4%；
+> n ≤ 2000 无差异。
+> **下表及后续消融阶梯中的「一次性口径」数字（Windows x64）是本次修订之前测得
+> 的，未重测**，一次性的 `bump_spine_iter`/`bump_spine_slim` 行应视为偏保守；
+> `bump_spine_iter_ss`（`Machine` 稳态）与其余变体**不受影响**（`Machine` 的预留
+> 独立、且只在构造时分配一次）。修订的取舍（固定值、大 n 仍会扩容、小规模多占
+> 288KB）见 `bump_spine_iter.rs` 的 `SPINE_RESERVE` / `normalize_imported` 文档。
+
 n = 4000（min ms / med ms / 相对 bump_spine_iter_ss）：
 
 | 变体 | min | med | 相对 |
