@@ -1,0 +1,27 @@
+L01 NBE bench（workload = guest）
+rounds per variant = 3, only variants = bump_spine_iter,bump_spine_iter_ss,bump_spine,bump_spine_memo
+
+== guest-shape benches（负载设计取自 guest0x0/normalization-bench）==
+（口径：import/export 在计时外；表内为 min ms）
+
+== guest/church_mul ==
+  variant                   n=50       n=100       n=200
+  bump_spine               0.032       0.138       0.572
+  bump_spine_iter          0.023       0.095       0.390
+  bump_spine_iter_ss       0.022       0.084       0.339
+  bump_spine_memo          0.024       0.097       0.392
+
+== guest/parigot_add ==
+  variant                    n=4         n=6         n=8        n=10
+  bump_spine               0.024       0.377       6.224     105.489
+  bump_spine_iter          0.032       0.503       8.295     146.232
+  bump_spine_iter_ss       0.032       0.505       8.184     143.251
+  bump_spine_memo          0.026       0.087       0.151       0.331
+
+== guest/exponential ==
+  variant                   n=10        n=14        n=18        n=20
+  bump_spine               0.010       0.155       3.136      12.567
+  bump_spine_iter          0.014       0.203       3.497      14.281
+  bump_spine_iter_ss       0.013       0.201       3.601      14.465
+  bump_spine_memo          0.003       0.004       0.006       0.006
+

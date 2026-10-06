@@ -1,0 +1,19 @@
+timestamp_utc: 2026-10-06T08:56:57Z
+kernel: Linux 6.17.0-PRoot-Distro aarch64 Linux
+cpu_model: unknown
+cores_online: 6
+cpu0: max=1804800kHz cur=1324800kHz governor=walt
+cpu4: max=2496000kHz cur=2342400kHz governor=walt
+cpu7: max=2995200kHz cur=787200kHz governor=walt
+pinned_cpu: 7
+cpus_allowed: 0-5,7
+cgroup_cpu_max: n/a
+loadavg_at_start: 0.12 0.07 0.02 2/165 765
+binary: /home/dev/elaboration-zoo-lsp/target/release/l01bench
+binary_sha256: 503ff7c966de2ef95368ce7af66a18fdcfb6c06006d7267a73d02283ea501d37
+rustc: rustc 1.98.1 (48a229cea 2026-09-01)
+cargo_profile_release: [profile.release] lto = true codegen-units = 1 # strip = true # enabled for releases, disabled via release-profiling for profiling [profile.release-profiling] 
+allocator: mimalloc (src/bin/l01bench.rs #[global_allocator])
+stack_mb: 128 (L01_STACK_MB env on the big-stack thread)
+cmd: taskset -c 7 env L01_STACK_MB=128 /home/dev/elaboration-zoo-lsp/target/release/l01bench --max-church 1000 --rounds 1 --only bump_spine_iter --workload church
+keepalive_mode: sched_idle

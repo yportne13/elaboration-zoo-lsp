@@ -1,0 +1,23 @@
+workload            n variant                batches reps  batchmin  batchmax  cross%  repCV% pair_med% pair_max% boot_minCV%
+-----------------------------------------------------------------------------------------------------------------------------
+church           4000 bump_iter                    3    7    0.1950    0.2340   20.00    5.80      0.85     20.00        8.40
+church           4000 bump_spine                   3    7    0.0940    0.1130   20.21    5.72      0.00     20.21        8.60
+church           4000 bump_spine_iter              3    7    0.0650    0.0780   20.00    6.02      8.33     20.00        7.42
+church           4000 bump_spine_iter_ss           3    7    0.0580    0.0680   17.24    5.81      9.52     17.24        6.01
+church           4000 bump_spine_memo              3    7    0.0650    0.0780   20.00    7.12      1.54     20.00        6.45
+church           4000 bump_spine_slim              3    7    0.0830    0.0980   18.07    7.91      1.16     19.28        5.11
+church           4000 bump_tree                    3    7    0.1610    0.1930   19.88    5.63      1.04     20.50        8.07
+church           4000 cek_bump                     3    7    0.1960    0.2360   20.41    5.66      0.00     20.92        7.98
+church           8000 bump_iter                    3    7    0.3940    0.4750   20.56    7.05      0.63      8.45        6.54
+church           8000 bump_spine                   3    7    0.1930    0.2310   19.69    6.51      8.81     14.93        6.71
+church           8000 bump_spine_iter              3    7    0.1310    0.1580   20.61    7.25      9.92     16.18        5.66
+church           8000 bump_spine_iter_ss           3    7    0.1140    0.1240    8.77    8.36      3.42     10.48        3.93
+church           8000 bump_spine_memo              3    7    0.1320    0.1390    5.30    8.17      0.00     18.80        2.12
+church           8000 bump_spine_slim              3    7    0.1640    0.1740    6.10    8.58      6.71     13.22        3.65
+church           8000 bump_tree                    3    7    0.3220    0.3890   20.81    7.95      1.52     15.53        5.13
+church           8000 cek_bump                     3    7    0.3940    0.4810   22.08    8.71     19.80     22.84        7.07
+
+cross-batch spread of min-of-N : median 20.00%  max 22.08%
+single-rep CV                  : median 7.08%  max 8.71%
+within-batch half-split paired : median 1.53%  max 22.84%
+bootstrap CV of min-of-N (iid) : median 6.49%  max 8.60%

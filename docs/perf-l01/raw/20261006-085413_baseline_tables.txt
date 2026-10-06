@@ -1,0 +1,88 @@
+
+### KA church (8 variants, sizes 1000..8000)|4000,8000
+church	4000	bump_iter	reps=21	med_of_min=0.2370	min=0.1950	max=0.2450	batch_median_spread%=0.85
+church	4000	bump_spine	reps=21	med_of_min=0.1130	min=0.0940	max=0.1140	batch_median_spread%=0.88
+church	4000	bump_spine_iter	reps=21	med_of_min=0.0780	min=0.0650	max=0.0820	batch_median_spread%=0.00
+church	4000	bump_spine_iter_ss	reps=21	med_of_min=0.0690	min=0.0570	max=0.0710	batch_median_spread%=1.47
+church	4000	bump_spine_memo	reps=21	med_of_min=0.0790	min=0.0660	max=0.0840	batch_median_spread%=1.28
+church	4000	bump_spine_slim	reps=21	med_of_min=0.1040	min=0.0810	max=0.1080	batch_median_spread%=2.94
+church	4000	bump_tree	reps=21	med_of_min=0.1940	min=0.1660	max=0.2010	batch_median_spread%=0.52
+church	4000	cek_bump	reps=21	med_of_min=0.2370	min=0.1980	max=0.2410	batch_median_spread%=0.85
+church	8000	bump_iter	reps=21	med_of_min=0.4750	min=0.4680	max=0.5440	batch_median_spread%=0.42
+church	8000	bump_spine	reps=21	med_of_min=0.2320	min=0.2300	max=0.2520	batch_median_spread%=0.43
+church	8000	bump_spine_iter	reps=21	med_of_min=0.1590	min=0.1580	max=0.1660	batch_median_spread%=0.63
+church	8000	bump_spine_iter_ss	reps=21	med_of_min=0.1400	min=0.1310	max=0.1460	batch_median_spread%=1.45
+church	8000	bump_spine_memo	reps=21	med_of_min=0.1610	min=0.1530	max=0.1690	batch_median_spread%=2.52
+church	8000	bump_spine_slim	reps=21	med_of_min=0.2030	min=0.1930	max=0.2140	batch_median_spread%=0.49
+church	8000	bump_tree	reps=21	med_of_min=0.3910	min=0.3310	max=0.4510	batch_median_spread%=2.31
+church	8000	cek_bump	reps=21	med_of_min=0.4820	min=0.3990	max=0.5840	batch_median_spread%=2.10
+
+### KA dup
+dup_deep	4000	bump_spine_iter	reps=7	med_of_min=0.3280	min=0.3260	max=0.3480	batch_median_spread%=0.00
+dup_pair	4000	bump_spine_iter	reps=7	med_of_min=0.1560	min=0.1540	max=0.1590	batch_median_spread%=0.00
+dup_pair	4000	bump_spine_memo	reps=7	med_of_min=0.0810	min=0.0800	max=0.0830	batch_median_spread%=0.00
+dup_deep	4000	bump_spine_memo	reps=7	med_of_min=0.0880	min=0.0830	max=0.0960	batch_median_spread%=0.00
+dup_pair	8000	bump_spine_iter	reps=7	med_of_min=0.3370	min=0.3240	max=0.3490	batch_median_spread%=0.00
+dup_deep	8000	bump_spine_iter	reps=7	med_of_min=0.6750	min=0.6680	max=0.7280	batch_median_spread%=0.00
+dup_pair	8000	bump_spine_memo	reps=7	med_of_min=0.1710	min=0.1660	max=0.1850	batch_median_spread%=0.00
+dup_deep	8000	bump_spine_memo	reps=7	med_of_min=0.1820	min=0.1800	max=0.1970	batch_median_spread%=0.00
+
+### KA guest
+guest/parigot_add	4	bump_spine	reps=5	med_of_min=0.0240	min=0.0230	max=0.0250	batch_median_spread%=0.00
+guest/parigot_add	4	bump_spine_iter	reps=5	med_of_min=0.0320	min=0.0320	max=0.0350	batch_median_spread%=0.00
+guest/parigot_add	4	bump_spine_iter_ss	reps=5	med_of_min=0.0320	min=0.0320	max=0.0360	batch_median_spread%=0.00
+guest/parigot_add	4	bump_spine_memo	reps=5	med_of_min=0.0260	min=0.0250	max=0.0260	batch_median_spread%=0.00
+guest/parigot_add	6	bump_spine	reps=5	med_of_min=0.3770	min=0.3620	max=0.3880	batch_median_spread%=0.00
+guest/parigot_add	6	bump_spine_iter	reps=5	med_of_min=0.5540	min=0.5000	max=0.5560	batch_median_spread%=0.00
+guest/parigot_add	6	bump_spine_iter_ss	reps=5	med_of_min=0.5530	min=0.5050	max=0.5540	batch_median_spread%=0.00
+guest/parigot_add	6	bump_spine_memo	reps=5	med_of_min=0.0770	min=0.0730	max=0.0870	batch_median_spread%=0.00
+guest/parigot_add	8	bump_spine	reps=5	med_of_min=6.4250	min=5.1160	max=6.4490	batch_median_spread%=0.00
+guest/parigot_add	8	bump_spine_iter	reps=5	med_of_min=9.0750	min=6.9730	max=9.1630	batch_median_spread%=0.00
+guest/parigot_add	8	bump_spine_iter_ss	reps=5	med_of_min=8.9500	min=6.7750	max=9.0240	batch_median_spread%=0.00
+guest/parigot_add	8	bump_spine_memo	reps=5	med_of_min=0.1600	min=0.1510	max=0.1620	batch_median_spread%=0.00
+guest/parigot_add	10	bump_spine	reps=5	med_of_min=103.0160	min=82.2040	max=105.4890	batch_median_spread%=0.00
+guest/exponential	10	bump_spine	reps=5	med_of_min=0.0100	min=0.0080	max=0.0110	batch_median_spread%=0.00
+guest/parigot_add	10	bump_spine_iter	reps=5	med_of_min=146.2320	min=111.7510	max=163.4800	batch_median_spread%=0.00
+guest/exponential	10	bump_spine_iter	reps=5	med_of_min=0.0130	min=0.0100	max=0.0140	batch_median_spread%=0.00
+guest/parigot_add	10	bump_spine_iter_ss	reps=5	med_of_min=143.3010	min=112.6380	max=147.8880	batch_median_spread%=0.00
+guest/exponential	10	bump_spine_iter_ss	reps=5	med_of_min=0.0130	min=0.0100	max=0.0130	batch_median_spread%=0.00
+guest/parigot_add	10	bump_spine_memo	reps=5	med_of_min=0.3050	min=0.2690	max=0.3310	batch_median_spread%=0.00
+guest/exponential	10	bump_spine_memo	reps=5	med_of_min=0.0030	min=0.0020	max=0.0030	batch_median_spread%=0.00
+guest/exponential	14	bump_spine	reps=5	med_of_min=0.1550	min=0.1270	max=0.1580	batch_median_spread%=0.00
+guest/exponential	14	bump_spine_iter	reps=5	med_of_min=0.2010	min=0.1500	max=0.2030	batch_median_spread%=0.00
+guest/exponential	14	bump_spine_iter_ss	reps=5	med_of_min=0.2010	min=0.1470	max=0.2020	batch_median_spread%=0.00
+guest/exponential	14	bump_spine_memo	reps=5	med_of_min=0.0040	min=0.0030	max=0.0040	batch_median_spread%=0.00
+guest/exponential	18	bump_spine	reps=5	med_of_min=3.1480	min=2.4670	max=3.3350	batch_median_spread%=0.00
+guest/exponential	18	bump_spine_iter	reps=5	med_of_min=3.5190	min=2.7290	max=5.1990	batch_median_spread%=0.00
+guest/exponential	18	bump_spine_iter_ss	reps=5	med_of_min=3.5710	min=2.7340	max=4.0040	batch_median_spread%=0.00
+guest/exponential	18	bump_spine_memo	reps=5	med_of_min=0.0060	min=0.0050	max=0.0060	batch_median_spread%=0.00
+guest/exponential	20	bump_spine	reps=5	med_of_min=12.5670	min=9.8760	max=12.6780	batch_median_spread%=0.00
+guest/exponential	20	bump_spine_iter	reps=5	med_of_min=14.2840	min=11.5470	max=14.5350	batch_median_spread%=0.00
+guest/exponential	20	bump_spine_iter_ss	reps=5	med_of_min=14.4630	min=11.2220	max=14.5060	batch_median_spread%=0.00
+guest/exponential	20	bump_spine_memo	reps=5	med_of_min=0.0060	min=0.0050	max=0.0070	batch_median_spread%=0.00
+guest/church_mul	50	bump_spine	reps=5	med_of_min=0.0320	min=0.0270	max=0.0320	batch_median_spread%=0.00
+guest/church_mul	50	bump_spine_iter	reps=5	med_of_min=0.0230	min=0.0190	max=0.0230	batch_median_spread%=0.00
+guest/church_mul	50	bump_spine_iter_ss	reps=5	med_of_min=0.0220	min=0.0180	max=0.0220	batch_median_spread%=0.00
+guest/church_mul	50	bump_spine_memo	reps=5	med_of_min=0.0230	min=0.0200	max=0.0240	batch_median_spread%=0.00
+guest/church_mul	100	bump_spine	reps=5	med_of_min=0.1380	min=0.1150	max=0.1380	batch_median_spread%=0.00
+guest/church_mul	100	bump_spine_iter	reps=5	med_of_min=0.0950	min=0.0820	max=0.0950	batch_median_spread%=0.00
+guest/church_mul	100	bump_spine_iter_ss	reps=5	med_of_min=0.0840	min=0.0700	max=0.0850	batch_median_spread%=0.00
+guest/church_mul	100	bump_spine_memo	reps=5	med_of_min=0.0960	min=0.0800	max=0.0970	batch_median_spread%=0.00
+guest/church_mul	200	bump_spine	reps=5	med_of_min=0.5660	min=0.5240	max=0.5720	batch_median_spread%=0.00
+guest/church_mul	200	bump_spine_iter	reps=5	med_of_min=0.3870	min=0.3330	max=0.3970	batch_median_spread%=0.00
+guest/church_mul	200	bump_spine_iter_ss	reps=5	med_of_min=0.3340	min=0.2990	max=0.3400	batch_median_spread%=0.00
+guest/church_mul	200	bump_spine_memo	reps=5	med_of_min=0.3880	min=0.3380	max=0.3920	batch_median_spread%=0.00
+
+### KA deep
+church	32000	bump_iter	reps=7	med_of_min=2.2480	min=2.1980	max=2.6080	batch_median_spread%=0.00
+church	32000	bump_spine_iter	reps=7	med_of_min=0.8660	min=0.8100	max=0.9450	batch_median_spread%=0.00
+church	32000	bump_spine_iter_ss	reps=7	med_of_min=0.5620	min=0.4840	max=0.5730	batch_median_spread%=0.00
+church	32000	bump_spine_slim	reps=7	med_of_min=1.2000	min=1.0970	max=1.3030	batch_median_spread%=0.00
+church	32000	cek	reps=7	med_of_min=16.5170	min=14.7680	max=18.6740	batch_median_spread%=0.00
+church	32000	cek_bump	reps=7	med_of_min=2.4360	min=2.3280	max=2.8080	batch_median_spread%=0.00
+church	64000	bump_iter	reps=7	med_of_min=5.4250	min=5.1730	max=6.3660	batch_median_spread%=0.00
+church	64000	bump_spine_iter	reps=7	med_of_min=1.4020	min=1.3240	max=1.6900	batch_median_spread%=0.00
+church	64000	bump_spine_iter_ss	reps=7	med_of_min=0.9660	min=0.9560	max=1.1540	batch_median_spread%=0.00
+church	64000	bump_spine_slim	reps=7	med_of_min=1.6280	min=1.5830	max=2.6270	batch_median_spread%=0.00
+church	64000	cek	reps=7	med_of_min=30.7590	min=29.3110	max=35.9560	batch_median_spread%=0.00
+church	64000	cek_bump	reps=7	med_of_min=4.6100	min=4.3040	max=5.1490	batch_median_spread%=0.00

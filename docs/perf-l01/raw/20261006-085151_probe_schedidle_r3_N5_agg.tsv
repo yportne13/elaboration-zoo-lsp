@@ -1,0 +1,9 @@
+workload	size	variant	reps	min_ms	med_ms	max_ms	spread_pct	med_of_med
+church	1000	bump_spine_iter	5	0.0160	0.0190	0.0190	18.75	0.0190
+church	1000	bump_spine_iter_ss	5	0.0150	0.0180	0.0180	20.00	0.0180
+church	2000	bump_spine_iter	5	0.0320	0.0370	0.0370	15.62	0.0380
+church	2000	bump_spine_iter_ss	5	0.0300	0.0350	0.0350	16.67	0.0350
+church	4000	bump_spine_iter	5	0.0770	0.0780	0.0790	2.60	0.0780
+church	4000	bump_spine_iter_ss	5	0.0680	0.0690	0.0690	1.47	0.0700
+church	8000	bump_spine_iter	5	0.1570	0.1590	0.1600	1.91	0.1610
+church	8000	bump_spine_iter_ss	5	0.1380	0.1410	0.1450	5.07	0.1460
