@@ -1,0 +1,8 @@
+== workload: dup ==
+k=9   n=1024     fast_memo=     0.095ms*/     0.096
+k=10  n=2048     fast_memo=     0.175ms*/     0.177
+k=11  n=4096     fast_memo=     0.342ms*/     0.349
+k=12  n=8192     fast_memo=     0.688ms*/     0.729
+k=13  n=16384    fast_memo=     1.557ms*/     1.974
+k=14  n=32768    fast_memo=     2.798ms*/     3.057
+k=15  n=65536    fast_memo=     6.093ms*/     6.484

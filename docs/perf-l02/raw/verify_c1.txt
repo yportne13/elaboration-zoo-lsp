@@ -1,0 +1,98 @@
+# spec=exp-20261007-034011_exp9_c1_church_spec.txt prefix=exp-20261007-034011_exp9_c1_church
+# bin_a=l02bench-base sha=6f9a27311e55 bin_b=l02bench-c1 sha=89bd93e9b496
+# order=alternate reps=42 rounds=5 only=fast
+seg   workload   k   n     med1     med2   paired%     p95     unp%   unp95  signflip_p
+nullA church     9  42   0.0710   0.0710     0.000   0.000    0.000  14.789     1.00000
+nullA church    10  42   0.1330   0.1335     0.000   0.376    0.376  14.286     1.00000
+nullA church    11  42   0.2610   0.2605     0.000   0.610   -0.192  14.559     1.00000
+nullA church    12  42   0.5145   0.5140    -0.096   0.577   -0.097  10.853     0.62055
+nullA church    13  42   1.0280   1.0255    -0.243   0.815   -0.243   9.095     0.02200
+nullA church    14  42   2.0925   2.0955    -0.692   1.813    0.143   1.301     0.52265
+nullA church    15  42   4.4855   4.1560    -1.135   2.214   -7.346  10.432     0.05295
+ab    church     9  42   0.0710   0.0710     0.694   1.471    0.000   5.882     0.06970
+ab    church    10  42   0.1340   0.1340     0.746   1.493    0.000   5.098     0.07880
+ab    church    11  42   0.2615   0.2620     0.382   0.612    0.191   5.221     0.05095
+ab    church    12  42   0.5160   0.5180     0.384   0.597    0.388   0.778     0.09245
+ab    church    13  42   1.0270   1.0310     0.438   0.875    0.389   2.637     0.02175
+ab    church    14  42   2.0960   2.0915     0.515   2.881   -0.215   1.362     0.78925
+ab    church    15  42   4.4335   4.4225    -0.493   1.265   -0.248   4.789     0.70880
+nullB church     9  42   0.0600   0.0600     0.000   0.000    0.000   0.826     1.00000
+nullB church    10  42   0.1120   0.1120     0.000   0.446    0.000   0.901     1.00000
+nullB church    11  42   0.2190   0.2190     0.000   0.458    0.000   1.794     1.00000
+nullB church    12  42   0.4330   0.4340     0.102   0.463    0.231   2.870     0.45625
+nullB church    13  42   0.8805   0.8920     0.429   0.822    1.306   2.169     0.20600
+nullB church    14  42   1.9300   1.9590     0.322   1.881    1.503   3.273     0.55725
+nullB church    15  42   3.9810   3.9800    -0.114   0.380   -0.025   1.075     0.53455
+
+== verdict (paired md vs max(null p95, 0.5)) ==
+church   k=9   md=  +0.694%  p95_floor=0.000  eff=0.500  signflip_p=0.0697  -> 判定(+)
+church   k=10  md=  +0.746%  p95_floor=0.446  eff=0.500  signflip_p=0.0788  -> 判定(+)
+church   k=11  md=  +0.382%  p95_floor=0.610  eff=0.610  signflip_p=0.0510  -> 未判定
+church   k=12  md=  +0.384%  p95_floor=0.577  eff=0.577  signflip_p=0.0925  -> 未判定
+church   k=13  md=  +0.438%  p95_floor=0.822  eff=0.822  signflip_p=0.0217  -> 未判定
+church   k=14  md=  +0.515%  p95_floor=1.881  eff=1.881  signflip_p=0.7893  -> 未判定
+church   k=15  md=  -0.493%  p95_floor=2.214  eff=2.214  signflip_p=0.7088  -> 未判定
+== null segment paired stats (floors) ==
+nullA church   k=9   md=  +0.000%  p95=0.000  max=1.667  unp=+0.000% unp95=14.789
+nullA church   k=10  md=  +0.000%  p95=0.376  max=2.901  unp=+0.376% unp95=14.286
+nullA church   k=11  md=  +0.000%  p95=0.610  max=4.425  unp=-0.192% unp95=14.559
+nullA church   k=12  md=  -0.096%  p95=0.577  max=3.093  unp=-0.097% unp95=10.853
+nullA church   k=13  md=  -0.243%  p95=0.815  max=4.830  unp=-0.243% unp95=9.095
+nullA church   k=14  md=  -0.692%  p95=1.813  max=5.696  unp=+0.143% unp95=1.301
+nullA church   k=15  md=  -1.135%  p95=2.214  max=11.981  unp=-7.346% unp95=10.432
+nullB church   k=9   md=  +0.000%  p95=0.000  max=1.695  unp=+0.000% unp95=0.826
+nullB church   k=10  md=  +0.000%  p95=0.446  max=1.504  unp=+0.000% unp95=0.901
+nullB church   k=11  md=  +0.000%  p95=0.458  max=0.766  unp=+0.000% unp95=1.794
+nullB church   k=12  md=  +0.102%  p95=0.463  max=0.697  unp=+0.231% unp95=2.870
+nullB church   k=13  md=  +0.429%  p95=0.822  max=1.935  unp=+1.306% unp95=2.169
+nullB church   k=14  md=  +0.322%  p95=1.881  max=4.361  unp=+1.503% unp95=3.273
+nullB church   k=15  md=  -0.114%  p95=0.380  max=0.777  unp=-0.025% unp95=1.075
+# spec=exp-20261007-034508_exp9_c1_conv_spec.txt prefix=exp-20261007-034508_exp9_c1_conv
+# bin_a=l02bench-base sha=6f9a27311e55 bin_b=l02bench-c1 sha=89bd93e9b496
+# order=alternate reps=42 rounds=5 only=fast
+seg   workload   k   n     med1     med2   paired%     p95     unp%   unp95  signflip_p
+nullA conv       9  42   0.1690   0.1690     0.547   0.597    0.000   1.190     0.28400
+nullA conv      10  42   0.3235   0.3230     0.000   0.310   -0.155   0.929     1.00000
+nullA conv      11  42   0.6290   0.6315     0.000   0.343    0.397   3.511     1.00000
+nullA conv      12  42   1.2465   1.2550     0.081   0.483    0.682   5.984     0.42805
+nullA conv      13  42   2.5120   2.5175     0.255   1.185    0.219   6.777     0.47885
+nullA conv      14  42   5.0720   5.0990     0.238   0.978    0.532   1.243     0.44355
+nullA conv      15  42  10.1575  10.1335    -0.257   0.516   -0.236   0.732     0.33570
+ab    conv       9  42   0.1570   0.1560    -0.314   0.709   -0.637   7.643     0.62575
+ab    conv      10  42   0.2990   0.3005     0.000   0.353    0.502   5.843     1.00000
+ab    conv      11  42   0.5845   0.5850     0.000   0.580    0.086   4.966     1.00000
+ab    conv      12  42   1.1550   1.1605     0.410   1.123    0.476   4.930     0.03785
+ab    conv      13  42   2.3030   2.3085     0.016   0.549    0.239   2.969     0.93900
+ab    conv      14  42   4.4670   4.7035     1.627   4.363    5.294   6.497     0.00350
+ab    conv      15  42   9.4095   9.1190    -0.189   3.592   -3.087   4.007     0.45975
+nullB conv       9  42   0.1400   0.1520    -0.316   0.719    8.571  11.429     0.62905
+nullB conv      10  42   0.2710   0.2905     0.000   0.377    7.196  11.985     1.00000
+nullB conv      11  42   0.5490   0.5840     0.171   0.687    6.375  12.092     0.18795
+nullB conv      12  42   1.1580   1.1565     0.216   0.516   -0.130   5.826     0.55375
+nullB conv      13  42   2.3220   2.3270     0.215   0.689    0.215   0.627     0.27245
+nullB conv      14  42   4.5980   4.5325    -0.010   2.018   -1.425   4.081     1.00000
+nullB conv      15  42   9.1685   9.1520    -0.007   1.686   -0.180   3.896     1.00000
+
+== verdict (paired md vs max(null p95, 0.5)) ==
+conv     k=9   md=  -0.314%  p95_floor=0.719  eff=0.719  signflip_p=0.6258  -> 未判定
+conv     k=10  md=  +0.000%  p95_floor=0.377  eff=0.500  signflip_p=1.0000  -> 未判定
+conv     k=11  md=  +0.000%  p95_floor=0.687  eff=0.687  signflip_p=1.0000  -> 未判定
+conv     k=12  md=  +0.410%  p95_floor=0.516  eff=0.516  signflip_p=0.0379  -> 未判定
+conv     k=13  md=  +0.016%  p95_floor=1.185  eff=1.185  signflip_p=0.9390  -> 未判定
+conv     k=14  md=  +1.627%  p95_floor=2.018  eff=2.018  signflip_p=0.0035  -> 未判定
+conv     k=15  md=  -0.189%  p95_floor=1.686  eff=1.686  signflip_p=0.4597  -> 未判定
+== null segment paired stats (floors) ==
+nullA conv     k=9   md=  +0.547%  p95=0.597  max=3.922  unp=+0.000% unp95=1.190
+nullA conv     k=10  md=  +0.000%  p95=0.310  max=0.616  unp=-0.155% unp95=0.929
+nullA conv     k=11  md=  +0.000%  p95=0.343  max=0.798  unp=+0.397% unp95=3.511
+nullA conv     k=12  md=  +0.081%  p95=0.483  max=0.928  unp=+0.682% unp95=5.984
+nullA conv     k=13  md=  +0.255%  p95=1.185  max=4.182  unp=+0.219% unp95=6.777
+nullA conv     k=14  md=  +0.238%  p95=0.978  max=12.039  unp=+0.532% unp95=1.243
+nullA conv     k=15  md=  -0.257%  p95=0.516  max=2.955  unp=-0.236% unp95=0.732
+nullB conv     k=9   md=  -0.316%  p95=0.719  max=11.429  unp=+8.571% unp95=11.429
+nullB conv     k=10  md=  +0.000%  p95=0.377  max=1.136  unp=+7.196% unp95=11.985
+nullB conv     k=11  md=  +0.171%  p95=0.687  max=6.629  unp=+6.375% unp95=12.092
+nullB conv     k=12  md=  +0.216%  p95=0.516  max=7.599  unp=-0.130% unp95=5.826
+nullB conv     k=13  md=  +0.215%  p95=0.689  max=1.471  unp=+0.215% unp95=0.627
+nullB conv     k=14  md=  -0.010%  p95=2.018  max=5.196  unp=-1.425% unp95=4.081
+nullB conv     k=15  md=  -0.007%  p95=1.686  max=4.555  unp=-0.180% unp95=3.896

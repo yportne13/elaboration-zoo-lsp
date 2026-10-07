@@ -1,0 +1,8 @@
+workload	k	impl	reps	min_ms	med_of_min	max_ms	spread_pct	med_of_med
+church	9	fast	7	0.0590	0.0720	0.0720	22.03	0.0720
+church	10	fast	7	0.1110	0.1340	0.1350	21.62	0.1350
+church	11	fast	7	0.2170	0.2610	0.2680	23.50	0.2630
+church	12	fast	7	0.4270	0.5170	0.5210	22.01	0.5210
+church	13	fast	7	0.9760	1.0250	1.0330	5.84	1.0300
+church	14	fast	7	2.0500	2.0740	2.1670	5.71	2.1360
+church	15	fast	7	4.1920	4.3810	4.7900	14.27	4.4790

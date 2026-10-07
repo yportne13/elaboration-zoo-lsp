@@ -1,0 +1,2 @@
+workload	k	impl	reps	min_ms	med_of_min	max_ms	spread_pct	med_of_med
+church	9	fast	1	0.0750	0.0750	0.0750	0.00	0.0750
