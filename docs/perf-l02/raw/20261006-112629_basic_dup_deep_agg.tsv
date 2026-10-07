@@ -1,0 +1,8 @@
+workload	k	impl	reps	min_ms	med_of_min	max_ms	spread_pct	med_of_med
+dup_deep	9	basic	7	3.2360	4.1830	4.5350	40.14	4.4120
+dup_deep	10	basic	7	6.5920	7.5840	9.5880	45.45	8.1800
+dup_deep	11	basic	7	13.8690	18.4860	18.9940	36.95	18.5730
+dup_deep	12	basic	7	32.4070	37.1940	37.9870	17.22	37.6060
+dup_deep	13	basic	7	64.5570	74.6700	75.3690	16.75	77.2390
+dup_deep	14	basic	7	136.5450	148.6580	158.3870	16.00	157.4320
+dup_deep	15	basic	7	271.6030	314.6460	316.3060	16.46	317.8390

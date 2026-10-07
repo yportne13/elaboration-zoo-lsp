@@ -1,0 +1,2 @@
+== workload: church ==
+k=9   n=1024     fast=     0.075ms*/     0.075

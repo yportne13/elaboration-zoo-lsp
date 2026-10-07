@@ -1,0 +1,29 @@
+# env_spec: L02_NO_BITEQ=
+# cmd: taskset -c 7 /home/dev/elaboration-zoo-lsp/target/release/l02l05mem --chapter L02 --workload conv_dup --k 15 --rounds 3 --no-basic
+# binary_sha256: 8aeadb1577caf455c9cf7dfe94ae0a8275364f86f16023bb65e3d7ba100df606
+## run 1
+== L02 conv_dup k=15 n=65536 nf=false ==
+  parse               541 allocs      89320 B    0.09MB
+  fast(one-shot)      565 allocs   68309920 B   65.15MB  [arena 12× 62.37MB chunks "[1.0038909912109375,2.0077972412109375,4.0156097412109375,1.5,8.031234741210938,3,6,1.25,2.5,5,16.062484741210938,12]"]
+  fast_ss growth      565 allocs   68309920 B   65.15MB  [arena 12× 62.37MB chunks "[1.0038909912109375,2.0077972412109375,4.0156097412109375,1.5,8.031234741210938,3,6,1.25,2.5,5,16.062484741210938,12]"] reset 后保留 16.06MB
+  fast_ss churn       551 allocs   21805376 B   20.80MB (3 轮均值; 合计 1654 allocs / 65416128 B, 其中 arena 10× 58.37MB)
+  small-alloc top (fast):
+    size 4288         25 allocs     107200 B
+    size 160         366 allocs      58560 B
+    size 320          58 allocs      18560 B
+    size 144          53 allocs       7632 B
+    size 2560          2 allocs       5120 B
+    size 76           56 allocs       4256 B
+## run 2
+== L02 conv_dup k=15 n=65536 nf=false ==
+  parse               541 allocs      89320 B    0.09MB
+  fast(one-shot)      565 allocs   68309920 B   65.15MB  [arena 12× 62.37MB chunks "[1.0038909912109375,2.0077972412109375,4.0156097412109375,1.5,8.031234741210938,3,6,1.25,2.5,5,16.062484741210938,12]"]
+  fast_ss growth      565 allocs   68309920 B   65.15MB  [arena 12× 62.37MB chunks "[1.0038909912109375,2.0077972412109375,4.0156097412109375,1.5,8.031234741210938,3,6,1.25,2.5,5,16.062484741210938,12]"] reset 后保留 16.06MB
+  fast_ss churn       551 allocs   21805376 B   20.80MB (3 轮均值; 合计 1654 allocs / 65416128 B, 其中 arena 10× 58.37MB)
+  small-alloc top (fast):
+    size 4288         25 allocs     107200 B
+    size 160         366 allocs      58560 B
+    size 320          58 allocs      18560 B
+    size 144          53 allocs       7632 B
+    size 2560          2 allocs       5120 B
+    size 76           56 allocs       4256 B

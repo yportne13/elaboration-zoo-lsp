@@ -1,0 +1,29 @@
+# env_spec: L02_NO_CONV_MEMO=1
+# cmd: taskset -c 7 /home/dev/elaboration-zoo-lsp/target/release/l02l05mem --chapter L02 --workload conv_dup --k 13 --rounds 3 --no-basic
+# binary_sha256: 8aeadb1577caf455c9cf7dfe94ae0a8275364f86f16023bb65e3d7ba100df606
+## run 1
+== L02 conv_dup k=13 n=16384 nf=false ==
+  parse               509 allocs      86504 B    0.08MB
+  fast(one-shot)      313 allocs   22066497 B   21.04MB  [arena 6× 19.56MB chunks "[1.0038909912109375,2.0077972412109375,4.0156097412109375,1.5,3,8.031234741210938]"]
+  fast_ss growth      312 allocs   22066496 B   21.04MB  [arena 6× 19.56MB chunks "[1.0038909912109375,2.0077972412109375,4.0156097412109375,1.5,3,8.031234741210938]"] reset 后保留 8.03MB
+  fast_ss churn       301 allocs    5664805 B    5.40MB (3 轮均值; 合计 904 allocs / 16994416 B, 其中 arena 1× 16.06MB)
+  small-alloc top (fast):
+    size 4288         11 allocs      47168 B
+    size 160         294 allocs      47040 B
+    size 2560          1 allocs       2560 B
+    size 320           5 allocs       1600 B
+    size 1280          1 allocs       1280 B
+    size 640           1 allocs        640 B
+## run 2
+== L02 conv_dup k=13 n=16384 nf=false ==
+  parse               509 allocs      86504 B    0.08MB
+  fast(one-shot)      313 allocs   22066497 B   21.04MB  [arena 6× 19.56MB chunks "[1.0038909912109375,2.0077972412109375,4.0156097412109375,1.5,3,8.031234741210938]"]
+  fast_ss growth      312 allocs   22066496 B   21.04MB  [arena 6× 19.56MB chunks "[1.0038909912109375,2.0077972412109375,4.0156097412109375,1.5,3,8.031234741210938]"] reset 后保留 8.03MB
+  fast_ss churn       301 allocs    5664805 B    5.40MB (3 轮均值; 合计 904 allocs / 16994416 B, 其中 arena 1× 16.06MB)
+  small-alloc top (fast):
+    size 4288         11 allocs      47168 B
+    size 160         294 allocs      47040 B
+    size 2560          1 allocs       2560 B
+    size 320           5 allocs       1600 B
+    size 1280          1 allocs       1280 B
+    size 640           1 allocs        640 B

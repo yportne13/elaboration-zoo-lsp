@@ -1,0 +1,161 @@
+== ab_conv_biteq  (exp-20261006-113136_ab_conv_biteq_spec.txt) ==
+   workload=conv max_k=15 rounds=5 reps/side=21 only=fast sha256=28d9884383ef
+   segment nullA [null]: nA1(env=-) vs nA2(env=-)
+     workload    k impl     n      med1      med2  unpaired%   paired%   u_boot95   p_boot95
+     conv       11 fast    21    0.4160    0.4590     10.337     0.000      18.814      10.577
+     conv       13 fast    21    1.8180    1.8200      0.110     0.000       0.385       0.553
+     conv       15 fast    21    7.5400    7.5420      0.027    -0.437       0.437       1.121
+   segment ab [exp]: A(env=-) vs B(env=L02_NO_BITEQ=1)
+     workload    k impl     n      med1      med2  unpaired%   paired%   u_boot95   p_boot95
+     conv       11 fast    21    0.4610    0.9320    102.169   102.169     111.957     112.418
+     conv       13 fast    21    1.8180    3.9490    117.217   117.432     118.392     118.592
+     conv       15 fast    21    7.5170   16.6950    122.097   121.111     137.888     134.725
+   segment nullB [null]: nB1(env=L02_NO_BITEQ=1) vs nB2(env=L02_NO_BITEQ=1)
+     workload    k impl     n      med1      med2  unpaired%   paired%   u_boot95   p_boot95
+     conv       11 fast    21    0.9780    0.9780      0.000    -0.102       0.307       0.307
+     conv       13 fast    21    3.9500    3.9560      0.152     0.025       0.407       0.329
+     conv       15 fast    21   17.8880   16.5940     -7.234    -0.189       7.868       8.060
+   --- verdict (exp segment vs same-batch null floors) ---
+     workload    k  unpaired%            u_ci95  floor_u   paired%            p_ci95  floor_p  verdict
+     conv       11    102.169  [ 77.44,112.39]    18.814   102.169  [ 77.66,112.42]    10.577  判定(配对+非配对)
+     conv       13    117.217  [116.09,118.51]     0.500   117.432  [116.12,118.59]     0.553  判定(配对+非配对)
+     conv       15    122.097  [118.70,137.94]     7.868   121.111  [119.33,134.72]     8.060  判定(配对+非配对)
+
+== ab_convdup_biteq  (exp-20261006-113329_ab_convdup_biteq_spec.txt) ==
+   workload=conv_dup max_k=15 rounds=5 reps/side=21 only=fast sha256=28d9884383ef
+   segment nullA [null]: nA1(env=-) vs nA2(env=-)
+     workload    k impl     n      med1      med2  unpaired%   paired%   u_boot95   p_boot95
+     conv_dup   11 fast    21    0.9110    0.9110      0.000     0.219       0.440       0.329
+     conv_dup   13 fast    21    3.6830    3.6670     -0.434    -0.381       0.704       0.782
+     conv_dup   15 fast    21   16.4250   16.4430      0.110     0.182       6.658       1.292
+   segment ab [exp]: A(env=-) vs B(env=L02_NO_BITEQ=1)
+     workload    k impl     n      med1      med2  unpaired%   paired%   u_boot95   p_boot95
+     conv_dup   11 fast    21    0.9120    0.9810      7.566     7.574       7.794       7.895
+     conv_dup   13 fast    21    3.6880    3.9770      7.836     7.988       8.288       8.161
+     conv_dup   15 fast    21   16.4330   17.9230      9.067     8.845      15.615      11.631
+   segment nullB [null]: nB1(env=L02_NO_BITEQ=1) vs nB2(env=L02_NO_BITEQ=1)
+     workload    k impl     n      med1      med2  unpaired%   paired%   u_boot95   p_boot95
+     conv_dup   11 fast    21    0.9800    0.9800      0.000     0.000       0.204       0.307
+     conv_dup   13 fast    21    3.9740    3.9720     -0.050     0.000       0.580       0.533
+     conv_dup   15 fast    21   17.8680   17.9010      0.185     0.022       2.025       0.880
+   --- verdict (exp segment vs same-batch null floors) ---
+     workload    k  unpaired%            u_ci95  floor_u   paired%            p_ci95  floor_p  verdict
+     conv_dup   11      7.566  [  7.23,  7.79]     0.500     7.574  [  7.33,  7.89]     0.500  判定(配对+非配对)
+     conv_dup   13      7.836  [  7.14,  8.44]     0.704     7.988  [  7.52,  8.16]     0.782  判定(配对+非配对)
+     conv_dup   15      9.067  [  7.24, 16.17]     6.658     8.845  [  8.37, 11.63]     1.292  判定(配对+非配对)
+
+== ab_convdup_memo  (exp-20261006-113403_ab_convdup_memo_spec.txt) ==
+   workload=conv_dup max_k=15 rounds=5 reps/side=21 only=fast sha256=28d9884383ef
+   segment nullA [null]: nA1(env=-) vs nA2(env=-)
+     workload    k impl     n      med1      med2  unpaired%   paired%   u_boot95   p_boot95
+     conv_dup   11 fast    21    0.9130    0.9110     -0.219    -0.219       0.438       0.546
+     conv_dup   13 fast    21    3.6830    3.6740     -0.244    -0.376       0.757       0.651
+     conv_dup   15 fast    21   16.4610   16.4420     -0.115     0.212       7.587       0.449
+   segment ab [exp]: A(env=-) vs B(env=L02_NO_CONV_MEMO=1)
+     workload    k impl     n      med1      med2  unpaired%   paired%   u_boot95   p_boot95
+     conv_dup   11 fast    21    0.9120    1.3510     48.136    48.193      48.953      48.802
+     conv_dup   13 fast    21    3.6790    5.4800     48.954    49.440      50.367      50.000
+     conv_dup   15 fast    21   15.2570   24.1610     58.360    47.648      65.310      58.403
+   segment nullB [null]: nB1(env=L02_NO_CONV_MEMO=1) vs nB2(env=L02_NO_CONV_MEMO=1)
+     workload    k impl     n      med1      med2  unpaired%   paired%   u_boot95   p_boot95
+     conv_dup   11 fast    21    1.3410    1.3440      0.224     0.000      18.800       0.442
+     conv_dup   13 fast    21    4.8850    5.4530     11.627    -0.108      16.942       0.916
+     conv_dup   15 fast    21   21.5980   22.1450      2.533     0.336      19.742       0.757
+   --- verdict (exp segment vs same-batch null floors) ---
+     workload    k  unpaired%            u_ci95  floor_u   paired%            p_ci95  floor_p  verdict
+     conv_dup   11     48.136  [ 47.43, 48.95]    18.800    48.193  [ 47.92, 48.80]     0.546  判定(配对+非配对)
+     conv_dup   13     48.954  [ 47.91, 50.67]    16.942    49.440  [ 48.67, 50.00]     0.916  判定(配对+非配对)
+     conv_dup   15     58.360  [ 47.24, 65.47]    19.742    47.648  [ 46.10, 58.40]     0.757  判定(配对+非配对)
+
+== pre_rounds3v25  (exp-20261006-114857_pre_rounds3v25_spec.txt) ==
+   workload=conv max_k=15 rounds=3 reps/side=21 only=fast sha256=28d9884383ef
+   segment nullA [null]: nA1(env=- rounds=3) vs nA2(env=- rounds=3)
+     workload    k impl     n      med1      med2  unpaired%   paired%   u_boot95   p_boot95
+     conv       11 fast    21    0.4610    0.4600     -0.217    -0.217       0.651       0.651
+     conv       13 fast    21    1.8210    1.8250      0.220     0.165       0.495       0.328
+     conv       15 fast    21    7.5670    7.5970      0.396     0.489       0.702       0.996
+   segment ab [exp]: A(env=- rounds=3) vs B(env=- rounds=25)
+     workload    k impl     n      med1      med2  unpaired%   paired%   u_boot95   p_boot95
+     conv       11 fast    21    0.4600    0.4580     -0.435    -0.435       0.866       0.866
+     conv       13 fast    21    1.8210    1.8080     -0.714    -0.551       0.987       0.987
+     conv       15 fast    21    7.5610    8.1730      8.094     8.087       8.352       8.319
+   segment nullB [null]: nB1(env=- rounds=25) vs nB2(env=- rounds=25)
+     workload    k impl     n      med1      med2  unpaired%   paired%   u_boot95   p_boot95
+     conv       11 fast    21    0.4580    0.4580      0.000     0.000       0.218       0.218
+     conv       13 fast    21    1.8100    1.8080     -0.110     0.055       0.387       0.387
+     conv       15 fast    21    8.1680    8.1690      0.012     0.000       0.319       0.394
+   --- verdict (exp segment vs same-batch null floors) ---
+     workload    k  unpaired%            u_ci95  floor_u   paired%            p_ci95  floor_p  verdict
+     conv       11     -0.435  [ -0.87,  0.22]     0.651    -0.435  [ -0.87,  0.22]     0.651  未判定
+     conv       13     -0.714  [ -1.04, -0.27]     0.500    -0.551  [ -0.99, -0.33]     0.500  判定(配对+非配对)
+     conv       15      8.094  [  7.66,  8.37]     0.702     8.087  [  7.49,  8.32]     0.996  判定(配对+非配对)
+
+== ab_church_biteq  (exp-20261006-114937_ab_church_biteq_spec.txt) ==
+   workload=church max_k=15 rounds=5 reps/side=21 only=fast sha256=28d9884383ef
+   segment nullA [null]: nA1(env=- rounds=5) vs nA2(env=- rounds=5)
+     workload    k impl     n      med1      med2  unpaired%   paired%   u_boot95   p_boot95
+     church     11 fast    21    0.2610    0.2620      0.383     0.000       0.769       0.385
+     church     13 fast    21    1.0270    1.0270      0.000    -0.194       0.388       0.388
+     church     15 fast    21    4.4620    4.4530     -0.202    -0.508       1.123       0.713
+   segment ab [exp]: A(env=- rounds=5) vs B(env=L02_NO_BITEQ=1 rounds=5)
+     workload    k impl     n      med1      med2  unpaired%   paired%   u_boot95   p_boot95
+     church     11 fast    21    0.2620    0.2730      4.198     4.580       4.981       4.598
+     church     13 fast    21    1.0280    1.0650      3.599     3.797       3.996       3.910
+     church     15 fast    21    4.4690    4.5520      1.857     1.805       2.523       2.684
+   segment nullB [null]: nB1(env=L02_NO_BITEQ=1 rounds=5) vs nB2(env=L02_NO_BITEQ=1 rounds=5)
+     workload    k impl     n      med1      med2  unpaired%   paired%   u_boot95   p_boot95
+     church     11 fast    21    0.2730    0.2730      0.000    -0.364       0.366       0.366
+     church     13 fast    21    1.0660    1.0670      0.094     0.187       0.377       0.468
+     church     15 fast    21    4.5420    4.5390     -0.066    -0.174       1.179       1.233
+   --- verdict (exp segment vs same-batch null floors) ---
+     workload    k  unpaired%            u_ci95  floor_u   paired%            p_ci95  floor_p  verdict
+     church     11      4.198  [  4.20,  4.98]     0.769     4.580  [  4.18,  4.60]     0.500  判定(配对+非配对)
+     church     13      3.599  [  3.40,  4.00]     0.500     3.797  [  3.59,  3.91]     0.500  判定(配对+非配对)
+     church     15      1.857  [  0.62,  2.73]     1.179     1.805  [  1.58,  2.68]     1.233  判定(配对+非配对)
+
+== pre_rounds25v3rev  (exp-20261006-115034_pre_rounds25v3rev_spec.txt) ==
+   workload=conv max_k=15 rounds=25 reps/side=21 only=fast sha256=28d9884383ef
+   segment nullA [null]: nA1(env=- rounds=25) vs nA2(env=- rounds=25)
+     workload    k impl     n      med1      med2  unpaired%   paired%   u_boot95   p_boot95
+     conv       11 fast    21    0.4570    0.4580      0.219     0.218       0.438       0.654
+     conv       13 fast    21    1.8080    1.8080      0.000    -0.110       0.498       0.602
+     conv       15 fast    21    7.5580    7.4950     -0.834     0.222      15.668       6.873
+   segment ab [exp]: A(env=- rounds=25) vs B(env=- rounds=3)
+     workload    k impl     n      med1      med2  unpaired%   paired%   u_boot95   p_boot95
+     conv       11 fast    21    0.4590    0.4590      0.000     0.217       0.437       0.645
+     conv       13 fast    21    1.8080    1.8200      0.664     0.386       5.633       4.588
+     conv       15 fast    21    8.1840    7.5990     -7.148    -7.334       7.630       7.630
+   segment nullB [null]: nB1(env=- rounds=3) vs nB2(env=- rounds=3)
+     workload    k impl     n      med1      med2  unpaired%   paired%   u_boot95   p_boot95
+     conv       11 fast    21    0.4600    0.4610      0.217    -0.216       0.654       0.435
+     conv       13 fast    21    1.8150    1.8230      0.441     0.387       0.883       0.885
+     conv       15 fast    21    7.5940    7.5900     -0.053     0.864       0.786       2.532
+   --- verdict (exp segment vs same-batch null floors) ---
+     workload    k  unpaired%            u_ci95  floor_u   paired%            p_ci95  floor_p  verdict
+     conv       11      0.000  [ -0.44,  0.44]     0.654     0.217  [ -0.65,  0.44]     0.654  未判定
+     conv       13      0.664  [  0.06,  6.04]     0.883     0.386  [ -0.11,  4.59]     0.885  未判定
+     conv       15     -7.148  [ -7.77, -6.72]    15.668    -7.334  [ -7.63, -6.66]     6.873  判定(配对);非配对未过(地板受档位漂移抬高)
+
+== ab_conv_memo  (exp-20261006-120432_ab_conv_memo_spec.txt) ==
+   workload=conv max_k=15 rounds=5 reps/side=21 only=fast sha256=28d9884383ef
+   segment nullA [null]: nA1(env=- rounds=5) vs nA2(env=- rounds=5)
+     workload    k impl     n      med1      med2  unpaired%   paired%   u_boot95   p_boot95
+     conv       11 fast    21    0.4600    0.4580     -0.435    -0.432      16.739       9.111
+     conv       13 fast    21    1.8190    1.8140     -0.275     0.055       0.877       0.497
+     conv       15 fast    21    7.5150    7.5630      0.639     0.652       1.421       1.530
+   segment ab [exp]: A(env=- rounds=5) vs B(env=L02_NO_CONV_MEMO=1 rounds=5)
+     workload    k impl     n      med1      med2  unpaired%   paired%   u_boot95   p_boot95
+     conv       11 fast    21    0.4590    0.4600      0.218    -0.216       0.655       0.437
+     conv       13 fast    21    1.8110    1.8220      0.607     0.110       0.942       0.716
+     conv       15 fast    21    7.5440    7.5430     -0.013     0.000       0.386       0.799
+   segment nullB [null]: nB1(env=L02_NO_CONV_MEMO=1 rounds=5) vs nB2(env=L02_NO_CONV_MEMO=1 rounds=5)
+     workload    k impl     n      med1      med2  unpaired%   paired%   u_boot95   p_boot95
+     conv       11 fast    21    0.4590    0.4600      0.218    -0.217      19.171       1.075
+     conv       13 fast    21    1.8190    1.8180     -0.055    -0.330       0.769       2.100
+     conv       15 fast    21    7.5610    7.5360     -0.331    -0.497       6.790       8.655
+   --- verdict (exp segment vs same-batch null floors) ---
+     workload    k  unpaired%            u_ci95  floor_u   paired%            p_ci95  floor_p  verdict
+     conv       11      0.218  [ -0.43,  0.88]    19.171    -0.216  [ -0.43,  0.44]     9.111  未判定
+     conv       13      0.607  [ -0.27,  1.05]     0.877     0.110  [ -0.17,  0.72]     2.100  未判定
+     conv       15     -0.013  [ -0.33,  0.39]     6.790     0.000  [ -0.84,  0.35]     8.655  未判定
+

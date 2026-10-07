@@ -1,0 +1,16 @@
+timestamp_utc: 2026-10-06T11:34:03Z
+kernel: Linux 6.17.0-PRoot-Distro aarch64 Linux
+cores_online: 7
+cpu0: max=1804800kHz cur=1056000 governor=walt
+cpu4: max=2496000kHz cur=2342400 governor=walt
+cpu7: max=2995200kHz cur=787200 governor=walt
+pinned_cpu: 7  stack_mb: 128  keepalive: sched_idle
+binary: /home/dev/elaboration-zoo-lsp/target/release/l02bench
+binary_sha256: 28d9884383ef0440d4832bf911b84e0dea067e3ef25b889d223ebcd6f0f5e87a
+binary_mtime: 2026-10-06 11:21:58.863378728 +0000
+rustc: rustc 1.98.1 (48a229cea 2026-09-01)
+workload: conv_dup  max_k: 15  rounds: 5  only: fast  reps_per_side: 21
+segments: nullA,ab,nullB
+  nullA: nA1 env=- | nA2 env=-
+  ab: A env=- | B env=L02_NO_CONV_MEMO=1
+  nullB: nB1 env=L02_NO_CONV_MEMO=1 | nB2 env=L02_NO_CONV_MEMO=1

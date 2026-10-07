@@ -1,0 +1,22 @@
+E1 conv BITEQ            n=21 pos=21 neg= 0 med=+117.432%  sign_test_p=0.00000
+E1 conv BITEQ k15        n=21 pos=21 neg= 0 med=+121.111%  sign_test_p=0.00000
+E2 convdup BITEQ k13     n=21 pos=21 neg= 0 med= +7.988%  sign_test_p=0.00000
+E3 convdup MEMO k13      n=21 pos=21 neg= 0 med=+49.440%  sign_test_p=0.00000
+E4 church BITEQ k11      n=21 pos=18 neg= 3 med= +4.580%  sign_test_p=0.00149
+E4 church BITEQ k13      n=21 pos=21 neg= 0 med= +3.797%  sign_test_p=0.00000
+E4 church BITEQ k15      n=21 pos=19 neg= 2 med= +1.805%  sign_test_p=0.00022
+E5 conv MEMO k13         n=21 pos=13 neg= 7 med= +0.110%  sign_test_p=0.18925
+C1 church k13            n=42 pos=29 neg=13 med= +0.438%  sign_test_p=0.01952
+C1 church k15            n=42 pos=19 neg=23 med= -0.493%  sign_test_p=0.64397
+C1 conv k13              n=42 pos=21 neg=21 med= +0.016%  sign_test_p=1.00000
+C1 conv k15              n=42 pos=18 neg=23 med= -0.189%  sign_test_p=0.44080
+C2o church k13           n=42 pos= 6 neg=36 med= -6.420%  sign_test_p=0.00000
+C2o church k15           n=42 pos= 1 neg=41 med= -5.765%  sign_test_p=0.00000
+C2o conv k13             n=42 pos= 6 neg=36 med= -7.416%  sign_test_p=0.00000
+C2o conv k15             n=42 pos= 7 neg=35 med= -5.703%  sign_test_p=0.00002
+C2v church k13           n=42 pos= 5 neg=37 med= -6.529%  sign_test_p=0.00000
+C2v church k15           n=42 pos= 8 neg=34 med= -5.596%  sign_test_p=0.00007
+C2v conv k13             n=42 pos= 3 neg=39 med= -7.713%  sign_test_p=0.00000
+C2v conv k15             n=42 pos= 3 neg=39 med= -6.445%  sign_test_p=0.00000
+A/Ap church k13          n=42 pos=19 neg=22 med= -0.097%  sign_test_p=0.64397
+A/Ap church k15          n=42 pos=21 neg=21 med= +0.041%  sign_test_p=1.00000

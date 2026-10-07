@@ -1,0 +1,54 @@
+# binary=/tmp/l02-exp/l05mem-c1
+# sha256=95d0e27d40745fb267829bd8f59a993b4f96ee1de618559fc0f058e68d4d2581
+## run 1
+== L02 church k=13 n=16384 nf=true ==
+  parse               328 allocs      49640 B    0.05MB
+  fast(one-shot)      228 allocs    5215872 B    4.97MB  [arena 2× 3.01MB chunks "[1.0038909912109375,2.0077972412109375]"]
+  fast_ss growth      228 allocs    5215872 B    4.97MB  [arena 2× 3.01MB chunks "[1.0038909912109375,2.0077972412109375]"] reset 后保留 2.01MB
+  fast_ss churn       221 allocs    1954117 B    1.86MB (3 轮均值; 合计 664 allocs / 5862352 B, 其中 arena 1× 4.02MB)
+  fast_memo           231 allocs    5216956 B    4.98MB
+  small-alloc top (fast):
+    size 4288         13 allocs      55744 B
+    size 160          78 allocs      12480 B
+    size 96          118 allocs      11328 B
+    size 4096          1 allocs       4096 B
+    size 2560          1 allocs       2560 B
+    size 2048          1 allocs       2048 B
+== L02 conv k=13 n=16384 nf=false ==
+  parse               491 allocs      84712 B    0.08MB
+  fast(one-shot)      304 allocs   10486280 B   10.00MB  [arena 4× 8.53MB chunks "[1.0038909912109375,2.0077972412109375,4.0156097412109375,1.5]"]
+  fast_ss growth      304 allocs   10486280 B   10.00MB  [arena 4× 8.53MB chunks "[1.0038909912109375,2.0077972412109375,4.0156097412109375,1.5]"] reset 后保留 4.02MB
+  fast_ss churn       295 allocs      37432 B    0.04MB (3 轮均值; 合计 885 allocs / 112296 B, 其中 arena 0× 0.00MB)
+  small-alloc top (fast):
+    size 4288          9 allocs      38592 B
+    size 160         114 allocs      18240 B
+    size 96          167 allocs      16032 B
+    size 2560          1 allocs       2560 B
+    size 192           5 allocs        960 B
+    size 768           1 allocs        768 B
+## run 2
+== L02 church k=13 n=16384 nf=true ==
+  parse               328 allocs      49640 B    0.05MB
+  fast(one-shot)      228 allocs    5215872 B    4.97MB  [arena 2× 3.01MB chunks "[1.0038909912109375,2.0077972412109375]"]
+  fast_ss growth      228 allocs    5215872 B    4.97MB  [arena 2× 3.01MB chunks "[1.0038909912109375,2.0077972412109375]"] reset 后保留 2.01MB
+  fast_ss churn       221 allocs    1954117 B    1.86MB (3 轮均值; 合计 664 allocs / 5862352 B, 其中 arena 1× 4.02MB)
+  fast_memo           231 allocs    5216956 B    4.98MB
+  small-alloc top (fast):
+    size 4288         13 allocs      55744 B
+    size 160          78 allocs      12480 B
+    size 96          118 allocs      11328 B
+    size 4096          1 allocs       4096 B
+    size 2560          1 allocs       2560 B
+    size 2048          1 allocs       2048 B
+== L02 conv k=13 n=16384 nf=false ==
+  parse               491 allocs      84712 B    0.08MB
+  fast(one-shot)      304 allocs   10486280 B   10.00MB  [arena 4× 8.53MB chunks "[1.0038909912109375,2.0077972412109375,4.0156097412109375,1.5]"]
+  fast_ss growth      304 allocs   10486280 B   10.00MB  [arena 4× 8.53MB chunks "[1.0038909912109375,2.0077972412109375,4.0156097412109375,1.5]"] reset 后保留 4.02MB
+  fast_ss churn       295 allocs      37432 B    0.04MB (3 轮均值; 合计 885 allocs / 112296 B, 其中 arena 0× 0.00MB)
+  small-alloc top (fast):
+    size 4288          9 allocs      38592 B
+    size 160         114 allocs      18240 B
+    size 96          167 allocs      16032 B
+    size 2560          1 allocs       2560 B
+    size 192           5 allocs        960 B
+    size 768           1 allocs        768 B
