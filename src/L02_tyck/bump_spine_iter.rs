@@ -233,7 +233,18 @@ fn eval_iter<'a>(
     work.clear();
     vals.clear();
     work.push(W::Tm(tm0, env0));
-    while let Some(w) = work.pop() {
+    // 尾任务寄存器化：有些臂把任务 push 后立刻回到循环头，该任务下一轮必被 pop——
+    // 这一 push/pop 对是纯浪费（40B store + 40B load + 两次 len 更新 + 一次
+    // jump-table 分发）。改为循环局部寄存器 `cur`：循环头先取 cur，空了再 pop；
+    // 此类 push 改写为 `cur = Some(..)`。LIFO 顺序严格不变（cur 下一轮最先被取走，
+    // 等价于「刚 push 上去、下一轮被 pop」）。规则与逐站点判据见
+    // docs/perf-l02/C2-PROPAGATION.md。
+    let mut cur: Option<W<'a>> = None;
+    loop {
+        let w = match cur.take().or_else(|| work.pop()) {
+            Some(w) => w,
+            None => break,
+        };
         match w {
             W::Tm(Tm::Var(i), env) => vals.push(nth(env, *i as usize)),
             W::Tm(Tm::Lam(name, body), env) => {
@@ -243,11 +254,11 @@ fn eval_iter<'a>(
             W::Tm(Tm::U, _) => vals.push(v_u()),
             W::Tm(Tm::Pi(name, dom, cod), env) => {
                 work.push(W::PiBody(name, cod, env));
-                work.push(W::Tm(dom, env));
+                cur = Some(W::Tm(dom, env));
             }
             W::Tm(Tm::Let(_, _, t, u), env) => {
                 work.push(W::LetBody(u, env));
-                work.push(W::Tm(t, env));
+                cur = Some(W::Tm(t, env));
             }
             W::Tm(app @ Tm::App(..), env) => {
                 // 右链下钻：头为非闭包变量时头值直接进 vals
@@ -260,7 +271,7 @@ fn eval_iter<'a>(
                             if heads > 0 {
                                 work.push(W::ChainWrap(heads));
                             }
-                            work.push(W::Tm(base, env));
+                            cur = Some(W::Tm(base, env));
                             break;
                         }
                     };
@@ -274,7 +285,7 @@ fn eval_iter<'a>(
                                     work.push(W::ChainWrap(heads));
                                 }
                                 work.push(W::ApplyKnown(vf));
-                                work.push(W::Tm(a, env));
+                                cur = Some(W::Tm(a, env));
                                 break;
                             }
                             vals.push(vf);
@@ -288,7 +299,7 @@ fn eval_iter<'a>(
                             }
                             work.push(W::Apply);
                             work.push(W::Tm(a, env));
-                            work.push(W::Tm(f, env));
+                            cur = Some(W::Tm(f, env));
                             break;
                         }
                     }
@@ -301,7 +312,7 @@ fn eval_iter<'a>(
                     // β 归约是尾调用：直接推入体，继续循环
                     let c = v_clo_of(vf);
                     let node = bump.alloc(EnvCons { val: va, next: c.env });
-                    work.push(W::Tm(c.body, Some(node)));
+                    cur = Some(W::Tm(c.body, Some(node)));
                 } else {
                     vals.push(spine.push(vf, va));
                 }
@@ -310,7 +321,7 @@ fn eval_iter<'a>(
                 let va = vals.pop().expect("eval 栈：ApplyKnown 缺实参");
                 let c = v_clo_of(vf);
                 let node = bump.alloc(EnvCons { val: va, next: c.env });
-                work.push(W::Tm(c.body, Some(node)));
+                cur = Some(W::Tm(c.body, Some(node)));
             }
             W::ChainWrap(k) => {
                 let mut v = vals.pop().expect("eval 栈：ChainWrap 缺 base");
@@ -323,7 +334,7 @@ fn eval_iter<'a>(
             W::LetBody(u, env) => {
                 let vt = vals.pop().expect("eval 栈：LetBody 缺绑定值");
                 let node = bump.alloc(EnvCons { val: vt, next: env });
-                work.push(W::Tm(u, Some(node)));
+                cur = Some(W::Tm(u, Some(node)));
             }
             W::PiBody(name, cod, env) => {
                 let dom = vals.pop().expect("eval 栈：PiBody 缺定义域");
