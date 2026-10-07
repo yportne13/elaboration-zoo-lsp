@@ -7,6 +7,8 @@ use bumpalo::Bump;
 use rustc_hash::FxHashMap;
 use std::cell::RefCell;
 
+use crate::L13_namespace::eval_budget;
+
 use super::parser::syntax::Icit;
 
 use super::env::{env_ext, Env, PiCell};
@@ -554,10 +556,19 @@ pub(super) fn quote_iter<'a>(
 /// 原生 `Nat(k)` → 等价的 succ/zero `Tm::SumCase` 链（参考版 `quote_nat`：
 /// `zero` = index 0 空字段；`succ^n` = n 层 index 1 单字段 `"n"`；迭代构造
 /// 防深栈）。`nat_tm` 是已 quote 的 Nat 类型项。
+///
+/// **内存护栏**：k 是运行期值（`nat_mul 100000 100000` → 10^10），裸循环
+/// 会把提交量顶到上百 GB 并拖垮主机（2026-10-07 事件 2004：121.8 GB）——
+/// 先过 [`eval_budget::guard_nat_chain`]（超限立即中止，不开始分配），循环
+/// 内补预算 checkpoint 让时间维度也受管。见 `eval_budget::NAT_CHAIN_LIMIT`。
 pub(super) fn quote_nat_chain<'a>(bump: &'a Bump, nat_tm: &'a Tm<'a>, k: u64) -> &'a Tm<'a> {
+    eval_budget::guard_nat_chain(k);
     let mut inner: &Tm<'a> =
         bump.alloc(Tm::SumCase { typ: nat_tm, index: 0, datas: &[], is_trait: false });
+    // tick 补点：本循环此前零 checkpoint（同 force/quote 的历史缺口）
+    let mut budget_ctr: u32 = 0;
     for _ in 0..k {
+        eval_budget::tick(&mut budget_ctr);
         let datas: &'a [SumDataT<'a>] =
             bump.alloc([SumDataT { name: "n", val: inner, icit: Icit::Expl }]);
         inner = bump.alloc(Tm::SumCase { typ: nat_tm, index: 1, datas, is_trait: false });

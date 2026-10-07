@@ -13,6 +13,8 @@ use smol_str::SmolStr;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use crate::L13_namespace::eval_budget;
+
 use super::parser::syntax::Icit;
 
 use super::env::EMPTY_ENV;
@@ -760,6 +762,13 @@ pub(super) fn prim_exec<'a>(
             }
             if v_tag(y) == 7 {
                 if let XCell::Nat(k) = v_xcell_of(y) {
+                    // 内存护栏：k 是运行期值，本回退链是 `for _ in 0..k` 的
+                    // 裸分配（链循环无 checkpoint，预算拦不住）。超限时
+                    // 保持 `nat_add x y` 卡住（返回 None 的既有语义），
+                    // 不再申请 ~k 个节点。见 eval_budget::NAT_CHAIN_LIMIT。
+                    if *k > eval_budget::NAT_CHAIN_LIMIT {
+                        return None;
+                    }
                     let mut inner = x;
                     for _ in 0..*k {
                         inner = nat_succ_shape(bump, decl, inner)?;
@@ -792,6 +801,11 @@ pub(super) fn prim_exec<'a>(
             }
             if v_tag(y) == 7 {
                 if let XCell::Nat(k) = v_xcell_of(y) {
+                    // 内存护栏：同 NatAdd 的 k 层回退链（本循环无
+                    // checkpoint）。超限保持 `nat_mul x y` 卡住。
+                    if *k > eval_budget::NAT_CHAIN_LIMIT {
+                        return None;
+                    }
                     let mut acc = v_xcell(bump.alloc(XCell::Nat(0)));
                     for _ in 0..*k {
                         acc = stuck_decl(bump, spine, "nat_add", &[x, acc]);

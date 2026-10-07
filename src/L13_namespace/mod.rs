@@ -3689,6 +3689,11 @@ impl Infer {
     /// `Tm` unchanged: every downstream consumer of a quoted value sees the
     /// exact term shape it saw when nats were unary chains.
     fn quote_nat(&self, decl: &Decl, l: Lvl, k: u64) -> Rc<Tm> {
+        // 内存护栏（同孪生 quote_nat_chain）：k 是运行期值，
+        // `println (nat_mul 100000 100000)` 即 10^10 层链 = 上百 GB 提交量
+        // （2026-10-07 事件 2004 实测 121.8 GB，主机被迫重启）。超限立即
+        // 中止，由边界按 eval_budget 中止族处理（见 NAT_CHAIN_LIMIT）。
+        eval_budget::guard_nat_chain(k);
         let nat_ty = decl.get("Nat").map(|e| e.2.clone()).unwrap_or_else(|| Val::U(0).into());
         let nat_tm = self.quote(decl, l, &nat_ty);
         let mut inner: Rc<Tm> = Tm::SumCase {
@@ -3697,7 +3702,10 @@ impl Infer {
             index: 0,
             datas: Rc::new(vec![]),
         }.into();
+        // tick 补点：链循环此前零 checkpoint（同孪生侧）
+        let mut budget_ctr: u32 = 0;
         for _ in 0..k {
+            eval_budget::tick(&mut budget_ctr);
             inner = Tm::SumCase {
                 is_trait: false,
                 typ: nat_tm.clone(),

@@ -180,7 +180,13 @@ fn nat_add(infer: &Infer, decl: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
     }
     // y ≡ Nat(k>0), x not concrete → unfold `succ^k x` (O(k)).  Preserves
     // walkability for `len + 1`-style width expressions (count_nat_forced).
+    // 内存护栏：k 是运行期值，本回退链是 `for _ in 0..k` 的裸分配（循环内
+    // 无 checkpoint，时间预算拦不住；2026-10-07 事件 2004 实测 121.8 GB）。
+    // 超限保持 `nat_add x y` 卡住（None 的既有语义），不再申请 ~k 个节点。
     if let Val::Nat(k) = y.as_ref() {
+        if *k > eval_budget::NAT_CHAIN_LIMIT {
+            return None;
+        }
         let mut inner = x;
         for _ in 0..*k {
             inner = nat_succ_shape(decl, inner)?;
@@ -219,6 +225,12 @@ fn nat_mul(infer: &Infer, decl: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
     // (so `pow2(m) * 1 = pow2(m)` — relied on by double_step in
     // test_prove_term_pure).
     if let Val::Nat(k) = y.as_ref() {
+        // 内存护栏：同 nat_add 的 k 层回退链（循环内无 checkpoint）。
+        // 超限保持 `nat_mul x y` 卡住，k ≤ 上限时行为不变（k=1 的
+        // `x * 1 ⇒ x + 0 ⇒ x` 归约仍成立）。
+        if *k > eval_budget::NAT_CHAIN_LIMIT {
+            return None;
+        }
         let mut acc: Rc<Val> = Val::Nat(0).into();
         for _ in 0..*k {
             acc = stuck_decl("nat_add", &[x.clone(), acc]);
