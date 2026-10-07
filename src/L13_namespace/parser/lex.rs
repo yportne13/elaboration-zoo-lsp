@@ -283,17 +283,60 @@ fn op(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
     .parse(input)
 }
 
+/// EndLine token 文本的「下一行缩进列」：最后一个换行之后的水平空白
+/// **字符数**。缩进列定义（见 `lex` 内 `endline` 的注释）：' ' / '\t' /
+/// '\r' 各计 1 列，不做 tab 展开——只用于相对深浅比较（续行 vs 语句
+/// 锚点），统一定宽不影响判定。非 EndLine 文本调用返回无意义值。
+pub fn endline_indent(text: &str) -> u32 {
+    text.rsplit('\n').next().map_or(0, |s| s.chars().count() as u32)
+}
+
+/// Q2（2026-10-02，续行断开修复）：EndLine token 的文本从「换行 run」
+/// 扩为「换行 run + 紧随的水平空白（下一行前导缩进）」，end_offset 同
+/// 步延伸到下一行第一个非空白字符之前。解析器用 `endline_indent(token
+/// 文本)` 读出下一行缩进列，在 p_spine 实参循环里做缩进感知续行。
+///
+/// 旧实现里这段缩进由 `ws` 包装吞掉后丢弃（token 只到换行末尾），词法
+/// 层完全不携带行布局信息。缩进列的口径：' ' / '\t' / '\r' 各计 1 列
+/// （与 `ws` 的空白类一致），不做 tab 展开；CRLF 的 '\r' 在换行前被上
+/// 一 token 的尾随 ws 吃掉，行首孤悬 '\r' 计 1 列。
+///
+/// 行为保持：换行 run 之间夹水平空白的折叠（旧 many1 of ws("\n") 把
+/// "\n \n" 并成一个 EndLine）等价保留——循环直到水平空白后不再是换行
+/// 为止；token 覆盖范围多吃了尾随缩进而已。
+///
+/// 一致性要求：宏展开/块拼接送 owned token 文本重拼字符串再 re-lex
+/// （parser/mod.rs owned_tokens_to_string_mapped）——EndLine 文本带缩进
+/// 后，拼接处在 EndLine 之后**不再补空格分隔**（见该函数），re-lex 逐
+/// 列复原缩进；否则每次 re-lex 缩进 +1，同缩进守护（calc 步骤）会被
+/// 差一错误击穿。
+fn endline(input: Input<'_>) -> Option<(Input<'_>, Token<'_>)> {
+    let mut rest = input;
+    loop {
+        let (r, _) = pmatch("\n").parse(rest)?;
+        // 贪心水平空白（可空）：option 包装保证零匹配也成功
+        let (r, _) = pmatch(|c: char| c == ' ' || c == '\t' || c == '\r')
+            .option()
+            .parse(r)?;
+        rest = r;
+        if !rest.data.starts_with('\n') {
+            break;
+        }
+    }
+    let len = input.data.len() - rest.data.len();
+    Some((
+        rest,
+        Span {
+            data: (&input.data[..len], EndLine),
+            start_offset: input.start_offset,
+            end_offset: input.start_offset + len as u32,
+            path_id: input.path_id,
+        },
+    ))
+}
+
 pub fn lex(input: Span<&str>) -> Option<(Input<'_>, Vec<Token<'_>>)> {
     let num = pmatch(|c: char| c.is_ascii_digit()).map(|x| x.map(|y| (y, Num)));
-    let endline = ws(pmatch("\n")).many1().map(|x| {
-        let x0 = x.first().unwrap();
-        Span {
-            data: (x0.data, EndLine),
-            start_offset: x0.start_offset,
-            end_offset: x.last().unwrap().end_offset,
-            path_id: x0.path_id,
-        }
-    });
     let err_token = pmatch(|c: char| !c.is_ascii_whitespace()).map(|x| x.map(|y| (y, ErrToken)));
     fn ws<'a, A, P: Parser<Span<&'a str>, A>>(p: P) -> impl Parser<Span<&'a str>, A> {
         let whitespace = pmatch(|c: char| c == ' ' || c == '\t' || c == '\r').option();

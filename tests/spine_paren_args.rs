@@ -281,3 +281,171 @@ fn flattened_run_matches_bare_juxtaposition_on_both_engines() {
     let f = run_fast(PARITY_SRC).expect("twin engine must elaborate");
     assert_eq!(r, f, "parity mismatch");
 }
+
+// ============================================================
+// 5. Q2 缩进感知续行（2026-10-02）：更深缩进的下一行拼实参，
+//    同缩进（calc 步骤 / 块内语句 / match 臂边界）保持断开
+// ============================================================
+
+/// B1（分析 §2.3 首形状）：def 体续行。修复前 `add_succ_left n` 后的
+/// EndLine 是硬终结符 → 孤儿行 + "expected newline"。修复后
+/// `add_succ_left n\n        ((n * k) + k)` 拼成三实参调用；
+/// add_succ_left 2 ((2*3)+3) : Eq ((succ 2)+9) (succ (2+9)) = Eq 12 12，
+/// match refl 取见证值 12。
+#[test]
+fn newline_continued_paren_arg_elaborates_and_evaluates() {
+    let out = run_prelude(
+        r#"
+def n: Nat = 2
+def k: Nat = 3
+def w: Nat =
+    match add_succ_left n
+        ((n * k) + k) {
+        case refl(z) => z
+    }
+println w
+"#,
+    )
+    .expect("continued paren argument must elaborate after the fix");
+    assert_eq!(lines(&out), vec!["12"]);
+}
+
+/// B2/B7：match 臂体续行 + let 链续行（臂体起始行缩进 8/12，续行 +4）。
+/// 修复前分别是 "expected `}`, found `(`" 与 let 值被截断。两臂都产
+/// Nat（臂内各自 match refl 提取见证），避免臂型不合。
+#[test]
+fn match_arm_and_let_chain_continuation_elaborate() {
+    let out = run_prelude(
+        r#"
+def n: Nat = 2
+def k: Nat = 3
+def v: Nat =
+    match k {
+        case zero =>
+            (match add_succ_left n
+                ((n * k) + k) {
+                case refl(z) => z
+            })
+        case succ(a) =>
+            let p2 = add_succ_left n
+                ((n * a) + a);
+            (match p2 {
+                case refl(z) => z
+            })
+    }
+println v
+"#,
+    )
+    .expect("arm/let-chain continuation must elaborate after the fix");
+    // k=3 走 succ 臂（a=2）：add_succ_left 2 ((2*2)+2) : Eq 9 9 → 见证 9
+    assert_eq!(lines(&out), vec!["9"]);
+}
+
+/// B6 + 静默错义族：花括号块内更深缩进的 `(`-起头行修复前被吞成
+/// 「幽灵语句」（块静默错义，只报体类型不匹配）；修复后回归为上一
+/// 表达式的续行，块值 = 续行拼满的调用。同缩进语句（后一守护）对拍。
+#[test]
+fn brace_block_deeper_indent_continues_instead_of_phantom_statement() {
+    let out = run_prelude(
+        r#"
+def n: Nat = 2
+def k: Nat = 3
+def w =
+    {
+    add_succ_left n
+        ((n * k) + k)
+    }
+def v: Nat =
+    match w {
+        case refl(z) => z
+    }
+println v
+"#,
+    )
+    .expect("deeper-indent line inside braces must continue the previous expression");
+    assert_eq!(lines(&out), vec!["12"]);
+}
+
+/// 守护：花括号块内**同缩进**语句仍是两条语句（块值 = 末条）；若被
+/// 胶连成一条，`nat_add(2, 3) nat_add(4, 5)` 五实参直接 can't unify。
+#[test]
+fn brace_block_same_indent_statements_stay_separate() {
+    let out = run_prelude(
+        r#"
+def v: Nat = {
+    nat_add(2, 3)
+    nat_add(4, 5)
+}
+println v
+"#,
+    )
+    .expect("same-indent brace statements must stay separate statements");
+    assert_eq!(lines(&out), vec!["9"]);
+}
+
+/// 守护：calc 多步骤块（步骤行以 `(` 起头、与上一行同缩进——
+/// examples/adder_proof.typort 的招牌形状）必须仍逐步展开求值。
+/// 无条件跳行会击穿 `$y: raw` 定界，整个 calc 机制报废（分析 §2.4）。
+#[test]
+fn calc_same_indent_paren_led_steps_still_elaborate() {
+    let out = run_prelude(
+        r#"
+def h2: Eq 2 2 = rfl
+def t: Eq ((2 + 0)) (2 + 0) =
+    calc {
+        (2 + 0) = 2 by add_zero_right(2)
+        (2) = 2 by h2
+        (2) = (2 + 0) by symm(add_zero_right(2))
+    }
+def v: Nat =
+    match t {
+        case refl(z) => z
+    }
+println v
+"#,
+    )
+    .expect("calc steps at uniform indent must keep elaborating");
+    assert_eq!(lines(&out), vec!["2"]);
+}
+
+/// 守护：本来合法的显式换行点——逗号后换行的逗号调用——读法不变。
+#[test]
+fn comma_call_newline_unchanged() {
+    let out = run_prelude(
+        r#"
+println (nat_add(2,
+    3))
+"#,
+    )
+    .expect("comma-call newline form must keep elaborating");
+    assert_eq!(lines(&out), vec!["5"]);
+}
+
+/// parity 冒烟：续行读法在参考版与孪生快版上逐字节一致
+/// （`f3 two <换行>(two) <换行>(two)` ≡ `f3 two two two`）。
+#[test]
+fn newline_continuation_matches_bare_on_both_engines() {
+    const SRC: &str = r#"
+enum Nat {
+    zero
+    succ(n: Nat)
+}
+def add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+def two = succ (succ zero)
+def f3(p: Nat, q: Nat, r: Nat): Nat = add (add p q) r
+println (f3 two
+    (two)
+    (two))
+println (f3 two two two)
+"#;
+    let r = run_basic(SRC).expect("reference engine must elaborate");
+    let ls = lines(&r);
+    assert_eq!(ls.len(), 2, "unexpected output: {r}");
+    assert_eq!(ls[0], ls[1], "continued form must equal bare juxtaposition");
+    let f = run_fast(SRC).expect("twin engine must elaborate");
+    assert_eq!(r, f, "parity mismatch");
+}

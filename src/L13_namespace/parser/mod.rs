@@ -182,7 +182,24 @@ impl crate::parser_lib_resilient::ErrorProgress for IError {
 
 type IResult<'a, 'b, O> = Result<(&'b [TokenNode<'a>], O), IError>;
 
-pub type MacroState = (Vec<IError>, HashMap<String, Vec<MacroRule>>, Vec<MacroExpansionInfo>);
+/// 解析器共享状态：错误账、宏表、展开记录，外加 Q2 续行锚点（第 4 元）。
+///
+/// 锚点 = 最近一次被 `kw(EndLine)` 消费的换行所记录的「下一行缩进列」
+/// （≈ 当前语句/结构所在行的缩进；文件起点为 0）。所有合法换行点
+/// （`(` 后、`)` 前、逗号后、`=>` 后、let 体 `;` 后、decl/块/宏匹配器的
+/// 分隔换行……）都走 `kw(EndLine)`，锚点随之推进——因此它就是「语句现在
+/// 在哪一行、该行缩进多少」的廉价近似。p_spine 实参循环只允许「严格更深
+/// 缩进」的续行跨行拼实参；同缩进（calc 步骤、花括号块语句、match 臂
+/// 边界）天然不胶连。见 p_spine 与 kw 的注释。
+pub type MacroState = (Vec<IError>, HashMap<String, Vec<MacroRule>>, Vec<MacroExpansionInfo>, u32);
+
+/// 4 元组状态的错误账实现（parser_lib_resilient 只内置到 3 元组；本 crate
+/// 内的 trait，就地补臂即可，不动 parser_lib_resilient.rs）。
+impl crate::parser_lib_resilient::ErrorStore<IError> for MacroState {
+    fn push_error(&mut self, error: IError) {
+        self.0.push(error);
+    }
+}
 
 /// 宏展开重解析的递归深度上限：自递归宏（`macro_rules m { () => { m } }` +
 /// `def x = m`）在展开后再次命中同名宏，若不加限制会无限递归直至栈溢出
@@ -241,7 +258,7 @@ fn macro_depth_error(input: &[TokenNode<'_>]) -> IError {
 fn owned_tokens_to_string(tokens: &[OwnedToken]) -> String {
     let mut result = String::new();
     for (i, tok) in tokens.iter().enumerate() {
-        if i > 0 {
+        if i > 0 && tokens[i - 1].data.1 != TokenKind::EndLine {
             result.push(' ');
         }
         // Wrap Str tokens in double quotes (string literals)
@@ -273,7 +290,12 @@ fn owned_tokens_to_string_mapped(tokens: &[OwnedToken]) -> (String, Vec<Expansio
     let mut result = String::new();
     let mut map = Vec::with_capacity(tokens.len());
     for (i, tok) in tokens.iter().enumerate() {
-        if i > 0 {
+        // Q2：EndLine 的 token 文本已含下一行缩进（lex.rs），其后**不再补
+        // 空格分隔**——re-lex 逐列复原缩进。若在此补一格，每次宏展开/块
+        // 拼接重解析都会把续行缩进读深 1 列，同缩进守护（calc 步骤、块内
+        // 同缩进语句）会被差一错误击穿。换行本身是硬分隔，不补空格不影响
+        // 相邻 token 的切分。
+        if i > 0 && tokens[i - 1].data.1 != TokenKind::EndLine {
             result.push(' ');
         }
         let expansion_start = result.len() as u32;
@@ -417,7 +439,7 @@ pub fn parser_with_macros(input: &str, id: u32, global_macros: &HashMap<String, 
         .filter(|(k, _)| !k.starts_with("__exported__"))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
-    let mut err_collect: MacroState = (vec![], clean_global, vec![]);
+    let mut err_collect: MacroState = (vec![], clean_global, vec![], 0);
     err_collect.1.entry("stringify".to_owned()).or_insert_with(|| vec![MacroRule {
         matcher: MacroMatcher::Metavar { name: empty_span(String::new()), fragment: MacroFragment::Ident },
         transcriber: MacroTranscriber::BuiltIn,
@@ -494,8 +516,17 @@ macro_rules! T {
 }
 
 fn kw<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [TokenNode<'a>], Span<()>, MacroState, IError> {
-    move |input: &'b [TokenNode<'a>], _: &mut MacroState| match input.first() {
+    move |input: &'b [TokenNode<'a>], state: &mut MacroState| match input.first() {
         Some(x) => if x.data.1 == p {
+            // Q2 续行锚点推进：EndLine 在任何合法换行点被消费，锚点即更新
+            // 为该换行记录的下一行缩进（词法层携带，见 lex.rs endline）。
+            // 语句/结构的分隔换行（decl 间、块内语句间、match 臂间、宏
+            // 匹配器的换行跳过）都经此推进——p_spine 的「严格更深缩进才
+            // 续行」判据因此以当前语句行缩进为基线。option/or 回溯只回滚
+            // 输入不回滚锚点：失败分支推进到的行即解析继续的行，值仍自洽。
+            if p == TokenKind::EndLine {
+                state.3 = lex::endline_indent(x.data.0);
+            }
             input
                 .get(1..)
                 .map(|i| (i, x.map(|_| ())))
@@ -1234,9 +1265,73 @@ fn unescape_spine(raw: Raw, pieces: &mut Vec<(Either, Raw)>) -> Raw {
     }
 }
 
+/// Q2 实参续行判据（2026-10-02）：换行后下一 token 属「能起实参」的原子
+/// 类（括号组 / 隐参方括号 / 标识符 / 数字 / 字符串 / 洞 / Type），且下一
+/// 行缩进**严格深于**锚点（当前语句所在行缩进，见 kw(EndLine) 的锚点推进
+/// 与 MacroState 文档）。关键字（case/def/let/match/by/…）不在集合里，
+/// match 臂边界等即使缩进判据失手也不会被吞成实参。
+fn spine_continuation(nl: &TokenNode<'_>, after: &[TokenNode<'_>], anchor: u32) -> bool {
+    lex::endline_indent(nl.data.0) > anchor
+        && matches!(
+            after.first().map(|t| t.data.1),
+            Some(
+                TokenKind::LParen
+                    | TokenKind::LSquare
+                    | TokenKind::Ident
+                    | TokenKind::Num
+                    | TokenKind::Str
+                    | TokenKind::Hole
+                    | TokenKind::TypeKeyword
+            )
+        )
+}
+
 fn p_spine<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
     let (input, head) = expr(input, state)?;
-    let (input, args) = p_arg.many0().map(|x| x.concat()).parse(input, state)?;
+    // 实参 juxtaposition 循环（原 `p_arg.many0().map(concat)` 的手写展开）
+    // + Q2 缩进感知续行：EndLine 不再是硬终结符——下一行缩进严格深于
+    // 语句锚点（state.3）且以原子类 token 起头时，消费换行并继续收实参；
+    // 该次 p_arg 失败则回滚输入与错误/展开账（slice 组合子层天然回溯，
+    // state 是共享引用，须手动截断）。
+    //
+    // 【承重墙】缩进判据不可退让成「无条件跳行」：calc 宏的 `$y: raw`
+    // 片段在调用点经 p_raw → 本循环定界，calc 步骤行常以 `(` 起头且与上
+    // 一行**同缩进**——无条件跳行会把后续步骤折叠成实参，`=`/`by` 的匹配
+    // 期待落空，整个 calc 推理机制报废（分析 §2.4）。同缩进必须断开；
+    // 更深缩进才是续行。副作用（本轮修复的目标之一）：花括号块内更深
+    // 缩进的 `(`-起头行从「幽灵语句」（静默错义族：被吞成下一条语句，
+    // 只报体类型不匹配）回归为上一表达式的续行。
+    let mut input = input;
+    let mut args: Vec<(Either, Raw)> = Vec::new();
+    loop {
+        if let Some(nl) = input.first() {
+            if nl.data.1 == TokenKind::EndLine {
+                if spine_continuation(nl, input.get(1..).unwrap_or(&[]), state.3) {
+                    let err_mark = state.0.len();
+                    let exp_mark = state.2.len();
+                    if let Ok((i, more)) = p_arg.parse(input.get(1..).unwrap_or(&[]), state) {
+                        args.extend(more);
+                        input = i;
+                        continue;
+                    }
+                    // 回溯：撤销失败尝试期间 Cut/recover 压入的错误与展开
+                    // 记录，避免给「本就是孤儿行」的输入叠加伪诊断。
+                    state.0.truncate(err_mark);
+                    state.2.truncate(exp_mark);
+                }
+                // EndLine 且不续行：实参循环到此为止（p_arg 在 EndLine 上
+                // 恒失败，不必再试）。
+                break;
+            }
+        }
+        match p_arg.parse(input, state) {
+            Ok((i, more)) => {
+                args.extend(more);
+                input = i;
+            }
+            Err(_) => break,
+        }
+    }
 
     // 逃逸哨兵结算（`f a (b)` 误解析修复，2026-09-19；2026-10-01 从
     // 「只拆一层」改为 unescape_spine 递归拆尽）：头/显式实参顶层的单实参
@@ -1622,7 +1717,8 @@ fn p_raw<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
                     // 展开深度超限：停止递归，返回错误（由上层 recover 记录）。
                     None => return Err(macro_depth_error(input)),
                 };
-                let mut temp_state = (vec![], state.1.clone(), vec![]);
+                // 继承外层锚点：展开体重解析沿用调用点的语句行上下文
+                let mut temp_state = (vec![], state.1.clone(), vec![], state.3);
                 let ret = p_raw(&t_borrowed, &mut temp_state)?;
                 state.0.extend(temp_state.0);
                 state.2.extend(temp_state.2);
@@ -1962,7 +2058,8 @@ fn p_def_stmt_block<'a: 'b, 'b>(
         Some(g) => g,
         None => return Err(macro_depth_error(input)),
     };
-    let mut temp_state = (vec![], state.1.clone(), vec![]);
+    // 继承外层锚点（块循环消费语句前换行时已推进到语句行缩进）
+    let mut temp_state = (vec![], state.1.clone(), vec![], state.3);
     let ret = p_raw(&t_borrowed, &mut temp_state)?;
     state.0.extend(temp_state.0);
     state.2.extend(temp_state.2);
@@ -3534,7 +3631,7 @@ fn p_decl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
                     }
                 }
             };
-            let mut temp_state = (vec![], state.1.clone(), vec![]);
+            let mut temp_state = (vec![], state.1.clone(), vec![], state.3);
             let ret = match p_decl(&t_borrowed, &mut temp_state) {
                 Ok(r) => r,
                 Err(e) => {
@@ -3661,7 +3758,7 @@ def t = match x {
 
 //pub fn parser_test<'a, T, P: Parser<&'a [TokenNode<'a>], T, Vec<IError>, IError>>(p: P, input: &'a str, id: u32) -> Option<(Vec<T>, Vec<IError>)> {
 pub fn parser_test(input: &str, id: u32) -> Option<(Vec<Raw>, Vec<IError>)> {
-    let mut err_collect: MacroState = (vec![], Default::default(), vec![]);
+    let mut err_collect: MacroState = (vec![], Default::default(), vec![], 0);
     let ret = super::parser::lex::lex(Span {
         data: input,
         start_offset: 0,
@@ -3800,6 +3897,210 @@ mod spine_paren_shape {
     fn spine_impl_arg_type_application_stays_glued() {
         assert_eq!(one_shape("g n [T]"), "(app E g (app I n T))");
         assert_eq!(one_shape("g [T] n"), "(app E (app I g T) n)");
+    }
+}
+
+/// Q2 缩进感知续行（2026-10-02）AST 形状钉：EndLine 不再是 spine 实参
+/// 循环的硬终结符——下一行缩进**严格深于**语句锚点且以原子类 token 起头
+/// 时拼实参；同缩进（calc 步骤、块内语句、match 臂边界）必须保持断开。
+/// 词法侧 EndLine token 文本携带下一行缩进（lex.rs endline），锚点由
+/// kw(EndLine) 在每个合法换行点推进（MacroState 第 4 元）。
+#[cfg(test)]
+mod spine_continuation {
+    use super::{lex, p_raw, parser, parser_test, Either, Icit, MacroState, Raw, TokenKind};
+    use crate::parser_lib::Span;
+    use crate::parser_lib_resilient::Parser;
+
+    fn icit_shape(icit: &Either) -> String {
+        match icit {
+            Either::Icit(Icit::Expl) => "E".to_string(),
+            Either::Icit(Icit::Impl) => "I".to_string(),
+            Either::Name(s) => format!("={}", s.data),
+        }
+    }
+
+    fn shape(t: &Raw) -> String {
+        match t {
+            Raw::App(l, r, icit) => format!("(app {} {} {})", icit_shape(icit), shape(l), shape(r)),
+            Raw::Var(s) => s.data.to_string(),
+            Raw::Obj(x, Some(m)) => format!("{}.{}", shape(x), m.data),
+            Raw::Obj(x, None) => format!("{}._", shape(x)),
+            Raw::Lam(n, _, b) => format!("(lam {} {})", n.data, shape(b)),
+            Raw::Let(n, _, v, b) => format!("(let {} {} {})", n.data, shape(v), shape(b)),
+            Raw::Match(scr, arms) => format!(
+                "(match {} [{}])",
+                shape(scr),
+                arms.iter().map(|(_, b)| shape(b)).collect::<Vec<_>>().join(" ")
+            ),
+            Raw::Nat(n) => n.data.to_string(),
+            Raw::U(_) => "U".to_string(),
+            Raw::Hole(_) => "_".to_string(),
+            other => format!("({:?})", other.to_span()),
+        }
+    }
+
+    fn one_shape(src: &str) -> String {
+        let (raws, errs) = parser_test(src, 0).expect("lex/parse must succeed");
+        assert!(errs.is_empty(), "unexpected parse errors for {src:?}: {errs:?}");
+        assert_eq!(raws.len(), 1, "expected exactly one top-level raw for {src:?}");
+        shape(&raws[0])
+    }
+
+    /// 低层入口：手跑 lex + p_raw.many0，返回（raw 形状，错误，剩余 token 的
+    /// 种类）——同缩进断开时剩余应从 EndLine 起（第二条语句不被吞）。
+    fn raws_errs_leftover(src: &str) -> (Vec<String>, Vec<String>, Vec<TokenKind>) {
+        let toks = lex::lex(Span {
+            data: src,
+            start_offset: 0,
+            end_offset: src.len() as u32,
+            path_id: 0,
+        })
+        .unwrap()
+        .1;
+        let mut state: MacroState = (vec![], Default::default(), vec![], 0);
+        let (rest, raws) = p_raw.many0().parse(&toks, &mut state).unwrap();
+        (
+            raws.iter().map(shape).collect(),
+            state.0.iter().map(|e| e.msg.data.to_string()).collect(),
+            rest.iter().map(|t| t.data.1).collect(),
+        )
+    }
+
+    /// 词法层：EndLine 文本 = 换行 run + 下一行前导空白，缩进列可复原。
+    #[test]
+    fn endline_token_records_next_line_indent() {
+        let src = "a\n  b\n\tc";
+        let toks = lex::lex(Span {
+            data: src,
+            start_offset: 0,
+            end_offset: src.len() as u32,
+            path_id: 0,
+        })
+        .unwrap()
+        .1;
+        let endlines: Vec<_> = toks
+            .iter()
+            .filter(|t| t.data.1 == TokenKind::EndLine)
+            .collect();
+        assert_eq!(endlines.len(), 2, "one EndLine per line break");
+        assert_eq!(endlines[0].data.0, "\n  ");
+        assert_eq!(lex::endline_indent(endlines[0].data.0), 2);
+        assert_eq!(endlines[1].data.0, "\n\t");
+        assert_eq!(lex::endline_indent(endlines[1].data.0), 1);
+        // 空行折叠成一个 EndLine；缩进取最后换行之后的列数
+        assert_eq!(lex::endline_indent("\n \n   "), 3);
+        assert_eq!(lex::endline_indent("\n"), 0);
+    }
+
+    /// 核心：更深缩进续行拼实参，且与 Q1 摊平复合（`g n` + `(x) (y)`）。
+    /// 多条续行同列（4 > 锚点 0）逐条拼接，锚点不随拼接推进。
+    #[test]
+    fn deep_indent_continuation_glues_args() {
+        assert_eq!(
+            one_shape("g n\n    (x) (y)"),
+            "(app E (app E (app E g n) x) y)"
+        );
+        assert_eq!(
+            one_shape("g n\n    (x)\n    (y)"),
+            "(app E (app E (app E g n) x) y)"
+        );
+        // 标识符起头的续行同样拼接
+        assert_eq!(one_shape("g n\n    y"), "(app E (app E g n) y)");
+    }
+
+    /// 守护：同缩进下一行（calc 步骤 / 块内语句的形状）不许胶连——
+    /// 第一条 raw 只到 `g n`，剩余从 EndLine 起。
+    #[test]
+    fn same_indent_lines_stay_broken() {
+        let (raws, errs, leftover) = raws_errs_leftover("g n\n(x) (y)");
+        assert_eq!(raws, vec!["(app E g n)".to_string()], "must not glue at equal indent");
+        assert!(errs.is_empty(), "unexpected errors: {errs:?}");
+        assert_eq!(leftover.first(), Some(&TokenKind::EndLine));
+        // 缩进浅于锚点（负缩进不存在，但浅行同样断开）
+        let (raws, _, leftover) = raws_errs_leftover("    g n\n(x)");
+        assert_eq!(raws, vec!["(app E g n)".to_string()]);
+        assert_eq!(leftover.first(), Some(&TokenKind::EndLine));
+    }
+
+    /// 守护：`case` 等关键字不能起实参——即使缩进判据满足也原样留给
+    /// 臂分隔符（match 臂边界不被吞）。
+    #[test]
+    fn keyword_led_line_never_continues() {
+        let (raws, errs, leftover) = raws_errs_leftover("g n\n    case");
+        assert_eq!(raws, vec!["(app E g n)".to_string()]);
+        assert!(errs.is_empty(), "unexpected errors: {errs:?}");
+        assert_eq!(leftover.first(), Some(&TokenKind::EndLine));
+    }
+
+    /// 守护：逗号调用换行（`f(a,\n b)`，本来合法的显式换行点）读法不变。
+    #[test]
+    fn comma_call_newline_form_unchanged() {
+        assert_eq!(one_shape("g (a,\n    b)"), "(app E (app E g a) b)");
+        assert_eq!(one_shape("g (a, b)"), "(app E (app E g a) b)");
+    }
+
+    /// B2 形状（match 臂体续行）：臂体 `add_succ_left n` 后更深缩进的
+    /// `((n * k) + k)` 拼成臂体应用；下一臂 `case` 行同缩进断开。
+    #[test]
+    fn match_arm_body_continuation_glues() {
+        let (decls, errs) = parser(
+            r#"
+def p(n: Nat): Nat =
+    match n {
+        case zero => add_succ_left n
+            ((n * k) + k)
+        case succ(m) => m
+    }
+"#,
+            0,
+        )
+        .expect("parse must succeed");
+        assert!(errs.is_empty(), "unexpected parse errors: {errs:?}");
+        assert_eq!(decls.len(), 1);
+        match &decls[0] {
+            super::Decl::Def { body, .. } => assert_eq!(
+                shape(body),
+                "(match n [(app E (app E add_succ_left n) (app E (app E n.* k).+ k)) m])"
+            ),
+            other => panic!("expected Def decl, got {other:?}"),
+        }
+    }
+
+    /// calc 守护（宏机制级）：三步同缩进、第 2/3 步以 `(` 起头的 calc 块
+    /// 必须仍按步骤展开（let 链 + 每步一个 trans）；若换行被无条件跳过，
+    /// 步骤会折叠进 `$y: raw` 片段，`=`/`by` 期待落空，整个 calc 报废。
+    #[test]
+    fn calc_same_indent_steps_stay_separate() {
+        let (decls, errs) = parser(
+            r#"
+macro_rules calc {
+    ( { $( $x: raw = $y: raw by $p: raw $( $x2: raw = $z: raw by $q: raw )* )+ } ) => {
+        let _c : Eq ($x) ($y) = ($p);
+        $( let _ : Eq ($x2) ($z) = ($q);
+           let _c = trans (_c) ($q); )*
+        _c
+    };
+}
+def foo(a: Nat, b: Nat, h: Eq a b): Eq (a + 0) (b + 0) =
+    calc {
+        (a + 0) = a by add_zero_right(a)
+        (a) = b by h
+        (b) = (b + 0) by symm(add_zero_right(b))
+    }
+"#,
+            0,
+        )
+        .expect("parse must succeed");
+        assert!(errs.is_empty(), "calc steps must not fold: {errs:?}");
+        assert_eq!(decls.len(), 1, "macro_rules def is not a decl");
+        match &decls[0] {
+            super::Decl::Def { body, .. } => {
+                let s = shape(body);
+                assert_eq!(s.matches("(let ").count(), 5, "3 steps => 1 + 2*2 lets: {s}");
+                assert_eq!(s.matches("trans").count(), 2, "one trans per extra step: {s}");
+            }
+            other => panic!("expected Def decl, got {other:?}"),
+        }
     }
 }
 
