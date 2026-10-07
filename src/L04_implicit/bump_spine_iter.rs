@@ -483,7 +483,15 @@ fn eval_iter<'a>(
     vals.clear();
     icits.clear();
     work.push(W::Tm(tm0, env0));
-    while let Some(w) = work.pop() {
+    // [C2-prop] 尾任务寄存器化：把"push 后必然立刻 pop"的任务放循环局部
+    // `cur`，省一次 40B store+load 与一轮 jump-table 分发。严格 LIFO 等价：
+    // 每个改点都是其控制路径上最后一个 work.push（规程 §3 a/b/c）。
+    let mut cur: Option<W<'a>> = None;
+    loop {
+        let w = match cur.take().or_else(|| work.pop()) {
+            Some(w) => w,
+            None => break,
+        };
         match w {
             W::Tm(Tm::Var(i), env) => vals.push(env_nth(defs, env, *i)),
             W::Tm(Tm::Lam(name, icit, body), env) => {
@@ -493,16 +501,16 @@ fn eval_iter<'a>(
             W::Tm(Tm::U, _) => vals.push(v_u()),
             W::Tm(Tm::Pi(name, icit, dom, cod), env) => {
                 work.push(W::PiBody(name, *icit, cod, env));
-                work.push(W::Tm(dom, env));
+                cur = Some(W::Tm(dom, env));
             }
             W::Tm(Tm::Let(_, _, t, u), env) => {
                 work.push(W::LetBody(u, env));
-                work.push(W::Tm(t, env));
+                cur = Some(W::Tm(t, env));
             }
             W::Tm(Tm::Meta(m), _) => vals.push(meta_val_of(metas, *m)),
             W::Tm(Tm::InsertedMeta(m, bds), env) => {
                 vals.push(meta_val_of(metas, *m));
-                work.push(W::AppBds(env, *bds));
+                cur = Some(W::AppBds(env, *bds));
             }
             W::Tm(app @ Tm::App(..), env) => {
                 // 右链下钻：头为非闭包变量时头值直接进 vals（icit 进侧栈）
@@ -515,7 +523,7 @@ fn eval_iter<'a>(
                             if heads > 0 {
                                 work.push(W::ChainWrap(heads));
                             }
-                            work.push(W::Tm(base, env));
+                            cur = Some(W::Tm(base, env));
                             break;
                         }
                     };
@@ -531,7 +539,7 @@ fn eval_iter<'a>(
                                     work.push(W::ChainWrap(heads));
                                 }
                                 work.push(W::ApplyKnown(vf));
-                                work.push(W::Tm(a, env));
+                                cur = Some(W::Tm(a, env));
                                 break;
                             }
                             vals.push(vf);
@@ -546,7 +554,7 @@ fn eval_iter<'a>(
                             }
                             work.push(W::Apply(i));
                             work.push(W::Tm(a, env));
-                            work.push(W::Tm(f, env));
+                            cur = Some(W::Tm(f, env));
                             break;
                         }
                     }
@@ -559,7 +567,7 @@ fn eval_iter<'a>(
                     // β 归约是尾调用：直接推入体，继续循环
                     let c = v_clo_of(vf);
                     let env = env_ext(bump, c.env, va);
-                    work.push(W::Tm(c.body, env));
+                    cur = Some(W::Tm(c.body, env));
                 } else {
                     vals.push(spine.push(vf, va, i));
                 }
@@ -568,7 +576,7 @@ fn eval_iter<'a>(
                 let va = vals.pop().expect("eval 栈：ApplyKnown 缺实参");
                 let c = v_clo_of(vf);
                 let env = env_ext(bump, c.env, va);
-                work.push(W::Tm(c.body, env));
+                cur = Some(W::Tm(c.body, env));
             }
             W::ChainWrap(k) => {
                 let mut v = vals.pop().expect("eval 栈：ChainWrap 缺 base");
@@ -581,7 +589,7 @@ fn eval_iter<'a>(
             }
             W::LetBody(u, env) => {
                 let vt = vals.pop().expect("eval 栈：LetBody 缺绑定值");
-                work.push(W::Tm(u, env_ext(bump, env, vt)));
+                cur = Some(W::Tm(u, env_ext(bump, env, vt)));
             }
             W::PiBody(name, icit, cod, env) => {
                 let dom = vals.pop().expect("eval 栈：PiBody 缺定义域");
@@ -600,7 +608,7 @@ fn eval_iter<'a>(
                     // 维护的 run 长度一次跳完，落点 = run 后第一个槽。
                     // （implicit 负载整条链全 false：注入评估 O(层深) → O(1)。）
                     debug_assert!(env.flat_len >= b.false_run); // 链与 env 平行
-                    work.push(W::AppBds(
+                    cur = Some(W::AppBds(
                         Env { flat_len: env.flat_len - b.false_run, ..env },
                         b.after_run,
                     ));
@@ -625,7 +633,7 @@ fn eval_iter<'a>(
                     if let Some(a) = arg {
                         work.push(W::AppBdsOne(a));
                     }
-                    work.push(W::AppBds(rest, b.next));
+                    cur = Some(W::AppBds(rest, b.next));
                 }
             },
             W::AppBdsOne(arg) => {
@@ -633,7 +641,7 @@ fn eval_iter<'a>(
                 if v_tag(v) == 1 {
                     let c = v_clo_of(v);
                     let env = env_ext(bump, c.env, arg);
-                    work.push(W::Tm(c.body, env));
+                    cur = Some(W::Tm(c.body, env));
                 } else {
                     vals.push(spine.push(v, arg, Icit::Expl));
                 }

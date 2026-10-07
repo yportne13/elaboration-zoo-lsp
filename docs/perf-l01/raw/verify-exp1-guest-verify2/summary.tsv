@@ -1,0 +1,12 @@
+workload	size	variant	A_syn_med	A_syn_copy_med	B_exp1_syn_med	A_syn_copy_ratio_pct	B_exp1_syn_ratio_pct	A_syn_min	A_syn_copy_min	B_exp1_syn_min	ref_halfsplit_p95	null_p95_A_syn_vs_A_syn_copy	null_p95_A_syn_vs_B_exp1_syn	verdict
+guest/church_mul	50	bump_spine_iter	0.0230	0.0250	0.0220	8.70	-4.35	0.0180	0.0180	0.0210	18.18	18.18	22.73	UNDECIDED(dev=4.35<=bound=18.18[p95=18.18])
+guest/church_mul	100	bump_spine_iter	0.1000	0.1070	0.0970	7.00	-3.00	0.0800	0.0790	0.0920	17.71	17.71	18.75	UNDECIDED(dev=3.00<=bound=17.71[p95=17.71])
+guest/church_mul	200	bump_spine_iter	0.4050	0.3950	0.4060	-2.47	0.25	0.3240	0.3840	0.3820	16.79	14.81	17.26	UNDECIDED(dev=0.25<=bound=16.79[p95=16.79])
+guest/exponential	10	bump_spine_iter	0.0140	0.0140	0.0140	0.00	0.00	0.0120	0.0100	0.0100	14.29	14.29	14.29	UNDECIDED(dev=0.00<=bound=14.29[p95=14.29])
+guest/exponential	14	bump_spine_iter	0.2020	0.2020	0.2120	0.00	4.95	0.1680	0.1480	0.1480	16.92	16.83	16.83	UNDECIDED(dev=4.95<=bound=16.92[p95=16.92])
+guest/exponential	18	bump_spine_iter	3.5440	3.5480	3.5660	0.11	0.62	3.0360	2.7020	2.8070	14.48	14.52	14.15	UNDECIDED(dev=0.62<=bound=14.48[p95=14.48])
+guest/exponential	20	bump_spine_iter	14.3340	14.3100	14.3450	-0.17	0.08	12.1010	10.7680	11.0540	14.72	14.86	14.76	UNDECIDED(dev=0.08<=bound=14.72[p95=14.72])
+guest/parigot_add	4	bump_spine_iter	0.0350	0.0350	0.0330	0.00	-5.71	0.0260	0.0300	0.0240	14.29	11.43	17.95	UNDECIDED(dev=5.71<=bound=14.29[p95=14.29])
+guest/parigot_add	6	bump_spine_iter	0.5580	0.5880	0.5160	5.38	-7.53	0.4150	0.4750	0.3830	13.71	10.79	16.40	UNDECIDED(dev=7.53<=bound=13.71[p95=13.71])
+guest/parigot_add	8	bump_spine_iter	9.1840	9.7380	8.5360	6.03	-7.06	6.9470	7.2540	6.4540	13.42	10.43	15.71	UNDECIDED(dev=7.06<=bound=13.42[p95=13.42])
+guest/parigot_add	10	bump_spine_iter	147.2220	147.4620	137.6510	0.16	-6.50	115.7500	113.5130	103.4490	16.06	15.89	19.34	UNDECIDED(dev=6.50<=bound=16.06[p95=16.06])

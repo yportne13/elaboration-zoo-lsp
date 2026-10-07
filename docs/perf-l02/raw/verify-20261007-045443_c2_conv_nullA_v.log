@@ -1,0 +1,2 @@
+--- segment nullA: nA1 vs nA2
+  reps_ok: nA1=42/42 nA2=42/42

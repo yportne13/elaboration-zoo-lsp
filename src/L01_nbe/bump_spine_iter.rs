@@ -31,6 +31,12 @@ use super::bump_spine::{
 };
 use super::term::Term;
 
+/// 一次性口径 [`normalize_imported`] 的 spine 预保留槽数（`Entry` 24B）。
+/// 4096 → 16384 是 2026-10 的实测修订：消除 n ≥ 2048 时右链负载的扩容
+/// （新 malloc + memcpy + free），本机 n=4000/8000 分别 −7.4% / −10.3%，
+/// 独立复核复现 −7.50% / −10.37%。理由与取舍见 `normalize_imported` 文档。
+const SPINE_RESERVE: usize = 16384;
+
 /// eval 的 work 栈条目。
 enum W<'a> {
     Tm(&'a Bt<'a>, Option<&'a EnvCons<'a>>),
@@ -350,8 +356,23 @@ impl Machine {
 
 /// 对已导入 bump 的项做 NBE（基准计时对象；import 在计时外）。
 /// eval（双栈）与 quote（任务栈 + 流式链）都深度无上限。
+///
+/// **spine 预保留 16384（2026-10 修订）**：一次性口径里 spine 是本函数新建的
+/// `Vec<Entry>`（`Entry` 24B），右链负载的条目数 ≈ 输出 App 数 ≈ 2n——原来的
+/// 4096 槽（96KB）在 n ≥ 2048 时必然触发扩容（`vec::push` 的倍增 = 新 malloc +
+/// memcpy + free，全在计时窗内）。改预保留 16384（384KB）后本机实测
+/// `church_pair` n=4000 **−7.4%**、n=8000 **−10.3%**（同批空对照 p95 ≤3.1%），
+/// 并经独立复核（自写 A/B/A_copy 三臂轮转、25 reps/侧）复现为 −7.50% / −10.37%；
+/// n ≤ 2000 无差异，稳态口径 `Machine::normalize`（`_ss` 行）不受影响（`clear`
+/// 保容量，其预留在 `Machine::new` 里单独调）。
+///
+/// 取舍（诚实记录）：16384 是按 bench 的 n ≤ 8000 调的固定值——更大的 n 仍会
+/// 扩容，且每次调用都多占 288KB 容量（小规模高频调用会浪费虚拟/驻留内存）。
+/// 若将来要为"高频小 normalize"优化，应改成按输入规模的容量 hint，而不是继续
+/// 放大这个常量。`Machine`（长驻口径）的预保留刻意不动：它只分配一次且跨调用
+/// 复用，不受本处影响。
 pub(crate) fn normalize_imported<'a>(bump: &'a Bump, tm: &'a Bt<'a>) -> &'a Bt<'a> {
-    let mut spine = Spine { stack: Vec::with_capacity(4096) };
+    let mut spine = Spine { stack: Vec::with_capacity(SPINE_RESERVE) };
     let v = eval_iter(bump, &mut spine, &mut Vec::with_capacity(64), &mut Vec::new(), None, tm);
     quote_iter(
         bump,

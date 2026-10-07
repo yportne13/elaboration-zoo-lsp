@@ -1,0 +1,6 @@
+--- segment nullA: nA1 vs nA2
+  reps_ok: nA1=21/21 nA2=21/21
+--- segment ab: A vs B
+  reps_ok: A=21/21 B=21/21
+--- segment nullB: nB1 vs nB2
+  reps_ok: nB1=21/21 nB2=21/21

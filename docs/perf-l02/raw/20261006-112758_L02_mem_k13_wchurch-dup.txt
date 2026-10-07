@@ -1,0 +1,37 @@
+timestamp_utc: 2026-10-06T11:27:58Z
+binary: /home/dev/elaboration-zoo-lsp/target/release/l02l05mem
+binary_sha256: 8aeadb1577caf455c9cf7dfe94ae0a8275364f86f16023bb65e3d7ba100df606
+cmd: /home/dev/elaboration-zoo-lsp/target/release/l02l05mem --chapter L02 --workload church,dup --k 13 --rounds 3
+repeat: 1
+
+########## run 1/1 ##########
+== L02 church k=13 n=16384 nf=true ==
+  parse               328 allocs      49640 B    0.05MB
+  basic            610696 allocs   41860744 B   39.92MB
+  fast(one-shot)      228 allocs    5224576 B    4.98MB  [arena 2× 3.01MB chunks "[1.0038909912109375,2.0077972412109375]"]
+  fast_ss growth      228 allocs    5224576 B    4.98MB  [arena 2× 3.01MB chunks "[1.0038909912109375,2.0077972412109375]"] reset 后保留 2.01MB
+  fast_ss churn       221 allocs    1962821 B    1.87MB (3 轮均值; 合计 664 allocs / 5888464 B, 其中 arena 1× 4.02MB)
+  fast_memo           231 allocs    5225660 B    4.98MB
+  ratio basic/fast = 8.01× bytes, 2678.49× allocs
+  small-alloc top (fast):
+    size 4288         13 allocs      55744 B
+    size 160         196 allocs      31360 B
+    size 4096          1 allocs       4096 B
+    size 2560          1 allocs       2560 B
+    size 2048          1 allocs       2048 B
+    size 1280          1 allocs       1280 B
+== L02 dup k=13 n=16384 nf=true ==
+  parse               374 allocs      54120 B    0.05MB
+  basic           1217231 allocs   83434312 B   79.57MB
+  fast(one-shot)      258 allocs   11013200 B   10.50MB  [arena 4× 8.53MB chunks "[1.0038909912109375,2.0077972412109375,4.0156097412109375,1.5]"]
+  fast_ss growth      258 allocs   11013200 B   10.50MB  [arena 4× 8.53MB chunks "[1.0038909912109375,2.0077972412109375,4.0156097412109375,1.5]"] reset 后保留 4.02MB
+  fast_ss churn       249 allocs    3371472 B    3.22MB (3 轮均值; 合计 748 allocs / 10114416 B, 其中 arena 1× 8.03MB)
+  fast_memo           258 allocs    5229980 B    4.99MB
+  ratio basic/fast = 7.58× bytes, 4717.95× allocs
+  small-alloc top (fast):
+    size 4288         15 allocs      64320 B
+    size 160         223 allocs      35680 B
+    size 4096          1 allocs       4096 B
+    size 2560          1 allocs       2560 B
+    size 2048          1 allocs       2048 B
+    size 1280          1 allocs       1280 B

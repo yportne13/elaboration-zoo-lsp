@@ -1,0 +1,71 @@
+NULL A/B: same binary, odd reps = A, even reps = B, min-of-7 each, true ratio = 1.000
+A 'decision threshold' above the max |ratio-1| observed here is required.
+
+batch1 n=4000  bump_spine_iter      A=0.0780 B=0.0780 B/A=1.000 diff=+0.0%
+batch1 n=4000  bump_spine_iter_ss   A=0.0680 B=0.0690 B/A=1.015 diff=+1.5%
+batch1 n=4000  bump_spine           A=0.1130 B=0.1130 B/A=1.000 diff=+0.0%
+batch1 n=4000  bump_spine_memo      A=0.0780 B=0.0780 B/A=1.000 diff=+0.0%
+batch1 n=4000  bump_spine_slim      A=0.1020 B=0.0980 B/A=0.961 diff=-3.9%
+batch1 n=4000  cek_bump             A=0.2340 B=0.2350 B/A=1.004 diff=+0.4%
+batch1 n=4000  bump_iter            A=0.2350 B=0.2340 B/A=0.996 diff=-0.4%
+batch1 n=4000  bump_tree            A=0.1930 B=0.1940 B/A=1.005 diff=+0.5%
+batch1 n=8000  bump_spine_iter      A=0.1580 B=0.1580 B/A=1.000 diff=+0.0%
+batch1 n=8000  bump_spine_iter_ss   A=0.1370 B=0.1370 B/A=1.000 diff=+0.0%
+batch1 n=8000  bump_spine           A=0.2300 B=0.2310 B/A=1.004 diff=+0.4%
+batch1 n=8000  bump_spine_memo      A=0.1320 B=0.1590 B/A=1.205 diff=+20.5%
+batch1 n=8000  bump_spine_slim      A=0.1680 B=0.1960 B/A=1.167 diff=+16.7%
+batch1 n=8000  cek_bump             A=0.4750 B=0.4730 B/A=0.996 diff=-0.4%
+batch1 n=8000  bump_iter            A=0.4710 B=0.3970 B/A=0.843 diff=-15.7%
+batch1 n=8000  bump_tree            A=0.3890 B=0.3950 B/A=1.015 diff=+1.5%
+batch2 n=4000  bump_spine_iter      A=0.0780 B=0.0780 B/A=1.000 diff=+0.0%
+batch2 n=4000  bump_spine_iter_ss   A=0.0690 B=0.0680 B/A=0.986 diff=-1.4%
+batch2 n=4000  bump_spine           A=0.1130 B=0.1130 B/A=1.000 diff=+0.0%
+batch2 n=4000  bump_spine_memo      A=0.0750 B=0.0780 B/A=1.040 diff=+4.0%
+batch2 n=4000  bump_spine_slim      A=0.0970 B=0.0980 B/A=1.010 diff=+1.0%
+batch2 n=4000  cek_bump             A=0.2330 B=0.2340 B/A=1.004 diff=+0.4%
+batch2 n=4000  bump_iter            A=0.2340 B=0.2320 B/A=0.991 diff=-0.9%
+batch2 n=4000  bump_tree            A=0.1940 B=0.1930 B/A=0.995 diff=-0.5%
+batch2 n=8000  bump_spine_iter      A=0.1550 B=0.1570 B/A=1.013 diff=+1.3%
+batch2 n=8000  bump_spine_iter_ss   A=0.1190 B=0.1380 B/A=1.160 diff=+16.0%
+batch2 n=8000  bump_spine           A=0.2310 B=0.2310 B/A=1.000 diff=+0.0%
+batch2 n=8000  bump_spine_memo      A=0.1350 B=0.1580 B/A=1.170 diff=+17.0%
+batch2 n=8000  bump_spine_slim      A=0.1730 B=0.1960 B/A=1.133 diff=+13.3%
+batch2 n=8000  cek_bump             A=0.4750 B=0.4740 B/A=0.998 diff=-0.2%
+batch2 n=8000  bump_iter            A=0.4730 B=0.4300 B/A=0.909 diff=-9.1%
+batch2 n=8000  bump_tree            A=0.3990 B=0.3890 B/A=0.975 diff=-2.5%
+batch3 n=4000  bump_spine_iter      A=0.0780 B=0.0740 B/A=0.949 diff=-5.1%
+batch3 n=4000  bump_spine_iter_ss   A=0.0690 B=0.0590 B/A=0.855 diff=-14.5%
+batch3 n=4000  bump_spine           A=0.0950 B=0.1130 B/A=1.189 diff=+18.9%
+batch3 n=4000  bump_spine_memo      A=0.0780 B=0.0660 B/A=0.846 diff=-15.4%
+batch3 n=4000  bump_spine_slim      A=0.0990 B=0.0900 B/A=0.909 diff=-9.1%
+batch3 n=4000  cek_bump             A=0.1990 B=0.2350 B/A=1.181 diff=+18.1%
+batch3 n=4000  bump_iter            A=0.1950 B=0.2340 B/A=1.200 diff=+20.0%
+batch3 n=4000  bump_tree            A=0.1610 B=0.1930 B/A=1.199 diff=+19.9%
+batch3 n=8000  bump_spine_iter      A=0.1570 B=0.1450 B/A=0.924 diff=-7.6%
+batch3 n=8000  bump_spine_iter_ss   A=0.1370 B=0.1260 B/A=0.920 diff=-8.0%
+batch3 n=8000  bump_spine           A=0.2310 B=0.1940 B/A=0.840 diff=-16.0%
+batch3 n=8000  bump_spine_memo      A=0.1370 B=0.1590 B/A=1.161 diff=+16.1%
+batch3 n=8000  bump_spine_slim      A=0.1970 B=0.1960 B/A=0.995 diff=-0.5%
+batch3 n=8000  cek_bump             A=0.4720 B=0.4690 B/A=0.994 diff=-0.6%
+batch3 n=8000  bump_iter            A=0.4720 B=0.4000 B/A=0.847 diff=-15.3%
+batch3 n=8000  bump_tree            A=0.3890 B=0.3210 B/A=0.825 diff=-17.5%
+
+null paired |B/A-1|: n=48 max=20.5%  p90=17.5%  median=2.5%
+
+UNPAIRED cross-batch (batch1 vs batch2, min-of-14 each):
+n=4000  bump_spine_iter      b1=0.0780 b2=0.0780 diff=+0.0%
+n=4000  bump_spine_iter_ss   b1=0.0680 b2=0.0680 diff=+0.0%
+n=4000  bump_spine           b1=0.1130 b2=0.1130 diff=+0.0%
+n=4000  bump_spine_memo      b1=0.0780 b2=0.0750 diff=-3.8%
+n=4000  bump_spine_slim      b1=0.0980 b2=0.0970 diff=-1.0%
+n=4000  cek_bump             b1=0.2340 b2=0.2330 diff=-0.4%
+n=4000  bump_iter            b1=0.2340 b2=0.2320 diff=-0.9%
+n=4000  bump_tree            b1=0.1930 b2=0.1930 diff=+0.0%
+n=8000  bump_spine_iter      b1=0.1580 b2=0.1550 diff=-1.9%
+n=8000  bump_spine_iter_ss   b1=0.1370 b2=0.1190 diff=-13.1%
+n=8000  bump_spine           b1=0.2300 b2=0.2310 diff=+0.4%
+n=8000  bump_spine_memo      b1=0.1320 b2=0.1350 diff=+2.3%
+n=8000  bump_spine_slim      b1=0.1680 b2=0.1730 diff=+3.0%
+n=8000  cek_bump             b1=0.4730 b2=0.4740 diff=+0.2%
+n=8000  bump_iter            b1=0.3970 b2=0.4300 diff=+8.3%
+n=8000  bump_tree            b1=0.3890 b2=0.3890 diff=+0.0%

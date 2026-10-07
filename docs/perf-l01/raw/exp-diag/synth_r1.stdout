@@ -1,0 +1,7 @@
+L01 NBE bench（workload = synth）
+rounds per variant = 1, only variants = bump_spine_iter
+
+== guest/synth_clo_chain ==
+  variant                 k=1000     k=10000    k=100000
+  bump_spine_iter          0.075       0.982       9.504
+

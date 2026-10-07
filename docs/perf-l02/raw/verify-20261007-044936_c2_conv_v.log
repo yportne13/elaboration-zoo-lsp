@@ -1,0 +1,12 @@
+--- segment nullA: nA1 vs nA2
+  nullA nA1 rep 1 FAILED
+  nullA nA2 rep 1 FAILED
+  nullA nA2 rep 2 FAILED
+  nullA nA1 rep 2 FAILED
+  nullA nA1 rep 3 FAILED
+  nullA nA2 rep 3 FAILED
+  reps_ok: nA1=39/42 nA2=39/42
+--- segment ab: A vs B
+  reps_ok: A=42/42 B=42/42
+--- segment nullB: nB1 vs nB2
+  reps_ok: nB1=42/42 nB2=42/42

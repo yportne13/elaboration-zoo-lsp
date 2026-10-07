@@ -1,0 +1,18 @@
+timestamp_utc: 2026-10-07T03:45:08Z
+kernel: Linux 6.17.0-PRoot-Distro aarch64 Linux
+cores_online: 8
+cpu0: max=1804800kHz cur=1804800 governor=walt
+cpu4: max=2496000kHz cur=1324800 governor=walt
+cpu7: max=2995200kHz cur=1401600 governor=walt
+pinned_cpu: 7  stack_mb: 128  keepalive: sched_idle
+binary_a: /tmp/l02-exp/l02bench-base
+binary_a_sha256: 6f9a27311e55bb9240452b6269b697f602e27eff5444b6ebe388ad7f018b9d5c
+binary_b: /tmp/l02-exp/l02bench-c1
+binary_b_sha256: 89bd93e9b4965967afeca06994f2e260a29936c79c61445513037f66b4f6faee
+binary_mtime: 2026-10-06 12:36:36.667032580 +0000
+rustc: rustc 1.98.1 (48a229cea 2026-09-01)
+workload: conv  max_k: 15  rounds: 5 (b-side: 5)  only: fast  reps_per_side: 42  order: alternate
+segments: nullA,ab,nullB
+  nullA: nA1 env=- | nA2 env=-
+  ab: A env=- | B env=-
+  nullB: nB1 env=- | nB2 env=-

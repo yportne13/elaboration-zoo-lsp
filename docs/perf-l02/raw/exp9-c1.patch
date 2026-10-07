@@ -1,0 +1,39 @@
+diff --git a/src/L02_tyck/bump_spine_iter.rs b/src/L02_tyck/bump_spine_iter.rs
+index 9bb451b..91612cf 100644
+--- a/src/L02_tyck/bump_spine_iter.rs
++++ b/src/L02_tyck/bump_spine_iter.rs
+@@ -214,7 +214,9 @@ enum W<'a> {
+     /// vals 顶是 let 绑定的值：弹出压进环境，继续求值体。
+     LetBody(&'a Tm<'a>, Option<&'a EnvCons<'a>>),
+     /// vals 顶是 Π 定义域值：弹出配余定义域闭包，压 Π 值。
+-    PiBody(&'a str, &'a Tm<'a>, Option<&'a EnvCons<'a>>),
++    /// [exp-C1] 只携带 Π 节点指针 + env（16B）而非 (name, cod, env)（32B），
++    /// 让 `W` 40B -> 24B；弹出时再从节点里取 name/cod。
++    PiBody(&'a Tm<'a>, Option<&'a EnvCons<'a>>),
+ }
+ 
+ /// 双栈迭代 eval（`bump_spine_iter::eval_iter` 的 L02 扩充：多了 Π/let/U）。
+@@ -241,8 +243,8 @@ fn eval_iter<'a>(
+                 vals.push(v_clo(c));
+             }
+             W::Tm(Tm::U, _) => vals.push(v_u()),
+-            W::Tm(Tm::Pi(name, dom, cod), env) => {
+-                work.push(W::PiBody(name, cod, env));
++            W::Tm(tm @ Tm::Pi(_, dom, _), env) => {
++                work.push(W::PiBody(tm, env));
+                 work.push(W::Tm(dom, env));
+             }
+             W::Tm(Tm::Let(_, _, t, u), env) => {
+@@ -325,8 +327,11 @@ fn eval_iter<'a>(
+                 let node = bump.alloc(EnvCons { val: vt, next: env });
+                 work.push(W::Tm(u, Some(node)));
+             }
+-            W::PiBody(name, cod, env) => {
++            W::PiBody(node, env) => {
+                 let dom = vals.pop().expect("eval 栈：PiBody 缺定义域");
++                let Tm::Pi(name, _, cod) = node else {
++                    unreachable!("[exp-C1] W::PiBody 只由 Tm::Pi 构造")
++                };
+                 let cell = bump.alloc(PiCell { name, dom, env, body: cod });
+                 vals.push(v_pi(cell));
+             }

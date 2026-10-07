@@ -1,0 +1,5 @@
+workload	size	variant	min_A	min_B	ratio_B_over_A	spread_A_pct	spread_B_pct	paired_ratio_med	paired_ratio_min	paired_ratio_max	n_pairs	verdict
+church	1000	bump_spine_iter	0.0150	0.0150	1.0000	26.67	26.67	1.0000	0.7895	1.2667	21	undecided(dev=0.00%<=noise=26.67%)
+church	2000	bump_spine_iter	0.0300	0.0300	1.0000	23.33	23.33	1.0000	0.8108	1.1562	21	undecided(dev=0.00%<=noise=23.33%)
+church	4000	bump_spine_iter	0.0640	0.0640	1.0000	21.87	21.87	1.0000	0.8312	1.1846	21	undecided(dev=0.00%<=noise=21.87%)
+church	8000	bump_spine_iter	0.1300	0.1310	1.0077	21.54	25.19	1.0000	0.8662	1.1970	21	undecided(dev=0.77%<=noise=25.19%)

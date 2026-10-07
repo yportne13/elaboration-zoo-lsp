@@ -1,0 +1,8 @@
+workload	k	impl	reps	min_ms	med_of_min	max_ms	spread_pct	med_of_med
+conv	9	fast_ss	7	0.1020	0.1020	0.1040	1.96	0.1030
+conv	10	fast_ss	7	0.1920	0.1930	0.1960	2.08	0.1940
+conv	11	fast_ss	7	0.3710	0.3740	0.3790	2.16	0.3740
+conv	12	fast_ss	7	0.7280	0.7330	0.7430	2.06	0.7430
+conv	13	fast_ss	7	1.4490	1.4630	1.4660	1.17	1.4770
+conv	14	fast_ss	7	2.8770	2.9170	3.1710	10.22	2.9610
+conv	15	fast_ss	7	5.7790	5.8340	5.8590	1.38	5.9800

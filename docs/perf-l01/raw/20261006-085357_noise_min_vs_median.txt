@@ -1,0 +1,38 @@
+Per-statistic cross-batch spread over 3 identical batches (n=4000/8000)
+protocol                 n variant                 min spread%  median spread%
+KA(keepalive)         4000 bump_spine_iter               20.00            0.00
+KA(keepalive)         4000 bump_spine_iter_ss            21.05            1.47
+KA(keepalive)         4000 bump_spine                    20.21            0.88
+KA(keepalive)         4000 bump_spine_memo               18.18            1.28
+KA(keepalive)         4000 bump_spine_slim               24.69            2.94
+KA(keepalive)         4000 cek_bump                      18.69            0.85
+KA(keepalive)         4000 bump_iter                     21.03            0.85
+KA(keepalive)         4000 bump_tree                     16.87            0.52
+KA(keepalive)         8000 bump_spine_iter                0.00            0.63
+KA(keepalive)         8000 bump_spine_iter_ss             5.34            1.45
+KA(keepalive)         8000 bump_spine                     0.43            0.43
+KA(keepalive)         8000 bump_spine_memo                4.58            2.52
+KA(keepalive)         8000 bump_spine_slim                4.66            0.49
+KA(keepalive)         8000 cek_bump                      19.05            2.10
+KA(keepalive)         8000 bump_iter                      0.64            0.42
+KA(keepalive)         8000 bump_tree                     17.22            2.31
+noKA(opportunistic)   4000 bump_spine_iter               20.00            0.00
+noKA(opportunistic)   4000 bump_spine_iter_ss            17.24            1.47
+noKA(opportunistic)   4000 bump_spine                    20.21            0.00
+noKA(opportunistic)   4000 bump_spine_memo               20.00            1.28
+noKA(opportunistic)   4000 bump_spine_slim               18.07            5.10
+noKA(opportunistic)   4000 cek_bump                      20.41            0.42
+noKA(opportunistic)   4000 bump_iter                     20.00            0.85
+noKA(opportunistic)   4000 bump_tree                     19.88            0.52
+noKA(opportunistic)   8000 bump_spine_iter               20.61           16.91
+noKA(opportunistic)   8000 bump_spine_iter_ss             8.77           19.83
+noKA(opportunistic)   8000 bump_spine                    19.69           10.48
+noKA(opportunistic)   8000 bump_spine_memo                5.30           17.78
+noKA(opportunistic)   8000 bump_spine_slim                6.10           15.43
+noKA(opportunistic)   8000 cek_bump                      22.08            1.89
+noKA(opportunistic)   8000 bump_iter                     20.56           15.46
+noKA(opportunistic)   8000 bump_tree                     20.81            7.53
+
+median-of-batch-min spread, summarized:
+  KA(keepalive)        min: med  17.7% max  24.7% | median: med   0.9% max   2.9%
+  noKA(opportunistic)  min: med  20.0% max  22.1% | median: med   3.5% max  19.8%

@@ -1,0 +1,9 @@
+workload	size	variant	med_A	med_B	ratio_med_B_over_A_pct	min_A	min_B	min_ratio_pct	empty_parity_pct	empty_boot_p95_pct	threshold_pct	paired_ratio_med	paired_ratio_p10	paired_ratio_p90	verdict
+dup_deep	1000	bump_spine_iter	0.0750	0.0750	0.00	0.0620	0.0650	4.84	0.00	0.00	5.0	1.0000	1.0000	1.0000	UNDECIDED(dev=0.00%<=bound=5.00%[thr=5.0,p95=0.00])
+dup_deep	2000	bump_spine_iter	0.1520	0.1530	0.66	0.1260	0.1270	0.79	0.33	0.66	5.0	1.0000	0.9062	1.0526	UNDECIDED(dev=0.66%<=bound=5.00%[thr=5.0,p95=0.66])
+dup_deep	4000	bump_spine_iter	0.3290	0.3290	0.00	0.2600	0.2610	0.38	0.00	0.91	5.0	1.0030	0.9541	1.0123	UNDECIDED(dev=0.00%<=bound=5.00%[thr=5.0,p95=0.91])
+dup_deep	8000	bump_spine_iter	0.6750	0.6760	0.15	0.6510	0.5610	-13.82	-0.30	0.89	5.0	1.0000	0.9688	1.0029	UNDECIDED(dev=0.15%<=bound=5.00%[thr=5.0,p95=0.89])
+dup_pair	1000	bump_spine_iter	0.0360	0.0360	0.00	0.0300	0.0300	0.00	0.00	0.00	5.0	1.0000	0.8333	1.2000	UNDECIDED(dev=0.00%<=bound=5.00%[thr=5.0,p95=0.00])
+dup_pair	2000	bump_spine_iter	0.0770	0.0770	0.00	0.0650	0.0640	-1.54	0.00	0.00	5.0	1.0000	0.8481	1.0390	UNDECIDED(dev=0.00%<=bound=5.00%[thr=5.0,p95=0.00])
+dup_pair	4000	bump_spine_iter	0.1610	0.1610	0.00	0.1300	0.1520	16.92	0.00	0.31	5.0	1.0000	0.9503	1.0063	UNDECIDED(dev=0.00%<=bound=5.00%[thr=5.0,p95=0.31])
+dup_pair	8000	bump_spine_iter	0.3340	0.3330	-0.30	0.3240	0.2690	-16.98	-0.45	0.60	5.0	1.0000	0.9701	1.0091	UNDECIDED(dev=0.30%<=bound=5.00%[thr=5.0,p95=0.60])

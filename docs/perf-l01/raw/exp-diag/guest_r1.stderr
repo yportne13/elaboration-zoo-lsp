@@ -1,0 +1,11 @@
+DIAG|guest/church_mul n=50|app=210|fork_h0=104|fork_hn=0|composite_h0=6|composite_hn=0|base_h0=0|base_hn=100|apply=110|cw0=110|cw_k=100|wrap_heads=5000|steps=756
+DIAG|guest/church_mul n=100|app=410|fork_h0=204|fork_hn=0|composite_h0=6|composite_hn=0|base_h0=0|base_hn=200|apply=210|cw0=210|cw_k=200|wrap_heads=20000|steps=1456
+DIAG|guest/church_mul n=200|app=810|fork_h0=404|fork_hn=0|composite_h0=6|composite_hn=0|base_h0=0|base_hn=400|apply=410|cw0=410|cw_k=400|wrap_heads=80000|steps=2856
+DIAG|guest/parigot_add n=4|app=2104|fork_h0=528|fork_hn=0|composite_h0=1066|composite_hn=0|base_h0=0|base_hn=510|apply=1594|cw0=1594|cw_k=510|wrap_heads=510|steps=9506
+DIAG|guest/parigot_add n=6|app=32852|fork_h0=8216|fork_hn=0|composite_h0=16446|composite_hn=0|base_h0=0|base_hn=8190|apply=24662|cw0=24662|cw_k=8190|wrap_heads=8190|steps=147886
+DIAG|guest/parigot_add n=8|app=524400|fork_h0=131104|fork_hn=0|composite_h0=262226|composite_hn=0|base_h0=0|base_hn=131070|apply=393330|cw0=393330|cw_k=131070|wrap_heads=131070|steps=2359866
+DIAG|guest/parigot_add n=10|app=8388748|fork_h0=2097192|fork_hn=0|composite_h0=4194406|composite_hn=0|base_h0=0|base_hn=2097150|apply=6291598|cw0=6291598|cw_k=2097150|wrap_heads=2097150|steps=37749446
+DIAG|guest/exponential n=10|app=40|fork_h0=0|fork_hn=0|composite_h0=20|composite_hn=0|base_h0=0|base_hn=20|apply=20|cw0=20|cw_k=20|wrap_heads=20|steps=144
+DIAG|guest/exponential n=14|app=56|fork_h0=0|fork_hn=0|composite_h0=28|composite_hn=0|base_h0=0|base_hn=28|apply=28|cw0=28|cw_k=28|wrap_heads=28|steps=200
+DIAG|guest/exponential n=18|app=72|fork_h0=0|fork_hn=0|composite_h0=36|composite_hn=0|base_h0=0|base_hn=36|apply=36|cw0=36|cw_k=36|wrap_heads=36|steps=256
+DIAG|guest/exponential n=20|app=80|fork_h0=0|fork_hn=0|composite_h0=40|composite_hn=0|base_h0=0|base_hn=40|apply=40|cw0=40|cw_k=40|wrap_heads=40|steps=284

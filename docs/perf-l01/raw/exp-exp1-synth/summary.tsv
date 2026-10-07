@@ -1,0 +1,4 @@
+workload	size	variant	med_A	med_B	ratio_med_B_over_A_pct	min_A	min_B	min_ratio_pct	empty_parity_pct	empty_boot_p95_pct	threshold_pct	paired_ratio_med	paired_ratio_p10	paired_ratio_p90	verdict
+guest/synth_clo_chain	1000	bump_spine_iter	0.0170	0.0120	-29.41	0.0140	0.0100	-28.57	0.00	0.00	5.0	0.7059	0.5882	0.7059	WIN(-29.41%>bound=5.00%[thr=5.0,p95=0.00])
+guest/synth_clo_chain	10000	bump_spine_iter	0.1910	0.1250	-34.55	0.1600	0.1040	-35.00	-0.52	0.52	5.0	0.6510	0.5445	0.6562	WIN(-34.55%>bound=5.00%[thr=5.0,p95=0.52])
+guest/synth_clo_chain	100000	bump_spine_iter	2.0470	1.2730	-37.81	1.8500	1.2640	-31.68	-0.61	1.07	5.0	0.6226	0.6175	0.6323	WIN(-37.81%>bound=5.00%[thr=5.0,p95=1.07])

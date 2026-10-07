@@ -1,0 +1,19 @@
+# spec=exp-20261007-034610_exp9_c2_conv_spec.txt prefix=exp-20261007-034610_exp9_c2_conv
+# bin_a=l02bench-base sha=6f9a27311e55 bin_b=l02bench-c2 sha=86d2133e42bc
+# order=alternate reps=42 rounds=5 only=fast
+seg   workload   k   n     med1     med2   paired%     p95     unp%   unp95  signflip_p
+nullA conv      13  42   2.3265   2.3170    -0.364   3.339   -0.408   5.560     0.38010
+nullA conv      15  42   9.2470   9.2870    -0.016   1.118    0.433   4.489     1.00000
+ab    conv      13  42   2.3200   2.1510    -7.416   8.026   -7.284   7.803     0.00000
+ab    conv      15  42   9.3280   8.8145    -5.703   6.957   -5.505   8.086     0.00005
+nullB conv      13  42   2.1515   2.1575     0.278   0.940    0.279   0.698     0.45895
+nullB conv      15  42   8.6395   8.8510     0.491   3.161    2.448   4.392     0.25575
+
+== verdict (paired md vs max(null p95, 0.5)) ==
+conv     k=13  md=  -7.416%  p95_floor=3.339  eff=3.339  signflip_p=0.0000  -> 判定(-)
+conv     k=15  md=  -5.703%  p95_floor=3.161  eff=3.161  signflip_p=0.0001  -> 判定(-)
+== null segment paired stats (floors) ==
+nullA conv     k=13  md=  -0.364%  p95=3.339  max=10.400  unp=-0.408% unp95=5.560
+nullA conv     k=15  md=  -0.016%  p95=1.118  max=5.014  unp=+0.433% unp95=4.489
+nullB conv     k=13  md=  +0.278%  p95=0.940  max=1.673  unp=+0.279% unp95=0.698
+nullB conv     k=15  md=  +0.491%  p95=3.161  max=5.054  unp=+2.448% unp95=4.392
