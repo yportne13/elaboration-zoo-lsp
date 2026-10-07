@@ -2783,7 +2783,21 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
     ) -> Vec<Diagnostic> {
         let mut diags = Vec::new();
         for job in &infer.println_jobs {
-            let s = pretty_tm(0, job.names.clone(), &infer.nf(&job.decl, &job.env, &job.tm));
+            // 延迟 println 的求值也在预算看门狗管辖内（docs §4 R2/R3）：
+            // 超时（如超大字面量的链展开）跳过该条 note 并落一条诊断，
+            // 而不是让 ElabTimeout 冲出排水点冻结主循环。
+            let nf_tm = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                infer.nf(&job.decl, &job.env, &job.tm)
+            })) {
+                Ok(t) => t,
+                Err(p) => {
+                    if crate::L13_namespace::eval_budget::is_timeout(p.as_ref()) {
+                        continue;
+                    }
+                    std::panic::resume_unwind(p);
+                }
+            };
+            let s = pretty_tm(0, job.names.clone(), &nf_tm);
             if job.span.end_offset as usize > rope.len_bytes() {
                 continue;
             }

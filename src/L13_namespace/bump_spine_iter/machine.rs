@@ -36,7 +36,7 @@ use super::force::{
 use super::prim::{
     is_nat_sum_v, tm_scan_global_ops, DeclEntry, Decls, Mutable, PrimId,
 };
-use super::quote::{quote_iter, QJob, QuoteMemo};
+use super::quote::{quote_go, quote_iter, QJob, QuoteMemo};
 use super::rename::{invert_bump, lams_from_ty, prune_ty_bump, rename_iter, RenBuf};
 use super::spine::{
     is_flex, journal_meta, meta_journal_discard, meta_journal_rollback, MetaEntry, MetaSnap,
@@ -1408,6 +1408,62 @@ impl Machine {
             level,
             v,
             Some(&mut *memo),
+        )
+    }
+
+    /// 显示口径 quote（R4 大数显示压缩）：`quote` 的显示变体——原生
+    /// `XCell::Nat(k)` 引出为十进制 `Tm::LiteralIntro` 而非 k 节点 succ 链
+    /// （`quote_go` 的 `nat_dec` 路径）。**当前未接线**：孪生 println 显示
+    /// 位仍走 [`Machine::quote`]——孪生值层不把 succ(原生 Nat) 折叠成
+    /// Nat(k+1)（参考版 eval 折叠），nat_dec 路径会把 `succ (nat_mul 3 4)`
+    /// 渲染成 `12 + 1` 而参考版是 `13`，诊断 parity（twin_engine_tests）
+    /// 会分叉；接线前须先对齐值层折叠或 nat_dec 路径内做 succ-折叠特判。
+    /// 孪生大数显示挂死当前由 eval_budget 看门狗兜底（tests/bignum_
+    /// display.rs 钉）。unify/pattern/rename 等引擎内部消费方继续走
+    /// [`Machine::quote`] 的链展开。
+    #[allow(dead_code)]
+    #[allow(clippy::unnecessary_cast)]
+    pub(super) fn quote_dec<'a>(&mut self, bump: &'a Bump, cxt: &Cxt<'a>, level: u32, v: V) -> &'a Tm<'a> {
+        super::prof_count(&super::FUNC_PROF.quote.1);
+        let Machine {
+            spine,
+            vals,
+            icits,
+            defs,
+            metas,
+            mutable,
+            quote_tasks,
+            quote_done,
+            quote_work,
+            ..
+        } = self;
+        // SAFETY：同 eval_work——'static 存放口径，进核前 clear。
+        let tasks: &mut Vec<QJob<'a>> =
+            unsafe { &mut *(quote_tasks as *mut Vec<QJob<'static>> as *mut Vec<QJob<'a>>) };
+        let done: &mut Vec<&'a Tm<'a>> = unsafe {
+            &mut *(quote_done as *mut Vec<&'static Tm<'static>> as *mut Vec<&'a Tm<'a>>)
+        };
+        let work: &mut Vec<W<'a>> =
+            unsafe { &mut *(quote_work as *mut Vec<W<'static>> as *mut Vec<W<'a>>) };
+        tasks.clear();
+        done.clear();
+        work.clear();
+        quote_go(
+            bump,
+            spine,
+            tasks,
+            done,
+            work,
+            vals,
+            icits,
+            defs,
+            metas,
+            &*cxt.decls,
+            mutable,
+            level,
+            v,
+            None,
+            true,
         )
     }
 
@@ -3839,7 +3895,14 @@ impl Machine {
                 Ok((DeclOut::Def { name: bump.alloc_str(&name.data) }, out))
             }
             Decl::Println(t) => {
-                // 立即 nf + pretty（参考版 run() 口径；defer_println 不移植）
+                // 立即 nf + pretty（参考版 run() 口径；defer_println 不移植）。
+                // 显示位仍是 [`Machine::quote`] 的链展开（[`Machine::quote_dec`]
+                // **未接线**，理由见其文档）：原生 `Nat(k)` 会建 k 节点 succ 链，
+                // 故 `println (nat_mul 100000 100000)`（k=10^10）先前在此把提交量
+                // 顶到 121.8 GB（2026-10-07，Windows 事件 2004，主机重启）。现在
+                // 由 `eval_budget::guard_nat_chain` 在展开前立即中止（零分配）→
+                // LSP 边界作废 resident 并回落参考版（参考版 nf 走 quote_dec，
+                // 十进制输出仍正确）；链循环内的 `tick` 只作时间第二道。
                 let (tm, _) = self.infer_expr(bump, cxt, t)?;
                 let t_pretty = {
                     let v = self.eval(bump, cxt, cxt.env, tm);

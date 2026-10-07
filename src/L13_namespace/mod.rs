@@ -3509,7 +3509,7 @@ impl Infer {
             }
         }
     }
-    fn quote_sp(&self, decl: &Decl, l: Lvl, t: Rc<Tm>, spine: &Spine) -> Rc<Tm> {
+    fn quote_sp(&self, decl: &Decl, l: Lvl, t: Rc<Tm>, spine: &Spine, nat_dec: bool) -> Rc<Tm> {
         /*spine.iter().fold(t, |acc, u| {
             Tm::App(Box::new(acc), Box::new(self.quote(l, u.0.clone())), u.1)
         })*/
@@ -3517,47 +3517,63 @@ impl Infer {
             List { head: None, .. } => t,
             _ => {
                 let head = spine.head().unwrap();
-                Tm::App(self.quote_sp(decl, l, t, &spine.tail()), self.quote(decl, l, &head.0), head.1).into()
+                Tm::App(self.quote_sp(decl, l, t, &spine.tail(), nat_dec), self.quote_inner(decl, l, &head.0, nat_dec), head.1).into()
             }
         }
     }
 
     pub fn quote(&self, decl: &Decl, l: Lvl, t: &Rc<Val>) -> Rc<Tm> {
         let _g = prof_enter(&FUNC_PROF.quote.0, &FUNC_PROF.quote.1);
-        self.quote_inner(decl, l, t)
+        self.quote_inner(decl, l, t, false)
     }
-    fn quote_inner(&self, decl: &Decl, l: Lvl, t: &Rc<Val>) -> Rc<Tm> {
+    /// 显示口径 quote（R4 大数显示压缩）：原生 `Val::Nat(k)` 不展开成一元
+    /// succ 链，直接产出十进制 `Tm::LiteralIntro`（与 `nat_to_dec` prim 的
+    /// `count.to_string()` 同格式；小数与展开后 `pretty_nat` 的十进制输出
+    /// 逐字节一致，仅原先挂死的大数域从挂死变十进制）。**只供显示管线**
+    /// （[`nf`] → pretty）使用——unify/pattern/occurs 等引擎内部消费方
+    /// 依赖 `quote` 的链展开形态（succ 模式匹配、meta 解的项层比较），
+    /// 必须继续走 [`quote`]。
+    fn quote_dec(&self, decl: &Decl, l: Lvl, t: &Rc<Val>) -> Rc<Tm> {
+        self.quote_inner(decl, l, t, true)
+    }
+    fn quote_inner(&self, decl: &Decl, l: Lvl, t: &Rc<Val>, nat_dec: bool) -> Rc<Tm> {
         //println!("{} {:?}", "quote".green(), t);
         let t = self.force(decl, t);
         match t.as_ref() {
-            Val::Flex(m, sp) => self.quote_sp(decl, l, Tm::Meta(*m).into(), sp),
-            Val::Rigid(x, sp) => self.quote_sp(decl, l, Tm::Var(lvl2ix(l, *x)).into(), sp),
-            Val::Decl(x, sp) => self.quote_sp(decl, l, Tm::Decl(x.clone()).into(), sp),
-            Val::Obj(x, name, sp) => self.quote_sp(decl, l, Tm::Obj(self.quote(decl, l, x), name.clone()).into(), sp),
+            Val::Flex(m, sp) => self.quote_sp(decl, l, Tm::Meta(*m).into(), sp, nat_dec),
+            Val::Rigid(x, sp) => self.quote_sp(decl, l, Tm::Var(lvl2ix(l, *x)).into(), sp, nat_dec),
+            Val::Decl(x, sp) => self.quote_sp(decl, l, Tm::Decl(x.clone()).into(), sp, nat_dec),
+            Val::Obj(x, name, sp) => self.quote_sp(decl, l, Tm::Obj(self.quote_inner(decl, l, x, nat_dec), name.clone()).into(), sp, nat_dec),
             Val::Lam(x, i, closure) => Tm::Lam(
                 x.clone(),
                 *i,
-                self.quote(decl, l + 1, &self.closure_apply(decl, closure, Val::vvar(l).into())),
+                self.quote_inner(decl, l + 1, &self.closure_apply(decl, closure, Val::vvar(l).into()), nat_dec),
             ).into(),
             Val::Pi(x, i, a, closure) => Tm::Pi(
                 x.clone(),
                 *i,
-                self.quote(decl, l, a),
-                self.quote(decl, l + 1, &self.closure_apply(decl, closure, Val::vvar(l).into())),
+                self.quote_inner(decl, l, a, nat_dec),
+                self.quote_inner(decl, l + 1, &self.closure_apply(decl, closure, Val::vvar(l).into()), nat_dec),
             ).into(),
             Val::U(x) => Tm::U(*x).into(),
             Val::LiteralIntro(x) => Tm::LiteralIntro(x.clone()).into(),
             Val::LiteralType => Tm::LiteralType.into(),
             Val::Nat(k) => {
-                // Native Nat -> the equivalent `succ`/`zero` `Tm::SumCase`
-                // chain, so existing consumers (pretty/nf/unify round-trips)
-                // see exactly the term shape they saw with unary chains.
-                self.quote_nat(decl, l, *k)
+                if nat_dec {
+                    // 显示层压缩：十进制字面量（nat_to_dec prim 同款格式化，
+                    // 不经 prim 机器以免再触发求值）
+                    Tm::LiteralIntro(empty_span(k.to_string())).into()
+                } else {
+                    // Native Nat -> the equivalent `succ`/`zero` `Tm::SumCase`
+                    // chain, so existing consumers (pretty/nf/unify round-trips)
+                    // see exactly the term shape they saw with unary chains.
+                    self.quote_nat(decl, l, *k)
+                }
             }
             Val::Sum(name, params, cases, is_trait) => {
                 let new_params = Rc::new(params.iter()
                     .map(|x| {
-                        (x.0.clone(), self.quote(decl, l, &x.1), self.quote(decl, l, &x.2), x.3)
+                        (x.0.clone(), self.quote_inner(decl, l, &x.1, nat_dec), self.quote_inner(decl, l, &x.2, nat_dec), x.3)
                     })
                     .collect());
                 Tm::Sum(name.clone(), new_params, cases.clone(), *is_trait).into()
@@ -3598,12 +3614,12 @@ impl Infer {
                     }
                 }
                 if nodes.len() >= 2 {
-                    let mut inner = self.quote(decl, l, &cur);
+                    let mut inner = self.quote_inner(decl, l, &cur, nat_dec);
                     for node in nodes.into_iter().rev() {
                         let datas: TmSumCaseDatas = Rc::new(vec![(node.name, inner.clone(), node.icit)]);
                         inner = Tm::SumCase {
                             is_trait: node.is_trait,
-                            typ: self.quote(decl, l, &node.typ),
+                            typ: self.quote_inner(decl, l, &node.typ, nat_dec),
                             index: node.index,
                             datas,
                         }.into();
@@ -3613,12 +3629,12 @@ impl Infer {
                     let datas = Rc::new(datas
                         .iter()
                         .map(|p| {
-                            (p.0.clone(), self.quote(decl, l, &p.1), p.2)
+                            (p.0.clone(), self.quote_inner(decl, l, &p.1, nat_dec), p.2)
                         })
                         .collect());
                     Tm::SumCase {
                         is_trait: *is_trait,
-                        typ: self.quote(decl, l, typ),
+                        typ: self.quote_inner(decl, l, typ, nat_dec),
                         index: *index,
                         datas,
                     }.into()
@@ -3642,13 +3658,13 @@ impl Infer {
                     Some(sym) if args.len() == 1 || args.len() == 2 => Tm::OpCall {
                         symbol: sym,
                         name: name.clone(),
-                        args: args.map(|(x, i)| (self.quote(decl, l, x), *i)),
-                        body: self.quote(decl, l, body),
+                        args: args.map(|(x, i)| (self.quote_inner(decl, l, x, nat_dec), *i)),
+                        body: self.quote_inner(decl, l, body, nat_dec),
                     }.into(),
                     _ => Tm::Call(
                         name.clone(),
-                        args.map(|(x, i)| (self.quote(decl, l, x), *i)),
-                        self.quote(decl, l, body),
+                        args.map(|(x, i)| (self.quote_inner(decl, l, x, nat_dec), *i)),
+                        self.quote_inner(decl, l, body, nat_dec),
                     ).into(),
                 }
             }
@@ -3676,11 +3692,11 @@ impl Infer {
                             let env = (0..x.0.bind_count())
                                 .fold(env.clone(), |env, x| env.prepend(Val::vvar(l + x).into()));
                             let tm = self.eval(declb.as_ref(), &env, &x.1);
-                            self.quote(decl, l+x.0.bind_count(), &tm)
+                            self.quote_inner(decl, l+x.0.bind_count(), &tm, nat_dec)
                         }
                     ))
                     .collect();
-                Tm::Match(self.quote(decl, l, val), tm_cases).into()
+                Tm::Match(self.quote_inner(decl, l, val, nat_dec), tm_cases).into()
             }
         }
     }
@@ -3724,7 +3740,14 @@ impl Infer {
         // quote → eval 会 force；一次 nf 充值 fuel 防循环解（L08 同款）
         self.refuel();
         let l = Lvl(env.len() as u32);
-        self.quote(decl, l, &self.eval(decl, env, t))
+        // R4 大数显示压缩：走显示口径 quote_dec（原生 Nat(k) → 十进制
+        // LiteralIntro，不建 k 节点 succ 链）。调用方审计（2026-10）：
+        // L13 内全部 nf 消费点——elaboration.rs 的 def/enum typ_pretty、
+        // println 体、错误消息渲染 + lib.rs 延迟 println 诊断 +
+        // bench_head 输出——均**即时 pretty_tm**，无结构化下游（unify/
+        // match/occurs 走 quote 本体，不受影响）。若未来出现 nf 产出的
+        // 结构化消费点，须改走 quote。
+        self.quote_dec(decl, l, &self.eval(decl, env, t))
     }
 
     fn close_val(&self, cxt: &Cxt, t: &Rc<Val>) -> Closure {

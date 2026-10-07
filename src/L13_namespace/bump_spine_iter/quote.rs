@@ -86,8 +86,9 @@ pub(super) enum QJob<'a> {
 /// 口径）。
 pub(super) type QuoteMemo<'a> = FxHashMap<(u64, u32), &'a Tm<'a>>;
 
-/// 任务栈 quote（L06 版 + LiteralType/LiteralIntro/Prim/Obj/Sum/SumCase/
-/// Match 臂；L09：tag 0 的大下标直通、tag 3 带层级）。
+/// 任务栈 quote 的引擎内部入口（machine 的 quote/quote_memo、rename/
+/// unify/force 逐点调用）：原生 Nat 维持一元 succ 链展开——succ 模式匹配、
+/// meta 解的项层比较等引擎内部消费方依赖该形状（参考版 `quote` 同口径）。
 #[allow(clippy::too_many_arguments)]
 pub(super) fn quote_iter<'a>(
     bump: &'a Bump,
@@ -104,6 +105,38 @@ pub(super) fn quote_iter<'a>(
     level0: u32,
     v0: V,
     mut memo: Option<&mut QuoteMemo<'a>>,
+) -> &'a Tm<'a> {
+    quote_go(
+        bump, spine, tasks, done, work, vals, icits, defs, metas, decl, mutable, level0, v0, memo,
+        false,
+    )
+}
+
+/// 任务栈 quote 本体（L06 版 + LiteralType/LiteralIntro/Prim/Obj/Sum/SumCase/
+/// Match 臂；L09：tag 0 的大下标直通、tag 3 带层级）。`nat_dec` = 显示口径
+/// （R4 大数显示压缩）：只有 machine 的 [`Machine::quote_dec`] 传 true
+/// （**该方法当前未接线**，理由见其文档——孪生 println 显示位仍走
+/// `quote_iter`）；此时原生 `XCell::Nat(k)` 不展开成 k 节点 succ 链，直接产
+/// 十进制 `Tm::LiteralIntro`——与 nat_to_dec prim 的 `n.to_string()` 同格式
+/// 化，小数与展开后 pretty_nat 的十进制输出逐字节一致，仅原先挂死的大数域
+/// 从挂死变十进制。
+#[allow(clippy::too_many_arguments)]
+pub(super) fn quote_go<'a>(
+    bump: &'a Bump,
+    spine: &mut Spine,
+    tasks: &mut Vec<QJob<'a>>,
+    done: &mut Vec<&'a Tm<'a>>,
+    work: &mut Vec<W<'a>>,
+    vals: &mut Vec<V>,
+    icits: &mut Vec<Icit>,
+    defs: &mut Vec<V>,
+    metas: &[MetaEntry],
+    decl: &Decls<'a>,
+    mutable: &RefCell<Mutable>,
+    level0: u32,
+    v0: V,
+    mut memo: Option<&mut QuoteMemo<'a>>,
+    nat_dec: bool,
 ) -> &'a Tm<'a> {
     // tick 补点（backlog §3）：quote 此前零 tick（同 force）。
     #[cfg(feature = "sampler")]
@@ -145,8 +178,14 @@ pub(super) fn quote_iter<'a>(
                         XCell::Decl { name } => done.push(bump.alloc(Tm::Decl(name))),
                         // 原生 Nat → 等价的 succ/zero SumCase 链（参考版
                         // quote_nat：Nat 类型项查 decl["Nat"] 登记值并 quote，
-                        // 缺失回退 U(0)——下游看到与一元链完全相同的形状）
+                        // 缺失回退 U(0)——下游看到与一元链完全相同的形状）；
+                        // 显示口径（nat_dec）下不建链，直接十进制字面量
+                        // （nat_to_dec prim 同款格式化，不经 prim 机器）
                         XCell::Nat(k) => {
+                            if nat_dec {
+                                done.push(bump.alloc(Tm::LiteralIntro(bump.alloc_str(&k.to_string()))));
+                                continue;
+                            }
                             let nat_ty = decl.get("Nat").map(|e| e.val).unwrap_or_else(v_u0);
                             // Nat 类型项缓存（[`QUOTE_NAT_TM`]）：闭合 Sum 值
                             // 的引出项轮内恒定、与层级无关，免每次嵌套 quote
@@ -257,7 +296,7 @@ pub(super) fn quote_iter<'a>(
                                     bump, spine, work, vals, icits, defs, metas, &declb, mutable,
                                     env2, b,
                                 );
-                                let q = quote_iter(
+                                let q = quote_go(
                                     bump,
                                     spine,
                                     &mut Vec::new(),
@@ -272,13 +311,14 @@ pub(super) fn quote_iter<'a>(
                                     level + count,
                                     tv,
                                     None,
+                                    nat_dec,
                                 );
                                 qc.push(((*p).clone(), q));
                             }
                             let cs: &'a [(PatternDetail, &'a Tm<'a>)] =
                                 bump.alloc_slice_fill_iter(qc);
                             // scrutinee 用真实表（调用方的 level 下正确）
-                            let sq = quote_iter(
+                            let sq = quote_go(
                                 bump,
                                 spine,
                                 &mut Vec::new(),
@@ -293,6 +333,7 @@ pub(super) fn quote_iter<'a>(
                                 level,
                                 *scrutinee,
                                 None,
+                                nat_dec,
                             );
                             done.push(bump.alloc(Tm::Match(sq, cs)));
                         }
