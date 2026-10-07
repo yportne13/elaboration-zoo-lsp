@@ -191,7 +191,15 @@ pub(super) fn eval_iter<'a>(
     vals.clear();
     icits.clear();
     work.push(W::Tm(tm0, env0));
-    while let Some(w) = work.pop() {
+    // [C2] 尾任务寄存器化：把“push 后必被立刻 pop”的尾任务放循环局部
+    // 寄存器 `cur`，省一次 store/load 与一轮分发（LIFO 等价，规程见
+    // docs/perf-l02/C2-PROPAGATION.md）。
+    let mut cur: Option<W<'a>> = None;
+    loop {
+        let w = match cur.take().or_else(|| work.pop()) {
+            Some(w) => w,
+            None => break,
+        };
         match w {
             W::Tm(Tm::Var(i), env) => {
                 vals.push(env_nth(defs, env, *i));
@@ -317,23 +325,23 @@ pub(super) fn eval_iter<'a>(
             },
             W::Tm(Tm::Pi(name, icit, dom, cod), env) => {
                 work.push(W::PiBody(name, *icit, cod, env));
-                work.push(W::Tm(dom, env));
+                cur = Some(W::Tm(dom, env));
             }
             W::Tm(Tm::Let(_, _, t, u), env) => {
                 work.push(W::LetBody(u, env));
-                work.push(W::Tm(t, env));
+                cur = Some(W::Tm(t, env));
             }
             W::Tm(Tm::Meta(m), _) => vals.push(meta_val_of(metas, *m)),
             W::Tm(Tm::AppPruning(head, pr), env) => {
                 work.push(W::AppPrun(env, *pr));
-                work.push(W::Tm(head, env));
+                cur = Some(W::Tm(head, env));
             }
             // 投影：求值接收者后 force（参考版 eval 的 Tm::Obj 臂同）。
             // Sum/SumCase 命中给投影值（miss panic，参考版 unwrap 同款）；
             // 其余形态一律卡成 Obj（参考版 `_` 臂）。
             W::Tm(Tm::Obj(h, name), env) => {
                 work.push(W::ObjSel(name));
-                work.push(W::Tm(h, env));
+                cur = Some(W::Tm(h, env));
             }
             // enum 本体：逐参数求值（值 + 类型）后装配
             W::Tm(Tm::Sum(name, params, cases, is_trait), env) => {
@@ -356,14 +364,14 @@ pub(super) fn eval_iter<'a>(
                 for d in datas.iter().rev() {
                     work.push(W::Tm(d.val, env));
                 }
-                work.push(W::Tm(typ, env));
+                cur = Some(W::Tm(typ, env));
             }
             // match：求值 scrutinee → force → 选分支 / 卡住（参考版 eval 的
             // Tm::Match 臂：SumCase + eval_aux 命中给分支体（**None 即
             // panic**）；其它 neutral 卡 Match，无 pending）
             W::Tm(Tm::Match(s, cases), env) => {
                 work.push(W::MatchSel { cases, env });
-                work.push(W::Tm(s, env));
+                cur = Some(W::Tm(s, env));
             }
             W::Tm(app @ Tm::App(..), env) => {
                 // 右链下钻：头为非闭包变量时头值直接进 vals（icit 进侧栈）
@@ -376,7 +384,7 @@ pub(super) fn eval_iter<'a>(
                             if heads > 0 {
                                 work.push(W::ChainWrap(heads));
                             }
-                            work.push(W::Tm(base, env));
+                            cur = Some(W::Tm(base, env));
                             break;
                         }
                     };
@@ -392,7 +400,7 @@ pub(super) fn eval_iter<'a>(
                                     work.push(W::ChainWrap(heads));
                                 }
                                 work.push(W::ApplyKnown(vf));
-                                work.push(W::Tm(a, env));
+                                cur = Some(W::Tm(a, env));
                                 break;
                             }
                             vals.push(vf);
@@ -407,7 +415,7 @@ pub(super) fn eval_iter<'a>(
                             }
                             work.push(W::Apply(i));
                             work.push(W::Tm(a, env));
-                            work.push(W::Tm(f, env));
+                            cur = Some(W::Tm(f, env));
                             break;
                         }
                     }
@@ -420,7 +428,7 @@ pub(super) fn eval_iter<'a>(
                     // β 归约是尾调用：直接推入体，继续循环
                     let c = v_clo_of(vf);
                     let env = env_ext(bump, c.env, va);
-                    work.push(W::Tm(c.body, env));
+                    cur = Some(W::Tm(c.body, env));
                 } else {
                     let r = vapp1(
                         bump, spine, work, vals, icits, defs, metas, decl, mutable, vf, va, i,
@@ -432,7 +440,7 @@ pub(super) fn eval_iter<'a>(
                 let va = vals.pop().expect("eval 栈：ApplyKnown 缺实参");
                 let c = v_clo_of(vf);
                 let env = env_ext(bump, c.env, va);
-                work.push(W::Tm(c.body, env));
+                cur = Some(W::Tm(c.body, env));
             }
             W::ChainWrap(k) => {
                 let mut v = vals.pop().expect("eval 栈：ChainWrap 缺 base");
@@ -447,7 +455,7 @@ v = vapp1(
             }
             W::LetBody(u, env) => {
                 let vt = vals.pop().expect("eval 栈：LetBody 缺绑定值");
-                work.push(W::Tm(u, env_ext(bump, env, vt)));
+                cur = Some(W::Tm(u, env_ext(bump, env, vt)));
             }
             W::PiBody(name, icit, cod, env) => {
                 let dom = vals.pop().expect("eval 栈：PiBody 缺定义域");
@@ -468,7 +476,7 @@ v = vapp1(
                 Some(b) if env.binds.is_none() && b.slot.is_none() => {
                     // O(1) 跳段：binds 耗尽后剩余链只剩 define 槽。
                     assert!(env.flat_len >= b.none_run);
-                    work.push(W::AppPrun(
+                    cur = Some(W::AppPrun(
                         Env {
                             flat_len: env.flat_len - b.none_run,
                             ..env
@@ -504,7 +512,7 @@ v = vapp1(
                         (None, Some(_)) => panic!("impossible"), // env 短于 pr
                         _ => {}
                     }
-                    work.push(W::AppPrun(rest, b.next));
+                    cur = Some(W::AppPrun(rest, b.next));
                 }
             },
             W::AppPrunOne(arg, i) => {
@@ -512,7 +520,7 @@ v = vapp1(
                 if v_tag(v) == 1 {
                     let c = v_clo_of(v);
                     let env = env_ext(bump, c.env, arg);
-                    work.push(W::Tm(c.body, env));
+                    cur = Some(W::Tm(c.body, env));
                 } else {
                     let r = vapp1(
                         bump, spine, work, vals, icits, defs, metas, decl, mutable, v, arg, i,
@@ -610,7 +618,7 @@ v = vapp1(
                     match eval_aux(bump, spine, defs, metas, decl, mutable, s2, env, cases) {
                         Some((body_tm, env2)) => {
                             // 分支选中：体在本 eval 循环里尾推
-                            work.push(W::Tm(body_tm, env2));
+                            cur = Some(W::Tm(body_tm, env2));
                         }
                         // L10：无臂命中 → 卡住 Match（参考版 None => Match）
                         None => vals.push(v_xcell(bump.alloc(XCell::Match {
