@@ -3686,6 +3686,20 @@ impl Machine {
                 // redefine 报错），检查体，再 wrap_match_in_call 包装。
                 let fake = self.fake_bind(bump, cxt, &name.data, name.to_span(), typ_tm, vtyp)?;
                 let t_checked = self.check(bump, &fake, &bod, vtyp)?;
+                // Level A 终止性检查（参考版 elaboration.rs 同点位，逐句对
+                // 齐）：体检查通过后、wrap 前走查自调用；失败按普通 decl 错
+                // 误上抛（infer_decl 的占位回滚 / 下游错误恢复自动生效）。
+                let term_msg = format!(
+                    "cannot prove termination of recursive call to '{}'",
+                    name.data
+                );
+                super::termination::check_def_termination(
+                    &fake.decls,
+                    name.data.as_str(),
+                    params.len(),
+                    t_checked,
+                )
+                .map_err(|()| Error(name.clone().map(move |_| term_msg.clone()), vec![]))?;
                 let t_tm = self.wrap_match_in_call(bump, name.data.as_str(), t_checked);
                 // solve_multi_trait(this_meta, **true**)（参考版 Def 臂
                 // elaboration.rs:972）：失败 **返回 Err** 交上层（`.map_err(

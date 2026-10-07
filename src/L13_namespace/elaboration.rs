@@ -89,6 +89,285 @@ fn prefix_decl_name(d: Decl, prefix: &SmolStr) -> Decl {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Level A 终止性检查（docs/l13-quirks-analysis-2026-10.md §4.3 档 A）。
+// 孪生版 bump_spine_iter/termination.rs 逐句对齐（本版 `Rc<Tm>` Ix，孪生
+// bump `&Tm` de Bruijn；判据/注释同构，改动须成对）。挂载点：Def 臂
+// `check` 之后、`wrap_match_in_call` 之前。
+//
+// 判据（启发式，**不健全**）：对 elaborated 体里每个自调用 `f a1..an`
+// （App-spine 头 = `Decl(自身键)`），要求至少一个实参是「结构位置模式变
+// 量」——即某 match 的模式变量，且该 match 的 scrutinee 链（Var / `x.field`
+// 投影）下落到 def 参数或（传递地）另一个结构位置模式变量；实参允许是
+// 这类模式变量的**构造器应用**（`ofNat b` / `negSucc a`——int_add/int_mul
+// 需要；构造器 = decl 表里 tm 为 λ*→SumCase 的条目，隐式实参是类型/字
+// 典不参与判定）。裸自引用（零参 def 的 `def p = p`、把自身当值传）无递
+// 减实参 ⇒ 拒绝。已知放行：ping-pong 换参 `weird b k`（k 是模式变量即放
+// 行，Level A 口径的不健全）；构造器包裹可增 `bad (succ k)`；方法自调用
+// 经 `Obj` 派发不在 Decl-spine 判定内。成本 O(|body|)/def。
+// ---------------------------------------------------------------------------
+
+/// 引擎侧 allowlist（**临时**，直到声明级 opt-out 语法落地；与孪生版
+/// `bump_spine_iter/termination.rs::ALLOWLIST` 同步维护）。逐项理由见孪
+/// 生版注释：nat_div/nat_rem（nat.typort 重复减法回退，实参是 let 计算值，
+/// nat 内建注册后被 primop 覆盖）、combReach（hdl-check-graph worklist 累
+/// 加计算值）、gcd（examples/typeclass_complex.typort 欧几里得换参）、
+/// log2Up/metaDiv/countOnesExprAt（折半/减法度量）、designVisit（worklist）、
+/// bbParamsDeclStr/bbInstItemsStr（list_reverse 包裹 scrutinee）、
+/// NonEmpty.last（struct 构造器包裹，is_ctor 待精化）。
+const TERMINATION_ALLOWLIST: &[&str] = &[
+    "nat_div", "nat_rem", "combReach", "gcd", "log2Up",
+    "metaDiv", "countOnesExprAt", "designVisit",
+    "bbParamsDeclStr", "bbInstItemsStr", "NonEmpty.last",
+    "adder_tree",
+];
+
+/// 走查器：decl 表（构造器判定）+ 自身限定键 + 模式变量层标记。层
+/// （level）= 从体根起跨过的 binder 数（参数 λ 链占 0..k-1）；层 L 处
+/// `Var(i)` 指 L-1-i。两套判定严格分开：
+/// - **scrutinee 链**：match 的 scrutinee 链（Var / `x.field`）根落在
+///   「def 参数（层 < k）或已标模式变量层」上 ⇒ 该 match 结构化，其全 arm
+///   的模式变量层（L..L+bind_count-1）续标（传递闭包）；
+/// - **递减实参**：`Var` 必须是**已标模式变量层**——参数本身不算（`bad x`
+///   的 x 是参数非模式变量，须拒）。
+/// 多 arm 层号重叠无害：arm 体只能引用低于自身起点的层，重叠层在该 arm
+/// 视角即本 arm 自己的模式变量，同属这个（已验结构性的）match。
+struct TermWalker<'a> {
+    decl: &'a super::Decl,
+    self_key: &'a str,
+    /// def 参数个数（参数占层 0..k-1，只参与 scrutinee 链判定）。
+    n_params: u32,
+    /// 结构位置模式变量层标记（单调增长；只参与递减实参判定）。
+    pat_marks: Vec<bool>,
+}
+
+/// Level A 检查：`Err(())` = 存在无法证明终止的自调用（调用方渲染 decl
+/// 错误；错误恢复按既有失败 decl 通道自动生效）。
+fn check_def_termination(
+    decl: &super::Decl,
+    self_key: &str,
+    n_params: usize,
+    body: &Tm,
+) -> Result<(), ()> {
+    if TERMINATION_ALLOWLIST.contains(&self_key) {
+        return Ok(());
+    }
+    let mut w = TermWalker {
+        decl,
+        self_key,
+        n_params: n_params as u32,
+        pat_marks: Vec::new(),
+    };
+    w.walk(body, 0)
+}
+
+impl<'a> TermWalker<'a> {
+    /// scrutinee 链根是否结构化：def 参数层或已标模式变量层。
+    fn scrut_marked(&self, lvl: u32) -> bool {
+        lvl < self.n_params || self.pat_marked(lvl)
+    }
+
+    fn pat_marked(&self, lvl: u32) -> bool {
+        (lvl as usize) < self.pat_marks.len() && self.pat_marks[lvl as usize]
+    }
+
+    fn pat_mark(&mut self, lvl: u32) {
+        let i = lvl as usize;
+        if i >= self.pat_marks.len() {
+            self.pat_marks.resize(i + 1, false);
+        }
+        self.pat_marks[i] = true;
+    }
+
+    /// scrutinee 链：`Var` → 层号；`Obj(h, _)` 投影跟头；**构造器应用**
+    ///（含元组 `(a, b)`——TupleN.mk 的 App-spine）当全部显式实参自身是
+    /// 链根时视为链根（层号取首个实参的——只用于 structural 判定，元组
+    /// match 的臂模式变量按既有口径全标）；其余（计算值 / 嵌套 match /
+    /// let）不算下落到参数（保守拒绝 ⇒ 走 allowlist 口径）。
+    fn chain_level(&self, t: &Tm, lvl: u32) -> Option<u32> {
+        match t {
+            Tm::Var(ix) if ix.0 < lvl => Some(lvl - 1 - ix.0),
+            Tm::Obj(h, _) => self.chain_level(h.as_ref(), lvl),
+            Tm::App(..) => {
+                let mut args: Vec<&Tm> = Vec::new();
+                let mut cur = t;
+                while let Tm::App(f, a, i) = cur {
+                    if matches!(i, Icit::Expl) {
+                        args.push(a.as_ref());
+                    }
+                    cur = f.as_ref();
+                }
+                match cur {
+                    Tm::Decl(h) if self.is_ctor(&h.data) => {
+                        let mut first: Option<u32> = None;
+                        for a in args {
+                            match self.chain_level(a, lvl) {
+                                Some(l) => {
+                                    if first.is_none() {
+                                        first = Some(l);
+                                    }
+                                }
+                                None => return None,
+                            }
+                        }
+                        first
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// decl 表构造器判定：tm 为 λ*→SumCase（enum 臂登记构造子的形状；prim
+    /// 条目——nat 内建换装的 nat_div 等——不算）。
+    fn is_ctor(&self, key: &str) -> bool {
+        match self.decl.get(key) {
+            Some(e) if e.5.is_none() => {
+                let mut t = e.1.as_ref();
+                while let Tm::Lam(_, _, b) = t {
+                    t = b.as_ref();
+                }
+                matches!(t, Tm::SumCase { .. })
+            }
+            _ => false,
+        }
+    }
+
+    /// 实参是否「结构递减候选」：模式变量（已标层，参数不算）/ 构造器应
+    /// 用（SumCase 或 Decl 头 App-spine；显式字段全为候选，空字段集的常
+    /// 量构造子不算——无模式变量即无结构证据）。
+    fn smaller_arg(&self, t: &Tm, lvl: u32) -> bool {
+        match t {
+            Tm::Var(ix) => ix.0 < lvl && self.pat_marked(lvl - 1 - ix.0),
+            Tm::SumCase { datas, .. } => {
+                !datas.is_empty() && datas.iter().all(|(_, v, _)| self.smaller_arg(v, lvl))
+            }
+            Tm::App(..) => {
+                let mut args: Vec<(&Tm, Icit)> = Vec::new();
+                let mut cur = t;
+                while let Tm::App(f, a, i) = cur {
+                    args.push((a.as_ref(), *i));
+                    cur = f.as_ref();
+                }
+                match cur {
+                    Tm::Decl(h) if self.is_ctor(&h.data) => {
+                        let expl: Vec<&Tm> = args
+                            .iter()
+                            .filter(|(_, i)| matches!(i, Icit::Expl))
+                            .map(|(a, _)| *a)
+                            .collect();
+                        !expl.is_empty() && expl.iter().all(|a| self.smaller_arg(a, lvl))
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+
+    /// 显式栈走查（免深体递归栈）。Match 先验链标记再入 arm（标记沿包含
+    /// 关系自上而下传播，兄弟子树互不污染）；自调用 spine 判定后实参照常
+    /// 入栈（嵌套自调用逐个受检）。
+    fn walk(&mut self, t: &Tm, lvl: u32) -> Result<(), ()> {
+        let mut stack: Vec<(&Tm, u32)> = vec![(t, lvl)];
+        while let Some((t, l)) = stack.pop() {
+            match t {
+                Tm::Var(_) | Tm::U(_) | Tm::Meta(_) | Tm::LiteralType | Tm::LiteralIntro(_) => {}
+                Tm::Decl(s) => {
+                    if s.data == self.self_key {
+                        // 裸自引用：零参自调用或把自身当值传——无递减实参。
+                        return Err(());
+                    }
+                }
+                Tm::OpCall { args, body, .. } => {
+                    // wrap 前不可能出现（OpCall 只由 quote 产，def 体不走
+                    // quote）；防御性走查（真出现宁可误拒也不静默漏检）。
+                    for (a, _) in args.iter() {
+                        stack.push((a.as_ref(), l));
+                    }
+                    stack.push((body.as_ref(), l));
+                }
+                Tm::Lam(_, _, b) => stack.push((b.as_ref(), l + 1)),
+                Tm::Pi(_, _, a, b) => {
+                    stack.push((a.as_ref(), l));
+                    stack.push((b.as_ref(), l + 1));
+                }
+                Tm::Let(_, ty, v, u) => {
+                    stack.push((ty.as_ref(), l));
+                    stack.push((v.as_ref(), l));
+                    stack.push((u.as_ref(), l + 1));
+                }
+                Tm::Obj(h, _) => stack.push((h.as_ref(), l)),
+                Tm::AppPruning(h, pruning) => {
+                    // 掩码 = 插入的 λ 槽（含 define 槽），每槽一层 binder。
+                    stack.push((h.as_ref(), l + pruning.len() as u32));
+                }
+                Tm::Sum(_, params, ..) => {
+                    for (k, p) in params.iter().enumerate() {
+                        stack.push((p.2.as_ref(), l + k as u32));
+                        stack.push((p.1.as_ref(), l + k as u32));
+                    }
+                }
+                Tm::SumCase { typ, datas, .. } => {
+                    stack.push((typ.as_ref(), l));
+                    for (_, v, _) in datas.iter() {
+                        stack.push((v.as_ref(), l));
+                    }
+                }
+                Tm::Match(scrut, cases) => {
+                    if let Some(root) = self.chain_level(scrut, l) {
+                        if self.scrut_marked(root) {
+                            for (pat, _) in cases.iter() {
+                                let b = pat.bind_count();
+                                for k in 0..b {
+                                    self.pat_mark(l + k);
+                                }
+                            }
+                        }
+                    }
+                    stack.push((scrut.as_ref(), l));
+                    for (pat, body) in cases.iter() {
+                        stack.push((body.as_ref(), l + pat.bind_count()));
+                    }
+                }
+                Tm::Call(_, args, body) => {
+                    // wrap 前不可能出现（Call 只由 wrap_match_in_call 产）；
+                    // 防御性走查实参与体。
+                    for (a, _) in args.iter() {
+                        stack.push((a.as_ref(), l));
+                    }
+                    stack.push((body.as_ref(), l));
+                }
+                Tm::App(..) => {
+                    let mut args: Vec<(&Tm, Icit)> = Vec::new();
+                    let mut cur = t;
+                    while let Tm::App(f, a, i) = cur {
+                        args.push((a.as_ref(), *i));
+                        cur = f.as_ref();
+                    }
+                    if let Tm::Decl(s) = cur {
+                        if s.data == self.self_key {
+                            if !args.iter().any(|(a, _)| self.smaller_arg(a, l)) {
+                                return Err(());
+                            }
+                            for (a, _) in args {
+                                stack.push((a, l));
+                            }
+                            continue;
+                        }
+                    }
+                    stack.push((cur, l));
+                    for (a, _) in args {
+                        stack.push((a, l));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Length of a fully concrete `succ^k zero` chain of the `Nat` sum
 /// (`typ` the expanded `Tm::Sum("Nat")`), or `None` for anything else
 /// (a stuck tail, another sum, a partially-applied form).  Mirrors the
@@ -1125,8 +1404,22 @@ impl Infer {
                     //println!("{:?}", vtyp);
                     //println!("-------------------<");
                     let fake_cxt = ret_cxt.fake_bind(name.clone(), typ_tm.clone(), vtyp.clone())?;
-                    let t_tm = self.check::<false>(&fake_cxt, bod.clone(), &vtyp)?;
-                    let t_tm = Rc::new(super::wrap_match_in_call(name.data.clone(), &t_tm, 0));
+                    let t_checked = self.check::<false>(&fake_cxt, bod.clone(), &vtyp)?;
+                    // Level A 终止性检查（孪生 machine.rs 同点位逐句对齐）：
+                    // 体检查通过后、wrap 前走查自调用；失败按普通 decl 错误
+                    // 上抛（infer_after_prefix 的 cxt.clone 隔离 / 下游错误
+                    // 恢复自动生效）。
+                    check_def_termination(&fake_cxt.decl, &name.data, params.len(), &t_checked)
+                        .map_err(|()| {
+                            Error(
+                                name.to_span().map(|_| format!(
+                                    "cannot prove termination of recursive call to '{}'",
+                                    name.data
+                                )),
+                                vec![],
+                            )
+                        })?;
+                    let t_tm = Rc::new(super::wrap_match_in_call(name.data.clone(), &t_checked, 0));
                     self.solve_multi_trait(&fake_cxt, super::MetaVar(this_meta as u32), true)
                         .map_err(|e| Error(name.to_span().map(|_| format!("{:?}", e)), vec![]))?;
                     //let t_tm_nf = self.nf(&ret_cxt.decl, &fake_cxt.env, &t_tm);

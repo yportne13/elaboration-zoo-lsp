@@ -190,6 +190,7 @@ mod quote;
 mod rename;
 mod spine;
 mod syntax;
+mod termination;
 mod typeclass;
 mod unify;
 

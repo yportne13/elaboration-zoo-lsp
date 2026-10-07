@@ -13,7 +13,12 @@ use super::*;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 /// 会挂死的输入：`bad` 自递归，`bad2` 触发对 `bad 5` 的求值（登记期整求）。
-const LOOPING: &str = "def bad(x: Nat): Nat = bad x\ndef bad2: Nat = bad 5\n";
+/// 2026-10-02 Level A 终止性检查（termination_check_tests / elaboration.rs
+/// `check_def_termination`）落地后，`def bad(x: Nat): Nat = bad x`（实参是
+/// 参数非模式变量）在 elaboration 期即被拒；这里换成 Level A 已知放行的
+/// 构造器包裹形态 `bad (succ k)`（判据的不健全点，检查注释里有记录）——
+/// elaboration 照常通过，求值期仍无限递归，看门狗口径不变。
+const LOOPING: &str = "def bad(x: Nat): Nat = match x {\n    case zero => zero\n    case succ(k) => bad (succ k)\n}\ndef bad2: Nat = bad 5\n";
 
 #[test]
 fn reference_eval_budget_aborts_loop() {

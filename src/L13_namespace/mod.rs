@@ -374,6 +374,9 @@ mod prim_safety_tests;
 #[cfg(test)]
 mod cong_projection_tests;
 
+#[cfg(test)]
+mod termination_check_tests;
+
 type Rc<T> = std::rc::Rc<T>;
 
 // `decl.get` sits on the evaluator's hot paths (`Tm::Decl` eval arm, `v_app`,
