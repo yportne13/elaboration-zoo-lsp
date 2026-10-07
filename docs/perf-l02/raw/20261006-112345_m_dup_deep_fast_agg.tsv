@@ -1,0 +1,8 @@
+workload	k	impl	reps	min_ms	med_of_min	max_ms	spread_pct	med_of_med
+dup_deep	9	fast	7	0.2210	0.2220	0.2230	0.90	0.2230
+dup_deep	10	fast	7	0.4330	0.4340	0.4350	0.46	0.4350
+dup_deep	11	fast	7	0.8590	0.8740	1.0440	21.54	0.9370
+dup_deep	12	fast	7	1.7290	1.7400	2.2220	28.51	2.5010
+dup_deep	13	fast	7	3.6230	3.6780	4.2900	18.41	4.0350
+dup_deep	14	fast	7	7.4960	7.8940	9.5770	27.76	8.4970
+dup_deep	15	fast	7	15.0960	15.9850	19.3580	28.23	17.0010

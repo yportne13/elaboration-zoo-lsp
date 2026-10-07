@@ -1,0 +1,8 @@
+== workload: conv_dup ==
+k=9   n=1024     fast_ss=     0.193ms*/     0.195
+k=10  n=2048     fast_ss=     0.373ms*/     0.375
+k=11  n=4096     fast_ss=     0.736ms*/     0.740
+k=12  n=8192     fast_ss=     1.505ms*/     1.536
+k=13  n=16384    fast_ss=     3.041ms*/     3.174
+k=14  n=32768    fast_ss=     6.427ms*/     6.555
+k=15  n=65536    fast_ss=    12.785ms*/    13.618

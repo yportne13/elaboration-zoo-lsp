@@ -19,17 +19,53 @@ pub mod tutorial;
 pub mod quick;
 pub mod doc;
 mod lsp_stdio;
+// L02–L12 are the "elaboration zoo" reference layers: each is a copy-forward of
+// the previous one, kept around as a parity oracle for the twin engine and for
+// the per-layer unit tests.  The product build (L13 + LSP glue) uses only a
+// sliver of their API, so compiling the lib outside `cfg(test)` reports the rest
+// as dead code (~1800 sites).  Silence that surface where it is expected — the
+// bin tools already carry a crate-level `#![allow(dead_code)]` for the same
+// reason — while keeping the lint ON for L13 (the shipping layer, where a `never
+// used` warning is a genuine signal) and for `cargo test` (where the oracle APIs
+// are exercised).
+//
+// Each reference-layer module therefore carries `#[cfg_attr(not(test),
+// allow(dead_code))]`.  The `LNN_*` module names are CamelCase by design (they
+// mirror the doc/bench layer labels), so `non_snake_case` is allowed per module.
+#[allow(non_snake_case)]
+#[cfg_attr(not(test), allow(dead_code))]
 mod L02_tyck;
+#[allow(non_snake_case)]
+#[cfg_attr(not(test), allow(dead_code))]
 mod L03_holes;
+#[allow(non_snake_case)]
+#[cfg_attr(not(test), allow(dead_code))]
 mod L04_implicit;
+#[allow(non_snake_case)]
+#[cfg_attr(not(test), allow(dead_code))]
 mod L05_pruning;
+#[allow(non_snake_case)]
+#[cfg_attr(not(test), allow(dead_code))]
 mod L06_string;
+#[allow(non_snake_case)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub mod L07_sum_type;
+#[allow(non_snake_case)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub mod L08_product_type;
+#[allow(non_snake_case)]
+#[cfg_attr(not(test), allow(dead_code))]
 mod L09_mltt;
+#[allow(non_snake_case)]
+#[cfg_attr(not(test), allow(dead_code))]
 mod L10_typeclass;
+#[allow(non_snake_case)]
+#[cfg_attr(not(test), allow(dead_code))]
 mod L11_macro;
+#[allow(non_snake_case)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub mod L12_canonical;
+#[allow(non_snake_case)]
 pub mod L13_namespace;
 
 /// Whitespace-only document formatter (`textDocument/formatting`).

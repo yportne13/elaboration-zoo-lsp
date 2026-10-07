@@ -1,0 +1,2530 @@
+warning: unused imports: `hash::Hash`, `marker::PhantomData`, and `ops::Add`
+ --> src/parser_lib_resilient.rs:1:23
+  |
+1 | use std::{fmt::Debug, ops::Add, hash::Hash, marker::PhantomData};
+  |                       ^^^^^^^^  ^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `Pattern` and `Severity`
+ --> src/parser_lib_resilient.rs:3:43
+  |
+3 | pub use crate::parser_lib::{Span, ToSpan, Severity, Diagnostic, unescape, Pattern};
+  |                                           ^^^^^^^^                        ^^^^^^^
+
+warning: unused import: `crate::config::Config`
+  --> src/doc/collect.rs:22:5
+   |
+22 | use crate::config::Config;
+   |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `Closure`
+ --> src/L08_product_type/cxt.rs:7:5
+  |
+7 |     Closure, Env, Infer, Ix, Lvl, Tm, Ty, Val, VTy,
+  |     ^^^^^^^
+
+warning: unused import: `list::List`
+ --> src/L08_product_type/parser/syntax.rs:1:13
+  |
+1 | use crate::{list::List, parser_lib::Span};
+  |             ^^^^^^^^^^
+
+warning: unused import: `Either`
+  --> src/L09_mltt/mod.rs:14:22
+   |
+14 | use parser::syntax::{Either, Icit};
+   |                      ^^^^^^
+
+warning: unused imports: `Error` and `pretty::pretty_tm`
+ --> src/L09_mltt/unification.rs:4:5
+  |
+4 |     Error, Infer, Lvl, MetaEntry, MetaVar, Spine, Subst, Tm, UnifyError, VTy, Val,
+  |     ^^^^^
+5 |     cxt::Cxt, lvl2ix, v_applicable, val_mentions_lvl, wrap_sub,
+6 |     parser::syntax::Icit, syntax::Pruning, empty_span, pretty::pretty_tm,
+  |                                                        ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `Either`
+ --> src/L10_typeclass/mod.rs:2:22
+  |
+2 | use parser::syntax::{Either, Icit, Raw};
+  |                      ^^^^^^
+
+warning: unused imports: `BTreeSet` and `HashMap`
+ --> src/L10_typeclass/pattern_match.rs:2:19
+  |
+2 |     collections::{BTreeSet, HashMap, HashSet},
+  |                   ^^^^^^^^  ^^^^^^^
+
+warning: unused import: `Either`
+ --> src/L11_macro/mod.rs:2:23
+  |
+2 | use parser::{syntax::{Either, Icit, Raw}, IError};
+  |                       ^^^^^^
+
+warning: unused imports: `HashMap` and `extract_base`
+ --> src/L11_macro/parser/macros.rs:5:32
+  |
+5 | use super::{TokenNode, IError, HashMap, ErrMsg, BaseMsg, extract_base, string, p_raw, p_pi_binder, empty_span, owned_tokens_to_string...
+  |                                ^^^^^^^                   ^^^^^^^^^^^^
+
+warning: unused imports: `BTreeSet` and `HashMap`
+ --> src/L11_macro/pattern_match.rs:2:19
+  |
+2 |     collections::{BTreeSet, HashMap, HashSet},
+  |                   ^^^^^^^^  ^^^^^^^
+
+warning: unused import: `pretty::pretty_tm`
+ --> src/L11_macro/unification.rs:5:56
+  |
+5 |     parser::syntax::Icit, syntax::Pruning, empty_span, pretty::pretty_tm, typeclass::Assertion, Raw, Rc, Decl,
+  |                                                        ^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `HashMap` and `extract_base`
+ --> src/L12_canonical/parser/macros.rs:5:32
+  |
+5 | use super::{TokenNode, IError, HashMap, ErrMsg, BaseMsg, extract_base, string, p_raw, p_pi_binder, empty_span, owned_tokens_to_string...
+  |                                ^^^^^^^                   ^^^^^^^^^^^^
+
+warning: unused imports: `BTreeSet`, `HashMap`, and `HashSet`
+ --> src/L12_canonical/pattern_match.rs:2:19
+  |
+2 |     collections::{BTreeSet, HashMap, HashSet},
+  |                   ^^^^^^^^  ^^^^^^^  ^^^^^^^
+
+warning: unused import: `pretty::pretty_tm`
+ --> src/L12_canonical/unification.rs:7:56
+  |
+7 |     parser::syntax::Icit, syntax::Pruning, empty_span, pretty::pretty_tm, typeclass::Assertion, Raw, Rc, Decl,
+  |                                                        ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::L12_canonical::MetaVar as CMetaVar`
+   --> src/L12_canonical/bump_spine_iter.rs:163:5
+    |
+163 | use crate::L12_canonical::MetaVar as CMetaVar;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused doc comment
+    --> src/L13_namespace/mod.rs:1186:1
+     |
+1186 | / /// `simpl_decl` 的 decl 缓存（自函数体提升至模块级）：`Drop for
+1187 | | /// PreludeSlot` 推池前要能清空它（见该处的约束注释）。
+     | |_------------------------------------------------------^
+     |   |
+     |   rustdoc does not generate documentation for macro invocations
+     |
+     = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+     = note: `#[warn(unused_doc_comments)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `PrimFunc`
+ --> src/L13_namespace/elaboration.rs:9:45
+  |
+9 |     Closure, Cxt, DeclTm, Error, Infer, Ix, PrimFunc, Tm, VTy, Val,
+  |                                             ^^^^^^^^
+
+warning: unused imports: `HashMap` and `extract_base`
+ --> src/L13_namespace/parser/macros.rs:5:32
+  |
+5 | use super::{TokenNode, IError, HashMap, ErrMsg, BaseMsg, extract_base, string, p_raw, p_pi_binder, empty_span, owned_tokens_to_string...
+  |                                ^^^^^^^                   ^^^^^^^^^^^^
+
+warning: unused import: `ToSpan`
+ --> src/L13_namespace/parser/derive.rs:6:31
+  |
+6 | use crate::parser_lib::{Span, ToSpan};
+  |                               ^^^^^^
+
+warning: unused import: `Ix`
+  --> src/L13_namespace/parser/mod.rs:40:25
+   |
+40 | use super::{empty_span, Ix, Rc, Tm, Val};
+   |                         ^^
+
+warning: unnecessary parentheses around function argument
+   --> src/L13_namespace/parser/mod.rs:989:54
+    |
+989 | ...                   lhs = Raw::Hole((w.to_span() + tk.to_span()));
+    |                                       ^                          ^
+    |
+    = note: `#[warn(unused_parens)]` (part of `#[warn(unused)]`) on by default
+help: remove these parentheses
+    |
+989 -                                         lhs = Raw::Hole((w.to_span() + tk.to_span()));
+989 +                                         lhs = Raw::Hole(w.to_span() + tk.to_span());
+    |
+
+warning: unused doc comment
+  --> src/L13_namespace/unification.rs:17:1
+   |
+17 | / /// [`Infer::solve_multi_trait`] 的待解条目快照缓冲池：旧实现每次调用
+18 | | /// `self.trait_metas.clone()` 整表快照（该表整个会话保持 prelude 规模），
+19 | | /// 改为 retain 单遍 + 待解条目收进带所有权的小缓冲，按 LIFO 复用（嵌套
+20 | | /// solve 重入链各取各的缓冲，互不踩），暖机后零分配。池上限 = 最大 solve
+21 | | /// 重入深度。见 twin 侧同点位 `bump_spine_iter/typeclass.rs` 的
+22 | | /// TRAIT_METAS_SNAP_POOL（12c23b9，含 A/B 数据）。
+   | |_--------------------------------------------------^
+   |   |
+   |   rustdoc does not generate documentation for macro invocations
+   |
+   = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+
+warning: unused imports: `Assertion` and `pretty::pretty_tm`
+  --> src/L13_namespace/unification.rs:9:76
+   |
+ 9 |     is_nat_sum, lvl2ix, parser::syntax::Icit, syntax::Pruning, empty_span, pretty::pretty_tm,
+   |                                                                            ^^^^^^^^^^^^^^^^^
+10 |     typeclass::{Assertion, Instance}, Raw, Rc, Decl,
+   |                 ^^^^^^^^^
+
+warning: unused imports: `Lvl`, `MetaEntry`, `Span`, and `Tm`
+ --> src/L13_namespace/canonical.rs:3:12
+  |
+3 |     Infer, MetaEntry, Cxt, Rc, Val, UnifyError, Span,
+  |            ^^^^^^^^^                            ^^^^
+4 |     Tm, Lvl, List,
+  |     ^^  ^^^
+
+warning: unused doc comment
+   --> src/L13_namespace/bump_spine_iter.rs:196:1
+    |
+196 | / /// 构造子可达性探测次数（`compiler::probe_accessible` 入口自增）。与参考版
+197 | | /// `pattern_match::PROBE_COUNT` 同口径，用于"次数差异 vs 单价差异"的判别——
+198 | | /// `l13lspsample` 打印采样窗口内的增量（累计值含 prelude 与预热 kick，不可
+199 | | /// 直接跨引擎比）。
+    | |_-------------------^
+    |   |
+    |   rustdoc does not generate documentation for macro invocations
+    |
+    = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+
+warning: unused doc comment
+  --> src/L13_namespace/bump_spine_iter/typeclass.rs:64:1
+   |
+64 | / /// solve_multi_trait 的待解条目快照缓冲池（S1 轮）：旧实现每次调用
+65 | | /// `self.trait_metas.clone()`——整表快照（prelude-hdl 实测均值 3234 条、
+66 | | /// 峰值 6585 条）× 每次 trait 求解一次（实测 5 万次/轮）= 每轮数百 MB 的
+67 | | /// 分配 + memcpy 大户。retain+过滤后真正待解的条目通常个位数，改为进
+68 | | /// **带所有权的小缓冲**：池按 LIFO 复用（嵌套 solve → solve → trait_wrap
+69 | | /// 探测 → 再 solve 的重入链各自取各的缓冲，互不踩），暖机后零分配。
+   | |_-------------------------------------------------------------------^
+   |   |
+   |   rustdoc does not generate documentation for macro invocations
+   |
+   = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+
+warning: unused import: `parser`
+   --> src/lib.rs:101:29
+    |
+101 | use L13_namespace::parser::{parser, parser_with_macros, macros::MacroRule, MacroExpansionInfo};
+    |                             ^^^^^^
+
+warning: unused imports: `self`, `stdin`, and `stdout`
+   --> src/lib.rs:108:15
+    |
+108 | use std::io::{self, BufRead, Write, stdin, stdout};
+    |               ^^^^                  ^^^^^  ^^^^^^
+
+warning: unused import: `std::thread`
+   --> src/lib.rs:109:5
+    |
+109 | use std::thread;
+    |     ^^^^^^^^^^^
+
+warning: use of deprecated function `codespan_reporting::term::emit`: Use `emit_to_write_style` instead or depending on the writer use `emit_to_io_write` or `emit_to_string`
+  --> src/client.rs:98:15
+   |
+98 |         term::emit(&mut writer, &config, &files, cs_diag).unwrap();
+   |               ^^^^
+   |
+   = note: `#[warn(deprecated)]` on by default
+
+warning: unused import: `Write`
+   --> src/lib.rs:108:30
+    |
+108 | use std::io::{self, BufRead, Write, stdin, stdout};
+    |                              ^^^^^
+
+warning: unused import: `BufRead`
+   --> src/lib.rs:108:21
+    |
+108 | use std::io::{self, BufRead, Write, stdin, stdout};
+    |                     ^^^^^^^
+
+warning: unused import: `colored::Colorize`
+ --> src/L13_namespace/elaboration.rs:3:5
+  |
+3 | use colored::Colorize;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `colored::Colorize`
+ --> src/L13_namespace/unification.rs:1:5
+  |
+1 | use colored::Colorize;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `colored::Colorize`
+ --> src/L13_namespace/mod.rs:1:5
+  |
+1 | use colored::Colorize;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused variable: `e`
+  --> src/parser_lib_resilient.rs:22:71
+   |
+22 |         move |input, state: &mut S| self.parse(input, state).or_else(|e| rhs.parse(input, state))//TODO: err combine
+   |                                                                       ^ help: if this is intentional, prefix it with an underscore: `_e`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `version`
+   --> src/client.rs:177:75
+    |
+177 |     fn publish_diagnostics(&self, uri: Url, diagnostics: Vec<Diagnostic>, version: Option<i32>) {
+    |                                                                           ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_version`
+
+warning: unused variable: `sp`
+   --> src/L03_holes/mod.rs:360:32
+    |
+360 |             Val::Flex(m_prime, sp) if m == m_prime => Err(UnifyError),
+    |                                ^^ help: if this is intentional, prefix it with an underscore: `_sp`
+
+warning: unused variable: `sp`
+   --> src/L04_implicit/mod.rs:369:32
+    |
+369 |             Val::Flex(m_prime, sp) if m == m_prime => Err(UnifyError),
+    |                                ^^ help: if this is intentional, prefix it with an underscore: `_sp`
+
+warning: unused variable: `a`
+   --> src/L05_pruning/mod.rs:283:48
+    |
+283 |     fn new_binder(&self, x: Name, a_quote: Tm, a: Val) -> Cxt {
+    |                                                ^ help: if this is intentional, prefix it with an underscore: `_a`
+
+warning: variable does not need to be mutable
+   --> src/L05_pruning/mod.rs:844:36
+    |
+844 |         fn go(inf: &Infer, l: Lvl, mut a: VTy, l_prime: Lvl, t: Tm) -> Tm {
+    |                                    ----^
+    |                                    |
+    |                                    help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `val`
+   --> src/L06_string/unification.rs:310:37
+    |
+310 |                 Val::Pi(span, icit, val, closure) => Tm::Lam(
+    |                                     ^^^ help: if this is intentional, prefix it with an underscore: `_val`
+
+warning: variable does not need to be mutable
+   --> src/L07_sum_type/unification.rs:726:13
+    |
+726 |         let mut go = |this: &mut Self,
+    |             ----^^
+    |             |
+    |             help: remove this `mut`
+
+warning: unused variable: `t`
+   --> src/L08_product_type/elaboration.rs:621:42
+    |
+621 |             Raw::Lam(x, Either::Name(_), t) => Err(Error(format!("infer named lambda {x:?}"))),
+    |                                          ^ help: if this is intentional, prefix it with an underscore: `_t`
+
+warning: unused variable: `x`
+   --> src/L08_product_type/unification.rs:158:42
+    |
+158 |             (Some((None, rest)), Val::Pi(x, i, _, b)) => {
+    |                                          ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `i`
+   --> src/L08_product_type/unification.rs:158:45
+    |
+158 |             (Some((None, rest)), Val::Pi(x, i, _, b)) => {
+    |                                             ^ help: if this is intentional, prefix it with an underscore: `_i`
+
+warning: variable does not need to be mutable
+   --> src/L08_product_type/unification.rs:511:13
+    |
+511 |         let mut go = |this: &mut Self,
+    |             ----^^
+    |             |
+    |             help: remove this `mut`
+
+warning: unused variable: `x`
+   --> src/L09_mltt/elaboration.rs:269:32
+    |
+269 |                         Val::U(x) => {//TODO:x?
+    |                                ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `t`
+   --> src/L09_mltt/elaboration.rs:756:42
+    |
+756 |             Raw::Lam(x, Either::Name(_), t) => Err(Error(x.map(|_| "infer named lambda".to_owned()))),
+    |                                          ^ help: if this is intentional, prefix it with an underscore: `_t`
+
+warning: unused variable: `typ`
+  --> src/L09_mltt/parser/syntax.rs:91:28
+   |
+91 |             Raw::SumCase { typ, case_name, datas } => datas.last()
+   |                            ^^^ help: try ignoring the field: `typ: _`
+
+warning: unused variable: `println_kw`
+   --> src/L09_mltt/parser/mod.rs:632:16
+    |
+632 |         .map(|(println_kw, x)| Decl::Println(x.unwrap_or(Raw::Hole)))
+    |                ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_println_kw`
+
+warning: unused variable: `x`
+   --> src/L09_mltt/unification.rs:131:42
+    |
+131 |             (Some((None, rest)), Val::Pi(x, i, _, b)) => {
+    |                                          ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `i`
+   --> src/L09_mltt/unification.rs:131:45
+    |
+131 |             (Some((None, rest)), Val::Pi(x, i, _, b)) => {
+    |                                             ^ help: if this is intentional, prefix it with an underscore: `_i`
+
+warning: unused variable: `val`
+   --> src/L09_mltt/unification.rs:372:37
+    |
+372 |                 Val::Pi(span, icit, val, closure) if span.data == "_" => {
+    |                                     ^^^ help: if this is intentional, prefix it with an underscore: `_val`
+
+warning: unused variable: `val`
+   --> src/L09_mltt/unification.rs:385:37
+    |
+385 |                 Val::Pi(span, icit, val, closure) => Tm::Lam(
+    |                                     ^^^ help: if this is intentional, prefix it with an underscore: `_val`
+
+warning: unused variable: `items`
+   --> src/L09_mltt/pretty.rs:203:28
+    |
+203 |         Tm::Sum(span, tms, items) => format!(
+    |                            ^^^^^ help: if this is intentional, prefix it with an underscore: `_items`
+
+warning: unused variable: `is_def`
+    --> src/L09_mltt/bump_spine_iter/machine.rs:2100:17
+     |
+2100 |             let is_def = matches!(d, Decl::Def { .. });
+     |                 ^^^^^^ help: if this is intentional, prefix it with an underscore: `_is_def`
+
+warning: unused variable: `x`
+   --> src/L10_typeclass/elaboration.rs:234:32
+    |
+234 |                         Val::U(x) => {//TODO:x?
+    |                                ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `typ`
+  --> src/L10_typeclass/parser/syntax.rs:94:41
+   |
+94 |             Raw::SumCase { is_trait: _, typ, case_name, datas } => datas.last()
+   |                                         ^^^ help: try ignoring the field: `typ: _`
+
+warning: unused variable: `match_kw`
+   --> src/L10_typeclass/parser/mod.rs:575:16
+    |
+575 |         .map(|(match_kw, scrutinee, body)| Raw::Match(
+    |                ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_match_kw`
+
+warning: unused variable: `println_kw`
+   --> src/L10_typeclass/parser/mod.rs:634:16
+    |
+634 |         .map(|(println_kw, x)| Decl::Println(x.unwrap_or(Raw::Hole)))
+    |                ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_println_kw`
+
+warning: unused variable: `x`
+   --> src/L10_typeclass/unification.rs:130:42
+    |
+130 |             (Some((None, rest)), Val::Pi(x, i, _, b)) => {
+    |                                          ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `i`
+   --> src/L10_typeclass/unification.rs:130:45
+    |
+130 |             (Some((None, rest)), Val::Pi(x, i, _, b)) => {
+    |                                             ^ help: if this is intentional, prefix it with an underscore: `_i`
+
+warning: unused variable: `val`
+   --> src/L10_typeclass/unification.rs:387:37
+    |
+387 |                 Val::Pi(span, icit, val, closure) => Tm::Lam(
+    |                                     ^^^ help: if this is intentional, prefix it with an underscore: `_val`
+
+warning: unused variable: `val`
+  --> src/L10_typeclass/typeclass.rs:24:22
+   |
+24 |             Val::Obj(val, span, sp) => None,
+   |                      ^^^ help: if this is intentional, prefix it with an underscore: `_val`
+
+warning: unused variable: `span`
+  --> src/L10_typeclass/typeclass.rs:24:27
+   |
+24 |             Val::Obj(val, span, sp) => None,
+   |                           ^^^^ help: if this is intentional, prefix it with an underscore: `_span`
+
+warning: unused variable: `sp`
+  --> src/L10_typeclass/typeclass.rs:24:33
+   |
+24 |             Val::Obj(val, span, sp) => None,
+   |                                 ^^ help: if this is intentional, prefix it with an underscore: `_sp`
+
+warning: unused variable: `span`
+  --> src/L10_typeclass/typeclass.rs:26:21
+   |
+26 |             Val::Pi(span, icit, val, closure) => None,
+   |                     ^^^^ help: if this is intentional, prefix it with an underscore: `_span`
+
+warning: unused variable: `icit`
+  --> src/L10_typeclass/typeclass.rs:26:27
+   |
+26 |             Val::Pi(span, icit, val, closure) => None,
+   |                           ^^^^ help: if this is intentional, prefix it with an underscore: `_icit`
+
+warning: unused variable: `val`
+  --> src/L10_typeclass/typeclass.rs:26:33
+   |
+26 |             Val::Pi(span, icit, val, closure) => None,
+   |                                 ^^^ help: if this is intentional, prefix it with an underscore: `_val`
+
+warning: unused variable: `closure`
+  --> src/L10_typeclass/typeclass.rs:26:38
+   |
+26 |             Val::Pi(span, icit, val, closure) => None,
+   |                                      ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_closure`
+
+warning: unused variable: `neutral`
+    --> src/L10_typeclass/bump_spine_iter/machine.rs:1045:13
+     |
+1045 |             neutral,
+     |             ^^^^^^^ help: try ignoring the field: `neutral: _`
+
+warning: unused variable: `neutral`
+    --> src/L10_typeclass/bump_spine_iter/machine.rs:1341:13
+     |
+1341 |             neutral,
+     |             ^^^^^^^ help: try ignoring the field: `neutral: _`
+
+warning: unused variable: `t0`
+    --> src/L10_typeclass/bump_spine_iter/machine.rs:2399:29
+     |
+2399 |                 if let Some(t0) = probe_t0 {
+     |                             ^^ help: if this is intentional, prefix it with an underscore: `_t0`
+
+warning: variable does not need to be mutable
+   --> src/L10_typeclass/bump_spine_iter/rename.rs:822:9
+    |
+822 |     let mut lams_loop = solve_probe::on().then(|| std::time::Instant::now());
+    |         ----^^^^^^^^^
+    |         |
+    |         help: remove this `mut`
+
+warning: unused variable: `t0`
+  --> src/L10_typeclass/bump_spine_iter/typeclass.rs:49:21
+   |
+49 |         if let Some(t0) = probe_t0 {
+   |                     ^^ help: if this is intentional, prefix it with an underscore: `_t0`
+
+warning: unused variable: `items`
+   --> src/L10_typeclass/pretty.rs:207:28
+    |
+207 |         Tm::Sum(span, tms, items, _) => format!(
+    |                            ^^^^^ help: if this is intentional, prefix it with an underscore: `_items`
+
+warning: unused variable: `is_trait`
+   --> src/L10_typeclass/pretty.rs:216:23
+    |
+216 |         Tm::SumCase { is_trait, typ, case_name, datas: params } => format!(
+    |                       ^^^^^^^^ help: try ignoring the field: `is_trait: _`
+
+warning: unused variable: `span`
+   --> src/L11_macro/cxt.rs:396:22
+    |
+396 |         if let Some((span, _, _, _, _)) = t {
+    |                      ^^^^ help: if this is intentional, prefix it with an underscore: `_span`
+
+warning: unused variable: `t`
+   --> src/L11_macro/cxt.rs:441:13
+    |
+441 |         let t = Rc::make_mut(&mut decl).insert(x.data.clone(), (x.to_span(), t, vt, a, va));
+    |             ^ help: if this is intentional, prefix it with an underscore: `_t`
+
+warning: unused variable: `x`
+   --> src/L11_macro/elaboration.rs:246:32
+    |
+246 |                         Val::U(x) => {//TODO:x?
+    |                                ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `typ`
+   --> src/L11_macro/parser/syntax.rs:125:41
+    |
+125 |             Raw::SumCase { is_trait: _, typ, case_name, datas } => datas.last()
+    |                                         ^^^ help: try ignoring the field: `typ: _`
+
+warning: unused variable: `x`
+  --> src/L11_macro/parser/macros.rs:48:53
+   |
+48 | ...                   msg: token.map(|x| ErrMsg::Base(BaseMsg::Expect(*kind))),
+   |                                       ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `t`
+   --> src/L11_macro/parser/macros.rs:171:32
+    |
+171 |                         Ok((i, t)) if i.len() == input.len() => Err(IError {
+    |                                ^ help: if this is intentional, prefix it with an underscore: `_t`
+
+warning: value assigned to `rcurly_span` is never read
+    --> src/L11_macro/parser/mod.rs:1509:45
+     |
+1509 |     let mut rcurly_span: Option<Span<()>> = None;
+     |                                             ^^^^ this value is reassigned later and never used
+...
+1514 |             rcurly_span = Some(rc);
+     |             ---------------------- `rcurly_span` is overwritten here before the previous value is read
+     |
+     = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `val`
+   --> src/L11_macro/unification.rs:409:37
+    |
+409 |                 Val::Pi(span, icit, val, closure) => Tm::Lam(
+    |                                     ^^^ help: if this is intentional, prefix it with an underscore: `_val`
+
+warning: unused variable: `val`
+  --> src/L11_macro/typeclass.rs:26:22
+   |
+26 |             Val::Obj(val, span, sp) => None,
+   |                      ^^^ help: if this is intentional, prefix it with an underscore: `_val`
+
+warning: unused variable: `span`
+  --> src/L11_macro/typeclass.rs:26:27
+   |
+26 |             Val::Obj(val, span, sp) => None,
+   |                           ^^^^ help: if this is intentional, prefix it with an underscore: `_span`
+
+warning: unused variable: `sp`
+  --> src/L11_macro/typeclass.rs:26:33
+   |
+26 |             Val::Obj(val, span, sp) => None,
+   |                                 ^^ help: if this is intentional, prefix it with an underscore: `_sp`
+
+warning: unused variable: `span`
+  --> src/L11_macro/typeclass.rs:28:21
+   |
+28 |             Val::Pi(span, icit, val, closure) => None,
+   |                     ^^^^ help: if this is intentional, prefix it with an underscore: `_span`
+
+warning: unused variable: `icit`
+  --> src/L11_macro/typeclass.rs:28:27
+   |
+28 |             Val::Pi(span, icit, val, closure) => None,
+   |                           ^^^^ help: if this is intentional, prefix it with an underscore: `_icit`
+
+warning: unused variable: `val`
+  --> src/L11_macro/typeclass.rs:28:33
+   |
+28 |             Val::Pi(span, icit, val, closure) => None,
+   |                                 ^^^ help: if this is intentional, prefix it with an underscore: `_val`
+
+warning: unused variable: `closure`
+  --> src/L11_macro/typeclass.rs:28:38
+   |
+28 |             Val::Pi(span, icit, val, closure) => None,
+   |                                      ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_closure`
+
+warning: unused variable: `items`
+   --> src/L11_macro/pretty.rs:158:28
+    |
+158 |         Tm::Sum(span, tms, items, _) => {
+    |                            ^^^^^ help: if this is intentional, prefix it with an underscore: `_items`
+
+warning: unused variable: `is_trait`
+   --> src/L11_macro/pretty.rs:171:23
+    |
+171 |         Tm::SumCase { is_trait, typ, case_name, datas: params } => {
+    |                       ^^^^^^^^ help: try ignoring the field: `is_trait: _`
+
+warning: unused variable: `t`
+   --> src/L11_macro/mod.rs:109:35
+    |
+109 |                 MetaEntry::Solved(t, _) => None,//TODO: this is error. this will be fixed in L12
+    |                                   ^ help: if this is intentional, prefix it with an underscore: `_t`
+
+warning: unused variable: `t`
+   --> src/L12_canonical/cxt.rs:297:13
+    |
+297 |         let t = Rc::make_mut(&mut decl).insert(x.data.clone(), (x.to_span(), t, vt, a, va));
+    |             ^ help: if this is intentional, prefix it with an underscore: `_t`
+
+warning: unused variable: `span`
+   --> src/L12_canonical/elaboration.rs:654:21
+    |
+654 |                 let span = name.to_span();
+    |                     ^^^^ help: if this is intentional, prefix it with an underscore: `_span`
+
+warning: unused variable: `typ`
+   --> src/L12_canonical/parser/syntax.rs:142:41
+    |
+142 |             Raw::SumCase { is_trait: _, typ, case_name, datas } => datas.last()
+    |                                         ^^^ help: try ignoring the field: `typ: _`
+
+warning: unused variable: `x`
+  --> src/L12_canonical/parser/macros.rs:48:53
+   |
+48 | ...                   msg: token.map(|x| ErrMsg::Base(BaseMsg::Expect(*kind))),
+   |                                       ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `t`
+   --> src/L12_canonical/parser/macros.rs:171:32
+    |
+171 |                         Ok((i, t)) if i.len() == input.len() => Err(IError {
+    |                                ^ help: if this is intentional, prefix it with an underscore: `_t`
+
+warning: value assigned to `rcurly_span` is never read
+    --> src/L12_canonical/parser/mod.rs:1533:45
+     |
+1533 |     let mut rcurly_span: Option<Span<()>> = None;
+     |                                             ^^^^ this value is reassigned later and never used
+...
+1538 |             rcurly_span = Some(rc);
+     |             ---------------------- `rcurly_span` is overwritten here before the previous value is read
+
+warning: unused variable: `items`
+   --> src/L12_canonical/pretty.rs:164:28
+    |
+164 |         Tm::Sum(span, tms, items, _) => {
+    |                            ^^^^^ help: if this is intentional, prefix it with an underscore: `_items`
+
+warning: unused variable: `is_trait`
+   --> src/L12_canonical/pretty.rs:198:23
+    |
+198 |         Tm::SumCase { is_trait, typ, case_name, datas: params } => {
+    |                       ^^^^^^^^ help: try ignoring the field: `is_trait: _`
+
+warning: unused variable: `v`
+   --> src/L12_canonical/bump_spine_iter/spine.rs:182:29
+    |
+182 |         MetaEntry::Unsolved(v, _, _) => v_meta(m),
+    |                             ^ help: if this is intentional, prefix it with an underscore: `_v`
+
+warning: unused variable: `span`
+  --> src/L12_canonical/canonical.rs:84:35
+   |
+84 |                 while let Val::Pi(span, icit, dom, clos) = vt.as_ref() {
+   |                                   ^^^^ help: if this is intentional, prefix it with an underscore: `_span`
+
+warning: variable does not need to be mutable
+   --> src/L13_namespace/cxt.rs:476:9
+    |
+476 |     let mut intern = |s: &str, nodes: &mut Vec<String>| -> usize {
+    |         ----^^^^^^
+    |         |
+    |         help: remove this `mut`
+
+warning: unused variable: `out_param`
+    --> src/L13_namespace/elaboration.rs:1638:25
+     |
+1638 |                     let out_param = self.trait_out_param.get(&trait_full)
+     |                         ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_out_param`
+
+warning: unused variable: `inner`
+    --> src/L13_namespace/elaboration.rs:2500:37
+     |
+2500 |                     if let Raw::Obj(inner, Some(prev)) = x.as_ref() {
+     |                                     ^^^^^ help: if this is intentional, prefix it with an underscore: `_inner`
+
+warning: unused variable: `is_expl`
+    --> src/L13_namespace/elaboration.rs:2705:21
+     |
+2705 |                 let is_expl = matches!(i, Either::Icit(Icit::Expl));
+     |                     ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_is_expl`
+
+warning: unused variable: `head`
+    --> src/L13_namespace/elaboration.rs:2980:33
+     |
+2980 |                     if let Some(ref head) = typ_raw_head {
+     |                                 ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_head`
+
+warning: unused variable: `head`
+    --> src/L13_namespace/elaboration.rs:3222:37
+     |
+3222 |                         if let Some(ref head) = typ_raw_head {
+     |                                     ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_head`
+
+warning: unused variable: `typ`
+   --> src/L13_namespace/parser/syntax.rs:204:41
+    |
+204 |             Raw::SumCase { is_trait: _, typ, case_name, datas } => datas.last()
+    |                                         ^^^ help: try ignoring the field: `typ: _`
+
+warning: unused variable: `x`
+  --> src/L13_namespace/parser/macros.rs:48:53
+   |
+48 | ...                   msg: token.map(|x| ErrMsg::Base(BaseMsg::Expect(*kind))),
+   |                                       ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `t`
+   --> src/L13_namespace/parser/macros.rs:194:32
+    |
+194 |                         Ok((i, t)) if i.len() == input.len() => Err(IError {
+    |                                ^ help: if this is intentional, prefix it with an underscore: `_t`
+
+warning: unused variable: `bundle_body`
+   --> src/L13_namespace/parser/derive.rs:600:17
+    |
+600 |             let bundle_body = build_bundle_body(fields);
+    |                 ^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_bundle_body`
+
+warning: unused variable: `enum_name`
+    --> src/L13_namespace/parser/derive.rs:1198:5
+     |
+1198 |     enum_name: &str,
+     |     ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_enum_name`
+
+warning: value assigned to `rcurly_span` is never read
+    --> src/L13_namespace/parser/mod.rs:1839:45
+     |
+1839 |     let mut rcurly_span: Option<Span<()>> = None;
+     |                                             ^^^^ this value is reassigned later and never used
+...
+1844 |             rcurly_span = Some(rc);
+     |             ---------------------- `rcurly_span` is overwritten here before the previous value is read
+
+warning: unused variable: `e`
+    --> src/L13_namespace/parser/mod.rs:2800:13
+     |
+2800 |         Err(e) => Ok((input, vec![])), // No attribute found, not an error
+     |             ^ help: if this is intentional, prefix it with an underscore: `_e`
+
+warning: variable does not need to be mutable
+   --> src/L13_namespace/unification.rs:609:13
+    |
+609 |         let mut solution = self.eval(decl, &List::new(), &self.lams(pren.dom, decl, &mty, rhs));
+    |             ----^^^^^^^^
+    |             |
+    |             help: remove this `mut`
+
+warning: unused variable: `cxt`
+   --> src/L13_namespace/unification.rs:614:41
+    |
+614 |     pub fn solve_multi_trait(&mut self, cxt: &Cxt, m: MetaVar, allow_flex_defaulting: bool) -> Result<(), UnifyError> {
+    |                                         ^^^ help: if this is intentional, prefix it with an underscore: `_cxt`
+
+warning: unused variable: `items`
+   --> src/L13_namespace/pretty.rs:387:28
+    |
+387 |         Tm::Sum(span, tms, items, _) => {
+    |                            ^^^^^ help: if this is intentional, prefix it with an underscore: `_items`
+
+warning: unused variable: `span`
+  --> src/L13_namespace/canonical.rs:79:35
+   |
+79 |                 while let Val::Pi(span, icit, dom, clos) = vt.as_ref() {
+   |                                   ^^^^ help: if this is intentional, prefix it with an underscore: `_span`
+
+warning: unused variable: `t`
+    --> src/L13_namespace/bump_spine_iter/entry.rs:1220:41
+     |
+1220 |         let restore_done = kick_t0.map(|t| std::time::Instant::now());
+     |                                         ^ help: if this is intentional, prefix it with an underscore: `_t`
+
+warning: variable does not need to be mutable
+   --> src/L13_namespace/bump_spine_iter/machine.rs:277:21
+    |
+277 |                 let mut solver = &mut m.tstate.solver;
+    |                     ----^^^^^^
+    |                     |
+    |                     help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> src/L13_namespace/bump_spine_iter/machine.rs:286:21
+    |
+286 |                 let mut solver = &mut m.tstate.solver;
+    |                     ----^^^^^^
+    |                     |
+    |                     help: remove this `mut`
+
+warning: unused variable: `out_param`
+    --> src/L13_namespace/bump_spine_iter/machine.rs:4195:25
+     |
+4195 |                     let out_param = self
+     |                         ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_out_param`
+
+warning: unused variable: `a_t`
+    --> src/L13_namespace/bump_spine_iter/machine.rs:4598:25
+     |
+4598 |                     let a_t = self.quote(bump, &a_cxt, a_cxt.lvl, va);
+     |                         ^^^ help: if this is intentional, prefix it with an underscore: `_a_t`
+
+warning: unused variable: `work`
+   --> src/L13_namespace/bump_spine_iter/prim.rs:478:5
+    |
+478 |     work: &mut Vec<W<'a>>,
+    |     ^^^^ help: if this is intentional, prefix it with an underscore: `_work`
+
+warning: unused variable: `vals`
+   --> src/L13_namespace/bump_spine_iter/prim.rs:479:5
+    |
+479 |     vals: &mut Vec<V>,
+    |     ^^^^ help: if this is intentional, prefix it with an underscore: `_vals`
+
+warning: unused variable: `icits`
+   --> src/L13_namespace/bump_spine_iter/prim.rs:480:5
+    |
+480 |     icits: &mut Vec<Icit>,
+    |     ^^^^^ help: if this is intentional, prefix it with an underscore: `_icits`
+
+warning: unused variable: `cxt`
+  --> src/L13_namespace/bump_spine_iter/typeclass.rs:82:9
+   |
+82 |         cxt: &Cxt<'a>,
+   |         ^^^ help: if this is intentional, prefix it with an underscore: `_cxt`
+
+warning: variable does not need to be mutable
+   --> src/L13_namespace/bump_spine_iter/unify.rs:954:21
+    |
+954 |                 let mut args: Vec<(V, Icit)> = match v_tag(ov) {
+    |                     ----^^^^
+    |                     |
+    |                     help: remove this `mut`
+
+warning: unused variable: `name`
+    --> src/L13_namespace/mod.rs:1852:22
+     |
+1852 |             Val::Lam(name, _, clos) => {
+     |                      ^^^^ help: if this is intentional, prefix it with an underscore: `_name`
+
+warning: unused variable: `name`
+    --> src/L13_namespace/mod.rs:1857:21
+     |
+1857 |             Val::Pi(name, _, vty, clos) => {
+     |                     ^^^^ help: if this is intentional, prefix it with an underscore: `_name`
+
+warning: unused variable: `s`
+    --> src/L13_namespace/mod.rs:1866:31
+     |
+1866 |             Val::LiteralIntro(s) => {
+     |                               ^ help: if this is intentional, prefix it with an underscore: `_s`
+
+warning: unused variable: `name`
+    --> src/L13_namespace/mod.rs:1869:22
+     |
+1869 |             Val::Sum(name, params, cases, _) => {
+     |                      ^^^^ help: if this is intentional, prefix it with an underscore: `_name`
+
+warning: unused variable: `pname`
+    --> src/L13_namespace/mod.rs:1871:22
+     |
+1871 |                 for (pname, pval, pvty, _) in params.iter() {
+     |                      ^^^^^ help: if this is intentional, prefix it with an underscore: `_pname`
+
+warning: unused variable: `cname`
+    --> src/L13_namespace/mod.rs:1876:21
+     |
+1876 |                 for cname in cases.iter() {
+     |                     ^^^^^ help: if this is intentional, prefix it with an underscore: `_cname`
+
+warning: unused variable: `dname`
+    --> src/L13_namespace/mod.rs:1882:22
+     |
+1882 |                 for (dname, dval, _) in datas.iter() {
+     |                      ^^^^^ help: if this is intentional, prefix it with an underscore: `_dname`
+
+warning: unused variable: `pat`
+    --> src/L13_namespace/mod.rs:1890:22
+     |
+1890 |                 for (pat, tm) in cases {
+     |                      ^^^ help: if this is intentional, prefix it with an underscore: `_pat`
+
+warning: unused variable: `name`
+    --> src/L13_namespace/mod.rs:1931:22
+     |
+1931 |             Tm::Decl(name) => {
+     |                      ^^^^ help: if this is intentional, prefix it with an underscore: `_name`
+
+warning: unused variable: `name`
+    --> src/L13_namespace/mod.rs:1934:28
+     |
+1934 |             Tm::Obj(inner, name) => {
+     |                            ^^^^ help: if this is intentional, prefix it with an underscore: `_name`
+
+warning: unused variable: `name`
+    --> src/L13_namespace/mod.rs:1938:21
+     |
+1938 |             Tm::Lam(name, _, body) => {
+     |                     ^^^^ help: if this is intentional, prefix it with an underscore: `_name`
+
+warning: unused variable: `name`
+    --> src/L13_namespace/mod.rs:1950:20
+     |
+1950 |             Tm::Pi(name, _, ty_a, ty_b) => {
+     |                    ^^^^ help: if this is intentional, prefix it with an underscore: `_name`
+
+warning: unused variable: `name`
+    --> src/L13_namespace/mod.rs:1955:21
+     |
+1955 |             Tm::Let(name, ty, val, body) => {
+     |                     ^^^^ help: if this is intentional, prefix it with an underscore: `_name`
+
+warning: unused variable: `name`
+    --> src/L13_namespace/mod.rs:1966:21
+     |
+1966 |             Tm::Sum(name, params, cases, _) => {
+     |                     ^^^^ help: if this is intentional, prefix it with an underscore: `_name`
+
+warning: unused variable: `pname`
+    --> src/L13_namespace/mod.rs:1968:22
+     |
+1968 |                 for (pname, ptm, pty, _) in params.iter() {
+     |                      ^^^^^ help: if this is intentional, prefix it with an underscore: `_pname`
+
+warning: unused variable: `cname`
+    --> src/L13_namespace/mod.rs:1973:21
+     |
+1973 |                 for cname in cases.iter() {
+     |                     ^^^^^ help: if this is intentional, prefix it with an underscore: `_cname`
+
+warning: unused variable: `dname`
+    --> src/L13_namespace/mod.rs:1979:22
+     |
+1979 |                 for (dname, dtm, _) in datas.iter() {
+     |                      ^^^^^ help: if this is intentional, prefix it with an underscore: `_dname`
+
+warning: unused variable: `pat`
+    --> src/L13_namespace/mod.rs:1986:22
+     |
+1986 |                 for (pat, branch) in cases {
+     |                      ^^^ help: if this is intentional, prefix it with an underscore: `_pat`
+
+warning: unused variable: `span`
+    --> src/L13_namespace/mod.rs:2009:18
+     |
+2009 |         for (_, (span, rtm, rval, rty, rvty, _, _)) in cxt.decl.iter() {
+     |                  ^^^^ help: if this is intentional, prefix it with an underscore: `_span`
+
+warning: unused variable: `span`
+    --> src/L13_namespace/mod.rs:2021:21
+     |
+2021 |         for (_, _, (span, vty)) in cxt.src_names.iter_all() {
+     |                     ^^^^ help: if this is intentional, prefix it with an underscore: `_span`
+
+warning: unused variable: `meta_alloc`
+    --> src/L13_namespace/mod.rs:2314:13
+     |
+2314 |         let meta_alloc = (std::mem::size_of::<MetaEntry>() + 16 + 7) & !7;
+     |             ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_meta_alloc`
+
+warning: unused variable: `x`
+    --> src/L13_namespace/mod.rs:4034:22
+     |
+4034 |                 let (x, _, new_cxt) = infer.infer_in_place(&mut cxt, tm.clone())?;
+     |                      ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: variable does not need to be mutable
+   --> src/lib.rs:576:17
+    |
+576 |             let mut value = if let Some(d) = def_block {
+    |                 ----^^^^^
+    |                 |
+    |                 help: remove this `mut`
+
+warning: unused variable: `url`
+    --> src/lib.rs:2013:29
+     |
+2013 |                         let url = params.uri.clone();
+     |                             ^^^ help: if this is intentional, prefix it with an underscore: `_url`
+
+warning: variable does not need to be mutable
+    --> src/lib.rs:2484:17
+     |
+2484 |             let mut infer = self.infer.lock().unwrap();
+     |                 ----^^^^^
+     |                 |
+     |                 help: remove this `mut`
+
+warning: unused variable: `uri`
+    --> src/lib.rs:2668:9
+     |
+2668 |         uri: &Url,
+     |         ^^^ help: if this is intentional, prefix it with an underscore: `_uri`
+
+warning: variable does not need to be mutable
+    --> src/lib.rs:2782:17
+     |
+2782 |             let mut infer = self.infer.lock().unwrap();
+     |                 ----^^^^^
+     |                 |
+     |                 help: remove this `mut`
+
+warning: unused variable: `span`
+    --> src/lib.rs:3066:35
+     |
+3066 |                     .filter_map(|(span, name)| {
+     |                                   ^^^^ help: if this is intentional, prefix it with an underscore: `_span`
+
+warning: variable does not need to be mutable
+    --> src/lib.rs:3216:13
+     |
+3216 |         let mut start_line = range.start.line as usize;
+     |             ----^^^^^^^^^^
+     |             |
+     |             help: remove this `mut`
+
+warning: unused variable: `resp`
+    --> src/lib.rs:3783:35
+     |
+3783 |                 Message::Response(resp) => {
+     |                                   ^^^^ help: if this is intentional, prefix it with an underscore: `_resp`
+
+warning: type `L03_holes::Tm` is more private than the item `L03_holes::pretty_tm`
+   --> src/L03_holes/mod.rs:725:1
+    |
+725 | pub fn pretty_tm(prec: usize, ns: &[String], t: &Tm) -> String {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ function `L03_holes::pretty_tm` is reachable at visibility `pub(crate)`
+    |
+note: but type `L03_holes::Tm` is only usable at visibility `pub(self)`
+   --> src/L03_holes/mod.rs:88:1
+    |
+ 88 | enum Tm {
+    | ^^^^^^^
+    = note: `#[warn(private_interfaces)]` on by default
+
+warning: type `L04_implicit::Tm` is more private than the item `L04_implicit::pretty_tm`
+   --> src/L04_implicit/mod.rs:895:1
+    |
+895 | pub fn pretty_tm(prec: usize, ns: &[String], t: &Tm) -> String {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ function `L04_implicit::pretty_tm` is reachable at visibility `pub(crate)`
+    |
+note: but type `L04_implicit::Tm` is only usable at visibility `pub(self)`
+   --> src/L04_implicit/mod.rs:87:1
+    |
+ 87 | enum Tm {
+    | ^^^^^^^
+
+warning: type `L05_pruning::Tm` is more private than the item `L05_pruning::Locals::Define::2`
+   --> src/L05_pruning/mod.rs:114:30
+    |
+114 |     Define(Rc<Locals>, Name, Rc<Ty>, Rc<Tm>),
+    |                              ^^^^^^ field `L05_pruning::Locals::Define::2` is reachable at visibility `pub(crate)`
+    |
+note: but type `L05_pruning::Tm` is only usable at visibility `pub(self)`
+   --> src/L05_pruning/mod.rs:172:1
+    |
+172 | enum Tm {
+    | ^^^^^^^
+
+warning: type `L05_pruning::Tm` is more private than the item `L05_pruning::Locals::Define::3`
+   --> src/L05_pruning/mod.rs:114:38
+    |
+114 |     Define(Rc<Locals>, Name, Rc<Ty>, Rc<Tm>),
+    |                                      ^^^^^^ field `L05_pruning::Locals::Define::3` is reachable at visibility `pub(crate)`
+    |
+note: but type `L05_pruning::Tm` is only usable at visibility `pub(self)`
+   --> src/L05_pruning/mod.rs:172:1
+    |
+172 | enum Tm {
+    | ^^^^^^^
+
+warning: type `L05_pruning::Tm` is more private than the item `L05_pruning::Locals::Bind::2`
+   --> src/L05_pruning/mod.rs:115:28
+    |
+115 |     Bind(Rc<Locals>, Name, Rc<Ty>),
+    |                            ^^^^^^ field `L05_pruning::Locals::Bind::2` is reachable at visibility `pub(crate)`
+    |
+note: but type `L05_pruning::Tm` is only usable at visibility `pub(self)`
+   --> src/L05_pruning/mod.rs:172:1
+    |
+172 | enum Tm {
+    | ^^^^^^^
+
+warning: type `L05_pruning::Tm` is more private than the item `L05_pruning::close_ty`
+   --> src/L05_pruning/mod.rs:151:1
+    |
+151 | pub fn close_ty(mcl: &Locals, b: Ty) -> Ty {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ function `L05_pruning::close_ty` is reachable at visibility `pub(crate)`
+    |
+note: but type `L05_pruning::Tm` is only usable at visibility `pub(self)`
+   --> src/L05_pruning/mod.rs:172:1
+    |
+172 | enum Tm {
+    | ^^^^^^^
+
+warning: type `L05_pruning::Tm` is more private than the item `L05_pruning::pretty_tm`
+    --> src/L05_pruning/mod.rs:1351:1
+     |
+1351 | pub fn pretty_tm(prec: usize, ns: &[String], t: &Tm) -> String {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ function `L05_pruning::pretty_tm` is reachable at visibility `pub(crate)`
+     |
+note: but type `L05_pruning::Tm` is only usable at visibility `pub(self)`
+    --> src/L05_pruning/mod.rs:172:1
+     |
+ 172 | enum Tm {
+     | ^^^^^^^
+
+warning: type `L06_string::Tm` is more private than the item `L06_string::DeclTm::Println::0`
+  --> src/L06_string/mod.rs:37:13
+   |
+37 |     Println(Tm),
+   |             ^^ field `L06_string::DeclTm::Println::0` is reachable at visibility `pub(crate)`
+   |
+note: but type `L06_string::Tm` is only usable at visibility `pub(self)`
+  --> src/L06_string/mod.rs:41:1
+   |
+41 | enum Tm {
+   | ^^^^^^^
+
+warning: type `L06_string::Val` is more private than the item `L06_string::DeclEntry::vt`
+   --> src/L06_string/mod.rs:145:5
+    |
+145 |     pub(crate) vt: Rc<Val>,
+    |     ^^^^^^^^^^^^^^^^^^^^^^ field `L06_string::DeclEntry::vt` is reachable at visibility `pub(crate)`
+    |
+note: but type `L06_string::Val` is only usable at visibility `pub(self)`
+   --> src/L06_string/mod.rs:74:1
+    |
+ 74 | enum Val {
+    | ^^^^^^^^
+
+warning: type `L06_string::Val` is more private than the item `L06_string::DeclEntry::va`
+   --> src/L06_string/mod.rs:146:5
+    |
+146 |     pub(crate) va: Rc<VTy>,
+    |     ^^^^^^^^^^^^^^^^^^^^^^ field `L06_string::DeclEntry::va` is reachable at visibility `pub(crate)`
+    |
+note: but type `L06_string::Val` is only usable at visibility `pub(self)`
+   --> src/L06_string/mod.rs:74:1
+    |
+ 74 | enum Val {
+    | ^^^^^^^^
+
+warning: type `L06_string::Val` is more private than the item `L06_string::Infer::mutable_map`
+   --> src/L06_string/mod.rs:158:5
+    |
+158 |     pub(crate) mutable_map: RefCell<HashMap<String, Rc<Val>>>,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ field `L06_string::Infer::mutable_map` is reachable at visibility `pub(crate)`
+    |
+note: but type `L06_string::Val` is only usable at visibility `pub(self)`
+   --> src/L06_string/mod.rs:74:1
+    |
+ 74 | enum Val {
+    | ^^^^^^^^
+
+warning: type `L06_string::Val` is more private than the item `L06_string::Infer::register_builtin`
+   --> src/L06_string/mod.rs:167:5
+    |
+167 |     pub(crate) fn register_builtin(&mut self, name: &str, vt: Rc<Val>, va: Rc<VTy>, prim: PrimFunc) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method `L06_string::Infer::register_builtin` is reachable at visibility `pub(crate)`
+    |
+note: but type `L06_string::Val` is only usable at visibility `pub(self)`
+   --> src/L06_string/mod.rs:74:1
+    |
+ 74 | enum Val {
+    | ^^^^^^^^
+
+warning: type `L06_string::Val` is more private than the item `L06_string::Infer::nf`
+   --> src/L06_string/mod.rs:346:5
+    |
+346 |     pub fn nf(&self, env: &Env, t: Tm) -> Tm {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method `L06_string::Infer::nf` is reachable at visibility `pub(crate)`
+    |
+note: but type `L06_string::Val` is only usable at visibility `pub(self)`
+   --> src/L06_string/mod.rs:74:1
+    |
+ 74 | enum Val {
+    | ^^^^^^^^
+
+warning: type `L06_string::Tm` is more private than the item `L06_string::Infer::nf`
+   --> src/L06_string/mod.rs:346:5
+    |
+346 |     pub fn nf(&self, env: &Env, t: Tm) -> Tm {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method `L06_string::Infer::nf` is reachable at visibility `pub(crate)`
+    |
+note: but type `L06_string::Tm` is only usable at visibility `pub(self)`
+   --> src/L06_string/mod.rs:41:1
+    |
+ 41 | enum Tm {
+    | ^^^^^^^
+
+warning: type `L06_string::Val` is more private than the item `L06_string::elaboration::<impl L06_string::Infer>::infer`
+   --> src/L06_string/elaboration.rs:161:5
+    |
+161 |     pub fn infer(&mut self, cxt: &Cxt, t: Decl) -> Result<(DeclTm, Val, Cxt), Error> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method `L06_string::elaboration::<impl L06_string::Infer>::infer` is reachable at visibility `pub(crate)`
+    |
+note: but type `L06_string::Val` is only usable at visibility `pub(self)`
+   --> src/L06_string/mod.rs:74:1
+    |
+ 74 | enum Val {
+    | ^^^^^^^^
+
+warning: type `L06_string::Tm` is more private than the item `L06_string::elaboration::<impl L06_string::Infer>::infer_expr`
+   --> src/L06_string/elaboration.rs:220:5
+    |
+220 |     pub fn infer_expr(&mut self, cxt: &Cxt, t: Raw) -> Result<(Tm, Rc<Val>), Error> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method `L06_string::elaboration::<impl L06_string::Infer>::infer_expr` is reachable at visibility `pub(crate)`
+    |
+note: but type `L06_string::Tm` is only usable at visibility `pub(self)`
+   --> src/L06_string/mod.rs:41:1
+    |
+ 41 | enum Tm {
+    | ^^^^^^^
+
+warning: type `L06_string::Val` is more private than the item `L06_string::elaboration::<impl L06_string::Infer>::infer_expr`
+   --> src/L06_string/elaboration.rs:220:5
+    |
+220 |     pub fn infer_expr(&mut self, cxt: &Cxt, t: Raw) -> Result<(Tm, Rc<Val>), Error> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method `L06_string::elaboration::<impl L06_string::Infer>::infer_expr` is reachable at visibility `pub(crate)`
+    |
+note: but type `L06_string::Val` is only usable at visibility `pub(self)`
+   --> src/L06_string/mod.rs:74:1
+    |
+ 74 | enum Val {
+    | ^^^^^^^^
+
+warning: type `L06_string::Val` is more private than the item `L06_string::cxt::Cxt::env`
+   --> src/L06_string/cxt.rs:261:5
+    |
+261 |     pub env: Env, // Used for evaluation
+    |     ^^^^^^^^^^^^ field `L06_string::cxt::Cxt::env` is reachable at visibility `pub(crate)`
+    |
+note: but type `L06_string::Val` is only usable at visibility `pub(self)`
+   --> src/L06_string/mod.rs:74:1
+    |
+ 74 | enum Val {
+    | ^^^^^^^^
+
+warning: type `L06_string::Val` is more private than the item `L06_string::cxt::Cxt::src_names`
+   --> src/L06_string/cxt.rs:271:5
+    |
+271 |     pub src_names: Rc<HashMap<String, (Lvl, Rc<VTy>)>>,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ field `L06_string::cxt::Cxt::src_names` is reachable at visibility `pub(crate)`
+    |
+note: but type `L06_string::Val` is only usable at visibility `pub(self)`
+   --> src/L06_string/mod.rs:74:1
+    |
+ 74 | enum Val {
+    | ^^^^^^^^
+
+warning: type `L06_string::Tm` is more private than the item `L06_string::cxt::Cxt::add_builtin`
+   --> src/L06_string/cxt.rs:333:5
+    |
+333 |     pub fn add_builtin(self, infer: &mut Infer, name: &str, ty: Tm, prim: PrimFunc) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method `L06_string::cxt::Cxt::add_builtin` is reachable at visibility `pub(crate)`
+    |
+note: but type `L06_string::Tm` is only usable at visibility `pub(self)`
+   --> src/L06_string/mod.rs:41:1
+    |
+ 41 | enum Tm {
+    | ^^^^^^^
+
+warning: type `L06_string::Tm` is more private than the item `L06_string::cxt::Cxt::bind`
+   --> src/L06_string/cxt.rs:371:5
+    |
+371 |     pub fn bind(&self, x: Span<String>, a_quote: Tm, a: Rc<Val>) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method `L06_string::cxt::Cxt::bind` is reachable at visibility `pub(crate)`
+    |
+note: but type `L06_string::Tm` is only usable at visibility `pub(self)`
+   --> src/L06_string/mod.rs:41:1
+    |
+ 41 | enum Tm {
+    | ^^^^^^^
+
+warning: type `L06_string::Val` is more private than the item `L06_string::cxt::Cxt::bind`
+   --> src/L06_string/cxt.rs:371:5
+    |
+371 |     pub fn bind(&self, x: Span<String>, a_quote: Tm, a: Rc<Val>) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method `L06_string::cxt::Cxt::bind` is reachable at visibility `pub(crate)`
+    |
+note: but type `L06_string::Val` is only usable at visibility `pub(self)`
+   --> src/L06_string/mod.rs:74:1
+    |
+ 74 | enum Val {
+    | ^^^^^^^^
+
+warning: type `L06_string::Tm` is more private than the item `L06_string::cxt::Cxt::new_binder`
+   --> src/L06_string/cxt.rs:384:5
+    |
+384 |     pub fn new_binder(&self, x: Span<String>, a_quote: Tm) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method `L06_string::cxt::Cxt::new_binder` is reachable at visibility `pub(crate)`
+    |
+note: but type `L06_string::Tm` is only usable at visibility `pub(self)`
+   --> src/L06_string/mod.rs:41:1
+    |
+ 41 | enum Tm {
+    | ^^^^^^^
+
+warning: type `L06_string::Tm` is more private than the item `L06_string::cxt::Cxt::define`
+   --> src/L06_string/cxt.rs:395:5
+    |
+395 |     pub fn define(&self, x: Span<String>, t: Tm, vt: Rc<Val>, a: Ty, va: Rc<VTy>) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method `L06_string::cxt::Cxt::define` is reachable at visibility `pub(crate)`
+    |
+note: but type `L06_string::Tm` is only usable at visibility `pub(self)`
+   --> src/L06_string/mod.rs:41:1
+    |
+ 41 | enum Tm {
+    | ^^^^^^^
+
+warning: type `L06_string::Val` is more private than the item `L06_string::cxt::Cxt::define`
+   --> src/L06_string/cxt.rs:395:5
+    |
+395 |     pub fn define(&self, x: Span<String>, t: Tm, vt: Rc<Val>, a: Ty, va: Rc<VTy>) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method `L06_string::cxt::Cxt::define` is reachable at visibility `pub(crate)`
+    |
+note: but type `L06_string::Val` is only usable at visibility `pub(self)`
+   --> src/L06_string/mod.rs:74:1
+    |
+ 74 | enum Val {
+    | ^^^^^^^^
+
+warning: type `L06_string::Val` is more private than the item `L06_string::unification::<impl L06_string::Infer>::unify`
+   --> src/L06_string/unification.rs:448:5
+    |
+448 |     pub fn unify(&mut self, l: Lvl, t: &Rc<Val>, u: &Rc<Val>) -> Result<(), UnifyError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method `L06_string::unification::<impl L06_string::Infer>::unify` is reachable at visibility `pub(crate)`
+    |
+note: but type `L06_string::Val` is only usable at visibility `pub(self)`
+   --> src/L06_string/mod.rs:74:1
+    |
+ 74 | enum Val {
+    | ^^^^^^^^
+
+warning: type `L06_string::UnifyError` is more private than the item `L06_string::unification::<impl L06_string::Infer>::unify`
+   --> src/L06_string/unification.rs:448:5
+    |
+448 |     pub fn unify(&mut self, l: Lvl, t: &Rc<Val>, u: &Rc<Val>) -> Result<(), UnifyError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method `L06_string::unification::<impl L06_string::Infer>::unify` is reachable at visibility `pub(crate)`
+    |
+note: but type `L06_string::UnifyError` is only usable at visibility `pub(self)`
+   --> src/L06_string/mod.rs:102:1
+    |
+102 | struct UnifyError;
+    | ^^^^^^^^^^^^^^^^^
+
+warning: type `L06_string::Tm` is more private than the item `L06_string::syntax::Locals::Define::2`
+  --> src/L06_string/syntax.rs:18:38
+   |
+18 |     Define(Rc<Locals>, Span<String>, Rc<Ty>, Rc<Tm>),
+   |                                      ^^^^^^ field `L06_string::syntax::Locals::Define::2` is reachable at visibility `pub(crate)`
+   |
+note: but type `L06_string::Tm` is only usable at visibility `pub(self)`
+  --> src/L06_string/mod.rs:41:1
+   |
+41 | enum Tm {
+   | ^^^^^^^
+
+warning: type `L06_string::Tm` is more private than the item `L06_string::syntax::Locals::Define::3`
+  --> src/L06_string/syntax.rs:18:46
+   |
+18 |     Define(Rc<Locals>, Span<String>, Rc<Ty>, Rc<Tm>),
+   |                                              ^^^^^^ field `L06_string::syntax::Locals::Define::3` is reachable at visibility `pub(crate)`
+   |
+note: but type `L06_string::Tm` is only usable at visibility `pub(self)`
+  --> src/L06_string/mod.rs:41:1
+   |
+41 | enum Tm {
+   | ^^^^^^^
+
+warning: type `L06_string::Tm` is more private than the item `L06_string::syntax::Locals::Bind::2`
+  --> src/L06_string/syntax.rs:19:36
+   |
+19 |     Bind(Rc<Locals>, Span<String>, Rc<Ty>),
+   |                                    ^^^^^^ field `L06_string::syntax::Locals::Bind::2` is reachable at visibility `pub(crate)`
+   |
+note: but type `L06_string::Tm` is only usable at visibility `pub(self)`
+  --> src/L06_string/mod.rs:41:1
+   |
+41 | enum Tm {
+   | ^^^^^^^
+
+warning: type `L07_sum_type::unification::SpecSolve<'_>` is more private than the item `L07_sum_type::unification::<impl L07_sum_type::Infer>::unify`
+   --> src/L07_sum_type/unification.rs:825:5
+    |
+825 | /     pub fn unify(
+826 | |         &mut self,
+827 | |         decl: &Decls,
+828 | |         l: Lvl,
+...   |
+832 | |         mut spec: Option<&mut SpecSolve<'_>>,
+833 | |     ) -> Result<(), UnifyError> {
+    | |_______________________________^ method `L07_sum_type::unification::<impl L07_sum_type::Infer>::unify` is reachable at visibility `pub`
+    |
+note: but type `L07_sum_type::unification::SpecSolve<'_>` is only usable at visibility `pub(crate)`
+   --> src/L07_sum_type/unification.rs:42:1
+    |
+ 42 | pub(crate) struct SpecSolve<'a> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: type `L07_sum_type::UnifyError` is more private than the item `L07_sum_type::unification::<impl L07_sum_type::Infer>::unify`
+   --> src/L07_sum_type/unification.rs:825:5
+    |
+825 | /     pub fn unify(
+826 | |         &mut self,
+827 | |         decl: &Decls,
+828 | |         l: Lvl,
+...   |
+832 | |         mut spec: Option<&mut SpecSolve<'_>>,
+833 | |     ) -> Result<(), UnifyError> {
+    | |_______________________________^ method `L07_sum_type::unification::<impl L07_sum_type::Infer>::unify` is reachable at visibility `pub`
+    |
+note: but type `L07_sum_type::UnifyError` is only usable at visibility `pub(crate)`
+   --> src/L07_sum_type/mod.rs:426:1
+    |
+426 | pub(crate) struct UnifyError;
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: type `L08_product_type::unification::SpecSolve<'_>` is more private than the item `L08_product_type::unification::<impl L08_product_type::Infer>::unify`
+   --> src/L08_product_type/unification.rs:609:5
+    |
+609 | /     pub fn unify(
+610 | |         &mut self,
+611 | |         decl: &Decls,
+612 | |         l: Lvl,
+...   |
+616 | |         mut spec: Option<&mut SpecSolve<'_>>,
+617 | |     ) -> Result<(), UnifyError> {
+    | |_______________________________^ method `L08_product_type::unification::<impl L08_product_type::Infer>::unify` is reachable at visibility `pub`
+    |
+note: but type `L08_product_type::unification::SpecSolve<'_>` is only usable at visibility `pub(crate)`
+   --> src/L08_product_type/unification.rs:42:1
+    |
+ 42 | pub(crate) struct SpecSolve<'a> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: type `L08_product_type::UnifyError` is more private than the item `L08_product_type::unification::<impl L08_product_type::Infer>::unify`
+   --> src/L08_product_type/unification.rs:609:5
+    |
+609 | /     pub fn unify(
+610 | |         &mut self,
+611 | |         decl: &Decls,
+612 | |         l: Lvl,
+...   |
+616 | |         mut spec: Option<&mut SpecSolve<'_>>,
+617 | |     ) -> Result<(), UnifyError> {
+    | |_______________________________^ method `L08_product_type::unification::<impl L08_product_type::Infer>::unify` is reachable at visibility `pub`
+    |
+note: but type `L08_product_type::UnifyError` is only usable at visibility `pub(crate)`
+   --> src/L08_product_type/mod.rs:432:1
+    |
+432 | pub(crate) struct UnifyError;
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: type `L09_mltt::UnifyError` is more private than the item `L09_mltt::unification::<impl L09_mltt::Infer>::invert`
+   --> src/L09_mltt/unification.rs:85:5
+    |
+ 85 | /     pub fn invert(
+ 86 | |         &self,
+ 87 | |         gamma: Lvl,
+ 88 | |         sp: Spine,
+ 89 | |     ) -> Result<(PartialRenaming, Option<Pruning>), UnifyError> {
+    | |_______________________________________________________________^ method `L09_mltt::unification::<impl L09_mltt::Infer>::invert` is reachable at visibility `pub(crate)`
+    |
+note: but type `L09_mltt::UnifyError` is only usable at visibility `pub(self)`
+   --> src/L09_mltt/mod.rs:420:1
+    |
+420 | struct UnifyError;
+    | ^^^^^^^^^^^^^^^^^
+
+warning: type `L09_mltt::UnifyError` is more private than the item `L09_mltt::unification::<impl L09_mltt::Infer>::prune_ty`
+   --> src/L09_mltt/unification.rs:138:5
+    |
+138 |     pub fn prune_ty(&mut self, pr: &Pruning, a: Val) -> Result<Tm, UnifyError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method `L09_mltt::unification::<impl L09_mltt::Infer>::prune_ty` is reachable at visibility `pub(crate)`
+    |
+note: but type `L09_mltt::UnifyError` is only usable at visibility `pub(self)`
+   --> src/L09_mltt/mod.rs:420:1
+    |
+420 | struct UnifyError;
+    | ^^^^^^^^^^^^^^^^^
+
+warning: type `L09_mltt::UnifyError` is more private than the item `L09_mltt::unification::<impl L09_mltt::Infer>::rename`
+   --> src/L09_mltt/unification.rs:265:5
+    |
+265 |     pub fn rename(&mut self, pren: &PartialRenaming, t: Val) -> Result<Tm, UnifyError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method `L09_mltt::unification::<impl L09_mltt::Infer>::rename` is reachable at visibility `pub(crate)`
+    |
+note: but type `L09_mltt::UnifyError` is only usable at visibility `pub(self)`
+   --> src/L09_mltt/mod.rs:420:1
+    |
+420 | struct UnifyError;
+    | ^^^^^^^^^^^^^^^^^
+
+warning: type `L09_mltt::UnifyError` is more private than the item `L09_mltt::unification::<impl L09_mltt::Infer>::unify`
+   --> src/L09_mltt/unification.rs:542:5
+    |
+542 | /     pub fn unify(
+543 | |         &mut self,
+544 | |         l: Lvl,
+545 | |         cxt: &Cxt,
+...   |
+548 | |         mut spec: Option<&mut SpecSolve<'_>>,
+549 | |     ) -> Result<(), UnifyError> {
+    | |_______________________________^ method `L09_mltt::unification::<impl L09_mltt::Infer>::unify` is reachable at visibility `pub(crate)`
+    |
+note: but type `L09_mltt::UnifyError` is only usable at visibility `pub(self)`
+   --> src/L09_mltt/mod.rs:420:1
+    |
+420 | struct UnifyError;
+    | ^^^^^^^^^^^^^^^^^
+
+warning: type `L10_typeclass::UnifyError` is more private than the item `L10_typeclass::unification::<impl L10_typeclass::Infer>::invert`
+   --> src/L10_typeclass/unification.rs:83:5
+    |
+ 83 | /     pub fn invert(
+ 84 | |         &self,
+ 85 | |         gamma: Lvl,
+ 86 | |         sp: &Spine,
+ 87 | |     ) -> Result<(PartialRenaming, Option<Pruning>), UnifyError> {
+    | |_______________________________________________________________^ method `L10_typeclass::unification::<impl L10_typeclass::Infer>::invert` is reachable at visibility `pub(crate)`
+    |
+note: but type `L10_typeclass::UnifyError` is only usable at visibility `pub(self)`
+   --> src/L10_typeclass/mod.rs:431:1
+    |
+431 | enum UnifyError {
+    | ^^^^^^^^^^^^^^^
+
+warning: type `L10_typeclass::UnifyError` is more private than the item `L10_typeclass::unification::<impl L10_typeclass::Infer>::prune_ty`
+   --> src/L10_typeclass/unification.rs:137:5
+    |
+137 |     pub fn prune_ty(&mut self, pr: &Pruning, a: &Rc<Val>) -> Result<Rc<Tm>, UnifyError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method `L10_typeclass::unification::<impl L10_typeclass::Infer>::prune_ty` is reachable at visibility `pub(crate)`
+    |
+note: but type `L10_typeclass::UnifyError` is only usable at visibility `pub(self)`
+   --> src/L10_typeclass/mod.rs:431:1
+    |
+431 | enum UnifyError {
+    | ^^^^^^^^^^^^^^^
+
+warning: type `L10_typeclass::UnifyError` is more private than the item `L10_typeclass::unification::<impl L10_typeclass::Infer>::rename`
+   --> src/L10_typeclass/unification.rs:265:5
+    |
+265 |     pub fn rename(&mut self, pren: &PartialRenaming, t: &Rc<Val>) -> Result<Rc<Tm>, UnifyError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method `L10_typeclass::unification::<impl L10_typeclass::Infer>::rename` is reachable at visibility `pub(crate)`
+    |
+note: but type `L10_typeclass::UnifyError` is only usable at visibility `pub(self)`
+   --> src/L10_typeclass/mod.rs:431:1
+    |
+431 | enum UnifyError {
+    | ^^^^^^^^^^^^^^^
+
+warning: type `L10_typeclass::UnifyError` is more private than the item `L10_typeclass::unification::<impl L10_typeclass::Infer>::solve_multi_trait`
+   --> src/L10_typeclass/unification.rs:449:5
+    |
+449 |     pub fn solve_multi_trait(&mut self, cxt: &Cxt, m: MetaVar) -> Result<(), UnifyError>{
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method `L10_typeclass::unification::<impl L10_typeclass::Infer>::solve_multi_trait` is reachable at visibility `pub(crate)`
+    |
+note: but type `L10_typeclass::UnifyError` is only usable at visibility `pub(self)`
+   --> src/L10_typeclass/mod.rs:431:1
+    |
+431 | enum UnifyError {
+    | ^^^^^^^^^^^^^^^
+
+warning: type `L10_typeclass::UnifyError` is more private than the item `L10_typeclass::unification::<impl L10_typeclass::Infer>::unify`
+   --> src/L10_typeclass/unification.rs:604:5
+    |
+604 |     pub fn unify(&mut self, l: Lvl, cxt: &Cxt, t: &Rc<Val>, u: &Rc<Val>) -> Result<(), UnifyError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method `L10_typeclass::unification::<impl L10_typeclass::Infer>::unify` is reachable at visibility `pub(crate)`
+    |
+note: but type `L10_typeclass::UnifyError` is only usable at visibility `pub(self)`
+   --> src/L10_typeclass/mod.rs:431:1
+    |
+431 | enum UnifyError {
+    | ^^^^^^^^^^^^^^^
+
+warning: type `L11_macro::UnifyError` is more private than the item `L11_macro::unification::<impl L11_macro::Infer>::invert`
+   --> src/L11_macro/unification.rs:86:5
+    |
+ 86 | /     pub fn invert(
+ 87 | |         &self,
+ 88 | |         gamma: Lvl,
+ 89 | |         decl: &Decl,
+ 90 | |         sp: &Spine,
+ 91 | |     ) -> Result<(PartialRenaming, Option<Pruning>), UnifyError> {
+    | |_______________________________________________________________^ method `L11_macro::unification::<impl L11_macro::Infer>::invert` is reachable at visibility `pub(crate)`
+    |
+note: but type `L11_macro::UnifyError` is only usable at visibility `pub(self)`
+   --> src/L11_macro/mod.rs:461:1
+    |
+461 | enum UnifyError {
+    | ^^^^^^^^^^^^^^^
+
+warning: type `L11_macro::UnifyError` is more private than the item `L11_macro::unification::<impl L11_macro::Infer>::prune_ty`
+   --> src/L11_macro/unification.rs:142:5
+    |
+142 |     pub fn prune_ty(&mut self, decl: &Decl, pr: &Pruning, a: &Rc<Val>) -> Result<Rc<Tm>, UnifyError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method `L11_macro::unification::<impl L11_macro::Infer>::prune_ty` is reachable at visibility `pub(crate)`
+    |
+note: but type `L11_macro::UnifyError` is only usable at visibility `pub(self)`
+   --> src/L11_macro/mod.rs:461:1
+    |
+461 | enum UnifyError {
+    | ^^^^^^^^^^^^^^^
+
+warning: type `L11_macro::UnifyError` is more private than the item `L11_macro::unification::<impl L11_macro::Infer>::rename`
+   --> src/L11_macro/unification.rs:275:5
+    |
+275 |     pub fn rename(&mut self, decl: &Decl, pren: &PartialRenaming, t: &Rc<Val>) -> Result<Rc<Tm>, UnifyError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method `L11_macro::unification::<impl L11_macro::Infer>::rename` is reachable at visibility `pub(crate)`
+    |
+note: but type `L11_macro::UnifyError` is only usable at visibility `pub(self)`
+   --> src/L11_macro/mod.rs:461:1
+    |
+461 | enum UnifyError {
+    | ^^^^^^^^^^^^^^^
+
+warning: type `L11_macro::UnifyError` is more private than the item `L11_macro::unification::<impl L11_macro::Infer>::solve_multi_trait`
+   --> src/L11_macro/unification.rs:474:5
+    |
+474 |     pub fn solve_multi_trait(&mut self, cxt: &Cxt, m: MetaVar) -> Result<(), UnifyError>{
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method `L11_macro::unification::<impl L11_macro::Infer>::solve_multi_trait` is reachable at visibility `pub(crate)`
+    |
+note: but type `L11_macro::UnifyError` is only usable at visibility `pub(self)`
+   --> src/L11_macro/mod.rs:461:1
+    |
+461 | enum UnifyError {
+    | ^^^^^^^^^^^^^^^
+
+warning: type `L11_macro::UnifyError` is more private than the item `L11_macro::unification::<impl L11_macro::Infer>::unify`
+   --> src/L11_macro/unification.rs:645:5
+    |
+645 |     pub fn unify(&mut self, l: Lvl, cxt: &Cxt, t: &Rc<Val>, u: &Rc<Val>) -> Result<(), UnifyError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method `L11_macro::unification::<impl L11_macro::Infer>::unify` is reachable at visibility `pub(crate)`
+    |
+note: but type `L11_macro::UnifyError` is only usable at visibility `pub(self)`
+   --> src/L11_macro/mod.rs:461:1
+    |
+461 | enum UnifyError {
+    | ^^^^^^^^^^^^^^^
+
+warning: type `L11_macro::bump_spine_iter::syntax::PrimId` is more private than the item `L11_macro::bump_spine_iter::syntax::Tm::Prim::1`
+  --> src/L11_macro/bump_spine_iter/syntax.rs:55:13
+   |
+55 |     Prim(V, PrimId),
+   |             ^^^^^^ field `L11_macro::bump_spine_iter::syntax::Tm::Prim::1` is reachable at visibility `pub(crate)`
+   |
+note: but type `L11_macro::bump_spine_iter::syntax::PrimId` is only usable at visibility `pub(in crate::L11_macro::bump_spine_iter)`
+  --> src/L11_macro/bump_spine_iter/syntax.rs:17:1
+   |
+17 | pub(super) enum PrimId {
+   | ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: type `L11_macro::bump_spine_iter::syntax::PrimId` is more private than the item `L11_macro::bump_spine_iter::syntax::XCell::Prim::pid`
+   --> src/L11_macro/bump_spine_iter/syntax.rs:247:20
+    |
+247 |     Prim { typ: V, pid: PrimId },
+    |                    ^^^^^^^^^^^ field `L11_macro::bump_spine_iter::syntax::XCell::Prim::pid` is reachable at visibility `pub(crate)`
+    |
+note: but type `L11_macro::bump_spine_iter::syntax::PrimId` is only usable at visibility `pub(in crate::L11_macro::bump_spine_iter)`
+   --> src/L11_macro/bump_spine_iter/syntax.rs:17:1
+    |
+ 17 | pub(super) enum PrimId {
+    | ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: type `L13_namespace::bump_spine_iter::prim::PrimId` is more private than the item `L13_namespace::bump_spine_iter::prim::DeclEntry::prim`
+   --> src/L13_namespace/bump_spine_iter/prim.rs:332:5
+    |
+332 |     pub(crate) prim: Option<PrimId>,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ field `L13_namespace::bump_spine_iter::prim::DeclEntry::prim` is reachable at visibility `pub(crate)`
+    |
+note: but type `L13_namespace::bump_spine_iter::prim::PrimId` is only usable at visibility `pub(in crate::L13_namespace::bump_spine_iter)`
+   --> src/L13_namespace/bump_spine_iter/prim.rs:33:1
+    |
+ 33 | pub(super) enum PrimId {
+    | ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: type `L13_namespace::bump_spine_iter::machine::TCons<'a>` is more private than the item `L13_namespace::bump_spine_iter::spine::MetaSnap::types`
+    --> src/L13_namespace/bump_spine_iter/spine.rs:169:5
+     |
+ 169 |     pub(crate) types: Option<&'a TCons<'a>>,
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ field `L13_namespace::bump_spine_iter::spine::MetaSnap::types` is reachable at visibility `pub(crate)`
+     |
+note: but type `L13_namespace::bump_spine_iter::machine::TCons<'a>` is only usable at visibility `pub(in crate::L13_namespace::bump_spine_iter)`
+    --> src/L13_namespace/bump_spine_iter/machine.rs:1933:1
+     |
+1933 | pub(super) struct TCons<'a> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: type `L13_namespace::bump_spine_iter::machine::Cxt<'static>` is more private than the item `L13_namespace::bump_spine_iter::spine::MetaSnap::cxt`
+    --> src/L13_namespace/bump_spine_iter/spine.rs:178:5
+     |
+ 178 |     pub(crate) cxt: Cxt<'static>,
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ field `L13_namespace::bump_spine_iter::spine::MetaSnap::cxt` is reachable at visibility `pub(crate)`
+     |
+note: but type `L13_namespace::bump_spine_iter::machine::Cxt<'static>` is only usable at visibility `pub(in crate::L13_namespace::bump_spine_iter)`
+    --> src/L13_namespace/bump_spine_iter/machine.rs:1955:1
+     |
+1955 | pub(super) struct Cxt<'a> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: type `layout::Item` is more private than the item `render`
+   --> src/format/layout.rs:400:1
+    |
+400 | / pub(crate) fn render(
+401 | |     raw: &str,
+402 | |     items: &[Item],
+403 | |     opts: &FormatOptions,
+404 | |     eol: Eol,
+405 | | ) -> Option<(String, Vec<usize>)> {
+    | |_________________________________^ function `render` is reachable at visibility `pub(in crate::format)`
+    |
+note: but type `layout::Item` is only usable at visibility `pub(self)`
+   --> src/format/layout.rs:159:1
+    |
+159 | struct Item {
+    | ^^^^^^^^^^^
+
+warning: fields `severity`, `range`, `path_id`, and `msg` are never read
+   --> src/parser_lib.rs:191:5
+    |
+190 | pub struct Diagnostic {
+    |            ---------- fields in this struct
+191 |     severity: Severity,
+    |     ^^^^^^^^
+192 |     range: (u32, u32),
+    |     ^^^^^
+193 |     path_id: PathId,
+    |     ^^^^^^^
+194 |     msg: String,
+    |     ^^^
+    |
+    = note: `Diagnostic` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: methods `many0_sep` and `many1_sep` are never used
+   --> src/parser_lib.rs:251:8
+    |
+205 | pub trait Parser<I: Copy, A>: Sized + Copy {
+    |           ------ methods in this trait
+...
+251 |     fn many0_sep<P, X>(self, sep: P) -> impl Parser<I, Vec<A>>
+    |        ^^^^^^^^^
+...
+278 |     fn many1_sep<P, X>(self, sep: P) -> impl Parser<I, Vec<A>>
+    |        ^^^^^^^^^
+
+warning: enum `Maybe` is never used
+   --> src/parser_lib.rs:354:10
+    |
+354 | pub enum Maybe<T, E> {
+    |          ^^^^^
+
+warning: methods `map`, `and_then`, and `unwrap_or_else` are never used
+   --> src/parser_lib.rs:371:12
+    |
+370 | impl<T, E> Maybe<T, E> {
+    | ---------------------- methods in this implementation
+371 |     pub fn map<U, F>(self, mut f: F) -> Maybe<U, E>
+    |            ^^^
+...
+380 |     pub fn and_then<U, F>(self, f: F) -> Maybe<U, E>
+    |            ^^^^^^^^
+...
+389 |     pub fn unwrap_or_else<F>(self, f: F) -> T
+    |            ^^^^^^^^^^^^^^
+
+warning: method `raise_err` is never used
+   --> src/parser_lib.rs:401:12
+    |
+400 | impl<T, E: Debug> Maybe<T, E> {
+    | ----------------------------- method in this implementation
+401 |     pub fn raise_err(self, err: &mut Vec<Diagnostic>) -> Self {
+    |            ^^^^^^^^^
+
+warning: function `maybe` is never used
+   --> src/parser_lib.rs:421:8
+    |
+421 | pub fn maybe<'a: 'b, 'b, T, P, N: 'a + Copy, E: Copy>(
+    |        ^^^^^
+
+warning: function `pmatch_empty` is never used
+   --> src/parser_lib.rs:460:8
+    |
+460 | pub fn pmatch_empty<'a, P: Pattern + Copy>(pat: P) -> impl Parser<Input<'a>, Span<&'a str>> {
+    |        ^^^^^^^^^^^^
+
+warning: trait `AstDebug` is never used
+   --> src/parser_lib.rs:501:11
+    |
+501 | pub trait AstDebug {
+    |           ^^^^^^^^
+
+warning: type alias `Input` is never used
+   --> src/parser_lib_resilient.rs:316:10
+    |
+316 | pub type Input<'a> = Span<&'a str>;
+    |          ^^^^^
+
+warning: enum `Maybe` is never used
+   --> src/parser_lib_resilient.rs:319:10
+    |
+319 | pub enum Maybe<T, E> {
+    |          ^^^^^
+
+warning: methods `map`, `and_then`, and `unwrap_or_else` are never used
+   --> src/parser_lib_resilient.rs:336:12
+    |
+335 | impl<T, E> Maybe<T, E> {
+    | ---------------------- methods in this implementation
+336 |     pub fn map<U, F>(self, mut f: F) -> Maybe<U, E>
+    |            ^^^
+...
+345 |     pub fn and_then<U, F>(self, f: F) -> Maybe<U, E>
+    |            ^^^^^^^^
+...
+354 |     pub fn unwrap_or_else<F>(self, f: F) -> T
+    |            ^^^^^^^^^^^^^^
+
+warning: method `raise_err` is never used
+   --> src/parser_lib_resilient.rs:366:12
+    |
+365 | impl<T, E: Debug> Maybe<T, E> {
+    | ----------------------------- method in this implementation
+366 |     pub fn raise_err(self, err: &mut Vec<Diagnostic>) -> Self {
+    |            ^^^^^^^^^
+
+warning: trait `AstDebug` is never used
+   --> src/parser_lib_resilient.rs:446:11
+    |
+446 | pub trait AstDebug {
+    |           ^^^^^^^^
+
+warning: enum `BD` is never used
+   --> src/L13_namespace/mod.rs:399:6
+    |
+399 | enum BD {
+    |      ^^
+
+warning: fields `list_other_nodes`, `smolstr_unique`, and `smolstr_heap_est` are never read
+    --> src/L13_namespace/mod.rs:1829:5
+     |
+1821 | struct DetailCounts {
+     |        ------------ fields in this struct
+...
+1829 |     list_other_nodes: usize,
+     |     ^^^^^^^^^^^^^^^^
+1830 |     smolstr_unique: usize,
+     |     ^^^^^^^^^^^^^^
+1831 |     smolstr_heap_est: usize,
+     |     ^^^^^^^^^^^^^^^^
+
+warning: methods `walk_tm` and `count_smolstr` are never used
+    --> src/L13_namespace/mod.rs:1910:8
+     |
+1837 | impl DetailCounts {
+     | ----------------- methods in this implementation
+...
+1910 |     fn walk_tm(&mut self, tm: &Rc<Tm>, visited: &mut std::collections::HashSet<usize>) {
+     |        ^^^^^^^
+...
+2069 |     fn count_smolstr(&mut self, s: &SmolStr, visited: &mut std::collections::HashSet<usize>) {
+     |        ^^^^^^^^^^^^^
+
+warning: function `load_prelude_state` is never used
+    --> src/L13_namespace/mod.rs:3859:4
+     |
+3859 | fn load_prelude_state() -> Result<PreludeState, Error> {
+     |    ^^^^^^^^^^^^^^^^^^
+
+warning: field `macros` is never read
+    --> src/L13_namespace/mod.rs:3932:9
+     |
+3919 | pub(crate) struct PreludeParse {
+     |                   ------------ field in this struct
+...
+3932 |     pub macros: PreludeMacros,
+     |         ^^^^^^
+
+warning: function `tm_size_ref` is never used
+    --> src/L13_namespace/mod.rs:4492:15
+     |
+4492 | pub(crate) fn tm_size_ref(t: &Tm) -> u64 {
+     |               ^^^^^^^^^^^
+
+warning: function `bench_check` is never used
+    --> src/L13_namespace/mod.rs:4550:15
+     |
+4550 | pub(crate) fn bench_check(decls: &[parser::syntax::Decl]) -> bool {
+     |               ^^^^^^^^^^^
+
+warning: function `bench_check_nf` is never used
+    --> src/L13_namespace/mod.rs:4564:15
+     |
+4564 | pub(crate) fn bench_check_nf(decls: &[parser::syntax::Decl]) -> u64 {
+     |               ^^^^^^^^^^^^^^
+
+warning: function `bench_check_nf_bounded` is never used
+    --> src/L13_namespace/mod.rs:4597:15
+     |
+4597 | pub(crate) fn bench_check_nf_bounded(
+     |               ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `bench_check_nf_pretty_bounded` is never used
+    --> src/L13_namespace/mod.rs:4641:15
+     |
+4641 | pub(crate) fn bench_check_nf_pretty_bounded(
+     |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `bench_check_first_err_bounded` is never used
+    --> src/L13_namespace/mod.rs:4676:15
+     |
+4676 | pub(crate) fn bench_check_first_err_bounded(
+     |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `run_multi_into_test` is never used
+    --> src/L13_namespace/mod.rs:6178:4
+     |
+6178 | fn run_multi_into_test(input: &str) -> String {
+     |    ^^^^^^^^^^^^^^^^^^^
+
+warning: function `mk_multi_into_test` is never used
+    --> src/L13_namespace/mod.rs:6189:4
+     |
+6189 | fn mk_multi_into_test(extra: &str) -> String {
+     |    ^^^^^^^^^^^^^^^^^^
+
+warning: function `tm_lam` is never used
+   --> src/L13_namespace/cxt.rs:934:15
+    |
+934 | pub(super) fn tm_lam(names: &[&str], inner: Rc<Tm>) -> Rc<Tm> {
+    |               ^^^^^^
+
+warning: function `skip_until_inner` is never used
+  --> src/L13_namespace/parser/mod.rs:45:4
+   |
+45 | fn skip_until_inner<'a: 'b, 'b>(kind: TokenKind) -> impl Fn(&'b [TokenNode<'a>]) -> &'b [TokenNode<'a>] + Copy {
+   |    ^^^^^^^^^^^^^^^^
+
+warning: fields `goal`, `instances`, `index`, and `assertion_idx` are never read
+  --> src/L13_namespace/typeclass.rs:31:5
+   |
+30 | pub struct GeneratorNode {
+   |            ------------- fields in this struct
+31 |     goal: Assertion,
+   |     ^^^^
+32 |     instances: Vec<Instance>,
+   |     ^^^^^^^^^
+33 |     index: usize,
+   |     ^^^^^
+34 |     assertion_idx: usize,
+   |     ^^^^^^^^^^^^^
+   |
+   = note: `GeneratorNode` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: fields `goal`, `subgoals`, `lvl`, and `assertion_idx` are never read
+  --> src/L13_namespace/typeclass.rs:41:5
+   |
+40 | pub struct ConsumerNode {
+   |            ------------ fields in this struct
+41 |     goal: Assertion,
+   |     ^^^^
+42 |     subgoals: List<Assertion>,
+   |     ^^^^^^^^
+43 |     lvl: Span<SmolStr>,
+   |     ^^^
+44 |     assertion_idx: usize,
+   |     ^^^^^^^^^^^^^
+   |
+   = note: `ConsumerNode` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: variants `Root` and `ConsumerNode` are never constructed
+  --> src/L13_namespace/typeclass.rs:56:5
+   |
+55 | pub enum Waiter {
+   |          ------ variants in this enum
+56 |     Root,
+   |     ^^^^
+57 |     ConsumerNode(ConsumerNode),
+   |     ^^^^^^^^^^^^
+   |
+   = note: `Waiter` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: field `waiters` is never read
+  --> src/L13_namespace/typeclass.rs:73:9
+   |
+72 | pub struct TableEntry {
+   |            ---------- field in this struct
+73 |     pub waiters: Vec<Waiter>,
+   |         ^^^^^^^
+   |
+   = note: `TableEntry` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: function `uncons` is never used
+   --> src/L13_namespace/typeclass.rs:115:4
+    |
+115 | fn uncons<T: Clone>(xs: &List<T>) -> Option<(T, List<T>)> {
+    |    ^^^^^^
+
+warning: multiple associated items are never used
+   --> src/L13_namespace/typeclass.rs:134:12
+    |
+133 | impl Synth {
+    | ---------- associated items in this implementation
+134 |     pub fn new() -> Self {
+    |            ^^^
+...
+460 |     fn try_answer(&mut self, subgoal: &Assertion, answer: &Assertion) -> bool {
+    |        ^^^^^^^^^^
+...
+470 |     fn try_resolve(
+    |        ^^^^^^^^^^^
+...
+510 |     fn find_assertion_entry(&self, target: &Assertion) -> Option<usize> {
+    |        ^^^^^^^^^^^^^^^^^^^^
+...
+520 |     pub fn synth(&mut self, assertion: Assertion) -> Option<Span<SmolStr>> {
+    |            ^^^^^
+...
+579 |     fn new_subgoal(&mut self, subgoal: &Assertion, waiter: &Waiter) {
+    |        ^^^^^^^^^^^
+...
+598 |     fn consume(&mut self, consumer_node: ConsumerNode) {
+    |        ^^^^^^^
+
+warning: function `church_src` is never used
+  --> src/L13_namespace/bump_spine_iter/bench_src.rs:21:15
+   |
+21 | pub(crate) fn church_src(k: u32) -> String {
+   |               ^^^^^^^^^^
+
+warning: function `natadd_src` is never used
+  --> src/L13_namespace/bump_spine_iter/bench_src.rs:36:15
+   |
+36 | pub(crate) fn natadd_src(k: u32) -> String {
+   |               ^^^^^^^^^^
+
+warning: function `gadt_src` is never used
+  --> src/L13_namespace/bump_spine_iter/bench_src.rs:60:15
+   |
+60 | pub(crate) fn gadt_src() -> String {
+   |               ^^^^^^^^
+
+warning: function `strchain_src` is never used
+   --> src/L13_namespace/bump_spine_iter/bench_src.rs:101:15
+    |
+101 | pub(crate) fn strchain_src(k: u32) -> String {
+    |               ^^^^^^^^^^^^
+
+warning: function `match_src` is never used
+   --> src/L13_namespace/bump_spine_iter/bench_src.rs:113:15
+    |
+113 | pub(crate) fn match_src(k: u32) -> String {
+    |               ^^^^^^^^^
+
+warning: function `enum_src` is never used
+   --> src/L13_namespace/bump_spine_iter/bench_src.rs:137:15
+    |
+137 | pub(crate) fn enum_src() -> String {
+    |               ^^^^^^^^
+
+warning: function `moduletree_src` is never used
+   --> src/L13_namespace/bump_spine_iter/bench_src.rs:199:15
+    |
+199 | pub(crate) fn moduletree_src() -> String {
+    |               ^^^^^^^^^^^^^^
+
+warning: function `struct_src` is never used
+   --> src/L13_namespace/bump_spine_iter/bench_src.rs:238:15
+    |
+238 | pub(crate) fn struct_src(k: u32) -> String {
+    |               ^^^^^^^^^^
+
+warning: function `wide_enum_src` is never used
+   --> src/L13_namespace/bump_spine_iter/bench_src.rs:280:15
+    |
+280 | pub(crate) fn wide_enum_src(k: u32) -> String {
+    |               ^^^^^^^^^^^^^
+
+warning: function `dbg_span_unit` is never used
+  --> src/L13_namespace/bump_spine_iter/debug.rs:25:4
+   |
+25 | fn dbg_span_unit() -> String {
+   |    ^^^^^^^^^^^^^
+
+warning: function `strconv_quote` is never used
+  --> src/L13_namespace/bump_spine_iter/debug.rs:31:4
+   |
+31 | fn strconv_quote(s: &str) -> String {
+   |    ^^^^^^^^^^^^^
+
+warning: function `debug_tm` is never used
+   --> src/L13_namespace/bump_spine_iter/debug.rs:262:4
+    |
+262 | fn debug_tm(t: &Tm<'_>) -> String {
+    |    ^^^^^^^^
+
+warning: function `tm_size` is never used
+   --> src/L13_namespace/bump_spine_iter/entry.rs:288:4
+    |
+288 | fn tm_size(t: &Tm<'_>) -> u64 {
+    |    ^^^^^^^
+
+warning: method `elab_all` is never used
+   --> src/L13_namespace/bump_spine_iter/entry.rs:535:8
+    |
+349 | impl Machine {
+    | ------------ method in this implementation
+...
+535 |     fn elab_all<'a>(
+    |        ^^^^^^^^
+
+warning: field `metas` is never read
+   --> src/L13_namespace/bump_spine_iter/entry.rs:787:5
+    |
+773 | struct Resident {
+    |        -------- field in this struct
+...
+787 |     metas: Vec<MetaEntry>,
+    |     ^^^^^
+
+warning: multiple methods are never used
+    --> src/L13_namespace/bump_spine_iter/entry.rs:885:19
+     |
+ 867 | impl Tycker {
+     | ----------- methods in this implementation
+...
+ 885 |     pub(crate) fn last_kick_metas_created(&self) -> usize {
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^
+...
+1427 |     pub(crate) fn resident_user_bytes(&self) -> usize {
+     |                   ^^^^^^^^^^^^^^^^^^^
+...
+1445 |     pub(crate) fn hover_entry_at(
+     |                   ^^^^^^^^^^^^^^
+...
+1458 |     pub(crate) fn run_decls(&mut self, ast: &[Decl]) -> Result<String, Error> {
+     |                   ^^^^^^^^^
+...
+1464 |     pub(crate) fn run_decls_bounded(
+     |                   ^^^^^^^^^^^^^^^^^
+...
+1551 |     pub(crate) fn run_decls_with_prelude(
+     |                   ^^^^^^^^^^^^^^^^^^^^^^
+...
+1610 |     pub(crate) fn run_input(&mut self, input: &str, path_id: u32) -> Result<String, Error> {
+     |                   ^^^^^^^^^
+...
+1620 |     pub(crate) fn bench_check(&mut self, ast: &[Decl]) -> bool {
+     |                   ^^^^^^^^^^^
+...
+1631 |     pub(crate) fn bench_check_nf(&mut self, ast: &[Decl]) -> u64 {
+     |                   ^^^^^^^^^^^^^^
+...
+1636 |     pub(crate) fn bench_check_nf_memo(&mut self, ast: &[Decl]) -> u64 {
+     |                   ^^^^^^^^^^^^^^^^^^^
+...
+1640 |     fn bench_nf_impl(&mut self, ast: &[Decl], use_memo: bool) -> u64 {
+     |        ^^^^^^^^^^^^^
+...
+1664 |     pub(crate) fn bench_check_nf_bounded(&mut self, ast: &[Decl], nat_after: &[usize]) -> u64 {
+     |                   ^^^^^^^^^^^^^^^^^^^^^^
+...
+1777 |     pub(crate) fn bench_check_nf_pretty_bounded(
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `run_fast` is never used
+    --> src/L13_namespace/bump_spine_iter/entry.rs:1812:15
+     |
+1812 | pub(crate) fn run_fast(input: &str, path_id: u32) -> Result<String, Error> {
+     |               ^^^^^^^^
+
+warning: function `parse` is never used
+    --> src/L13_namespace/bump_spine_iter/entry.rs:1819:15
+     |
+1819 | pub(crate) fn parse(input: &str, path_id: u32) -> Result<Vec<Decl>, String> {
+     |               ^^^^^
+
+warning: type alias `SourceDecl` is never used
+    --> src/L13_namespace/bump_spine_iter/entry.rs:1827:17
+     |
+1827 | pub(crate) type SourceDecl = Decl;
+     |                 ^^^^^^^^^^
+
+warning: function `project` is never used
+  --> src/L13_namespace/bump_spine_iter/force.rs:31:15
+   |
+31 | pub(super) fn project<'a>(v: V, name: &str) -> Option<V> {
+   |               ^^^^^^^
+
+warning: methods `ns_method_keys_for` and `quote_memo` are never used
+    --> src/L13_namespace/bump_spine_iter/machine.rs:875:8
+     |
+ 526 | impl Machine {
+     | ------------ methods in this implementation
+...
+ 875 |     fn ns_method_keys_for(&mut self, head: Option<&NsCons<'_>>) -> FxHashSet<SmolStr> {
+     |        ^^^^^^^^^^^^^^^^^^
+...
+1269 |     pub(super) fn quote_memo<'a>(&mut self, bump: &'a Bump, cxt: &Cxt<'a>, level: u32, v: V) -> &'a Tm<'a> {
+     |                   ^^^^^^^^^^
+
+warning: methods `run_pure_probe` and `update_cxt` are never used
+    --> src/L13_namespace/bump_spine_iter/machine.rs:2394:8
+     |
+2170 | impl Machine {
+     | ------------ methods in this implementation
+...
+2394 |     fn run_pure_probe<R>(&mut self, f: impl FnOnce(&mut Machine) -> R) -> R {
+     |        ^^^^^^^^^^^^^^
+...
+2613 |     fn update_cxt<'a>(
+     |        ^^^^^^^^^^
+
+warning: function `t_span_of` is never used
+    --> src/L13_namespace/bump_spine_iter/machine.rs:5019:4
+     |
+5019 | fn t_span_of(t: &Raw) -> crate::parser_lib::Span<()> {
+     |    ^^^^^^^^^
+
+warning: field `name` is never read
+    --> src/L13_namespace/bump_spine_iter/machine.rs:5063:11
+     |
+5063 |     Def { name: &'a str },
+     |     ---   ^^^^
+     |     |
+     |     field in this variant
+
+warning: field `0` is never read
+    --> src/L13_namespace/bump_spine_iter/machine.rs:5066:13
+     |
+5066 |     Println(&'a Tm<'a>, crate::parser_lib::Span<()>, String),
+     |     ------- ^^^^^^^^^^
+     |     |
+     |     field in this variant
+     |
+help: consider changing the field to be of unit type to suppress this warning while preserving the field numbering, or remove the field
+     |
+5066 -     Println(&'a Tm<'a>, crate::parser_lib::Span<()>, String),
+5066 +     Println((), crate::parser_lib::Span<()>, String),
+     |
+
+warning: method `hover_entry_at` is never used
+   --> src/L13_namespace/bump_spine_iter/observe.rs:189:19
+    |
+  9 | impl Machine {
+    | ------------ method in this implementation
+...
+189 |     pub(super) fn hover_entry_at(
+    |                   ^^^^^^^^^^^^^^
+
+warning: function `meta_unsolved` is never used
+   --> src/L13_namespace/bump_spine_iter/spine.rs:194:15
+    |
+194 | pub(crate) fn meta_unsolved<'a>(m: &MetaEntry) -> (V, &'a MetaSnap<'a>, V, crate::parser_lib::Span<()>) {
+    |               ^^^^^^^^^^^^^
+
+warning: using `.clone()` on a double reference, which returns `&smol_str::SmolStr` instead of cloning the inner type
+    --> src/L12_canonical/elaboration.rs:1185:36
+     |
+1185 | ...                   name: x.clone().clone(),
+     |                              ^^^^^^^^
+     |
+     = note: `#[warn(suspicious_double_ref_op)]` on by default
+
+warning: using `.clone()` on a double reference, which returns `&smol_str::SmolStr` instead of cloning the inner type
+    --> src/L12_canonical/elaboration.rs:1228:36
+     |
+1228 | ...                   name: x.clone().clone(),
+     |                              ^^^^^^^^
+
+warning: for loop over an `Option`. This is more readably written as an `if let` statement
+    --> src/L12_canonical/parser/mod.rs:1389:30
+     |
+1389 |                 for items in clause {
+     |                              ^^^^^^
+     |
+     = note: `#[warn(for_loops_over_fallibles)]` on by default
+help: to check pattern in a loop use `while let`
+     |
+1389 -                 for items in clause {
+1389 +                 while let Some(items) = clause {
+     |
+help: consider using `if let` to clear intent
+     |
+1389 -                 for items in clause {
+1389 +                 if let Some(items) = clause {
+     |
+
+warning: for loop over an `Option`. This is more readably written as an `if let` statement
+    --> src/L13_namespace/parser/mod.rs:1691:30
+     |
+1691 |                 for items in clause {
+     |                              ^^^^^^
+     |
+help: to check pattern in a loop use `while let`
+     |
+1691 -                 for items in clause {
+1691 +                 while let Some(items) = clause {
+     |
+help: consider using `if let` to clear intent
+     |
+1691 -                 for items in clause {
+1691 +                 if let Some(items) = clause {
+     |
+
+warning: `elaboration-zoo-lsp` (lib) generated 284 warnings (run `cargo fix --lib -p elaboration-zoo-lsp` to apply 152 suggestions)
+   Compiling elaboration-zoo-lsp v0.1.0 (/tmp/l01-verify/tree)
+warning: field `size` is never read
+  --> src/bin/../list.rs:44:9
+   |
+42 | pub struct Node<T> {
+   |            ---- field in this struct
+43 |     pub elem: T,
+44 |     pub size: usize,
+   |         ^^^^
+   |
+   = note: `Node` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: multiple methods are never used
+   --> src/bin/../list.rs:53:12
+    |
+ 48 | impl<T> List<T> {
+    | --------------- methods in this implementation
+...
+ 53 |     pub fn is_empty(&self) -> bool {
+    |            ^^^^^^^^
+...
+ 68 |     pub fn head(&self) -> Option<&T> {
+    |            ^^^^
+...
+ 72 |     pub fn tail(&self) -> List<T> {
+    |            ^^^^
+...
+ 82 |     pub fn len(&self) -> usize {
+    |            ^^^
+...
+ 86 |     pub fn map<U, F>(&self, f: F) -> List<U>
+    |            ^^^
+...
+101 |     pub fn flat_map<U, F>(&self, f: F) -> List<U>
+    |            ^^^^^^^^
+...
+118 |     pub fn result_map<U, E, F>(&self, f: F) -> Result<List<U>, E>
+    |            ^^^^^^^^^^
+...
+134 |     pub fn split(&self) -> (Option<&T>, List<T>) {
+    |            ^^^^^
+
+warning: methods `filter`, `change_n`, `change_tail`, `zip`, and `split_at` are never used
+   --> src/bin/../list.rs:143:12
+    |
+142 | impl<T: Clone> List<T> {
+    | ---------------------- methods in this implementation
+143 |     pub fn filter<F>(&self, f: F) -> List<T>
+    |            ^^^^^^
+...
+160 |     pub fn change_n(&self, n: usize, f: impl FnOnce(&T) -> T) -> List<T> {
+    |            ^^^^^^^^
+...
+177 |     pub fn change_tail(self, new_tail: List<T>) -> List<T> {
+    |            ^^^^^^^^^^^
+...
+194 |     pub fn zip<U: Clone>(&self, other: &List<U>) -> List<(T, U)> {
+    |            ^^^
+...
+210 |     pub fn split_at(self, n: usize) -> (List<T>, List<T>) {
+    |            ^^^^^^^^
+
+warning: function `dump` is never used
+  --> src/bin/../L01_nbe/bump_spine_iter.rs:51:12
+   |
+51 |     pub fn dump(tag: &str) {
+   |            ^^^^
+
+warning: module `L01_nbe` should have a snake case name
+  --> src/bin/l01bench.rs:26:9
+   |
+26 | pub mod L01_nbe;
+   |         ^^^^^^^ help: convert the identifier to snake case: `l01_nbe`
+   |
+   = note: `#[warn(non_snake_case)]` (part of `#[warn(nonstandard_style)]`) on by default
+
+warning: `elaboration-zoo-lsp` (bin "l01bench" test) generated 5 warnings
+    Finished `release` profile [optimized] target(s) in 19.94s
+     Running unittests src/bin/l01bench.rs (target/release/deps/l01bench-9c997fb27cf113f4)
+
+running 79 tests
+test L01_nbe::bump_arena::tests::already_normal_right_chain ... ok
+test L01_nbe::bump_arena::tests::beta_under_binder ... ok
+test L01_nbe::bump_arena::tests::chain_beta_fork ... ok
+test L01_nbe::bump_arena::tests::chain_mixed_heads ... ok
+test L01_nbe::bump_arena::tests::interleaved_chains_fallback ... ok
+test L01_nbe::bump_iter::tests::already_normal_right_chain ... ok
+test L01_nbe::bump_arena::tests::church_pair_ok ... ok
+test L01_nbe::bump_iter::tests::beta_under_binder ... ok
+test L01_nbe::bump_iter::tests::chain_beta_fork ... ok
+test L01_nbe::bump_iter::tests::chain_mixed_heads ... ok
+test L01_nbe::bump_iter::tests::church_pair_ok ... ok
+test L01_nbe::bump_iter::tests::interleaved_chains_fallback ... ok
+test L01_nbe::bump_spine::tests::already_normal_right_chain ... ok
+test L01_nbe::bump_spine::tests::beta_under_binder ... ok
+test L01_nbe::bump_spine::tests::church_pair_ok ... ok
+test L01_nbe::bump_spine::tests::interleaved_chains_fallback ... ok
+test L01_nbe::bump_spine_iter::tests::already_normal_right_chain ... ok
+test L01_nbe::bump_spine_iter::tests::beta_under_binder ... ok
+test L01_nbe::bump_spine_iter::tests::church_pair_ok ... ok
+test L01_nbe::bump_spine_iter::tests::chain_mixed_heads ... ok
+test L01_nbe::bump_spine_iter::tests::chain_beta_fork ... ok
+test L01_nbe::bump_spine_iter::tests::guest_shapes_ok ... ok
+test L01_nbe::bump_spine_iter::tests::interleaved_chains_fallback ... ok
+test L01_nbe::bump_spine_iter::tests::machine_steady_state_two_rounds ... ok
+test L01_nbe::bump_spine_memo::tests::already_normal_right_chain ... ok
+test L01_nbe::bump_spine_memo::tests::beta_under_binder ... ok
+test L01_nbe::bump_spine_memo::tests::chain_beta_fork ... ok
+test L01_nbe::bump_spine_memo::tests::chain_mixed_heads ... ok
+test L01_nbe::bump_spine_memo::tests::church_pair_ok ... ok
+test L01_nbe::bump_spine_memo::tests::dup_deep_ok ... ok
+test L01_nbe::bump_spine_memo::tests::dup_pair_ok ... ok
+test L01_nbe::bump_spine_memo::tests::dup_shared_subtree_is_same_pointer ... ok
+test L01_nbe::bump_spine_memo::tests::guest_shapes_ok ... ok
+test L01_nbe::bump_spine_memo::tests::interleaved_chains_fallback ... ok
+test L01_nbe::bump_spine_memo_inline::tests::already_normal_right_chain ... ok
+test L01_nbe::bump_spine_memo_inline::tests::beta_under_binder ... ok
+test L01_nbe::bump_spine_memo_inline::tests::chain_beta_fork ... ok
+test L01_nbe::bump_spine_memo_inline::tests::chain_mixed_heads ... ok
+test L01_nbe::bump_spine_memo_inline::tests::church_pair_ok ... ok
+test L01_nbe::bump_spine_memo_inline::tests::dup_deep_ok ... ok
+test L01_nbe::bump_spine_memo_inline::tests::dup_pair_ok ... ok
+test L01_nbe::bump_spine_memo_inline::tests::dup_shared_subtree_is_same_pointer ... ok
+test L01_nbe::bump_spine_memo_inline::tests::guest_shapes_ok ... ok
+test L01_nbe::bump_spine_memo_inline::tests::interleaved_chains_fallback ... ok
+test L01_nbe::bump_spine_rpn::tests::already_normal_right_chain ... ok
+test L01_nbe::bump_spine_rpn::tests::chain_mixed_heads ... ok
+test L01_nbe::bump_spine_rpn::tests::church_pair_ok ... ok
+test L01_nbe::bump_spine_rpn::tests::interleaved_chains_fallback ... ok
+test L01_nbe::bump_spine_slim::tests::already_normal_right_chain ... ok
+test L01_nbe::bump_spine_slim::tests::beta_under_binder ... ok
+test L01_nbe::bump_spine_slim::tests::chain_beta_fork ... ok
+test L01_nbe::bump_spine_slim::tests::chain_mixed_heads ... ok
+test L01_nbe::bump_spine_slim::tests::church_pair_ok ... ok
+test L01_nbe::bump_spine_slim::tests::interleaved_chains_fallback ... ok
+test L01_nbe::bump_spine_slim::tests::machine_steady_state_two_rounds ... ok
+test L01_nbe::cek_bump::tests::already_normal_right_chain ... ok
+test L01_nbe::cek_bump::tests::beta_under_binder ... ok
+test L01_nbe::cek_bump::tests::chain_beta_fork ... ok
+test L01_nbe::cek_bump::tests::chain_mixed_heads ... ok
+test L01_nbe::cek_bump::tests::church_pair_ok ... ok
+test L01_nbe::cek_bump::tests::interleaved_chains_fallback ... ok
+test L01_nbe::compiled::tests::already_normal_right_chain ... ok
+test L01_nbe::compiled::tests::beta_under_binder ... ok
+test L01_nbe::compiled::tests::chain_beta_fork ... ok
+test L01_nbe::compiled::tests::chain_mixed_heads ... ok
+test L01_nbe::compiled::tests::church_pair_ok ... ok
+test L01_nbe::compiled::tests::interleaved_chains_fallback ... ok
+test L01_nbe::env_slice::tests::already_normal_right_chain ... ok
+test L01_nbe::env_slice::tests::beta_under_binder ... ok
+test L01_nbe::env_slice::tests::chain_beta_fork ... ok
+test L01_nbe::env_slice::tests::chain_mixed_heads ... ok
+test L01_nbe::env_slice::tests::church_pair_ok ... ok
+test L01_nbe::env_slice::tests::interleaved_chains_fallback ... ok
+test L01_nbe::native_clo::tests::already_normal_right_chain ... ok
+test L01_nbe::native_clo::tests::beta_under_binder ... ok
+test L01_nbe::native_clo::tests::chain_beta_fork ... ok
+test L01_nbe::native_clo::tests::chain_mixed_heads ... ok
+test L01_nbe::native_clo::tests::church_pair_ok ... ok
+test L01_nbe::native_clo::tests::interleaved_chains_fallback ... ok
+
+test result: ok. 79 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+

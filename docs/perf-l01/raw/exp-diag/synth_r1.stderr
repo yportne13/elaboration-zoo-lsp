@@ -1,0 +1,3 @@
+DIAG|synth/clo_chain k=1000|app=2002|fork_h0=2000|fork_hn=0|composite_h0=2|composite_hn=0|base_h0=0|base_hn=0|apply=2002|cw0=2002|cw_k=0|wrap_heads=0|steps=10014
+DIAG|synth/clo_chain k=10000|app=20002|fork_h0=20000|fork_hn=0|composite_h0=2|composite_hn=0|base_h0=0|base_hn=0|apply=20002|cw0=20002|cw_k=0|wrap_heads=0|steps=100014
+DIAG|synth/clo_chain k=100000|app=200002|fork_h0=200000|fork_hn=0|composite_h0=2|composite_hn=0|base_h0=0|base_hn=0|apply=200002|cw0=200002|cw_k=0|wrap_heads=0|steps=1000014

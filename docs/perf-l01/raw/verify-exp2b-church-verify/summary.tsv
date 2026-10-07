@@ -1,0 +1,9 @@
+workload	size	variant	A_syn_med	A_syn_copy_med	E2b_med	A_syn_copy_ratio_pct	E2b_ratio_pct	A_syn_min	A_syn_copy_min	E2b_min	ref_halfsplit_p95	null_p95_A_syn_vs_A_syn_copy	null_p95_A_syn_vs_E2b	verdict
+church	1000	bump_spine_iter	0.0180	0.0180	0.0180	0.00	0.00	0.0150	0.0150	0.0150	9.09	5.88	5.88	UNDECIDED(dev=0.00<=bound=9.09[p95=9.09])
+church	1000	bump_spine_iter_ss	0.0180	0.0180	0.0180	0.00	0.00	0.0150	0.0150	0.0150	2.78	0.00	0.00	UNDECIDED(dev=0.00<=bound=5.00[p95=2.78])
+church	2000	bump_spine_iter	0.0370	0.0360	0.0360	-2.70	-2.70	0.0300	0.0350	0.0300	2.78	2.78	2.78	UNDECIDED(dev=2.70<=bound=5.00[p95=2.78])
+church	2000	bump_spine_iter_ss	0.0350	0.0350	0.0340	0.00	-2.86	0.0290	0.0340	0.0290	2.94	2.94	2.94	UNDECIDED(dev=2.86<=bound=5.00[p95=2.94])
+church	4000	bump_spine_iter	0.0800	0.0810	0.0740	1.25	-7.50	0.0770	0.0770	0.0730	1.25	1.25	8.64	WIN(-7.50>bound=5.00[p95=1.25])
+church	4000	bump_spine_iter_ss	0.0700	0.0700	0.0700	0.00	0.00	0.0690	0.0690	0.0690	1.45	1.45	1.45	UNDECIDED(dev=0.00<=bound=5.00[p95=1.45])
+church	8000	bump_spine_iter	0.1640	0.1640	0.1470	0.00	-10.37	0.1610	0.1600	0.1450	0.61	0.61	10.37	WIN(-10.37>bound=5.00[p95=0.61])
+church	8000	bump_spine_iter_ss	0.1380	0.1380	0.1380	0.00	0.00	0.1370	0.1370	0.1370	0.00	0.00	0.00	UNDECIDED(dev=0.00<=bound=5.00[p95=0.00])

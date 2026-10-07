@@ -1,0 +1,95 @@
+== exp9_xbuild_church  (exp-20261007-033934_exp9_xbuild_church_spec.txt) ==
+   workload=church max_k=15 rounds=5 reps/side=42 only=fast sha256=28d9884383ef
+   segment nullA [null]: nA1(env=- rounds=5 bin=l02bench) vs nA2(env=- rounds=5 bin=l02bench)
+     workload    k impl     n      med1      med2  unpaired%   paired%   u_boot95   p_boot95
+     church     13 fast    42    1.0260    1.0220     -0.390    -0.433      10.291       2.395
+     church     15 fast    42    4.0070    4.4955     12.191     0.902      13.680       3.092
+   segment ab [exp]: A(env=- rounds=5 bin=l02bench) vs B(env=- rounds=5 bin=l02bench-base)
+     workload    k impl     n      med1      med2  unpaired%   paired%   u_boot95   p_boot95
+     church     13 fast    42    1.0270    1.0285      0.146    -0.097       9.643       0.390
+     church     15 fast    42    4.3315    4.4495      2.724     0.041      12.834       0.777
+   segment nullB [null]: nB1(env=- rounds=5 bin=l02bench-base) vs nB2(env=- rounds=5 bin=l02bench-base)
+     workload    k impl     n      med1      med2  unpaired%   paired%   u_boot95   p_boot95
+     church     13 fast    42    1.0260    1.0215     -0.439    -0.213      11.306       0.378
+     church     15 fast    42    4.0770    4.3060      5.617     0.202      11.769       0.866
+   --- verdict (exp segment vs same-batch null floors) ---
+     workload    k  unpaired%            u_ci95  floor_u   paired%            p_ci95  floor_p  verdict
+     church     13      0.146  [ -0.48, 10.79]    11.306    -0.097  [ -0.29,  2.20]     2.395  未判定
+     church     15      2.724  [ -9.17, 13.24]    13.680     0.041  [ -0.65,  0.86]     3.092  未判定
+
+== exp9_c1_church  (exp-20261007-034011_exp9_c1_church_spec.txt) ==
+   workload=church max_k=15 rounds=5 reps/side=42 only=fast sha256=28d9884383ef
+   segment nullA [null]: nA1(env=- rounds=5 bin=l02bench-base) vs nA2(env=- rounds=5 bin=l02bench-base)
+     workload    k impl     n      med1      med2  unpaired%   paired%   u_boot95   p_boot95
+     church     13 fast    42    1.0280    1.0255     -0.243    -0.243       9.272       0.814
+     church     15 fast    42    4.4855    4.1560     -7.346    -1.135      10.392       2.668
+   segment ab [exp]: A(env=- rounds=5 bin=l02bench-base) vs B(env=- rounds=5 bin=l02bench-c1)
+     workload    k impl     n      med1      med2  unpaired%   paired%   u_boot95   p_boot95
+     church     13 fast    42    1.0270    1.0310      0.389     0.438       2.691       0.875
+     church     15 fast    42    4.4335    4.4225     -0.248    -0.493       5.026       1.265
+   segment nullB [null]: nB1(env=- rounds=5 bin=l02bench-c1) vs nB2(env=- rounds=5 bin=l02bench-c1)
+     workload    k impl     n      med1      med2  unpaired%   paired%   u_boot95   p_boot95
+     church     13 fast    42    0.8805    0.8920      1.306     0.429       2.169       0.822
+     church     15 fast    42    3.9810    3.9800     -0.025    -0.114       1.080       0.380
+   --- verdict (exp segment vs same-batch null floors) ---
+     workload    k  unpaired%            u_ci95  floor_u   paired%            p_ci95  floor_p  verdict
+     church     13      0.389  [ -0.10,  4.43]     9.272     0.438  [  0.15,  0.88]     0.822  未判定
+     church     15     -0.248  [ -4.91,  4.57]    10.392    -0.493  [ -1.33,  1.17]     2.668  未判定
+
+== exp9_c2_church  (exp-20261007-034052_exp9_c2_church_spec.txt) ==
+   workload=church max_k=15 rounds=5 reps/side=42 only=fast sha256=28d9884383ef
+   segment nullA [null]: nA1(env=- rounds=5 bin=l02bench-base) vs nA2(env=- rounds=5 bin=l02bench-base)
+     workload    k impl     n      med1      med2  unpaired%   paired%   u_boot95   p_boot95
+     church     13 fast    42    0.9870    0.9885      0.152    -0.264       5.263       0.652
+     church     15 fast    42    4.3715    4.3870      0.355    -0.321       3.818       1.358
+   segment ab [exp]: A(env=- rounds=5 bin=l02bench-base) vs B(env=- rounds=5 bin=l02bench-c2)
+     workload    k impl     n      med1      med2  unpaired%   paired%   u_boot95   p_boot95
+     church     13 fast    42    2.2420    2.0855     -6.980    -6.420      11.272       7.465
+     church     15 fast    42    9.2695    8.6675     -6.494    -5.765      11.545       6.068
+   segment nullB [null]: nB1(env=- rounds=5 bin=l02bench-c2) vs nB2(env=- rounds=5 bin=l02bench-c2)
+     workload    k impl     n      med1      med2  unpaired%   paired%   u_boot95   p_boot95
+     church     13 fast    42    2.0710    2.0580     -0.628     0.116      55.053       0.625
+     church     15 fast    42    8.6310    8.6225     -0.098     0.295      52.530       0.668
+   --- verdict (exp segment vs same-batch null floors) ---
+     workload    k  unpaired%            u_ci95  floor_u   paired%            p_ci95  floor_p  verdict
+     church     13     -6.980  [-13.56, -5.82]    55.053    -6.420  [ -7.52, -5.70]     0.652  判定(配对);非配对未过(地板受档位漂移抬高)
+     church     15     -6.494  [-14.54, -0.20]    52.530    -5.765  [ -6.16, -5.51]     1.358  判定(配对);非配对未过(地板受档位漂移抬高)
+
+== exp9_c1_conv  (exp-20261007-034508_exp9_c1_conv_spec.txt) ==
+   workload=conv max_k=15 rounds=5 reps/side=42 only=fast sha256=28d9884383ef
+   segment nullA [null]: nA1(env=- rounds=5 bin=l02bench-base) vs nA2(env=- rounds=5 bin=l02bench-base)
+     workload    k impl     n      med1      med2  unpaired%   paired%   u_boot95   p_boot95
+     conv       13 fast    42    2.5120    2.5175      0.219     0.255       5.956       1.185
+     conv       15 fast    42   10.1575   10.1335     -0.236    -0.257       0.726       0.510
+   segment ab [exp]: A(env=- rounds=5 bin=l02bench-base) vs B(env=- rounds=5 bin=l02bench-c1)
+     workload    k impl     n      med1      med2  unpaired%   paired%   u_boot95   p_boot95
+     conv       13 fast    42    2.3030    2.3085      0.239     0.016       2.969       0.549
+     conv       15 fast    42    9.4095    9.1190     -3.087    -0.189       4.000       3.592
+   segment nullB [null]: nB1(env=- rounds=5 bin=l02bench-c1) vs nB2(env=- rounds=5 bin=l02bench-c1)
+     workload    k impl     n      med1      med2  unpaired%   paired%   u_boot95   p_boot95
+     conv       13 fast    42    2.3220    2.3270      0.215     0.215       0.627       0.667
+     conv       15 fast    42    9.1685    9.1520     -0.180    -0.007       3.921       1.588
+   --- verdict (exp segment vs same-batch null floors) ---
+     workload    k  unpaired%            u_ci95  floor_u   paired%            p_ci95  floor_p  verdict
+     conv       13      0.239  [ -2.82,  3.08]     5.956     0.016  [ -0.35,  0.57]     1.185  未判定
+     conv       15     -3.087  [ -4.29,  1.92]     3.921    -0.189  [ -4.10,  0.75]     1.588  未判定
+
+== exp9_c2_conv  (exp-20261007-034610_exp9_c2_conv_spec.txt) ==
+   workload=conv max_k=15 rounds=5 reps/side=42 only=fast sha256=28d9884383ef
+   segment nullA [null]: nA1(env=- rounds=5 bin=l02bench-base) vs nA2(env=- rounds=5 bin=l02bench-base)
+     workload    k impl     n      med1      med2  unpaired%   paired%   u_boot95   p_boot95
+     conv       13 fast    42    2.3265    2.3170     -0.408    -0.364       5.641       3.339
+     conv       15 fast    42    9.2470    9.2870      0.433    -0.016       4.398       1.118
+   segment ab [exp]: A(env=- rounds=5 bin=l02bench-base) vs B(env=- rounds=5 bin=l02bench-c2)
+     workload    k impl     n      med1      med2  unpaired%   paired%   u_boot95   p_boot95
+     conv       13 fast    42    2.3200    2.1510     -7.284    -7.416       7.758       8.026
+     conv       15 fast    42    9.3280    8.8145     -5.505    -5.703       8.123       6.956
+   segment nullB [null]: nB1(env=- rounds=5 bin=l02bench-c2) vs nB2(env=- rounds=5 bin=l02bench-c2)
+     workload    k impl     n      med1      med2  unpaired%   paired%   u_boot95   p_boot95
+     conv       13 fast    42    2.1515    2.1575      0.279     0.278       0.698       0.919
+     conv       15 fast    42    8.6395    8.8510      2.448     0.491       4.333       3.161
+   --- verdict (exp segment vs same-batch null floors) ---
+     workload    k  unpaired%            u_ci95  floor_u   paired%            p_ci95  floor_p  verdict
+     conv       13     -7.284  [ -7.93, -6.64]     5.641    -7.416  [ -8.32, -6.80]     3.339  判定(配对+非配对)
+     conv       15     -5.505  [ -8.47, -2.51]     4.398    -5.703  [ -7.20, -4.39]     3.161  判定(配对+非配对)
+

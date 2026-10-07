@@ -1,0 +1,48 @@
+diff --git a/src/L02_tyck/bump_spine_iter.rs b/src/L02_tyck/bump_spine_iter.rs
+index 9bb451b..789b328 100644
+--- a/src/L02_tyck/bump_spine_iter.rs
++++ b/src/L02_tyck/bump_spine_iter.rs
+@@ -233,7 +233,15 @@ fn eval_iter<'a>(
+     work.clear();
+     vals.clear();
+     work.push(W::Tm(tm0, env0));
+-    while let Some(w) = work.pop() {
++    // [exp-C2] 尾任务寄存器化：β/let 尾部的 Tm 体本来 push 后必然立刻 pop，
++    // 改放循环局部 `cur`，省一次 40B store+load 与一轮 jump-table 分发。
++    // 严格 LIFO 等价：三处臂内没有更晚的 push。
++    let mut cur: Option<W<'a>> = None;
++    loop {
++        let w = match cur.take().or_else(|| work.pop()) {
++            Some(w) => w,
++            None => break,
++        };
+         match w {
+             W::Tm(Tm::Var(i), env) => vals.push(nth(env, *i as usize)),
+             W::Tm(Tm::Lam(name, body), env) => {
+@@ -301,7 +309,7 @@ fn eval_iter<'a>(
+                     // β 归约是尾调用：直接推入体，继续循环
+                     let c = v_clo_of(vf);
+                     let node = bump.alloc(EnvCons { val: va, next: c.env });
+-                    work.push(W::Tm(c.body, Some(node)));
++                    cur = Some(W::Tm(c.body, Some(node)));
+                 } else {
+                     vals.push(spine.push(vf, va));
+                 }
+@@ -310,7 +318,7 @@ fn eval_iter<'a>(
+                 let va = vals.pop().expect("eval 栈：ApplyKnown 缺实参");
+                 let c = v_clo_of(vf);
+                 let node = bump.alloc(EnvCons { val: va, next: c.env });
+-                work.push(W::Tm(c.body, Some(node)));
++                cur = Some(W::Tm(c.body, Some(node)));
+             }
+             W::ChainWrap(k) => {
+                 let mut v = vals.pop().expect("eval 栈：ChainWrap 缺 base");
+@@ -323,7 +331,7 @@ fn eval_iter<'a>(
+             W::LetBody(u, env) => {
+                 let vt = vals.pop().expect("eval 栈：LetBody 缺绑定值");
+                 let node = bump.alloc(EnvCons { val: vt, next: env });
+-                work.push(W::Tm(u, Some(node)));
++                cur = Some(W::Tm(u, Some(node)));
+             }
+             W::PiBody(name, cod, env) => {
+                 let dom = vals.pop().expect("eval 栈：PiBody 缺定义域");

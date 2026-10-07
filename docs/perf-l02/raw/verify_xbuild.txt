@@ -1,0 +1,19 @@
+# spec=exp-20261007-033934_exp9_xbuild_church_spec.txt prefix=exp-20261007-033934_exp9_xbuild_church
+# bin_a=l02bench sha=28d9884383ef bin_b=l02bench-base sha=6f9a27311e55
+# order=alternate reps=42 rounds=5 only=fast
+seg   workload   k   n     med1     med2   paired%     p95     unp%   unp95  signflip_p
+nullA church    13  42   1.0260   1.0220    -0.433   2.244   -0.390  10.143     0.39445
+nullA church    15  42   4.0070   4.4955     0.902   3.092   12.191  13.606     0.06370
+ab    church    13  42   1.0270   1.0285    -0.097   0.390    0.146   9.643     0.80705
+ab    church    15  42   4.3315   4.4495     0.041   0.777    2.724  12.881     1.00000
+nullB church    13  42   1.0260   1.0215    -0.213   0.378   -0.439  11.630     0.41885
+nullB church    15  42   4.0770   4.3060     0.202   0.864    5.617  11.724     0.55865
+
+== verdict (paired md vs max(null p95, 0.5)) ==
+church   k=13  md=  -0.097%  p95_floor=2.244  eff=2.244  signflip_p=0.8071  -> 未判定
+church   k=15  md=  +0.041%  p95_floor=3.092  eff=3.092  signflip_p=1.0000  -> 未判定
+== null segment paired stats (floors) ==
+nullA church   k=13  md=  -0.433%  p95=2.244  max=4.586  unp=-0.390% unp95=10.143
+nullA church   k=15  md=  +0.902%  p95=3.092  max=7.864  unp=+12.191% unp95=13.606
+nullB church   k=13  md=  -0.213%  p95=0.378  max=0.583  unp=-0.439% unp95=11.630
+nullB church   k=15  md=  +0.202%  p95=0.864  max=5.632  unp=+5.617% unp95=11.724

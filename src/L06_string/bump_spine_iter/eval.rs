@@ -118,7 +118,15 @@ pub(super) fn eval_iter<'a>(
     vals.clear();
     icits.clear();
     work.push(W::Tm(tm0, env0));
-    while let Some(w) = work.pop() {
+    // [C2] 尾任务寄存器化：臂内最后一个 work.push 的任务下一轮必被 pop，
+    // 改放循环局部 `cur`（省一次 store+load 与一轮跳转分发）。
+    // 严格 LIFO 等价：每个 `cur` 站点之后到循环头之前没有 work 操作。
+    let mut cur: Option<W<'a>> = None;
+    loop {
+        let w = match cur.take().or_else(|| work.pop()) {
+            Some(w) => w,
+            None => break,
+        };
         match w {
             W::Tm(Tm::Var(i), env) => vals.push(env_nth(defs, env, *i)),
             W::Tm(Tm::Lam(name, icit, body), env) => {
@@ -143,16 +151,16 @@ pub(super) fn eval_iter<'a>(
             }),
             W::Tm(Tm::Pi(name, icit, dom, cod), env) => {
                 work.push(W::PiBody(name, *icit, cod, env));
-                work.push(W::Tm(dom, env));
+                cur = Some(W::Tm(dom, env));
             }
             W::Tm(Tm::Let(_, _, t, u), env) => {
                 work.push(W::LetBody(u, env));
-                work.push(W::Tm(t, env));
+                cur = Some(W::Tm(t, env));
             }
             W::Tm(Tm::Meta(m), _) => vals.push(meta_val_of(metas, *m)),
             W::Tm(Tm::AppPruning(head, pr), env) => {
                 work.push(W::AppPrun(env, *pr));
-                work.push(W::Tm(head, env));
+                cur = Some(W::Tm(head, env));
             }
             W::Tm(app @ Tm::App(..), env) => {
                 // 右链下钻：头为非闭包变量时头值直接进 vals（icit 进侧栈）
@@ -165,7 +173,7 @@ pub(super) fn eval_iter<'a>(
                             if heads > 0 {
                                 work.push(W::ChainWrap(heads));
                             }
-                            work.push(W::Tm(base, env));
+                            cur = Some(W::Tm(base, env));
                             break;
                         }
                     };
@@ -181,7 +189,7 @@ pub(super) fn eval_iter<'a>(
                                     work.push(W::ChainWrap(heads));
                                 }
                                 work.push(W::ApplyKnown(vf));
-                                work.push(W::Tm(a, env));
+                                cur = Some(W::Tm(a, env));
                                 break;
                             }
                             vals.push(vf);
@@ -196,7 +204,7 @@ pub(super) fn eval_iter<'a>(
                             }
                             work.push(W::Apply(i));
                             work.push(W::Tm(a, env));
-                            work.push(W::Tm(f, env));
+                            cur = Some(W::Tm(f, env));
                             break;
                         }
                     }
@@ -209,7 +217,7 @@ pub(super) fn eval_iter<'a>(
                     // β 归约是尾调用：直接推入体，继续循环
                     let c = v_clo_of(vf);
                     let env = env_ext(bump, c.env, va);
-                    work.push(W::Tm(c.body, env));
+                    cur = Some(W::Tm(c.body, env));
                 } else if is_declheaded(spine, vf) {
                     let r = decl_apply(
                         bump, spine, work, vals, icits, defs, metas, decls, mmap, vf, va, i,
@@ -223,7 +231,7 @@ pub(super) fn eval_iter<'a>(
                 let va = vals.pop().expect("eval 栈：ApplyKnown 缺实参");
                 let c = v_clo_of(vf);
                 let env = env_ext(bump, c.env, va);
-                work.push(W::Tm(c.body, env));
+                cur = Some(W::Tm(c.body, env));
             }
             W::ChainWrap(k) => {
                 let mut v = vals.pop().expect("eval 栈：ChainWrap 缺 base");
@@ -244,7 +252,7 @@ pub(super) fn eval_iter<'a>(
             }
             W::LetBody(u, env) => {
                 let vt = vals.pop().expect("eval 栈：LetBody 缺绑定值");
-                work.push(W::Tm(u, env_ext(bump, env, vt)));
+                cur = Some(W::Tm(u, env_ext(bump, env, vt)));
             }
             W::PiBody(name, icit, cod, env) => {
                 let dom = vals.pop().expect("eval 栈：PiBody 缺定义域");
@@ -265,7 +273,7 @@ pub(super) fn eval_iter<'a>(
                 Some(b) if env.binds.is_none() && b.slot.is_none() => {
                     // O(1) 跳段：binds 耗尽后剩余链只剩 define 槽。
                     assert!(env.flat_len >= b.none_run);
-                    work.push(W::AppPrun(
+                    cur = Some(W::AppPrun(
                         Env {
                             flat_len: env.flat_len - b.none_run,
                             ..env
@@ -301,7 +309,7 @@ pub(super) fn eval_iter<'a>(
                         (None, Some(_)) => panic!("impossible"), // env 短于 pr
                         _ => {}
                     }
-                    work.push(W::AppPrun(rest, b.next));
+                    cur = Some(W::AppPrun(rest, b.next));
                 }
             },
             W::AppPrunOne(arg, i) => {
@@ -309,7 +317,7 @@ pub(super) fn eval_iter<'a>(
                 if v_tag(v) == 1 {
                     let c = v_clo_of(v);
                     let env = env_ext(bump, c.env, arg);
-                    work.push(W::Tm(c.body, env));
+                    cur = Some(W::Tm(c.body, env));
                 } else if is_declheaded(spine, v) {
                     let r = decl_apply(
                         bump, spine, work, vals, icits, defs, metas, decls, mmap, v, arg, i,

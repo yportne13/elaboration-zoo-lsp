@@ -5,19 +5,32 @@ on:
     branches:
       - master
 
+# Serialize runs on the same ref so a superseded push waits instead of kicking
+# off a second full 22-bin compile in parallel.  cancel-in-progress stays false:
+# this workflow publishes GitHub Releases, and cancelling a run mid-flight could
+# leave a created tag without its assets.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   test:
     name: L13 gate (lib + parity + twin LSP)
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.98.1
 
+      # Shared key with the `test-full` job so whichever runs second restores
+      # the other's compiled `target/` instead of recompiling from cold.  Both
+      # jobs previously used disjoint, job-prefixed keys, which forced two full
+      # cold compiles of the same dependency graph on every push.
       - name: Cache cargo registry and target
         uses: actions/cache@v4
         with:
@@ -25,8 +38,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-l13gate-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-l13gate-
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
 
       - name: Run the L13 gate
         run: bash tools/gate_l13.sh
@@ -46,15 +60,17 @@ jobs:
   test-full:
     name: Full test suite (all targets)
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.98.1
 
+      # Same key/restore as the `test` job — see the note there.
       - name: Cache cargo registry and target
         uses: actions/cache@v4
         with:
@@ -62,8 +78,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-fulltest-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-fulltest-
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
 
       - name: Run the full test suite
         run: cargo test --no-fail-fast
@@ -71,7 +88,9 @@ jobs:
   dependencies:
     name: Build dependencies
     runs-on: ubuntu-latest
+    # Only tag/release once the gate is green.
     needs: test
+    timeout-minutes: 10
     outputs:
       version: ${{ steps.version.outputs.version }}
 
@@ -85,35 +104,42 @@ jobs:
         id: version
         run: echo "version=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
-  release:
-    name: "Create Github tag/pre-release"
-    runs-on: ubuntu-latest
-    needs: dependencies
-    steps:
-      - name: Create Github pre-release (${{ needs.dependencies.outputs.version }})
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ github.run_number }}-${{ needs.dependencies.outputs.version }}
-          name: Version ${{ github.run_number }} (${{ needs.dependencies.outputs.version }})
-          prerelease: false
-
+  # The three artifact jobs build first and only publish workflow artifacts;
+  # `release` (below) creates the GitHub release once they all succeed, so a
+  # failed build can no longer strand a published tag with no assets.
   build-vscode:
     runs-on: ubuntu-latest
-    needs: [dependencies, release]
+    needs: dependencies
+    timeout-minutes: 45
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: 20
 
+      # The Rust wasm toolchain IS required here: `vsce package` runs
+      # `vscode:prepublish` → `npm run build`, which cross-compiles the LSP to
+      # wasm32-wasip1-threads and drops it at client/server.wasm.
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.98.1
           target: wasm32-wasip1-threads
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-wasm-
+            ${{ runner.os }}-cargo-
 
       - name: Build VS Code extension
         run: |
@@ -132,25 +158,35 @@ jobs:
           name: TyportHDL-${{ steps.ext_version.outputs.version }}
           path: |
             vscode_extension/*.vsix
-      - name: Upload vsix to release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ github.run_number }}-${{ needs.dependencies.outputs.version }}
-          files: vscode_extension/*.vsix
 
   build-cli:
     name: Build CLI (Linux + Windows)
     runs-on: ubuntu-latest
-    needs: [dependencies, release]
+    needs: dependencies
+    timeout-minutes: 60
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.98.1
           targets: wasm32-wasip1-threads, x86_64-unknown-linux-musl, x86_64-pc-windows-gnu
+
+      # These are full LTO release builds (see [profile.release] in Cargo.toml);
+      # without a cache every push re-downloads crates and rebuilds from cold.
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-cli-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-cli-
+            ${{ runner.os }}-cargo-
 
       - name: Install cross-compilation dependencies
         run: |
@@ -175,27 +211,32 @@ jobs:
             target/typort-x86_64-linux-musl
             target/typort-x86_64-windows.exe
 
-      - name: Upload typort (Linux musl + Windows) to release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ github.run_number }}-${{ needs.dependencies.outputs.version }}
-          files: |
-            target/typort-x86_64-linux-musl
-            target/typort-x86_64-windows.exe
-
   build-cli-macos:
     name: Build CLI (macOS ARM)
     runs-on: macos-latest
-    needs: [dependencies, release]
+    needs: dependencies
+    timeout-minutes: 60
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.98.1
           targets: aarch64-apple-darwin
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-macos-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-macos-
+            ${{ runner.os }}-cargo-
 
       - name: Build typort (aarch64-apple-darwin)
         run: |
@@ -206,11 +247,23 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: typort-cli-macos
-          path: |
-            target/typort-aarch64-macos
+          path: target/typort-aarch64-macos
 
-      - name: Upload typort (macOS ARM) to release
+  release:
+    name: "Create Github tag/pre-release"
+    runs-on: ubuntu-latest
+    needs: [dependencies, build-vscode, build-cli, build-cli-macos]
+    timeout-minutes: 15
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Github pre-release (${{ needs.dependencies.outputs.version }})
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ github.run_number }}-${{ needs.dependencies.outputs.version }}
-          files: target/typort-aarch64-macos
+          name: Version ${{ github.run_number }} (${{ needs.dependencies.outputs.version }})
+          prerelease: false
+          files: artifacts/**/*

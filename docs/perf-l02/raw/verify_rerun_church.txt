@@ -1,0 +1,19 @@
+# spec=verify-20261007-044856_c2_church_v_spec.txt prefix=verify-20261007-044856_c2_church_v
+# bin_a=l02bench-base sha=6f9a27311e55 bin_b=l02bench-c2 sha=86d2133e42bc
+# order=alternate reps=42 rounds=5 only=fast
+seg   workload   k   n     med1     med2   paired%     p95     unp%   unp95  signflip_p
+nullA church    13  42   1.0320   1.0290    -0.193   0.819   -0.291   0.678     0.55105
+nullA church    15  42   4.5420   4.5370    -0.066   0.364   -0.110   0.472     0.78625
+ab    church    13  42   1.0605   0.9720    -6.529   6.752   -8.345  11.070     0.00020
+ab    church    15  42   4.7350   4.3970    -5.596   6.580   -7.138  10.788     0.00905
+nullB church    13  42   1.1440   1.1460     0.087   0.701    0.175   0.615     0.90630
+nullB church    15  42   4.9780   4.9845    -0.252   0.779    0.131   0.798     0.57900
+
+== verdict (paired md vs max(null p95, 0.5)) ==
+church   k=13  md=  -6.529%  p95_floor=0.819  eff=0.819  signflip_p=0.0002  -> 判定(-)
+church   k=15  md=  -5.596%  p95_floor=0.779  eff=0.779  signflip_p=0.0091  -> 判定(-)
+== null segment paired stats (floors) ==
+nullA church   k=13  md=  -0.193%  p95=0.819  max=1.346  unp=-0.291% unp95=0.678
+nullA church   k=15  md=  -0.066%  p95=0.364  max=4.177  unp=-0.110% unp95=0.472
+nullB church   k=13  md=  +0.087%  p95=0.701  max=3.819  unp=+0.175% unp95=0.615
+nullB church   k=15  md=  -0.252%  p95=0.779  max=1.887  unp=+0.131% unp95=0.798

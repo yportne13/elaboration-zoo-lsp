@@ -1,0 +1,30 @@
+tag=exp9_c2_conv
+timestamp_utc=2026-10-07T03:46:12Z
+prefix=exp-20261007-034610_exp9_c2_conv
+binary=/home/dev/elaboration-zoo-lsp/target/release/l02bench
+binary_sha256=28d9884383ef0440d4832bf911b84e0dea067e3ef25b889d223ebcd6f0f5e87a
+bin_a=/tmp/l02-exp/l02bench-base
+bin_a_sha256=6f9a27311e55bb9240452b6269b697f602e27eff5444b6ebe388ad7f018b9d5c
+bin_b=/tmp/l02-exp/l02bench-c2
+bin_b_sha256=86d2133e42bcdd0407d0f208c756d02895c0ebcdaef758a825cb33084e4751ab
+workload=conv
+max_k=15
+rounds=5
+rounds_b=5
+rounds_a=5
+order=alternate
+freqs=exp-20261007-034610_exp9_c2_conv_freqs.tsv
+reps=42
+only=fast
+cpu=7
+stack_mb=128
+keepalive=sched_idle
+arm=nB2 env=- rounds=5
+arm=nB1 env=- rounds=5
+arm=B env=- rounds=5
+arm=A env=- rounds=5
+arm=nA2 env=- rounds=5
+arm=nA1 env=- rounds=5
+segment=nullA null nA1 nA2
+segment=ab exp A B
+segment=nullB null nB1 nB2

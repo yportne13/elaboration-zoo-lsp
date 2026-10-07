@@ -1,0 +1,26 @@
+tag=pre_rounds25v3rev
+timestamp_utc=2026-10-06T11:50:36Z
+prefix=exp-20261006-115034_pre_rounds25v3rev
+binary=/home/dev/elaboration-zoo-lsp/target/release/l02bench
+binary_sha256=28d9884383ef0440d4832bf911b84e0dea067e3ef25b889d223ebcd6f0f5e87a
+workload=conv
+max_k=15
+rounds=25
+rounds_b=3
+rounds_a=25
+order=alternate
+freqs=exp-20261006-115034_pre_rounds25v3rev_freqs.tsv
+reps=21
+only=fast
+cpu=7
+stack_mb=128
+keepalive=sched_idle
+arm=nB2 env=- rounds=3
+arm=nB1 env=- rounds=3
+arm=B env=- rounds=3
+arm=A env=- rounds=25
+arm=nA2 env=- rounds=25
+arm=nA1 env=- rounds=25
+segment=nullA null nA1 nA2
+segment=ab exp A B
+segment=nullB null nB1 nB2

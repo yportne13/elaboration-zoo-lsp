@@ -1,0 +1,47 @@
+L01 NBE bench（workload = church）
+rounds per variant = 3, only variants = bump_spine_iter,bump_spine_iter_ss,bump_spine,bump_spine_memo,bump_spine_slim,cek_bump,bump_iter,bump_tree
+
+== church_pair(1000) ==
+  variant                min_ms     med_ms
+  bump_tree               0.049      0.049
+  cek_bump                0.062      0.066
+  bump_iter               0.065      0.067
+  bump_spine              0.027      0.028
+  bump_spine_iter         0.018      0.019
+  bump_spine_iter_ss      0.018      0.018 *
+  bump_spine_slim         0.024      0.027
+  bump_spine_memo         0.019      0.019
+
+== church_pair(2000) ==
+  variant                min_ms     med_ms
+  bump_tree               0.098      0.098
+  cek_bump                0.123      0.129
+  bump_iter               0.120      0.124
+  bump_spine              0.055      0.055
+  bump_spine_iter         0.037      0.038
+  bump_spine_iter_ss      0.035      0.035 *
+  bump_spine_slim         0.048      0.048
+  bump_spine_memo         0.038      0.038
+
+== church_pair(4000) ==
+  variant                min_ms     med_ms
+  bump_tree               0.183      0.191
+  cek_bump                0.235      0.246
+  bump_iter               0.214      0.225
+  bump_spine              0.094      0.096
+  bump_spine_iter         0.066      0.067
+  bump_spine_iter_ss      0.059      0.060 *
+  bump_spine_slim         0.089      0.100
+  bump_spine_memo         0.075      0.078
+
+== church_pair(8000) ==
+  variant                min_ms     med_ms
+  bump_tree               0.345      0.353
+  cek_bump                0.532      0.537
+  bump_iter               0.436      0.562
+  bump_spine              0.207      0.214
+  bump_spine_iter         0.155      0.167
+  bump_spine_iter_ss      0.120      0.126 *
+  bump_spine_slim         0.183      0.186
+  bump_spine_memo         0.160      0.162
+

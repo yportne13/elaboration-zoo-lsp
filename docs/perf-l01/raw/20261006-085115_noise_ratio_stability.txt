@@ -1,0 +1,14 @@
+reps with a full church n=8000 row: 77
+
+Absolute time CV vs same-rep ratio-to-bump_spine_iter CV (church n=8000):
+variant                  absCV%  ratioCV%  absRange% ratioRange%
+bump_spine_iter_ss         7.04      3.82       25.4        23.6
+bump_spine                 5.79      4.78       21.2        42.3
+bump_spine_memo            6.98      5.40       29.0        34.4
+bump_spine_slim            6.85      6.58       32.9        56.8
+cek_bump                   6.00      6.53       31.7        55.1
+bump_iter                  6.26      5.57       29.2        46.5
+bump_tree                  6.58      6.27       26.8        52.4
+
+Interpretation: within one process rep every variant sees the same core state,
+so the RATIO to a reference variant is the low-noise currency; absolute ms is not.

@@ -1,0 +1,22 @@
+tag=ab_convdup_memo
+timestamp_utc=2026-10-06T11:34:04Z
+prefix=exp-20261006-113403_ab_convdup_memo
+binary=/home/dev/elaboration-zoo-lsp/target/release/l02bench
+binary_sha256=28d9884383ef0440d4832bf911b84e0dea067e3ef25b889d223ebcd6f0f5e87a
+workload=conv_dup
+max_k=15
+rounds=5
+reps=21
+only=fast
+cpu=7
+stack_mb=128
+keepalive=sched_idle
+arm=nB2 env=L02_NO_CONV_MEMO=1
+arm=nB1 env=L02_NO_CONV_MEMO=1
+arm=B env=L02_NO_CONV_MEMO=1
+arm=A env=-
+arm=nA2 env=-
+arm=nA1 env=-
+segment=nullA null nA1 nA2
+segment=ab exp A B
+segment=nullB null nB1 nB2

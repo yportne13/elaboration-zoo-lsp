@@ -1,0 +1,2 @@
+workload	size	variant	reps	min_ms	med_ms	max_ms	spread_pct	med_of_med
+church	1000	bump_spine_iter	2	0.0160	0.0200	0.0240	50.00	0.0200

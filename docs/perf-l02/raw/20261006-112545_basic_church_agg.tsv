@@ -1,0 +1,8 @@
+workload	k	impl	reps	min_ms	med_of_min	max_ms	spread_pct	med_of_med
+church	9	basic	7	0.9010	1.0440	1.0570	17.31	1.1100
+church	10	basic	7	1.8990	1.9150	1.9420	2.26	1.9860
+church	11	basic	7	3.5200	3.7860	3.8500	9.38	3.9290
+church	12	basic	7	7.2220	7.8110	7.9510	10.09	7.9320
+church	13	basic	7	12.9040	15.7800	16.5830	28.51	18.4920
+church	14	basic	7	26.1910	34.0110	34.2900	30.92	34.5010
+church	15	basic	7	52.3700	66.9500	67.8010	29.47	69.5770

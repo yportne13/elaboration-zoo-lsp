@@ -1,0 +1,9 @@
+workload	size	variant	med_A	med_B	ratio_med_B_over_A_pct	min_A	min_B	min_ratio_pct	empty_parity_pct	empty_boot_p95_pct	threshold_pct	paired_ratio_med	paired_ratio_p10	paired_ratio_p90	verdict
+church	1000	bump_spine_iter	0.0180	0.0180	0.00	0.0150	0.0150	0.00	0.00	2.78	5.0	1.0000	0.7895	1.1875	UNDECIDED(dev=0.00%<=bound=5.00%[thr=5.0,p95=2.78])
+church	1000	bump_spine_iter_ss	0.0180	0.0180	0.00	0.0150	0.0150	0.00	0.00	5.88	5.0	1.0000	0.8824	1.1333	UNDECIDED(dev=0.00%<=bound=5.88%[thr=5.0,p95=5.88])
+church	2000	bump_spine_iter	0.0360	0.0360	0.00	0.0300	0.0300	0.00	-1.39	2.78	5.0	1.0000	0.9730	1.1935	UNDECIDED(dev=0.00%<=bound=5.00%[thr=5.0,p95=2.78])
+church	2000	bump_spine_iter_ss	0.0350	0.0340	-2.86	0.0290	0.0290	0.00	2.94	2.94	5.0	1.0000	0.9714	1.0968	UNDECIDED(dev=2.86%<=bound=5.00%[thr=5.0,p95=2.94])
+church	4000	bump_spine_iter	0.0810	0.0750	-7.41	0.0640	0.0610	-4.69	-0.62	3.09	5.0	0.9259	0.7922	0.9740	WIN(-7.41%>bound=5.00%[thr=5.0,p95=3.09])
+church	4000	bump_spine_iter_ss	0.0700	0.0700	0.00	0.0570	0.0570	0.00	0.00	0.72	5.0	1.0000	0.9130	1.0145	UNDECIDED(dev=0.00%<=bound=5.00%[thr=5.0,p95=0.72])
+church	8000	bump_spine_iter	0.1650	0.1480	-10.30	0.1300	0.1190	-8.46	0.00	0.61	5.0	0.8970	0.8655	0.9024	WIN(-10.30%>bound=5.00%[thr=5.0,p95=0.61])
+church	8000	bump_spine_iter_ss	0.1390	0.1380	-0.72	0.1370	0.1150	-16.06	0.00	0.72	5.0	1.0000	0.9718	1.0072	UNDECIDED(dev=0.72%<=bound=5.00%[thr=5.0,p95=0.72])

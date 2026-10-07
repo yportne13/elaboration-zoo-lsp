@@ -1,0 +1,8 @@
+== workload: dup_deep ==
+k=9   n=1024     fast_ss=     0.217ms*/     0.218
+k=10  n=2048     fast_ss=     0.506ms*/     0.511
+k=11  n=4096     fast_ss=     1.003ms*/     1.012
+k=12  n=8192     fast_ss=     2.006ms*/     2.090
+k=13  n=16384    fast_ss=     4.101ms*/     4.218
+k=14  n=32768    fast_ss=     8.517ms*/     8.586
+k=15  n=65536    fast_ss=    18.286ms*/    18.428

@@ -11,6 +11,16 @@ path = "src/main.rs"
 name = "typort"
 path = "src/bin/cli.rs"
 
+# Bench bins L02–L13 `#[path]`-include whole layer sources that carry their own
+# `#[cfg(test)]` modules, so cargo auto-discovers a test target per bin that
+# re-runs those unit tests once per bench bin.  Every L02–L13 layer is declared
+# in src/lib.rs, so the same tests already run under `cargo test --lib`; the bin
+# test targets are pure duplication (the gate's `--skip "L13_namespace::"` was
+# added to shave the same repeat in l13_fast_parity).  `test = false` drops them.
+#
+# l01bench is deliberately EXEMPT: L01_nbe is not declared in the lib, so its
+# ~70 unit tests (`bump_*`, `cek_*`, `compiled`, ...) run in exactly one place —
+# l01bench's test target.  Disabling it would silently lose that coverage.
 [[bin]]
 name = "l01bench"
 path = "src/bin/l01bench.rs"
@@ -18,50 +28,62 @@ path = "src/bin/l01bench.rs"
 [[bin]]
 name = "l02bench"
 path = "src/bin/l02bench.rs"
+test = false
 
 [[bin]]
 name = "l03bench"
 path = "src/bin/l03bench.rs"
+test = false
 
 [[bin]]
 name = "l04bench"
 path = "src/bin/l04bench.rs"
+test = false
 
 [[bin]]
 name = "l05bench"
 path = "src/bin/l05bench.rs"
+test = false
 
 [[bin]]
 name = "l06bench"
 path = "src/bin/l06bench.rs"
+test = false
 
 [[bin]]
 name = "l07bench"
 path = "src/bin/l07bench.rs"
+test = false
 
 [[bin]]
 name = "l08bench"
 path = "src/bin/l08bench.rs"
+test = false
 
 [[bin]]
 name = "l09bench"
 path = "src/bin/l09bench.rs"
+test = false
 
 [[bin]]
 name = "l10bench"
 path = "src/bin/l10bench.rs"
+test = false
 
 [[bin]]
 name = "l11bench"
 path = "src/bin/l11bench.rs"
+test = false
 
 [[bin]]
 name = "l12bench"
 path = "src/bin/l12bench.rs"
+test = false
 
 [[bin]]
 name = "l13bench"
 path = "src/bin/l13bench.rs"
+test = false
 
 # LSP-kick 采样归因口（只依赖库，故 `--features sampler` 下可单独构建——
 # 其它 bin 用 `#[path]` 直编 L13/L10 源码、未包含 sampler.rs，包级开该

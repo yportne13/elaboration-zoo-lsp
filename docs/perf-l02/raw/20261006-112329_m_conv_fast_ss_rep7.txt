@@ -1,0 +1,8 @@
+== workload: conv ==
+k=9   n=1024     fast_ss=     0.103ms*/     0.103
+k=10  n=2048     fast_ss=     0.193ms*/     0.194
+k=11  n=4096     fast_ss=     0.374ms*/     0.374
+k=12  n=8192     fast_ss=     0.728ms*/     0.736
+k=13  n=16384    fast_ss=     1.464ms*/     1.477
+k=14  n=32768    fast_ss=     2.905ms*/     2.935
+k=15  n=65536    fast_ss=     5.816ms*/     5.862
