@@ -12,17 +12,96 @@ SpinalHDL lib 复刻 —— L3 行为验证（真值表/时序仿真）
 用法：
   python3 tools/spinalhdl-verify/verify.py [--cases 文件...] [--keep]
 """
-import os, re, subprocess, sys, tempfile, shutil, random
+import os, re, subprocess, sys, tempfile, shutil, random, datetime
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from dualclock_runner import run_dualclock_case
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-_TYPORT_DEFAULT = os.path.join(ROOT, "target", "release", "typort")
-# Windows 构建产物带 .exe 后缀；环境变量显式指定时原样使用
-TYPORT = os.environ.get("TYPORT") or (
-    _TYPORT_DEFAULT if os.path.exists(_TYPORT_DEFAULT) else _TYPORT_DEFAULT + ".exe"
+
+# ---------------------------------------------------------------------------
+# typort binary resolution (task-13, 2026-10-08)
+#
+# The old default was target/release/typort(.exe). On this host that path holds
+# a build from 2026-09-29, so any run WITHOUT an explicit TYPORT silently
+# elaborated every case against a month-old prelude (including the round-1 FIFO
+# deadlock) and produced convincing but wrong results.
+#
+# Never guess a branch: take the NEWEST existing build output and print the
+# chosen path and mtime at startup, so a log always says which prelude snapshot
+# produced it. $TYPORT still wins verbatim -- an explicit choice is a promise.
+# ---------------------------------------------------------------------------
+_TYPORT_CANDIDATES = (
+    os.path.join("target", "debug", "typort.exe"),
+    os.path.join("target", "debug", "typort"),
+    os.path.join("target", "debug", "deps", "typort.exe"),
+    os.path.join("target", "debug", "deps", "typort"),
+    os.path.join("target", "release", "typort.exe"),
+    os.path.join("target", "release", "typort"),
 )
-VERILATOR = os.environ.get("VERILATOR", "verilator")
+
+
+def _typort_candidates():
+    return [os.path.join(ROOT, c) for c in _TYPORT_CANDIDATES]
+
+
+def resolve_typort():
+    """Return (path, source) for the binary to verify against.
+
+    source is "env" for an explicit $TYPORT, "newest" for the mtime winner, or
+    "missing" when no known build output exists (main() then fails loudly).
+    """
+    env = os.environ.get("TYPORT")
+    if env:
+        return env, "env"
+    existing = [p for p in _typort_candidates() if os.path.isfile(p)]
+    if not existing:
+        return None, "missing"
+    return max(existing, key=os.path.getmtime), "newest"
+
+
+TYPORT, _TYPORT_SOURCE = resolve_typort()
+
+
+def _fmt_mtime(path):
+    return datetime.datetime.fromtimestamp(os.stat(path).st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def print_typort_banner():
+    """Print which prelude snapshot this run will use, plus the alternatives.
+
+    Behavioral results are only meaningful against a known snapshot, so the
+    chosen path and mtime belong at the top of every log.
+    """
+    if TYPORT is None:
+        print("[typort] NO BINARY FOUND. Looked for:")
+        for p in _typort_candidates():
+            print("[typort]   %s" % p)
+        print("[typort] build one first: cargo build --bin typort   (or set TYPORT)")
+        return
+    if os.path.exists(TYPORT):
+        print("[typort] using %s" % TYPORT)
+        print("[typort] mtime=%s size=%d bytes  (source=%s)"
+              % (_fmt_mtime(TYPORT), os.stat(TYPORT).st_size, _TYPORT_SOURCE))
+    else:
+        print("[typort] using %s  (source=%s, FILE MISSING)" % (TYPORT, _TYPORT_SOURCE))
+    print("[typort] candidates:")
+    chosen = os.path.abspath(TYPORT)
+    for p in _typort_candidates():
+        if os.path.isfile(p):
+            mark = "  <- chosen" if os.path.abspath(p) == chosen else ""
+            print("[typort]   %s  %10d  %s%s"
+                  % (_fmt_mtime(p), os.stat(p).st_size, p, mark))
+        else:
+            print("[typort]   %-19s %10s  %s  (absent)" % ("", "", p))
+
+
+# Verilator resolution (Lead 2026-10-08): msys64 ships `verilator` as an
+# EXTENSIONLESS wrapper script, which `shutil.which` cannot see on Windows
+# (it matches PATHEXT), so the old code silently reported "verilator not found"
+# and skipped all behavioral verification. Fall back to `verilator_bin`.
+VERILATOR = (os.environ.get("VERILATOR")
+             or shutil.which("verilator") or shutil.which("verilator_bin")
+             or "verilator")
 CASE_DIR = os.path.join(ROOT, "tools", "spinalhdl-verify", "cases")
 
 # ---------------------------------------------------------------------------
@@ -353,6 +432,14 @@ SEQ_CASES = {
 # Stream 时序参考状态机
 # ---------------------------------------------------------------------------
 class RefStreamM2s:
+    # Contract: docs/hdl-stream-fsm-design.md:38 lists the OLD
+    #   input.ready := rValid || outReady
+    # as bug F1 ("full/empty condition swapped"); the correct semantics is
+    #   input.ready = outReady || !rValid      (empty accepts immediately,
+    #                                           full waits for the consumer)
+    # and hdl-stream.typort:106 implements exactly that. This reference model
+    # still carried the pre-F1 formula, so it disagreed with a correct RTL.
+    # Reset init: rValid = 0 (empty).
     def reset_state(self):
         self.rValid = 0
         self.rData = 0
@@ -361,11 +448,13 @@ class RefStreamM2s:
             self.rValid = 0
             self.rData = 0
         else:
-            in_ready = self.rValid or inputs["pop_ready"]
+            # rValid/rData update inside `when (input.ready)`, so the enable is
+            # the same corrected expression the DUT drives onto push.ready.
+            in_ready = inputs["pop_ready"] or (not self.rValid)
             if in_ready:
                 self.rValid = 1 if inputs["push_valid"] else 0
                 self.rData = inputs["push_payload"]
-        return {"push_ready": 1 if (self.rValid or inputs["pop_ready"]) else 0,
+        return {"push_ready": 1 if (inputs["pop_ready"] or not self.rValid) else 0,
                 "pop_valid": self.rValid,
                 "pop_payload": self.rData}
 
@@ -728,7 +817,7 @@ int main(int argc, char** argv) {
     delete dut;
     return 0;
 }
-''' % (name, name, name, stim_file, inputs_decl, scanf_fmt, scanf_vars, len(ports_in), assigns, reads)
+''' % (name, name, name, os.path.basename(stim_file), inputs_decl, scanf_fmt, scanf_vars, len(ports_in), assigns, reads)
     tb_file = os.path.join(workdir, name + "_tb.cpp")
     with open(tb_file, "w") as f:
         f.write(tb)
@@ -736,9 +825,14 @@ int main(int argc, char** argv) {
     verilog_file = os.path.join(workdir, name + ".v")
     with open(verilog_file, "w") as f:
         f.write(modules[name][1])
+    # NOTE (Lead 2026-10-08): pass *relative* names + a relative -Mdir. The msys
+    # verilator 4.024 wrapper cannot handle Windows absolute paths here: it joins
+    # -Mdir with the absolute source path and then fails with "Cannot find file
+    # containing module". cwd is already `workdir`, so relative names are correct.
     comp = subprocess.run(
         [VERILATOR, "--cc", "--exe", "-Wno-fatal", "--top-module", name,
-         "-Mdir", objdir, "-o", name + "_tb", tb_file, verilog_file],
+         "-Mdir", "obj_" + name, "-o", name + "_tb",
+         os.path.basename(tb_file), os.path.basename(verilog_file)],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=workdir)
     if comp.returncode != 0:
         print("  [COMPILE FAIL] %s:\n%s" % (name, comp.stderr.decode("utf-8", "replace")[-1500:]))
@@ -835,7 +929,7 @@ int main(int argc, char** argv) {
     printf(fail ? "\nFAIL\n" : "\nPASS\n");
     return fail;
 }
-''' % (name, name, name, stim_file, inputs_decl, scanf_fmt, scanf_vars, nfields, rst_line, assigns, clk_lines, cmp_code)
+''' % (name, name, name, os.path.basename(stim_file), inputs_decl, scanf_fmt, scanf_vars, nfields, rst_line, assigns, clk_lines, cmp_code)
     tb_file = os.path.join(workdir, name + "_tb.cpp")
     with open(tb_file, "w") as f:
         f.write(tb)
@@ -843,9 +937,14 @@ int main(int argc, char** argv) {
     verilog_file = os.path.join(workdir, name + ".v")
     with open(verilog_file, "w") as f:
         f.write(modules[name][1])
+    # NOTE (Lead 2026-10-08): pass *relative* names + a relative -Mdir. The msys
+    # verilator 4.024 wrapper cannot handle Windows absolute paths here: it joins
+    # -Mdir with the absolute source path and then fails with "Cannot find file
+    # containing module". cwd is already `workdir`, so relative names are correct.
     comp = subprocess.run(
         [VERILATOR, "--cc", "--exe", "-Wno-fatal", "--top-module", name,
-         "-Mdir", objdir, "-o", name + "_tb", tb_file, verilog_file],
+         "-Mdir", "obj_" + name, "-o", name + "_tb",
+         os.path.basename(tb_file), os.path.basename(verilog_file)],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=workdir)
     if comp.returncode != 0:
         print("  [COMPILE FAIL] %s:\n%s" % (name, comp.stderr.decode("utf-8", "replace")[-1500:]))
@@ -871,8 +970,10 @@ def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     keep = "--keep" in sys.argv
     case_files = args or [os.path.join(CASE_DIR, c) for c in DEFAULT_CASES]
-    if not os.path.exists(TYPORT):
-        print("typort binary not found at %s (run cargo build --release --bin typort)" % TYPORT)
+    print_typort_banner()
+    if TYPORT is None or not os.path.exists(TYPORT):
+        print("[typort] ERROR: no usable typort binary; refusing to run behavioral "
+              "verification against an unknown prelude (set TYPORT).")
         sys.exit(1)
     if shutil.which(VERILATOR) is None:
         print("[SKIP] verilator not found — behavioral verification unavailable (L1/L2 still enforced)")
@@ -895,6 +996,7 @@ def main():
                 print("  [OK] %s" % name)
                 passed += 1
             else:
+                print("  [FAIL] %s" % name)
                 failed += 1
         for name, (ports_in, ports_out, ref, n_cycles) in SEQ_CASES.items():
             if name not in modules:
@@ -904,6 +1006,7 @@ def main():
             if res is True:
                 passed += 1
             else:
+                print("  [FAIL] %s" % name)
                 failed += 1
         for name, (ports_in, ports_out, ref, n_cycles) in MISC_SEQ_CASES.items():
             if name not in modules:
@@ -913,6 +1016,7 @@ def main():
             if res is True:
                 passed += 1
             else:
+                print("  [FAIL] %s" % name)
                 failed += 1
         for name, (ports_in, ports_out, ref, strategy) in MISC_CASES.items():
             if name not in modules:
@@ -923,6 +1027,7 @@ def main():
                 print("  [OK] %s" % name)
                 passed += 1
             else:
+                print("  [FAIL] %s" % name)
                 failed += 1
         for name, (ports_in, ports_out, ref, n_cycles) in STREAM_SEQ_CASES.items():
             if name not in modules:
@@ -932,6 +1037,7 @@ def main():
             if res is True:
                 passed += 1
             else:
+                print("  [FAIL] %s" % name)
                 failed += 1
         for name, (ports_in, ports_out, ref, n_cycles, clk_a, clk_b) in DUAL_CLOCK_CASES.items():
             if name not in modules:
@@ -941,6 +1047,7 @@ def main():
             if res is True:
                 passed += 1
             else:
+                print("  [FAIL] %s" % name)
                 failed += 1
     print("== %d passed, %d failed, %d total ==" % (passed, failed, total))
     if not keep:
