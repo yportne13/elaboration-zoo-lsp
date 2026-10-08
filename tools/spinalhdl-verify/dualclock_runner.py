@@ -7,11 +7,15 @@ backslash mangling inside verify.py.
 """
 
 import os
+import shutil
 import subprocess
 import sys
 
-# verilator binary (same resolution as verify.py)
-VERILATOR = os.environ.get("VERILATOR_BIN", "verilator")
+# verilator binary (same resolution as verify.py; see the note there about msys
+# shipping an extensionless `verilator` wrapper that shutil.which cannot see).
+VERILATOR = (os.environ.get("VERILATOR_BIN") or os.environ.get("VERILATOR")
+             or shutil.which("verilator") or shutil.which("verilator_bin")
+             or "verilator")
 
 
 def run_dualclock_case(name, ports_in, ports_out, ref, n_cycles, workdir, modules, clk_a, clk_b):
@@ -80,7 +84,7 @@ int main(int argc, char** argv) {
     printf(fail ? "\nFAIL\n" : "\nPASS\n");
     return fail;
 }
-''' % (name, name, name, stim_file, inputs_decl, scanf_fmt, scanf_vars, nfields, rst_line, assigns, clk_lines, cmp_code)
+''' % (name, name, name, os.path.basename(stim_file), inputs_decl, scanf_fmt, scanf_vars, nfields, rst_line, assigns, clk_lines, cmp_code)
     tb_file = os.path.join(workdir, name + "_tb.cpp")
     with open(tb_file, "w") as f:
         f.write(tb)
@@ -88,9 +92,12 @@ int main(int argc, char** argv) {
     verilog_file = os.path.join(workdir, name + ".v")
     with open(verilog_file, "w") as f:
         f.write(modules[name][1])
+    # NOTE (Lead 2026-10-08): relative names + relative -Mdir; see verify.py.
+    # msys verilator 4.024 mishandles Windows absolute paths with -Mdir.
     comp = subprocess.run(
         [VERILATOR, "--cc", "--exe", "-Wno-fatal", "--top-module", name,
-         "-Mdir", objdir, "-o", name + "_tb", tb_file, verilog_file],
+         "-Mdir", "obj_" + name, "-o", name + "_tb",
+         os.path.basename(tb_file), os.path.basename(verilog_file)],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=workdir)
     if comp.returncode != 0:
         print("  [COMPILE FAIL] %s:\n%s" % (name, comp.stderr.decode("utf-8", "replace")[-1500:]))

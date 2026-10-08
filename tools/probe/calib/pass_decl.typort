@@ -1,0 +1,5 @@
+// tools/probe/calib/pass_decl.typort
+// CALIBRATION SAMPLE - MUST PASS.
+// Both engines must elaborate every decl with no first-failing decl.
+def calib_pass_sample: Nat = 1 + 2
+println calib_pass_sample

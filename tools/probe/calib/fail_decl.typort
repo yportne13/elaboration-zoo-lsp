@@ -1,0 +1,6 @@
+// tools/probe/calib/fail_decl.typort
+// CALIBRATION SAMPLE - MUST FAIL.
+// l13bench must report a first-failing decl on both engines. If the judge under
+// test calls this PASS, the judge is broken (round 1 saw exactly that twice).
+// The name below is deliberately not in the prelude.
+def calib_fail_sample: Nat = no_such_prelude_name_9f3c
