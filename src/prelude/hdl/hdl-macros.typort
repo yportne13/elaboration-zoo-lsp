@@ -396,6 +396,50 @@ macro_rules Expr {
     (inout $x:ident = Bool) => {let $x: Bool = newBoolInOut;};
     (let $x:ident = Bool) => {let $x: Bool = newBool;};
 
+    // ---- `Boolean` port spelling: HDV004 diagnostic + hard failure (X1) ----
+    // `boolean` is the DEFINING type name of `Bool` (src/prelude/core/bool.typort
+    // is `enum Boolean { false, true }`), but every port arm above matches the
+    // literal token `Bool`.  Writing `input sel = Boolean` therefore used to fall
+    // through to the raw-passthrough arm at the bottom of this table, which
+    // expanded it to the illegal `let _ = input sel = Boolean`; the resulting
+    // parse error failed the WHOLE `module` macro expansion, so the user only saw
+    // `expected def, found identifier` at the `module` line (round-1 X1).
+    //
+    // These arms are deliberately NARROW: they specialize on the literal token
+    // `Boolean` only.  A generic `= $ty:ident` arm was prototyped and REJECTED
+    // (round-2): macro arms are chosen per WHOLE invocation, so once any port in
+    // the list fails the `= Bool` group, a generic repetition captures EVERY
+    // scalar port — including legitimate `x = Bool` ones — and would warn about
+    // types that are perfectly valid.  `MyTypo` therefore keeps its original loud
+    // failure (`expected def, found identifier` + `name not in scope: <module>`)
+    // and stays undiagnosed (recorded as a next-round item).
+    //
+    // They create NO port and always fail hard (the sentinel name below makes the
+    // class body fail), so the module can never silently elaborate as a Bool port.
+    // The HDV004 issue is reported INLINE with literal arguments on purpose:
+    //   * a helper `def` wrapping this call is executed by the prelude-load
+    //     DECLARATION CHECK, and with a constant module slot that pushed a line
+    //     into the CACHED "CheckIssues" global, leaking a warning into every
+    //     run_with_prelude output and reddening whole test families;
+    //   * `report_check_issue` reads LITERAL arguments only, so a def parameter
+    //     would arrive empty;
+    //   * an EMPTY string argument inside a transcriber breaks the expansion
+    //     (`expected \`}\`, found \`let\``), so both slots are non-empty here.
+    // The module slot carries `Boolean` and the signal slot the port name, which
+    // is what lib.rs::check_issue_span resolves to the port declaration line.
+    (input $x:ident = Boolean) => {
+        let _ = report_check_issue("HDV004", "Boolean", stringify $x, "`Boolean` is `Bool`'s defining type name - write `Bool` for a scalar port; sized ports use the NAME = UInt[w] / Bits[w] / SInt[w] form");
+        let _ = __port_type_must_be_the_literal_Bool__;
+    };
+    (output $x:ident = Boolean) => {
+        let _ = report_check_issue("HDV004", "Boolean", stringify $x, "`Boolean` is `Bool`'s defining type name - write `Bool` for a scalar port; sized ports use the NAME = UInt[w] / Bits[w] / SInt[w] form");
+        let _ = __port_type_must_be_the_literal_Bool__;
+    };
+    (inout $x:ident = Boolean) => {
+        let _ = report_check_issue("HDV004", "Boolean", stringify $x, "`Boolean` is `Bool`'s defining type name - write `Bool` for a scalar port; sized ports use the NAME = UInt[w] / Bits[w] / SInt[w] form");
+        let _ = __port_type_must_be_the_literal_Bool__;
+    };
+
     // ---- register declarations ----
     // `reg x = T[w] init v` — register with reset value (async reset, verilog init)
     (reg $x:ident = Bits[$width:raw] init $init:raw) => {let $x: Bits[$width] = newBitsRegInitNat($width, $init);};
@@ -421,6 +465,15 @@ macro_rules Expr {
     (output reg $x:ident = UInt[$width:raw]) => {let $x: UInt[$width] = newUIntOutReg($width);};
     (output reg $x:ident = SInt[$width:raw]) => {let $x: SInt[$width] = newSIntOutReg($width);};
     (output reg $x:ident = Bool) => {let $x: Bool = newBoolOutReg;};
+
+    // ---- `output reg q = Boolean`: same narrow `Boolean` diagnostic (X1) ----
+    // Placed AFTER every valid `output reg` arm so the sized/Bool forms still
+    // take their own arms; same inline-literal / no-helper-def discipline (see
+    // the note on the `input`/`output`/`inout` Boolean arms above).
+    (output reg $x:ident = Boolean) => {
+        let _ = report_check_issue("HDV004", "Boolean", stringify $x, "`Boolean` is `Bool`'s defining type name - write `Bool` for a scalar port; sized ports use the NAME = UInt[w] / Bits[w] / SInt[w] form");
+        let _ = __port_type_must_be_the_literal_Bool__;
+    };
 
     // ---- sub-module instantiation ----
     // `let u = myAdder.create[8]` needs no special branch: the class
@@ -789,6 +842,31 @@ macro_rules module {
 			$( let $pb: Bool = Bool.mk(None, subSignal(bn.name, stringify $pb)); )*
 			// tree reads the create-time `_res` field (see the WHY note above).
 			def tree: ModuleTree = this._res
+		}
+	};
+	// ---- `Boolean` port spelling with ports BEFORE the body brace (X1) ----
+	// Appended LAST and narrow: the final group accepts the literal token
+	// `Boolean` only, so it matches exactly those body-preceding port lists whose
+	// scalar ports are ALL spelled `Boolean` (that is the only shape that used to
+	// leave the macro with no arm at all and make the parser report
+	// `expected def, found identifier` at the `module` line).
+	//
+	// KNOWN LIMITATION (recorded, accepted): a MIXED body-preceding list such as
+	// `input sel = Boolean` + `output y = Bool` does NOT match this arm (the
+	// `= Boolean` group stops before `y = Bool` and the strict arms already
+	// failed), so it keeps the original undiagnosed error.  A generic
+	// `= $bt:ident` arm was prototyped and REJECTED because its repetition
+	// captures EVERY scalar port — including legitimate `x = Bool` ones — and
+	// would warn about valid types.  See the Expr-macro note above.
+	//
+	// It creates NO port and always fails hard (sentinel below), so the module can
+	// never silently elaborate; the HDV004 issue is inline with literal arguments
+	// for the same reasons as the Expr arms.
+	($name: ident $( $args: params )* $( output reg $rp: ident = $rt: ident [$rw: raw] init $rv: raw )* $( output reg $rp2: ident = $rt2: ident [$rw2: raw] )* $( output reg $rb: ident = Bool init $rbv: raw )* $( output reg $rb2: ident = Bool )* $( $d: ident $p: ident = $t: ident [$w: raw] )* $( $db: ident $pb: ident = Boolean )* {$( $body: Expr )*}) => {
+		class $name $({$args})* impl Module {
+			$( let _ = report_check_issue("HDV004", "Boolean", stringify $pb, "`Boolean` is `Bool`'s defining type name - write `Bool` for a scalar port; sized ports use the NAME = UInt[w] / Bits[w] / SInt[w] form"); )*
+			let _ = __port_type_must_be_the_literal_Bool__;
+			def tree: ModuleTree = ModuleTree.mk(0, nil)
 		}
 	};
 }
