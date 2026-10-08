@@ -534,3 +534,89 @@ println(moduleTreeVL(bCcToggle.create[bCdA].tree))
         output
     );
 }
+
+// ── task-16: mux 消费者不是同步链的下一级（HDL039 误报回归钉）──
+// 2FF 链 [s1, s2] 的末级 s2 有两个合法读者：组合输出 q := s2 与同域寄存器经 mux
+// （cons <= mux(en, s2, cons)）。修复前 chainNextOf 把 cons 当成链的下一级 ⇒ s2
+// 被升级为中间级 ⇒ 对 q := s2 误报 HDL039。修复后：链仍识别（HDL038），无 HDL039。
+
+#[test]
+fn hdl_b_mux_consumer_is_not_a_chain_stage() {
+    let output = assert_ok(r#"
+def t16CdA: ClockDomain = ClockDomain.mk "clk_a" "rst_a" Async RisingEdge ActiveHigh
+def t16CdB: ClockDomain = ClockDomain.mk "clk_b" "rst_b" Async RisingEdge ActiveHigh
+module t16MuxConsumer[cdA] {
+    input d = UInt[4]
+    input en = Bool
+    output q = UInt[4]
+    output held = UInt[4]
+    let src = newUIntRegCdNamed("src", 4, cdA)
+    let _ = createSignalExpr("", regAssignCd(src.zz_expr, d.zz_expr, cdA))
+    let s1 = newUIntRegCdNamed("s1", 4, t16CdB)
+    let _ = createSignalExpr("", regAssignCd(s1.zz_expr, src.zz_expr, t16CdB))
+    let s2 = newUIntRegCdNamed("s2", 4, t16CdB)
+    let _ = createSignalExpr("", regAssignCd(s2.zz_expr, s1.zz_expr, t16CdB))
+    q := s2
+    let cons = newUIntRegCdNamed("cons", 4, t16CdB)
+    let next = Expr.mux(en.zz_expr, s2.zz_expr, cons.zz_expr)
+    let _ = createSignalExpr("", regAssignCd(cons.zz_expr, next, t16CdB))
+    held := cons
+}
+println(moduleTreeVL(t16MuxConsumer.create[t16CdA].tree))
+"#);
+    assert!(
+        output.contains("HDL038"),
+        "the 2FF chain must still be recognized, got:\n{}",
+        output
+    );
+    assert!(
+        !output.contains("HDL039"),
+        "a mux consumer of the last FF must not make it a mid stage, got:\n{}",
+        output
+    );
+    assert!(
+        !output.contains("HDL037"),
+        "the chain must not be truncated, got:\n{}",
+        output
+    );
+}
+
+// ── task-16: memWrite 的读不得污染下一条 drive 的 srcs（pending 泄漏回归钉）──
+// memWrite 不产生 DriveSrc，它的读（mem/addr/data/en）曾留在 pending 里并附着到
+// 下一条 drive 的 srcs，使纯移位级 `s2 <= s1` 看起来读了 pushData/wrPtr/mem，
+// 从而被「纯移位」判据拒掉、链被截断（HDL037）。修复：stmtAssign 开头清 pending。
+
+#[test]
+fn hdl_b_mem_write_reads_do_not_contaminate_next_drive() {
+    let output = assert_ok(r#"
+def t16wCdA: ClockDomain = ClockDomain.mk "clk_a" "rst_a" Async RisingEdge ActiveHigh
+def t16wCdB: ClockDomain = ClockDomain.mk "clk_b" "rst_b" Async RisingEdge ActiveHigh
+module t16WriteChain[cdA] {
+    input pushValid = Bool
+    input pushData = UInt[4]
+    output q = UInt[4]
+    let mem = newMemUIntNamed("m", 4, 4)
+    let wr = newUIntRegInitNatNamed("wr", 3, 0)
+    let s1 = newUIntRegCdNamed("s1", 4, t16wCdB)
+    let _ = createSignalExpr("", regAssignCd(s1.zz_expr, wr.zz_expr, t16wCdB))
+    let s2 = newUIntRegCdNamed("s2", 4, t16wCdB)
+    let _ = createSignalExpr("", regAssignCd(s2.zz_expr, s1.zz_expr, t16wCdB))
+    let _ = whenBegin(pushValid.zz_expr)
+    let _ = createSignalExpr("", memWrite(mem.zz_expr, wr.zz_expr, pushData.zz_expr, literal(1)))
+    let _ = createSignalExpr("", regAssign(wr.zz_expr, binary(wr.zz_expr, "+", literal(1))))
+    let _ = whenEnd(unit)
+    q := s2
+}
+println(moduleTreeVL(t16WriteChain.create[t16wCdA].tree))
+"#);
+    assert!(
+        output.contains("HDL038"),
+        "the chain after a memWrite must still be recognized, got:\n{}",
+        output
+    );
+    assert!(
+        !output.contains("HDL037"),
+        "memWrite reads must not contaminate the next drive (chain truncated), got:\n{}",
+        output
+    );
+}
