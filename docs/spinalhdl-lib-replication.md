@@ -22,30 +22,41 @@
 | Utils.scala | `CountOne`/`CountOneOnEach`/`SetCount`/`ClearCount`、`Reverse`、`PropagateOnes`、`UIntToOh`/`UIntToOhMinusOne`/`OHToUInt`、`OH.isLegal`、`OHMasking.first/last/roundRobin*`、`PriorityMux`、`MuxOH`/`OhMux`、`Min/Max/Clamp`、`toGray/fromGray`、`EndiannessSwap`、`AddWithCarry`、`CountLeadingZeroes`/`CountTrailingZeroes`、`Shift.rightWithScrap`、`Delay`/`DelayEvent`/`Timeout`、`History`、`MajorityVote`、`whenIndexed`/`whenMasked`、`SetFromFirstOne`、`BitAggregator`(纯) | `hdl-utils.typort` |
 | Counter.scala | `Counter`（stateCount/clear/inc/willOverflow）、`CounterUpDown`、`DownCounter`、`OneHotCounter`、`JohnsonCounter` | `hdl-utils.typort` |
 | Misc.scala | `FlowCmdRsp`(bundle)、`Repeat`(`#*`)、`DataCarrier` trait 结构 | `hdl-misc.typort` |
-| logic/Decoder.scala | onehot 解码（`DecodingSpec` 纯逻辑 + 硬件 OR-tree）| `hdl-logic.typort` |
-| logic/Masked.scala | `Masked`（纯值 + `===` 硬件掩码比较）| `hdl-logic.typort` |
-| math/Bcd.scala | `Bcd`（4-bit digit Vec、BCD 加法/移位/`isZero`/`leadingZeroes`）| `hdl-math.typort` |
-| math/Divider.scala | `UnsignedDivider`（恢复除法状态机，cmd/rsp 握手）| `hdl-math.typort` |
-| io/TriState.scala | `TriState`（read/write/writeEnable + asMaster）、`TriStateArray` | `hdl-io.typort` |
-| io/ReadableOpenDrain.scala | `ReadableOpenDrain` | `hdl-io.typort` |
-| io/Gpio.scala | 简单 GPIO（in/out/中断挂起/掩码寄存器组）| `hdl-io.typort` |
+| logic/Decoder.scala | onehot 解码（`DecodingSpec` 纯逻辑 + 硬件 OR-tree）| `hdl-misc-io.typort` |
+| logic/Masked.scala | `Masked`（纯值 + `===` 硬件掩码比较）| `hdl-misc-io.typort` |
+| math/Bcd.scala | `Bcd`（4-bit digit Vec、BCD 加法/移位/`isZero`/`leadingZeroes`）| `hdl-misc-io.typort` |
+| math/Divider.scala | `UnsignedDivider`（恢复除法状态机，cmd/rsp 握手）| `hdl-misc-io.typort` |
+| io/TriState.scala | `TriState`（read/write/writeEnable + asMaster）、`TriStateArray` | `hdl-misc-io.typort` |
+| io/ReadableOpenDrain.scala | `ReadableOpenDrain` | `hdl-misc-io.typort` |
+| io/Gpio.scala | 简单 GPIO（in/out/中断挂起/掩码寄存器组）| `hdl-misc-io.typort` |
 | misc/Prescaler.scala | `Prescaler` | `hdl-misc.typort` |
 | misc/Timer.scala | `Timer`（tick/clear/limit/full/value）| `hdl-misc.typort` |
 | misc/InterruptCtrl.scala | `InterruptCtrl`（inputs/clears/masks/pendings）| `hdl-misc.typort` |
 | misc/Plru.scala | `Plru`（伪 LRU 状态 + evict/update）| `hdl-misc.typort` |
 | misc/Watchdog.scala | `Watchdog` | `hdl-misc.typort` |
-| bus/amba3/apb/APB3.scala | `Apb3` bundle + asMaster/asSlave + `Apb3Decoder` | `hdl-bus.typort` |
-| bus/amba4/axilite/AxiLite4.scala | `AxiLite4`（aw/w/b/ar/r 五通道 Stream）+ resp 常量 | `hdl-bus.typort` |
-| bus/amba4/axis/Axi4Stream.scala | `Axi4Stream`（data/id/strb/keep/last/dest/user）| `hdl-bus.typort` |
-| bus/wishbone/Wishbone.scala | `Wishbone`（classic/pipelined）| `hdl-bus.typort` |
-| bus/avalon/Avalon.scala | `AvalonST`（data/valid/ready/empty/sop/eop）| `hdl-bus.typort` |
-| bus/amba3/apb/Apb3SlaveFactory.scala | 寄存器组简化版（read/write/driveAndRead）| `hdl-bus.typort` |
+| bus/amba3/apb/APB3.scala | `Apb3` bundle + asMaster/asSlave + `Apb3Decoder` | `hdl-bus-proto.typort` |
+| bus/amba4/axilite/AxiLite4.scala | `AxiLite4`（aw/w/b/ar/r 五通道 Stream）+ resp 常量 | `hdl-bus-proto.typort` |
+| bus/amba4/axis/Axi4Stream.scala | `Axi4Stream`（data/id/strb/keep/last/dest/user）| `hdl-bus-proto.typort` |
+| bus/wishbone/Wishbone.scala | `Wishbone`（classic/pipelined）| `hdl-bus-proto.typort` |
+| bus/avalon/Avalon.scala | `AvalonST`（data/valid/ready/empty/sop/eop）| `hdl-bus-proto.typort` |
+| bus/amba3/apb/Apb3SlaveFactory.scala | 寄存器组简化版（read/write/driveAndRead）| `hdl-bus-proto.typort` |
 | CrossClock.scala | `BufferCC`（双触发器同步器，单时钟结构）| `hdl-crossclock.typort` |
 | Stream.scala | Stream 管线（`combStage`/`halfPipe`/`m2sPipe`/`s2mPipe`）、`StreamFifo`、`StreamFifoLowLatency`、`StreamMux`/`StreamDemux`/`StreamDemuxOh`、`StreamArbiter`(lowerPriority/roundRobin/roundRobinMasked)、`StreamFork`、`StreamJoin`、`StreamCombinerSequential`、`StreamDispatcherSequencial`、`throwWhen`/`haltWhen`/`continueWhen`/`takeWhen`/`freeRun` | `hdl-stream.typort` |
 | Flow.scala | `Flow`（已有）、`FlowMux`、`FlowArbiter`、`FlowFifo`（→ `StreamFifo` 转换）| `hdl-stream.typort` |
 | Fragment.scala | `Fragment[T]`（last 位）、`StreamFragment`/`FlowFragment` 工厂、`throwWhen` 等 | `hdl-stream.typort` |
 
 ### B 级 — 需要语言扩展（Rust 侧）后才能复刻
+
+> **2026-10 文件名对码更正（verifier）**：上表原把 Bcd/Divider 指向 `hdl-math.typort`、
+> Decoder/Masked 指向 `hdl-logic.typort`、TriState/Gpio 指向 `hdl-io.typort`、
+> 总线组件指向 `hdl-bus.typort` —— 这些名字里有三个**文件不存在**（`hdl-math`/`hdl-io`/
+> `hdl-logic`），总线组件实际在 `hdl-bus-proto.typort`。实测落点：
+> `Bcd`/`bcdAddDigit`/`bcdIsZero`/`bcdAdd`/`DividerCmd`/`DividerRsp`/`DividerFSM`/`dividerCore`/
+> `decoderOhToUInt`/`decoderValueUInt`/`Masked`/`maskedEq`/`TriStateBits`/`TriStateArray`/
+> `ReadableOpenDrain`/`GpioIO`/`gpioCtrl` 均在 `hdl-misc-io.typort`；
+> `Apb3`/`AxiLite4`/`Axi4Stream`/`Wishbone`/`AvalonST`/`Apb3RegBank` 均在 `hdl-bus-proto.typort`
+> （`hdl-bus.typort` 放的是 `IMasterSlave`/`Bundle`/`Stream`/`Flow`/`State`/`FSMEntryPoint` 等）。
+> 上表已按实测落点改写。
 
 | 组件 | 缺口 |
 |---|---|
@@ -72,7 +83,7 @@
 | 2 | `hdl-stream.typort` | Stream/Flow/Fragment 框架 + FIFO/Mux/Demux/Arbiter/Fork/Join | 结构断言 + 时序仿真（fifo 顺序）|
 | 3 | `hdl-crossclock.typort` | BufferCC + 单时钟可表达部分 | 结构断言 |
 | 4 | `hdl-bus.typort` | APB3/AxiLite4/Axi4Stream/Wishbone/AvalonST + 寄存器组 | 结构断言 + 读写仿真 |
-| 5 | `hdl-io.typort` `hdl-math.typort` `hdl-logic.typort` `hdl-fsm.typort` | TriState/GPIO、Bcd/Divider、Decoder/Masked、StateMachine 简化版 | 真值表 + 结构断言 |
+| 5 | `hdl-misc-io.typort` `hdl-fsm.typort` | TriState/GPIO、Bcd/Divider、Decoder/Masked、StateMachine 简化版 | 真值表 + 结构断言 |
 | 6 | `hdl-misc.typort` | Prescaler/Timer/InterruptCtrl/Plru/Watchdog | 结构断言 + 时序仿真 |
 | 7 | （B 级，语言扩展后）| 跨时钟 + StreamWidthAdapter + regif-lite | — |
 
@@ -112,8 +123,8 @@
 | 2 Stream/Flow/Fragment（hdl-stream.typort） | ✅ | L1/L2 通过；L3 12/12（m2s/fifo/mux/arb/fork + counter 家族） |
 | 3 CrossClock（hdl-crossclock.typort） | ✅ BufferCC；真跨时钟待语言扩展 | L1/L2 通过 |
 | 4 Bus（hdl-bus-proto.typort） | ✅ APB3/AxiLite4/Axi4Stream/Wishbone/AvalonST + 寄存器组 | L1/L2 通过（APB3 读写行为人工核验） |
-| 5 io/math/logic/fsm（hdl-misc-io.typort） | ✅ TriState/Gpio/Bcd/Divider/Decoder/Masked/StateMachine | L1/L2 通过；L3 7/7（bcd/maskedEq/decoder + prescaler/timer/intr/watchdog） |
-| 6 misc（hdl-misc.typort） | ✅ Prescaler/Timer/InterruptCtrl/Plru/Watchdog | 同上 |
+| 5 io/math/logic/fsm（hdl-misc-io.typort） | ✅ TriState/Gpio/Decoder/Masked/StateMachine；⚠ Bcd **部分**：`bcdAddDigit` 真实（+6 修正），`bcdAdd`（整宽级联）仍为存根 `= a`（`hdl-misc-io.typort:166`） | L1/L2 通过；L3 7/7（bcd/maskedEq/decoder + prescaler/timer/intr/watchdog） |
+| 6 misc（hdl-misc.typort） | ✅ Prescaler/Timer/InterruptCtrl/Watchdog；Plru 本轮由**存根升级为树形 PLRU**（`plruUpdate`/`plruEvict`/`plruEvictGo`/`plruPathSetMask`/`plruPathClrMask`，2026-10） | 同上 |
 | 7 B 级扩展 | ✅ 每寄存器时钟域已在 .typort 层实现（Expr 加 createRegWidthCd/regAssignCd 构造器，多 always 块按 cd 分组 + 额外时钟自动端口）→ PulseCCByToggle/CCByToggle/BufferCC-cd/readSyncCC/StreamFifoCC 全部落地；✅ Vec 硬件索引（vecAtUInt 平衡 mux 树）；✅ StreamWidthAdapter-lite（字节收集重排，22-widthadapter.typort） | L3 双时钟 51/51（含 vPulseCC/vFifoCC） |
 
 **最终验收**：examples/hdl/01-22 全部编译展开（L1）；关键 Verilog 结构断言通过（L2）；
@@ -177,7 +188,10 @@ stash 对比验证为同一集合）。
 **已知语言限制（记录于本文档 §3/§5）**：
 1.  不能在 prelude 文件中用（ 枚举构造器短名冲突）→ 总线
    bundle 用手工方向函数（ 等）。
-2. 每模块单时钟域 → 真跨时钟（PulseCCByToggle/StreamFifoCC）需 Rust 侧扩展。
+2. ~~每模块单时钟域 → 真跨时钟（PulseCCByToggle/StreamFifoCC）需 Rust 侧扩展。~~
+   **2026-10 更新**：每寄存器时钟域已在 `.typort` 层落地（§6 波次 7），
+   PulseCCByToggle/CCByToggle/BufferCC-cd/readSyncCC/StreamFifoCC 均已实现；
+   本轮另修 `streamFifoCC` 的满/空判据（指针加 wrap 位，RAM 只用低位寻址）。
 3. 泛型硬件值方法受限于 trait 方法签名规则（T 不能出现在参数类型）→ 用 MuxExpr 模式 /
    按类型实现。
 4. 在 module 体内  会与模块宏的  字段冲突 → 用 。
