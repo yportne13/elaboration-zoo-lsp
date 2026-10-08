@@ -472,6 +472,7 @@ pub fn parser_with_macros(input: &str, id: u32, global_macros: &HashMap<String, 
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
     let mut err_collect: MacroState = (vec![], clean_global, vec![], 0);
+    mt18_hint_reset();
     err_collect.1.entry("stringify".to_owned()).or_insert_with(|| vec![MacroRule {
         matcher: MacroMatcher::Metavar { name: empty_span(String::new()), fragment: MacroFragment::Ident },
         transcriber: MacroTranscriber::BuiltIn,
@@ -664,6 +665,82 @@ fn string_is<'a: 'b, 'b>(p: TokenKind, s: &'a str) -> impl Parser<&'b [TokenNode
     }
 }
 
+/// task-18 改动一（窗口 16 改进）：`(e : T)` 类型标注与注解 lambda binder
+/// `(x : T) => ...` 在括号组入口**无法可靠区分**（两者括号内文本同形：
+/// `(y: Nat) => y` 与 `(e : T)` 都是「深度 1 处一个 `:`」），因此用**一条
+/// 覆盖两义**的文案，不再把 binder 位置误导成 type ascription。
+const MT18_HINT: &str = "this language supports neither type ascription `(e : T)` nor an \
+     annotated lambda binder `(x: T) => ...`; bind it first instead, e.g. `def z: T = e`, \
+     or drop the annotation (`x => e`)";
+
+thread_local! {
+    /// 同一个 `:` 位置**最多推一条**定向诊断。两个钩子（atom 括号组臂 /
+    /// postfix `(` 臂）以及 `or_far` 的重试都可能在同一个 `:` 上命中，之前会
+    /// 在实参位重复输出同一文案（verifier task-19 实测）。键 = 该 `:` 的
+    /// `(path_id, start_offset, end_offset)`（唯一标识一处源码位置），
+    /// 每个顶层 parse 入口重置。
+    static MT18_HINTED: std::cell::Cell<Option<(u32, u32, u32)>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// 每个顶层 parse 入口调用：清空「已推过」记录，避免上一趟 parse 的同位置
+/// 记录把这一趟的合法提示吞掉。
+fn mt18_hint_reset() {
+    MT18_HINTED.with(|c| c.set(None));
+}
+
+/// 推一条定向诊断（**幂等**：同一个 `:` 只推一次）。
+fn mt18_push_hint(colon: Span<()>, state: &mut MacroState) {
+    let key = (colon.path_id, colon.start_offset, colon.end_offset);
+    if MT18_HINTED.with(|c| c.get() == Some(key)) {
+        return;
+    }
+    MT18_HINTED.with(|c| c.set(Some(key)));
+    state.push_error(IError {
+        msg: colon.map(|_| ErrMsg::Custom(MT18_HINT.to_owned())),
+    });
+}
+
+/// task-18 改动一：`(e : T)` / `(x: T) => …` 两种写法**都不受支持**。在表达式
+/// 括号组入口做一次**前瞻扫描**（不消费输入、不影响原解析）：若 `(`…`)` 内
+/// **深度 1** 处出现 `Colon`，就推一条定向诊断说明根因与绕法；随后原本的
+/// `expected ')' , found ':'` 与 elaboration 的错误**照旧产生**。
+fn mt18_hint_ascription<'a>(input: &[TokenNode<'a>], state: &mut MacroState) {
+    // 只在当前位置确实是 `(` 时扫描（该臂被 or_far 试跑时 input 可能不在括号上）
+    if !matches!(input.first().map(|t| t.data.1), Some(TokenKind::LParen)) {
+        return;
+    }
+    let mut depth = 0i32;
+    let mut colon_at: Option<usize> = None;
+    for (i, t) in input.iter().enumerate() {
+        match t.data.1 {
+            // 三种括号都计入深度：`[msb:lsb]` 位选里的 `:` 与 `{...}` 里的 `:`
+            // 都不是类型标注。只数 `(`…`)` 会让 HDL 里的 `w[15:8]` 被误判
+            // （examples/hdl/24-verilog-practice.typort 实测 3 条假阳性）。
+            TokenKind::LParen | TokenKind::LSquare | TokenKind::LCurly => depth += 1,
+            TokenKind::RParen | TokenKind::RSquare | TokenKind::RCurly => {
+                depth -= 1;
+                if depth == 0 {
+                    // 组已闭合：其内没有深度 1 的 `:` ⇒ 不是标注形态
+                    return;
+                }
+            }
+            // 组不跨行：深度 1 处遇到行尾 ⇒ 组未闭合（缺 `)`），不是标注形态。
+            // 这条守卫是必需的：否则扫描会越过本行、把后面声明的 `def bar: Nat`
+            // 的 `:` 误判成标注（parser_error_tests::single_missing_paren 实测）。
+            TokenKind::EndLine if depth == 1 => return,
+            TokenKind::Colon if depth == 1 => {
+                colon_at = Some(i);
+                break;
+            }
+            _ => {}
+        }
+    }
+    if let Some(i) = colon_at {
+        mt18_push_hint(input[i].to_span(), state);
+    }
+}
+
 /// ( p )
 fn paren<'a: 'b, 'b, P, O>(p: P) -> impl Parser<&'b [TokenNode<'a>], O, MacroState, IError>
 where
@@ -794,7 +871,12 @@ fn p_atom1<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IR
                 }
             }
         })
-        .or_far(
+        .or_far(|input: &'b [TokenNode<'a>], state: &mut MacroState| {
+            // task-18 改动一：表达式括号组 `(e : T)` 的定向诊断（前瞻、不消费、
+            // 只在深度 1 且本行内出现 `:` 时推；括号组解析本身完全不受影响）。
+            // 注意：不能用「解析失败才推」来收窄——`paren_cut` 对畸形组返回的是
+            // 软失败 `Ok(Err(span))`（下面的 `Raw::Hole` 分支），解析并不会 Err。
+            mt18_hint_ascription(input, state);
             // Tuple literal: (a, b, ...) -> TupleN.mk a b ...
             paren_cut(
                 p_raw.many1_sep((kw(T![,]), kw(EndLine).option()))
@@ -814,7 +896,8 @@ fn p_atom1<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IR
                 }
             })
             .or_far(paren_cut(p_raw).map(|x| x.unwrap_or_else(Raw::Hole)))
-        )
+            .parse(input, state)
+        })
         // Verilog concatenation `{a, b, c}` → `a ## b ## c` (the Cat trait).
         // A leading `{` is otherwise unparseable as an expression: block
         // braces are matched structurally by the macro matcher, and the
@@ -949,6 +1032,17 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, Macr
                     let (input_t, rhs) = p_raw
                         .many0_sep((kw(T![,]), kw(EndLine).option()))
                         .parse(input_t, state)?;
+                    // task-18 改动一：`(e : T)` / `(x: T) => …` 都不支持。此处补一条
+                    // **定向**诊断（真正的根因），否则用户只看到随后的
+                    // `expected ')' , found ':'` 与 elaboration 的 `can't unify`，
+                    // 根因被淹没。原有 Expect(RParen) 错误**保留**（本分支不消费
+                    // 冒号，下面的 RParen 解析照旧失败）。文案与 emit 都走
+                    // `mt18_push_hint` ⇒ 与 atom 括号组臂**同一处只推一条**。
+                    if rhs.len() == 1 {
+                        if let Ok((_, colon)) = kw(Colon).parse(input_t, state) {
+                            mt18_push_hint(colon, state);
+                        }
+                    }
                     let (input_t, _) = (kw(EndLine).option(), kw(RParen)).parse(input_t, state)?;
                     input = input_t;
                     if rhs.len() == 1 {
@@ -3818,6 +3912,7 @@ def t = match x {
 //pub fn parser_test<'a, T, P: Parser<&'a [TokenNode<'a>], T, Vec<IError>, IError>>(p: P, input: &'a str, id: u32) -> Option<(Vec<T>, Vec<IError>)> {
 pub fn parser_test(input: &str, id: u32) -> Option<(Vec<Raw>, Vec<IError>)> {
     let mut err_collect: MacroState = (vec![], Default::default(), vec![], 0);
+    mt18_hint_reset();
     let ret = super::parser::lex::lex(Span {
         data: input,
         start_offset: 0,
