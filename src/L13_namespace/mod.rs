@@ -356,6 +356,23 @@ mod calc_tests;
 #[cfg(test)]
 mod prelude_stdlib_tests;
 
+// 2026-10 prelude 完善轮：按 owner 分文件的 prelude 行为钉（每个 owner 独占一个文件，
+// 避免多 agent 并发写同一测试文件）。见 docs/prelude-round-2026-10b.md。
+#[cfg(test)]
+mod prelude_core_tests;
+
+#[cfg(test)]
+mod prelude_data_tests;
+
+#[cfg(test)]
+mod prelude_hdl_a_tests;
+
+#[cfg(test)]
+mod prelude_hdl_b_tests;
+
+#[cfg(test)]
+mod prelude_hdl_c_tests;
+
 #[cfg(test)]
 mod eval_budget_tests;
 
