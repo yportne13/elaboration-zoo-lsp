@@ -39,6 +39,38 @@ use TokenKind::*;
 
 use super::{empty_span, Ix, Rc, Tm, Val};
 
+/// Nat 字面量的 elaboration 深度上限（task-6 L1，2026-10 轮）。
+/// **语义：`n > NAT_LITERAL_ELAB_LIMIT` 被拒绝**（100000 本身保持可用）。
+///
+/// 为什么需要护栏：`Raw::Nat(n)` 在 elaboration 期被 `quote`/`quote_nat`
+/// 展开成 n 层 `succ`/`zero` 链，之后每个下游遍历（eval/force/unify/
+/// occurs/rename/pretty、孪生转换）都按 n 层递归——n 一大就吃光原生栈。
+/// 实测（HEAD 09:52:54 二进制，`l13bench --with-prelude core`，整进程墙钟）：
+/// ```text
+///  100000 (1e5) → PASS，输出表 nf=200002，整进程 0.75s
+/// 1000000 (1e6) → 109s 后 `thread '<unknown>' has overflowed its stack`
+///                 （进程崩在栈上，不是诊断；--only basic 144s / --only fast 95.5s）
+/// ```
+/// 同值走 primop 则完全无碍（反证：`def viamul: Nat = nat_mul 256 256`
+/// = 65536，2.9s PASS，与 12 字面量探针同档）⇒ 病态在"字面量 → succ 链"
+/// 这条路上，不在求值/显示上。
+///
+/// 阈值取 100000：仓库普查显示所有 `.typort` 无 ≥6 位字面量，`*.rs` 内联
+/// 源码里最大字面量正是 100000（`legacy_tests.rs` 的 bignat/nat_primop 回归钉、
+/// `eval_budget_tests.rs` 的 `nat_mul 100000 100000` 链护栏钉、
+/// `tests/bignum_display.rs` 的大数显示钉）⇒ 阈值 = 仓库已验证可用的最大
+/// 字面量，**不误伤任何现存输入**；100000 本身复测 0.6–0.9s PASS，保持可用。
+/// prelude 自身也无需回改（无 >100000 字面量），装载不受影响。
+///
+/// 需要写更大的常量请用 `nat_mul`/`nat_add` 分解式（原生 word-size primop，
+/// 求值直接得 `Val::Nat(k)`，不建链；`nat_mul 1000 1000` 即 10^6）。
+///
+/// 读数纪律（本轮教训，2026-10-08）：共享工作树上，**单次 TIMEOUT 不构成
+/// 证据**——`run_probe.ps1` 的 TIMEOUT 曾在并发 `cargo build` 窗口内把
+/// 100000（实际 0.9s PASS）误判成"悬崖"。定性必须满足：① 与并发构建/他人
+/// 探针无重叠的窗口；② 「包装脚本 + 直接调用」两种方式复测互证。
+pub const NAT_LITERAL_ELAB_LIMIT: u64 = 100_000;
+
 /// Skip input until a token of the given kind is found, returning the slice
 /// starting at that token (the sync token itself is NOT consumed).
 /// If the token is not found, the entire remaining input is skipped.
@@ -723,6 +755,33 @@ fn p_atom1<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IR
             // （L11/L12 同款，双版共用本 parser）。
             let (rest, x) = string(Num).parse(input, state)?;
             match x.data.parse::<u64>() {
+                Ok(n) if n > NAT_LITERAL_ELAB_LIMIT => {
+                    // 大字面量 elaboration 深度护栏（2026-10 轮，task-6 L1）。
+                    // 字面量不是原生值：`elaboration.rs` 的 `Raw::Nat` 臂会经
+                    // `quote`/`quote_nat` 把它展开成 n 层 `succ`/`zero` 链，
+                    // 之后 eval/force/unify/occurs/rename/pretty 与孪生转换
+                    // 全部按 n 层递归——n 一大就吃掉原生栈（进程崩，非诊断）。
+                    // 实测 1e6 → 109s 后栈溢出；100000 本身 ~0.9s PASS，保持
+                    // 可用（阈值取"仓库已验证可用的最大字面量"，见常量注释）。
+                    // 这里在**解析期**（双版共用）就拒绝，报可诊断错误并退化
+                    // `Raw::Hole`（与 u64 溢出同路径，后续不再进入 elaboration）。
+                    // 需要更大的常量请用 `nat_mul`/`nat_add` 分解式：走原生
+                    // word-size primop，求值直接得 `Val::Nat(k)`，不建链
+                    // （实测 `nat_mul 256 256` 与 12 字面量同耗时）。
+                    state.push_error(IError {
+                        msg: x.to_span().map(|_| {
+                            ErrMsg::Custom(format!(
+                                "integer literal {n} exceeds the Nat literal \
+                                 elaboration limit {NAT_LITERAL_ELAB_LIMIT}: large \
+                                 literals are expanded into a unary succ chain and \
+                                 would exhaust the native stack; rewrite it with \
+                                 `nat_mul`/`nat_add` (e.g. `nat_mul 1000 1000` for \
+                                 1000000)"
+                            ))
+                        }),
+                    });
+                    Ok((rest, Raw::Hole(x.to_span())))
+                }
                 Ok(n) => Ok((rest, Raw::Nat(x.map(|_| n)))),
                 Err(_) => {
 
