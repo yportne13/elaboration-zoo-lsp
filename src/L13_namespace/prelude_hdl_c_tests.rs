@@ -272,45 +272,158 @@ println(moduleTreeVL(afEx.create.tree))
     );
 }
 
-// ── X1 已入册限制：端口类型必须写 `Bool` ──
-// `src/prelude/core/bool.typort:10` 的真名是 `enum Boolean`，而 module 宏的
-// 标量端口组匹配**字面 token `Bool`**：写 `Boolean` 时该组不匹配 → 整个
-// module 宏无臂可匹配 → 宏根本不展开（错误落在 `module` 行）。
-// 失败是响亮的（编译错误，不是静默错编译），所以本轮只入册不修；
-// 若将来放宽匹配接受 `Boolean`，本测试的 Err 断言会失败并提示同步更新。
+// ── X1：`input x = Boolean` → 可定位诊断 + 响亮失败；错拼类型仍响亮失败 ──
+// `src/prelude/core/bool.typort:10` 的真名是 `enum Boolean`，而端口匹配是**字面
+// token**。窄设计（第 2 轮定稿）只对**字面 token `Boolean`** 特化：
+//   formB（端口在体内 `{ }`）走 `Expr` 宏的 `= Boolean` 臂（input/output/inout/
+//     output reg 各一条）；
+//   formA（端口在 body 前）走 `module` 宏末尾的 `= Boolean` 兜底臂。
+// 两者都**不创建端口** + 引用未定义名 `__port_type_must_be_the_literal_Bool__`
+// 让 class body 失败 ⇒ 模块无法 elaborate ⇒ 绝不会静默变成 Bool 端口。
+//
+// 通用 `= $ty:ident` 臂**已被否决**（实测）：宏臂按「整次调用」选择，一旦端口表里
+// 有任一端口不是 `Bool`，`= Bool` 臂整臂失败，通用臂的重复组会把**所有**标量端口
+// （含合法的 `x = Bool`）都捕获并逐条报警 ⇒ 会误报合法端口。因此：
+//   `input a = MyTypo` 保持**原有**的响亮失败（`expected def, found identifier`
+//   + `name not in scope: <模块名>`），**不带** HDV004，仍不可诊断（入册第 3 轮）。
+//   同理 formA 的**混合**端口表（`input sel = Boolean` + `output y = Bool`）不匹配
+//   `= Boolean` 兜底臂 ⇒ 回到原有错误（已入册的覆盖缺口）。
+//
+// 观测口径（2026-10-08 实测）：class body 里那条未定义名错误会被引擎的
+// "declaration failed to elaborate" 路径**吞掉**（stdout 也为空），因此 CLI 上
+// 用户实际看到的可定位诊断是 **HDV004 警告**，硬失败表现为下游
+// `error: name not in scope: <模块名>`。故本测试在 lib 口径只能断言 `Err`
+// （= 模块未 elaborate）；HDV004 的文本/槽位/span 由 CLI 探针取证（原文存档于
+// target/prelude_scratch/t10_x1_*_v6.err.txt）：
+//   `warning: [hdl][warning] HDV004 [Boolean] sel: \`Boolean\` is \`Bool\`'s
+//    defining type name - write \`Bool\` ...`，span 指向 `input sel = Boolean` 的 `sel`。
+// 若将来有人把端口匹配放宽成"任意类型都当 Bool"（= 静默错编译），这些负例
+// 会变成 Ok ⇒ 立刻红，正是本测试要守的红线。
+
+fn assert_port_type_error(input: &str, label: &str) {
+    match run_with_prelude(input) {
+        Ok(out) => panic!(
+            "{label}: an unsupported scalar port type must NOT elaborate \
+             (it would silently become a Bool port); got OK: {out:?}"
+        ),
+        Err(_) => { /* loud failure: the module declaration did not elaborate */ }
+    }
+}
+
 #[test]
 fn x1_boolean_port_spelling_is_rejected_loudly() {
-    // 正例：`Bool` 正常展开并生成端口。
+    // 正例：`Bool` 在两种形式下都正常展开并生成端口。
     assert_contains(
         r#"
-module plainPort {
+module plainPortB {
     input sel = Bool
     output y = Bool
     y := sel
 }
-println(moduleTreeVL(plainPort.create.tree))
+println(moduleTreeVL(plainPortB.create.tree))
 "#,
-        &["module plainPort (", "input wire sel,", "output wire y", "assign y = sel;"],
+        &["module plainPortB (", "input wire sel,", "output wire y", "assign y = sel;"],
+    );
+    assert_contains(
+        r#"
+module plainPortA
+    input sel = Bool
+    output y = Bool
+{
+    y := sel
+}
+println(moduleTreeVL(plainPortA.create.tree))
+"#,
+        &["module plainPortA (", "input wire sel,", "output wire y", "assign y = sel;"],
     );
 
-    // 反例：`Boolean`（真实 enum 名）不被接受 —— module 宏不展开，声明被解析器
-    // 恢复式丢弃（run_with_prelude 把 parse 错误走 stderr、decl 丢弃），
-    // 于是引用它的 println 以 `name not in scope: aliasPort` 失败 → Err。
-    let err = run_with_prelude(
+    // formB（端口在体内）：`Boolean` 与错拼都响亮失败。
+    // NOTE: every negative input MUST reference the module afterwards — the
+    // engine's recovery parsing drops a failed module decl silently (run_with_prelude
+    // then returns Ok("")), so only the downstream `println(... .create ...)` turns
+    // the failure into an observable `Err`.  It is also exactly the guard we want:
+    // if the port ever silently became Bool, the module WOULD elaborate and the
+    // Ok branch of assert_port_type_error fires.
+    assert_port_type_error(
         r#"
-module aliasPort {
+module aliasB {
     input sel = Boolean
     output y = Bool
     y := sel
 }
-println(moduleTreeVL(aliasPort.create.tree))
+println(moduleTreeVL(aliasB.create.tree))
 "#,
+        "formB Boolean",
     );
-    assert!(
-        err.is_err(),
-        "X1 limitation changed: `input sel = Boolean` now elaborates; \
-         the module-macro port matcher (hdl-macros.typort, `= Bool` group) was \
-         widened — update the hdl-macros `///` and this pin. got: {:?}",
-        err
+    assert_port_type_error(
+        r#"
+module typoB {
+    input sel = MyTypo
+    output y = Bool
+    y := sel
+}
+println(moduleTreeVL(typoB.create.tree))
+"#,
+        "formB MyTypo",
+    );
+
+    // formA（端口在 body 前）：同样两条。
+    assert_port_type_error(
+        r#"
+module aliasA
+    input sel = Boolean
+    output y = Bool
+{
+    y := sel
+}
+println(moduleTreeVL(aliasA.create.tree))
+"#,
+        "formA Boolean",
+    );
+    assert_port_type_error(
+        r#"
+module typoA
+    input sel = MyTypo
+    output y = Bool
+{
+    y := sel
+}
+println(moduleTreeVL(typoA.create.tree))
+"#,
+        "formA MyTypo",
+    );
+
+    // `output reg q = <non-Bool>` 也走同一条兜底。
+    assert_port_type_error(
+        r#"
+module outRegBad {
+    output reg q = Boolean
+}
+println(moduleTreeVL(outRegBad.create.tree))
+"#,
+        "output reg Boolean",
+    );
+}
+
+// ── 事故回归钉（2026-10 round-2）：prelude 期不得泄漏任何 HDV004 ──
+// 事故机理（实测）：早期实现把 report_check_issue 放进一个 helper def，而
+// prelude 装载期的「声明检查」会求值 def body（stuck 参数下也求值）——
+// module 槽位是常量 ⇒ `HDV004|module||` 被写进装载期 mutable map；该 map 成为
+// CACHED 状态，而 clone_prelude_state 只 reset WhenStack/ModuleTree/HdlLoopIdx/
+// CombCtx/ModulePortTable，**不 reset CheckIssues** ⇒ 警告泄进每一次
+// run_with_prelude 输出，calc_tests / bare_ctor_member_tests /
+// cong_projection_tests / termination_check_tests / debug_test / prelude_* 整片红。
+// 本用例的形状就是当时最先炸的 bare_ctor_show；任何「prelude 期 warning 泄漏」
+// 都会在这里立刻现形。
+#[test]
+fn no_hdv004_leak_in_core_only_programs() {
+    assert_output(
+        r#"
+def a: String = lnil.show
+println a
+println lnil.show
+println None.show
+"#,
+        &["[]", "[]", "none"],
     );
 }
