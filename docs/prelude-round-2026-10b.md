@@ -319,7 +319,12 @@ hdl-a 的 37 个 `@auto` 中抓出 2 条**假文档**（`hdl-core` 的 `ModuleTr
   —— `pulseCCByToggle` / `ccByToggleUInt` / `streamFifoCC`，**本轮全部已修**；
   修复后只剩 1 处 `whenBegin`（主域、不含 Cd 赋值）。其中 `streamFifoCC` 那处正是 §6.2 的
   读指针双驱动，已由 verifier 独立复验（`_d_rdPtr` 只出现在 clkB 块）。
-- 证据等级：结构级 + emitted-Verilog 实测（§6.2）；HDL039 误报的消除未独立仿真（本机无 verilator）。
+- 证据等级：结构级 + emitted-Verilog 实测（§6.2）；HDL039 误报的消除未独立仿真。
+  > **2026-10-08 更正（第 2 轮）**：本文件原写「本机无 verilator」——**该结论是错的**。本机有
+  > `C:\msys64\mingw64\bin\verilator_bin.exe`（Verilator 4.024），只是 msys 把 `verilator` 装成
+  > 无扩展名包装脚本、Windows 按 PATHEXT 匹配看不见它。第 2 轮修好管道后仿真已跑通：
+  > `streamFifoCC` 的修复现有**真仿真背书**（修前 286 条 MISMATCH / 修后 2 passed）。
+  > 详见 `docs/prelude-round-2-2026-10-08.md` §3。
 
 ---
 
@@ -329,7 +334,7 @@ hdl-a 的 37 个 `@auto` 中抓出 2 条**假文档**（`hdl-core` 的 `ModuleTr
 |---|---|---|---|
 | `Vec.foldl` 右折 → **真左折** | prelude-data | 中（语义变更；prelude 内无调用方） | **实测**：`foldl=123` / `fold=321` / `reduce=132` |
 | `list.typort` insert 注释纠正 | prelude-data | 低（纯注释） | 对码实现 `case eq => lcons(x, lcons(y, ys))` |
-| `streamFifoCC` 满/空判据（wrap 位 + RAM 低位寻址）+ 读指针双驱动修复 | hdl-b | 高（双时钟 FIFO） | **结构级实测**：emitted Verilog 有 `reg [2:0]` 指针、`{~rdPtrSync2[2], rdPtrSync2[1:0]}` 满判据、`_d_mem[..[1:0]]` 低位寻址、双 2FF 链；`_d_rdPtr` 只出现在 clkB 块（双驱动已消除）；**本机无 verilator，无仿真背书**（模型级证据见 §9.7） |
+| `streamFifoCC` 满/空判据（wrap 位 + RAM 低位寻址）+ 读指针双驱动修复 | hdl-b | 高（双时钟 FIFO） | **结构级实测**：emitted Verilog 有 `reg [2:0]` 指针、`{~rdPtrSync2[2], rdPtrSync2[1:0]}` 满判据、`_d_mem[..[1:0]]` 低位寻址、双 2FF 链；`_d_rdPtr` 只出现在 clkB 块（双驱动已消除）；**第 2 轮已升级为真仿真背书**（Verilator 4.024：修前 286 MISMATCH / 修后 2 passed，见 `docs/prelude-round-2-2026-10-08.md` §3） |
 | 树形真 PLRU（原为存根） | hdl-b | 中 | 【owner 报告 + diff 确认函数体从存根变为树遍历；未独立仿真】 |
 | `metaDiv` floor | hdl-c | 中 | 【owner 报告，未独立复核】 |
 | 大字面量护栏（>100000 解析期报错） | engine-quirks | 低（新增诊断） | 【owner 报告；本轮未独立复核（见 §8.3）】 |
@@ -366,7 +371,8 @@ hdl-a 的 37 个 `@auto` 中抓出 2 条**假文档**（`hdl-core` 的 `ModuleTr
 2. **`whenBegin` 无 Cd 变体**：架构级候选（新增 Cd 版 when API）。本轮「`when*` 包裹内 `*Cd` 赋值」
    的 3 处已全部用有界方式修掉（§6.6），但 API 层面仍缺 Cd 作用域，列为下一轮候选。
 3. **`subst2` 未独立确认**：需要显式 `P: A -> B -> Type 0` 的具体用例，本轮未构造出可钉值。
-4. **HDL 行为变更（PLRU / metaDiv / 护栏）未独立仿真/复核**：本机无 verilator；
+4. **HDL 行为变更（PLRU / metaDiv / 护栏）未独立仿真/复核**：第 2 轮确认仿真可用（Verilator 4.024），
+   这几项的证据等级待 task-13 全用例集结果一并升级；
    PLRU 与 metaDiv 仅有 owner 报告与源码 diff 证据（§7 已标等级）。
 5. **3 项算术链卡死的归因**：内容相关性实验已完成，但无 HEAD 二进制一锤定音 ⇒ 记「未定 + 倾向既有」。
 6. **doc 覆盖率与门禁数字**：**已按 Lead 冻结树实测填入 §3**（doc 100% = 1192/1192；
@@ -382,8 +388,10 @@ hdl-a 的 37 个 `@auto` 中抓出 2 条**假文档**（`hdl-core` 的 `ModuleTr
    RefFifoCC progress  -> cycles accepting push=40, cycles with popValid=16
    PRE-FIX progress    -> cycles accepting push=0, cycles with popValid=0
    ```
-   ⇒ **模型级**证明了「修前常数死锁 / 修后可用」，但**本机无 verilator，没有仿真背书**；
-   RTL 侧只有 emitted-Verilog 结构钉（§6.2 的 `emit21_ccFifo.v`）。
+   ⇒ **模型级**证明了「修前常数死锁 / 修后可用」；RTL 侧另有 emitted-Verilog 结构钉（§6.2 的 `emit21_ccFifo.v`）。
+   > **2026-10-08 更正（第 2 轮）**：本行原写「本机无 verilator，没有仿真背书」——**错误**。
+   > 仿真已跑通：`vFifoCC` 在修前二进制上 **286 条 MISMATCH**、修后 **2 passed / 0 failed**；
+   > 见 `docs/prelude-round-2-2026-10-08.md` §3（含 Verilator 4.024 与 msys PATHEXT 的成因）。
 8. **`streamFifoCC` 双驱动**（§6.2）：已修复并独立复验（mtime 11:47:26，`_d_rdPtr` 只出现在 clkB 块）。
 9. **「`when*` 包裹内 `*Cd` 赋值」类审计**（§6.6）：全 prelude 3 处（`pulseCCByToggle` /
    `ccByToggleUInt` / `streamFifoCC`）**本轮全部已修**；`whenBegin` 仍无 Cd 变体 ⇒ 下一轮架构候选。
