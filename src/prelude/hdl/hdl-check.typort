@@ -4,14 +4,19 @@
 // ============================================================
 // Design doc: docs/hdl-selfcheck-design.md
 //
-// checkModuleTree is called by the module macro's CREATE side at the
-// `_res` point (after the body, before the _prev restore), so every
-// module is checked WHILE its declaration is being type-checked —
-// Phase A of class elaboration evaluates the sandwich fields, replays
-// included (~3x, idempotent: the push at sandwich start replaces the
+// The module macro's CREATE side calls checkModuleTreeAll
+// (hdl-check-graph.typort) at the `_res` point (after the body, before the
+// _prev restore), so every module is checked WHILE its declaration is being
+// type-checked — Phase A of class elaboration evaluates the sandwich fields,
+// replays included (~3x, idempotent: the push at sandwich start replaces the
 // def, replays rebuild it). The tree side (`def tree`) is deliberately
 // NOT hooked: it re-runs on every `.tree` access and phase-2 println
 // normalization would re-trigger reports nobody drains.
+//
+// ENTRY INVERSION: the live entry point is checkModuleTreeAll in
+// hdl-check-graph.typort, which calls runChecks (this file, phase 1) and then
+// the phase 2-4 graph analyses. checkModuleTree below is the phase-1-only
+// entry, kept only as the documented roll-back path — nothing calls it.
 //
 // Reports flow through the Rust builtin report_check_issue into the
 // mutable global "CheckIssues" (one "code|module|signal|message" line
@@ -20,30 +25,43 @@
 // re-runs during parent elaboration don't duplicate or misattribute
 // diagnostics) and turns lines into WARNING diagnostics.
 //
-// All analysis is NAME-level (phase 1). Declaration vs reference is
-// structural: top-level create* nodes in the def's Vec[Expr] are
-// declarations; create* nodes nested inside assignment/condition
-// trees are reads (createSignalExpr's append discipline guarantees
-// this). Bit-level granularity, condition-awareness and source
-// locations (implicit Loc params) are later phases.
+// Declaration vs reference is structural: top-level create* nodes in the
+// def's Vec[Expr] are declarations; create* nodes nested inside
+// assignment/condition trees are reads (createSignalExpr's append
+// discipline guarantees this).
+//
+// The rule set is NAME-level by default (phase 1), with two deliberate
+// value-level exceptions: ruleDrivers consumes the phase-3 bit-range list
+// `rangeSafe`, produced by hdl-check-graph.typort's rangeSafeOf and handed
+// in by checkModuleTreeAll; and HDL004 keys on nat_is_ground, a value-level
+// predicate. Bit-level granularity beyond that and source locations
+// (implicit Loc params) remain later work.
 
 // ---------- small utilities ----------
 
+/// Boolean negation written out as a two-case match (true => false, false => true): this prelude has no `!` operator.
+/// Inverts rule verdicts — `ok` in ruleDanglingRead (HDL001), `read` in ruleUnusedDecl (HDL002), `driven` in ruleOutUndriven (HDL003), `isInout` in ruleConnDir.
 def chkBnot(a: Boolean): Boolean = match a {
     case true => false
     case false => true
 }
 
+/// Conjunction that yields `b` when `a` is true and false when `a` is false; the prelude has no `&&`, so rule guards compose with this.
+/// Used for every two-part verdict: `chkBand(isOut, chkBnot(driven))` (HDL003), `chkBand(checkable, chkBnot(read))` (HDL002), `badDrive`/`badRead` (HDL020/021) and the HDL011/012/013 predicates.
 def chkBand(a: Boolean, b: Boolean): Boolean = match a {
     case true => b
     case false => false
 }
 
+/// Disjunction: true when `a` is true, otherwise `b`; the prelude's substitute for `||`.
+/// ORs the acceptable-kind alternatives — the five-way `ok` guard of ruleDanglingRead and the `known` (in/out/inout) test of ruleConnDir.
 def chkBor(a: Boolean, b: Boolean): Boolean = match a {
     case true => true
     case false => b
 }
 
+/// Membership test over List[String]: true iff some element is `str_eq` to `s`; false at lnil (empty list answers "not present").
+/// Drives the replay dedup in scanAll (`acc.seen`), HDL002's read test, the rangeSafe test in ruleDrivers (HDL010/011 suppression), and the port-name tests in ruleConnDir.
 def chkStrIn(s: String, ls: List[String]): Boolean = match ls {
     case lnil => false
     case lcons(h, t) => match str_eq(h, s) {
@@ -52,15 +70,19 @@ def chkStrIn(s: String, ls: List[String]): Boolean = match ls {
     }
 }
 
+/// Named wrapper around the builtin `str_eq`: exact string equality, no case folding or trimming.
+/// Its only caller is ruleUnusedDecl, which uses it to recognise the module's clock and reset names so HDL002 never reports them.
 def chkStrEq(a: String, b: String): Boolean = str_eq(a, b)
 
+/// True iff `n` is `succ(_)` (strictly positive); false for `zero`.
+/// This is how the DriveFacts counters are tested: `multi` (HDL010), `mixed11` (HDL011), `anyComb`/`anyClk` (HDL012) and `multiCd` (HDL013).
 def chkNatNonZero(n: Nat): Boolean = match n {
     case zero => false
     case succ(_) => true
 }
 
-// Local copy of cdEq (hdl-verilog.typort loads later; keep this file
-// loadable right after hdl-core). Compares by (clockName, resetName).
+/// Local copy of cdEq (hdl-verilog.typort loads later; keep this file
+/// loadable right after hdl-core). Compares by (clockName, resetName).
 def chkCdEq(a: ClockDomain, b: ClockDomain): Boolean = match str_eq(a.clockName, b.clockName) {
     case true => str_eq(a.resetName, b.resetName)
     case false => false
@@ -68,6 +90,8 @@ def chkCdEq(a: ClockDomain, b: ClockDomain): Boolean = match str_eq(a.clockName,
 
 // ---------- declaration kinds ----------
 
+/// The seven declaration kinds the checker distinguishes: kWire, kIn, kOut, kInOut, kReg, kOutReg, kMem.
+/// Produced by declOf from the `create*` node variant and compared through kindEq; the kind decides which rules (HDL001/002/003/020/021/022/023) consider a name at all.
 enum SigKind {
     kWire
     kIn
@@ -78,11 +102,15 @@ enum SigKind {
     kMem
 }
 
+/// One declaration fact: the signal name plus its SigKind — no width, clock domain or source location (phase-1 name-level analysis).
+/// Built by declOf and accumulated into ModFacts.decls by mfAddDecl.
 struct SigDecl {
     name: String
     kind: SigKind
 }
 
+/// Hand-written equality for SigKind: one outer branch per constructor; each nested match returns true only for that same constructor and false otherwise.
+/// The prelude has no derived equality for enums, so every "is this input/output/mem/reg" test routes through here (declIsKind, hasPortEntry, namesOfKind, ruleOutUndriven, ...).
 def kindEq(a: SigKind, b: SigKind): Boolean = match a {
     case kWire => match b {
         case kWire => true
@@ -115,6 +143,8 @@ def kindEq(a: SigKind, b: SigKind): Boolean = match a {
 }
 
 // The signal name carried by a create or createMem node, "" otherwise.
+/// The signal name carried by a declaration-shaped node: every `create*` / `createSInt*` / `createMem` variant returns its name argument; any other Expr (literal, binary, subSignal, instance, ...) returns "".
+/// Enumerates the create variants explicitly instead of a catch-all, so a new variant silently returns "" (which means "not a name") until it is added here.
 def exprName(e: Expr): String = match e {
     case create(n) => n
     case createIn(n) => n
@@ -146,7 +176,7 @@ def exprName(e: Expr): String = match e {
     case _ => ""
 }
 
-// Statement-position declaration info, None for non-declaration nodes.
+/// Statement-position declaration info, None for non-declaration nodes.
 def declOf(e: Expr): Option[SigDecl] = match e {
     case create(n) => Some(SigDecl.mk(n, kWire))
     case createWidth(n, _) => Some(SigDecl.mk(n, kWire))
@@ -180,6 +210,8 @@ def declOf(e: Expr): Option[SigDecl] = match e {
 
 // ---------- driver facts ----------
 
+/// Per-signal driver tally: combinational counts uncondComb/condComb and clocked counts uncondClk/condClk (cond = the assignment sits under a `when`), plus defClk = clocked assignments with NO explicit clock domain, and cds = the distinct explicit domains seen.
+/// ruleDrivers turns these counters into HDL010 (uncondComb >= 2), HDL011 (uncondComb > 0 && condComb > 0), HDL012 (comb > 0 && clk > 0) and HDL013 (two distinct cds, or defClk > 0 with at least one explicit cd).
 struct DriveFacts {
     name: String
     uncondComb: Nat
@@ -190,6 +222,8 @@ struct DriveFacts {
     cds: List[ClockDomain]
 }
 
+/// Membership of a clock domain in a list, compared with chkCdEq (the clockName/resetName pair); false on lnil.
+/// Used only by bumpCds, which is what makes the `twoCds` HDL013 test mean "two genuinely different domains".
 def chkCdInList(c: ClockDomain, ls: List[ClockDomain]): Boolean = match ls {
     case lnil => false
     case lcons(h, t) => match chkCdEq(h, c) {
@@ -198,6 +232,8 @@ def chkCdInList(c: ClockDomain, ls: List[ClockDomain]): Boolean = match ls {
     }
 }
 
+/// Adds the drive's clock domain to the fact's distinct-domain list, prepending only when chkCdInList says it is new; None (no explicit cd) leaves the list untouched.
+/// So cds holds at most one entry per (clockName, resetName) pair, however many times that domain is used.
 def bumpCds(f: DriveFacts, cd: Option[ClockDomain]): List[ClockDomain] = match cd {
     case None => f.cds
     case Some(c) => match chkCdInList(c, f.cds) {
@@ -206,11 +242,15 @@ def bumpCds(f: DriveFacts, cd: Option[ClockDomain]): List[ClockDomain] = match c
     }
 }
 
+/// Increments defClk exactly when the clocked assignment carries NO explicit clock domain (cd = None); with Some(_) the count is unchanged.
+/// defClk separates implicit-cd registers from explicit ones, and ruleDrivers combines it with a non-empty cds to fire HDL013.
 def bumpDefClk(f: DriveFacts, cd: Option[ClockDomain]): Nat = match cd {
     case None => succ(f.defClk)
     case Some(_) => f.defClk
 }
 
+/// Pure update of one signal's tally for a single drive: comb=true bumps uncondComb (or condComb when cond is true), comb=false bumps uncondClk/condClk and additionally bumps defClk and cds.
+/// The (comb, cond) pair is the whole classification, so HDL010/011 read the comb side and HDL012 compares the comb side against the clocked side.
 def bumpFacts(f: DriveFacts, comb: Boolean, cond: Boolean, cd: Option[ClockDomain]): DriveFacts = match comb {
     case true => match cond {
         case true => DriveFacts.mk(f.name, f.uncondComb, f.uncondClk, succ(f.condComb), f.condClk, f.defClk, f.cds)
@@ -222,9 +262,13 @@ def bumpFacts(f: DriveFacts, comb: Boolean, cond: Boolean, cd: Option[ClockDomai
     }
 }
 
+/// Seeds a zeroed DriveFacts for `name` (all four counters 0, defClk 0, cds lnil) and applies one bumpFacts for the given drive.
+/// Entry point used by updFacts when a signal name is seen for the first time.
 def mkFacts(name: String, comb: Boolean, cond: Boolean, cd: Option[ClockDomain]): DriveFacts =
     bumpFacts(DriveFacts.mk(name, 0, 0, 0, 0, 0, lnil), comb, cond, cd)
 
+/// Folds one assignment into the DriveFacts list: appends a fresh record via mkFacts when `name` is absent, otherwise replaces that entry in place with bumpFacts applied to it.
+/// Name matching is plain str_eq, so two declaration entries that share a name share one fact record (the port/wire overlap is handled on the decls side by dropShadowedWires).
 def updFacts(facts: List[DriveFacts], name: String, comb: Boolean, cond: Boolean, cd: Option[ClockDomain]): List[DriveFacts] = match facts {
     case lnil => lcons(mkFacts(name, comb, cond, cd), lnil)
     case lcons(f, t) => match str_eq(f.name, name) {
@@ -233,8 +277,8 @@ def updFacts(facts: List[DriveFacts], name: String, comb: Boolean, cond: Boolean
     }
 }
 
-// Local severity key for assert nodes' dedup keys (AssertSeverity lives in
-// hdl-core; keep this file loadable right after it).
+/// Local severity key for assert nodes' dedup keys (AssertSeverity lives in
+/// hdl-core; keep this file loadable right after it).
 def chkSevKey(s: AssertSeverity): String = match s {
     case AssertInfo => "I"
     case AssertWarning => "W"
@@ -242,16 +286,16 @@ def chkSevKey(s: AssertSeverity): String = match s {
     case AssertFatal => "F"
 }
 
-// Structural serialization key of an Expr node. The create-side def
-// accumulates REPLAYED statements: class fields are evaluated ~3x at
-// check time and each evaluation re-appends its statement into the
-// same def (the push only resets at whole-sandwich boundaries; codegen
-// never sees this: it reads a tree from a single clean pass — the
-// create-time `_res` capture, formerly the per-access .tree rebuild).
-// The scanner dedups top-level statements by this key, collapsing
-// replays. Two literally-identical user statements therefore count as
-// one driver — an accepted blind spot (they are semantically the same
-// driver).
+/// Structural serialization key of an Expr node. The create-side def
+/// accumulates REPLAYED statements: class fields are evaluated ~3x at
+/// check time and each evaluation re-appends its statement into the
+/// same def (the push only resets at whole-sandwich boundaries; codegen
+/// never sees this: it reads a tree from a single clean pass — the
+/// create-time `_res` capture, formerly the per-access .tree rebuild).
+/// The scanner dedups top-level statements by this key, collapsing
+/// replays. Two literally-identical user statements therefore count as
+/// one driver — an accepted blind spot (they are semantically the same
+/// driver).
 def exprKey(e: Expr): String = match e {
     case create(n) => "c:" + n
     case createIn(n) => "ci:" + n
@@ -315,18 +359,24 @@ def exprKey(e: Expr): String = match e {
 
 // ---------- module facts accumulator ----------
 
+/// One hierarchical-port connection: the instance name, the port name, and isLhs = true when the port is on the LEFT of `:=` (parent drives child) versus false when it is read on the right (parent reads child).
+/// Consumed by ruleConnDir (HDL020/021/025) and by connCovers/ruleInstPorts (HDL022); scanExpr records the isLhs=false direction and scanLhsConn the isLhs=true one.
 struct ConnInfo {
     inst: String
     port: String
     isLhs: Boolean
 }
 
+/// One sub-module instance: instance name, child module name, and raw = true for `instanceWithPorts` (opaque port string) versus false for the typed `instance` form.
+/// ruleInsts emits HDL024 for every raw instance and runs HDL022 only for non-raw ones; instModule resolves a connection's child module from this list.
 struct InstInfo {
     inst: String
     mdl: String
     raw: Boolean
 }
 
+/// Accumulator for the whole-def statement scan: decls (List[SigDecl]), reads (names read in expression position), conns, insts, facts (per-signal DriveFacts) and seen (the exprKey set used to collapse replays).
+/// Filled by scanAll -> scanStmt -> scanExpr and consumed by ruleDanglingRead/UnusedDecl/OutUndriven/Drivers/OwnInputDriven; runChecks rewrites decls with dropShadowedWires before those rules run.
 struct ModFacts {
     decls: List[SigDecl]
     reads: List[String]
@@ -336,18 +386,28 @@ struct ModFacts {
     seen: List[String]
 }
 
+/// Prepends one name to ModFacts.reads, leaving every other field untouched.
+/// Called from scanExpr's fallback branch for every declaration node reached in expression position; the resulting list is what HDL001 iterates and HDL002 tests with chkStrIn.
 def mfAddRead(acc: ModFacts, nm: String): ModFacts =
     ModFacts.mk(acc.decls, lcons nm acc.reads, acc.conns, acc.insts, acc.facts, acc.seen)
 
+/// Prepends one SigDecl to ModFacts.decls.
+/// Called by scanStmt only for statement-position declaration nodes. The def's statement vec is itself newest-first (hdl-core's addExprToModuleHelper conses onto ModuleDef.expr), so walking it front-to-back and prepending here puts the list back into source order.
 def mfAddDecl(acc: ModFacts, d: SigDecl): ModFacts =
     ModFacts.mk(lcons d acc.decls, acc.reads, acc.conns, acc.insts, acc.facts, acc.seen)
 
+/// Prepends one ConnInfo to ModFacts.conns.
+/// Called from scanExpr (RHS subSignal -> isLhs=false) and scanLhsConn (LHS subSignal -> isLhs=true).
 def mfAddConn(acc: ModFacts, c: ConnInfo): ModFacts =
     ModFacts.mk(acc.decls, acc.reads, lcons c acc.conns, acc.insts, acc.facts, acc.seen)
 
+/// Prepends one InstInfo to ModFacts.insts.
+/// Called by scanStmt for both the `instance` and `instanceWithPorts` statement forms.
 def mfAddInst(acc: ModFacts, i: InstInfo): ModFacts =
     ModFacts.mk(acc.decls, acc.reads, acc.conns, lcons i acc.insts, acc.facts, acc.seen)
 
+/// Records one drive on `nm` by folding it into ModFacts.facts through updFacts (comb/cond/cd forwarded unchanged).
+/// Called by scanStmt for assign (comb=true) and regAssign/regAssignCd (comb=false); every rule that reports a driver conflict reads the facts it produces.
 def mfAddDrive(acc: ModFacts, nm: String, comb: Boolean, cond: Boolean, cd: Option[ClockDomain]): ModFacts =
     ModFacts.mk(acc.decls, acc.reads, acc.conns, acc.insts, updFacts(acc.facts, nm, comb, cond, cd), acc.seen)
 
@@ -361,8 +421,8 @@ def mfAddDrive(acc: ModFacts, nm: String, comb: Boolean, cond: Boolean, cd: Opti
 // which counts the assignment LHS root as a read — acceptable
 // imprecision for a shape that does not occur in generated trees.
 
-// Expression-position scan: collects reads (create* names) and
-// child-port reads (RHS subSignal -> connection with isLhs = false).
+/// Expression-position scan: collects reads (create* names) and
+/// child-port reads (RHS subSignal -> connection with isLhs = false).
 def scanExpr(e: Expr, acc: ModFacts): ModFacts = match e {
     case subSignal(inm, pnm) => mfAddConn(acc, ConnInfo.mk(inm, pnm, false))
     case literal(_) => acc
@@ -422,17 +482,17 @@ def scanExpr(e: Expr, acc: ModFacts): ModFacts = match e {
         }
 }
 
-// Root signal name of an assignment LHS (through bitsel/partsel bases);
-// "" for subSignal LHS (recorded as a connection instead).
+/// Root signal name of an assignment LHS (through bitsel/partsel bases);
+/// "" for subSignal LHS (recorded as a connection instead).
 def lhsRoot(e: Expr): String = match e {
     case bitsel(b, _) => lhsRoot(b)
     case partsel(b, _, _) => lhsRoot(b)
     case _ => exprName(e)
 }
 
-// LHS-side extra reads: dynamic index expressions of bitsel/partsel LHS
-// (`t[i] := x` reads i). The base signal itself is a drive target, not
-// a read, so only the index sub-expressions are scanned.
+/// LHS-side extra reads: dynamic index expressions of bitsel/partsel LHS
+/// (`t[i] := x` reads i). The base signal itself is a drive target, not
+/// a read, so only the index sub-expressions are scanned.
 def scanLhsIdx(e: Expr, acc: ModFacts): ModFacts = match e {
     case bitsel(b, i) =>
         let a1 = scanLhsIdx(b, acc);
@@ -444,15 +504,15 @@ def scanLhsIdx(e: Expr, acc: ModFacts): ModFacts = match e {
     case _ => acc
 }
 
-// LHS connection: `u.port := x` records parent-drives-child.
+/// LHS connection: `u.port := x` records parent-drives-child.
 def scanLhsConn(e: Expr, acc: ModFacts): ModFacts = match e {
     case subSignal(inm, pnm) => mfAddConn(acc, ConnInfo.mk(inm, pnm, true))
     case _ => acc
 }
 
-// Statement-position scan. underWhen marks assignments inside a when
-// (the tree records each such assignment as when(cond, assign, None)
-// with its FULL flattened condition — nesting need not be counted).
+/// Statement-position scan. underWhen marks assignments inside a when
+/// (the tree records each such assignment as when(cond, assign, None)
+/// with its FULL flattened condition — nesting need not be counted).
 def scanStmt(e: Expr, underWhen: Boolean, acc: ModFacts): ModFacts = match e {
     case assign(lhs, rhs) =>
         let a1 = scanExpr(rhs, acc);
@@ -515,6 +575,8 @@ def scanStmt(e: Expr, underWhen: Boolean, acc: ModFacts): ModFacts = match e {
         }
 }
 
+/// Walks a module's top-level Vec[Expr], skipping any statement whose exprKey is already in acc.seen and scanning the rest with scanStmt(underWhen=false).
+/// This is the replay collapse: class-field evaluation re-appends the body statement several times, so a statement is only analysed on its first appearance. It also fixes `underWhen=false` for top-level statements (nesting is carried by the when case itself).
 def scanAll[ne: Nat](es: Vec[Expr] ne, acc: ModFacts): ModFacts = match es {
     case nil => acc
     case cons(h, t) =>
@@ -533,6 +595,8 @@ def scanAll[ne: Nat](es: Vec[Expr] ne, acc: ModFacts): ModFacts = match es {
 // re-runs during the parent's body elaboration, so the table is
 // rebuilt on demand even after mutable_map was cleared per file.
 
+/// The port signature of one module as registered in the global port table: module name plus the kIn / (kOut ++ kOutReg) / kInOut name lists.
+/// Built by registerPortTable from the normalized decls; read back by ruleConnDir (HDL020/021/025) and by ruleInsts to derive the ports HDL022 requires.
 struct PortEntry {
     mdl: String
     ins: List[String]
@@ -540,10 +604,14 @@ struct PortEntry {
     inouts: List[String]
 }
 
+/// Wrapper for the design-wide List[PortEntry] stored under the mutable global "ModulePortTable" (a global holds one value, so the list needs a struct around it).
+/// portTableAdd overwrites by module name, which is what lets every registration round self-heal the table without cache gating.
 struct ModulePortTable {
     entries: List[PortEntry]
 }
 
+/// All declared names whose SigKind is exactly `k`, in declaration-list order.
+/// registerPortTable calls it four times (kIn, kOut, kOutReg, kInOut) to build a PortEntry; note a name with several entries contributes one occurrence per matching entry.
 def namesOfKind(ds: List[SigDecl], k: SigKind): List[String] = match ds {
     case lnil => lnil
     case lcons(d, t) => match kindEq(d.kind, k) {
@@ -552,6 +620,8 @@ def namesOfKind(ds: List[SigDecl], k: SigKind): List[String] = match ds {
     }
 }
 
+/// Drops every entry registered for module `mdl`, keeping the others in order.
+/// Used by portTableAdd to implement last-registration-wins overwrite by module name.
 def portEntryFilter(es: List[PortEntry], mdl: String): List[PortEntry] = match es {
     case lnil => lnil
     case lcons(e, t) => match str_eq(e.mdl, mdl) {
@@ -560,9 +630,13 @@ def portEntryFilter(es: List[PortEntry], mdl: String): List[PortEntry] = match e
     }
 }
 
+/// Registers `e` at the head of the table after removing any earlier entry for the same module name — idempotent overwrite, never cache-gated.
+/// Called only from registerPortTable via change_mutable_default on the "ModulePortTable" global.
 def portTableAdd(tbl: ModulePortTable, e: PortEntry): ModulePortTable =
     ModulePortTable.mk(lcons(e, portEntryFilter(tbl.entries, e.mdl)))
 
+/// The registered port entry for module `mdl`, or None when that module has no entry at all (never closed, or its registration round has not run yet).
+/// ruleConnDir and ruleInsts treat None as "child unknown" and stay silent, so a missing entry silently disables the parent-side port rules for that instance.
 def findPorts(es: List[PortEntry], mdl: String): Option[PortEntry] = match es {
     case lnil => None
     case lcons(e, t) => match str_eq(e.mdl, mdl) {
@@ -578,6 +652,8 @@ def findPorts(es: List[PortEntry], mdl: String): Option[PortEntry] = match es {
 // checker must apply the same precedence or port-kind lookups hit the
 // leftover wire entries.
 
+/// True iff some entry named `nm` has a port kind (kIn, kOut, kInOut or kOutReg); plain wires and kReg entries do not count.
+/// Predicate behind dropShadowedWires' precedence rule (a port beats a same-named wire).
 def hasPortEntry(ds: List[SigDecl], nm: String): Boolean = match ds {
     case lnil => false
     case lcons(d, t) => match str_eq(d.name, nm) {
@@ -586,6 +662,8 @@ def hasPortEntry(ds: List[SigDecl], nm: String): Boolean = match ds {
     }
 }
 
+/// Removes each kWire entry whose name is also carried by a port-kind entry later in the list — i.e. the directed port rebuilt afterwards (.asMaster/.asSlave after TypeName.create), which is exactly the shadowing case.
+/// Mirrors the Verilog generator's "ports take precedence over same-named wires": without this the kind lookups of HDL001/002/003/023 would hit the leftover wire entries. Non-wire entries are never dropped. The list is in source order (see mfAddDecl), so "later in the list" means "later in the body".
 def dropShadowedWires(ds: List[SigDecl]): List[SigDecl] = match ds {
     case lnil => lnil
     case lcons(d, t) => match kindEq(d.kind, kWire) {
@@ -599,6 +677,8 @@ def dropShadowedWires(ds: List[SigDecl]): List[SigDecl] = match ds {
 
 // ---------- queries ----------
 
+/// The DriveFacts accumulated for `nm`, or None when the signal was never assigned anywhere in the def.
+/// The None/Some split is the "is it driven at all" test: HDL001 (a read with no fact is dangling unless it is an input/inout/mem/output) and HDL003/HDL023 (a port with no fact is undriven / a driven input is an error).
 def findFacts(facts: List[DriveFacts], nm: String): Option[DriveFacts] = match facts {
     case lnil => None
     case lcons(f, t) => match str_eq(f.name, nm) {
@@ -607,8 +687,8 @@ def findFacts(facts: List[DriveFacts], nm: String): Option[DriveFacts] = match f
     }
 }
 
-// OR-continue over same-name entries: a name may legitimately carry a
-// wire entry AND a port entry (see dropShadowedWires) before normalize.
+/// OR-continue over same-name entries: a name may legitimately carry a
+/// wire entry AND a port entry (see dropShadowedWires) before normalize.
 def declIsKind(ds: List[SigDecl], nm: String, k: SigKind): Boolean = match ds {
     case lnil => false
     case lcons(d, t) => match str_eq(d.name, nm) {
@@ -617,6 +697,8 @@ def declIsKind(ds: List[SigDecl], nm: String, k: SigKind): Boolean = match ds {
     }
 }
 
+/// The child module name of instance `iname`, or None when no such instance was recorded by the scan.
+/// ruleConnDir resolves the child through this before looking its ports up in the global table; None suppresses HDL020/021/025 for that connection.
 def instModule(insts: List[InstInfo], iname: String): Option[String] = match insts {
     case lnil => None
     case lcons(i, t) => match str_eq(i.inst, iname) {
@@ -627,6 +709,8 @@ def instModule(insts: List[InstInfo], iname: String): Option[String] = match ins
 
 // ---------- rules ----------
 
+/// The single funnel for every diagnostic in this file: calls the Rust builtin report_check_issue(code, module, signal, message) and discards its result.
+/// The builtin appends one "code|module|signal|message" line to the mutable global "CheckIssues" with line-level dedup (src/L06_string/cxt.rs, src/L13_namespace/cxt.rs); lib.rs later drains those lines into WARNING diagnostics.
 def chkReport(code: String, mname: String, sig: String, msg: String): Unit =
     let _ = report_check_issue(code, mname, sig, msg);
     unit
@@ -645,6 +729,8 @@ def chkReport(code: String, mname: String, sig: String, msg: String): Unit =
 // nothing is ground there. A round with zero ground widths is that Phase-A
 // artifact, not a real design: only report when the same module also has at
 // least one ground width (the runtime round's ports are always ground).
+/// If `e` is a width-carrying declaration node (every create*Width* / createSInt*Width* / createOutRegWidth* variant and createMem), returns (name, nat_is_ground(width)); any other Expr yields None.
+/// The Boolean is the HDL004 test: false means the width is still an unevaluated elaboration-time variable, which the Verilog generator's width_range reads as 0 and silently degrades the signal to 1 bit.
 def widthProbe(e: Expr): Option[Tuple2[String, Boolean]] = match e {
     case createWidth(n, w) => Some(Tuple2.mk(n, nat_is_ground(w)))
     case createInWidth(n, w) => Some(Tuple2.mk(n, nat_is_ground(w)))
@@ -670,11 +756,15 @@ def widthProbe(e: Expr): Option[Tuple2[String, Boolean]] = match e {
     case _ => None
 }
 
+/// Running HDL004 tally over a def's top-level statements: groundCount = how many width-carrying declarations have a ground width, bad = the names whose width is not ground.
+/// ruleWidthGround only reports `bad` when groundCount is non-zero, because a Phase-A type-check tree has no ground widths at all.
 struct WidthScan {
     groundCount: Nat
     bad: List[String]
 }
 
+/// Folds one statement into the WidthScan: a ground width increments groundCount, a non-ground width prepends the name to bad, and a node that carries no width is ignored entirely.
+/// Composed by widthScanAll; names are prepended while the def's statement vec is walked newest-first, so `bad` ends up in source order.
 def widthScanStep(e: Expr, acc: WidthScan): WidthScan = match widthProbe(e) {
     case None => acc
     case Some(p) => match p._2 {
@@ -683,11 +773,15 @@ def widthScanStep(e: Expr, acc: WidthScan): WidthScan = match widthProbe(e) {
     }
 }
 
+/// Applies widthScanStep to every element of a whole Vec[Expr] and returns the accumulated WidthScan.
+/// Called once by ruleWidthGround with a fresh WidthScan.mk(0, lnil) over the module's top-level expressions.
 def widthScanAll[ne: Nat](es: Vec[Expr] ne, acc: WidthScan): WidthScan = match es {
     case nil => acc
     case cons(h, t) => widthScanAll(t, widthScanStep(h, acc))
 }
 
+/// Emits one HDL004 diagnostic per non-ground width name via chkReport, recursing to lnil; the empty list is a no-op.
+/// The message names the module, the signal and the doc docs/l13-typeclass-instance-nat-param-bug.md, and only ruleWidthGround's gated branch ever calls it.
 def reportBadWidths(mname: String, bad: List[String]): Unit = match bad {
     case lnil => unit
     case lcons(n, t) =>
@@ -695,6 +789,8 @@ def reportBadWidths(mname: String, bad: List[String]): Unit = match bad {
         reportBadWidths(mname, t)
 }
 
+/// HDL004 entry point: scans the def and reports every width-carrying declaration whose width is not ground — but only when the same def has at least one ground width.
+/// The gate is deliberate: the class two-phase elaboration also builds a throwaway tree in which every width (including the macro-transcribed ports) is a Rigid variable, so a round with zero ground widths is that Phase-A artifact and must stay silent. runChecks calls this unconditionally, blackboxes included.
 def ruleWidthGround[ne: Nat](mname: String, es: Vec[Expr] ne): Unit =
     let scan = widthScanAll(es, WidthScan.mk(0, lnil));
     let _ = match scan.groundCount {
@@ -703,8 +799,8 @@ def ruleWidthGround[ne: Nat](mname: String, es: Vec[Expr] ne): Unit =
     };
     unit
 
-// HDL001: read but never driven (and not an input/inout port, mem, or
-// output port — undriven outputs are HDL003's business).
+/// HDL001: read but never driven (and not an input/inout port, mem, or
+/// output port — undriven outputs are HDL003's business).
 def ruleDanglingRead(mname: String, reads: List[String], mf: ModFacts): Unit = match reads {
     case lnil => unit
     case lcons(r, t) =>
@@ -728,6 +824,8 @@ def ruleDanglingRead(mname: String, reads: List[String], mf: ModFacts): Unit = m
 // The clock and reset ports are intentionally never read in RTL — skip them
 // (Verilog-compat folds `input clk` / `reset` / `rst_n` into real ports now,
 // so without this every module would report both).
+/// HDL002 ("declared but never read"): fires for each declaration that is not in mf.reads, restricted to the kinds kWire, kReg, kIn and kMem.
+/// Outputs and inouts are not covered by this rule, and any name equal to the module's clkName or rstName is skipped unconditionally — those ports are never read in RTL, so without the skip every module whose clk/reset became real ports would report twice.
 def ruleUnusedDecl(mname: String, clkName: String, rstName: String, ds: List[SigDecl], mf: ModFacts): Unit = match ds {
     case lnil => unit
     case lcons(d, t) =>
@@ -742,6 +840,8 @@ def ruleUnusedDecl(mname: String, clkName: String, rstName: String, ds: List[Sig
 }
 
 // HDL003: output port never driven.
+/// HDL003 ("output port never driven"): fires for each kOut/kOutReg declaration for which findFacts finds no DriveFacts entry at all.
+/// A partly driven output does not report here — one assignment to any bit of the root name creates the fact, and the remaining conflict cases belong to HDL010-013.
 def ruleOutUndriven(mname: String, ds: List[SigDecl], mf: ModFacts): Unit = match ds {
     case lnil => unit
     case lcons(d, t) =>
@@ -764,6 +864,16 @@ def ruleOutUndriven(mname: String, ds: List[SigDecl], mf: ModFacts): Unit = matc
 // documented false positives of name-level conflict counting (a bit-sliced
 // bus is legally driven from several statements), so both are suppressed
 // here; HDL012/013 (comb/clk + multi-domain mixing) are NOT affected.
+//
+// HDL013 is an over-approximation by construction: ruleDrivers only sees the
+// signal's own DriveFacts and has no access to the module's own clock domain
+// `md.cd`. A register driven once by a plain default-domain assignment and
+// once by regAssignCd with the SAME module domain therefore has defClk > 0
+// and one explicit cd, and is reported as "driven from multiple clock
+// domains" although only one domain is involved. The predicate is exactly
+// the one specified in docs/hdl-selfcheck-design.md:91; no test pins it.
+/// HDL010/011/012/013 per DriveFacts: HDL010 when uncondComb >= 2, HDL011 when uncondComb > 0 and condComb > 0, HDL012 when any combinational count and any clocked count are both non-zero, HDL013 when the signal has two distinct explicit clock domains or defClk > 0 together with at least one explicit domain.
+/// rangeSafe (phase 3, hdl-check-graph.typort — the throwaway rangeSafeOf(drives) list) suppresses HDL010 and HDL011 for roots whose comb drivers are all partial static bit-range writes; those are the documented name-level false positives of a bit-sliced bus driven from several statements. HDL012/013 are never suppressed.
 def ruleDrivers(mname: String, facts: List[DriveFacts], rangeSafe: List[String]): Unit = match facts {
     case lnil => unit
     case lcons(f, t) =>
@@ -811,6 +921,8 @@ def ruleDrivers(mname: String, facts: List[DriveFacts], rangeSafe: List[String])
 }
 
 // HDL023: the module drives its own input port.
+/// HDL023 ("module drives its own input port"): fires for each kIn declaration that does have a DriveFacts entry, i.e. an assign/regAssign/LHS whose root name is that input port.
+/// It iterates declarations rather than facts, so the name must still be classified kIn in the normalized list (dropShadowedWires has already removed same-named wire leftovers).
 def ruleOwnInputDriven(mname: String, ds: List[SigDecl], mf: ModFacts): Unit = match ds {
     case lnil => unit
     case lcons(d, t) =>
@@ -826,6 +938,8 @@ def ruleOwnInputDriven(mname: String, ds: List[SigDecl], mf: ModFacts): Unit = m
 }
 
 // HDL020/021/025: parent-side port direction at each connection.
+/// Parent-side direction checks at every recorded connection: HDL020 when a LHS connection (`u.port := x`, isLhs=true) targets a port listed in the child's outs, HDL021 when a RHS read (isLhs=false) targets a child's ins, and HDL025 when the port name is in none of ins/outs/inouts.
+/// inout ports are exempt from both HDL020 and HDL021; a connection whose child module (instModule None) or port entry (findPorts None) cannot be resolved is skipped silently.
 def ruleConnDir(mname: String, conns: List[ConnInfo], insts: List[InstInfo], tbl: ModulePortTable): Unit = match conns {
     case lnil => unit
     case lcons(c, t) =>
@@ -860,8 +974,12 @@ def ruleConnDir(mname: String, conns: List[ConnInfo], insts: List[InstInfo], tbl
         ruleConnDir(mname, t, insts, tbl)
 }
 
-// HDL022: instance ports left unconnected (skipped for raw instances —
-// their port string is invisible to the checker).
+// HDL022's connection-membership test. ruleInsts is what owns the rule's
+// shape: it demands only ins ++ outs, so inout ports are never required to
+// be connected, and it skips raw instances entirely (their port string is
+// invisible to the checker).
+/// True iff a connection for (iname, port) was recorded at all — the membership test behind HDL022's "unconnected" verdict; false on lnil.
+/// It is deliberately direction-blind: a parent either drives or reads the port, and both count as connected.
 def connCovers(conns: List[ConnInfo], iname: String, port: String): Boolean = match conns {
     case lnil => false
     case lcons(c, t) => match str_eq(c.inst, iname) {
@@ -873,6 +991,8 @@ def connCovers(conns: List[ConnInfo], iname: String, port: String): Boolean = ma
     }
 }
 
+/// HDL022 ("instance port left unconnected"): for each required port name in `ports`, reports when connCovers finds no connection for (iname, port).
+/// Callers pass only ins ++ outs, so inout ports are never demanded here; and ruleInsts calls this only for non-raw instances.
 def ruleInstPorts(mname: String, ports: List[String], iname: String, conns: List[ConnInfo]): Unit = match ports {
     case lnil => unit
     case lcons(p, t) =>
@@ -885,6 +1005,8 @@ def ruleInstPorts(mname: String, ports: List[String], iname: String, conns: List
 }
 
 // HDL024: raw instance connections bypass all checking.
+/// HDL024 ("instanceWithPorts bypasses HDL checking"): emitted once for every raw instance (InstInfo.raw), after which that instance is not checked further.
+/// Non-raw instances resolve their module in the port table (None -> silently unchecked) and get HDL022 over that module's ins ++ outs.
 def ruleInsts(mname: String, insts: List[InstInfo], conns: List[ConnInfo], tbl: ModulePortTable): Unit = match insts {
     case lnil => unit
     case lcons(i, t) =>
@@ -906,20 +1028,20 @@ def ruleInsts(mname: String, insts: List[InstInfo], conns: List[ConnInfo], tbl: 
 
 // ---------- entry ----------
 
-// BlackBox 判定（本文件纯谓词，P2 收口修正；R2 评审 P1 修复改判据）：黑盒宏在
-// def 自身的 expr 里留下 SELF 标记 bbMarkerExpr(isInst=false, <参数串>)
-//（专用变体纯发射通道，见 hdl-macros 的黑盒宏头注释与
-// docs/hdl-blackbox-sim-design.md §4.5-3；旧载体
-// assertExpr(literal(zero), <参数串>, AssertError) 与用户常量 Bool 断言
-// `assert(false.into, msg)` 逐字节同构，会把普通模块误判成黑盒、整模块体被
-// stub 静默替换——专用变体终结混叠）。
-// 这里按变体判定，**不读任何全局**：runChecks 运行在类体检查求值上下文，
-// 任何可达全局 op 的 def 调用在该上下文不可归约（docs/l13-typeclass-instance-
-// nat-param-bug.md 的 lvl2ix/毒化纪律），注册表查询会返回停滞值、match 两支
-// 都不求值 —— 五条体规则会对**所有**模块静默跳过（HDL001/002/003/010-013
-// 全局失效，assert/legacy 既有测试回归）。
-// NOTE: 平面元素模式（cons 内不再嵌套解构）——嵌套模式编译出悬空级别模式引用
-// （lvl2ix，实测），与 hdl-verilog 的 bbIsBlackBox 同纪律。
+/// BlackBox 判定（本文件纯谓词，P2 收口修正；R2 评审 P1 修复改判据）：黑盒宏在
+/// def 自身的 expr 里留下 SELF 标记 bbMarkerExpr(isInst=false, <参数串>)
+///（专用变体纯发射通道，见 hdl-macros 的黑盒宏头注释与
+/// docs/hdl-blackbox-sim-design.md §4.5-3；旧载体
+/// assertExpr(literal(zero), <参数串>, AssertError) 与用户常量 Bool 断言
+/// `assert(false.into, msg)` 逐字节同构，会把普通模块误判成黑盒、整模块体被
+/// stub 静默替换——专用变体终结混叠）。
+/// 这里按变体判定，**不读任何全局**：runChecks 运行在类体检查求值上下文，
+/// 任何可达全局 op 的 def 调用在该上下文不可归约（docs/l13-typeclass-instance-
+/// nat-param-bug.md 的 lvl2ix/毒化纪律），注册表查询会返回停滞值、match 两支
+/// 都不求值 —— 五条体规则会对**所有**模块静默跳过（HDL001/002/003/010-013
+/// 全局失效，assert/legacy 既有测试回归）。
+/// NOTE: 平面元素模式（cons 内不再嵌套解构）——嵌套模式编译出悬空级别模式引用
+/// （lvl2ix，实测），与 hdl-verilog 的 bbIsBlackBox 同纪律。
 def chkBbDefIsBlackBox[en: Nat](es: Vec[Expr] en): Boolean = match es {
     case nil => false
     case cons(e, tail) =>
@@ -933,12 +1055,17 @@ def chkBbDefIsBlackBox[en: Nat](es: Vec[Expr] en): Boolean = match es {
         }
 }
 
-// Port-table registration hoisted (phase 2): the graph file's
-// checkModuleTreeAll must re-register the entry on EVERY round — including
-// per-module cache hits — because the table self-heals by idempotent
-// overwrite (never cache-gated; hdl-selfcheck-design.md §2). runChecks calls
-// this too, so the entry is registered twice per analysis round (same
-// content, harmless overwrite).
+/// Port-table registration hoisted (phase 2). The table self-heals by
+/// idempotent overwrite (portTableAdd drops any existing entry for the same
+/// module name), so registration is never gated by a cache — analysis is
+/// per-round and the per-module cache was cancelled
+/// (docs/hdl-selfcheck-phase234-design.md §11.4). runChecks calls this while
+/// hdl-check-graph.typort's checkModuleAll registers the same entry a few
+/// statements earlier, so the entry is written twice per round with
+/// equivalent content (declOf and gDeclOf are arm-for-arm identical); the
+/// runChecks write is the one that survives. Registration is deliberately
+/// unconditional: the table must be repopulated on every round because the
+/// global is cleared between files.
 def registerPortTable(mname: String, decls: List[SigDecl]): Unit =
     let entry = PortEntry.mk(
         mname,
@@ -948,6 +1075,8 @@ def registerPortTable(mname: String, decls: List[SigDecl]): Unit =
     let _ = change_mutable_default("ModulePortTable", x => portTableAdd(x, entry), ModulePortTable.mk(lnil));
     unit
 
+/// The full analysis of one completed module def: scanAll over md.expr, normalize decls with dropShadowedWires, register the port entry, read the global table back, then run the five body rules unless the def is a blackbox, and always run HDL004 plus the connection rules.
+/// Blackbox gate: chkBbDefIsBlackBox(md.expr) clears only the five body rules (HDL001/002/003/010-013/023), which would all be false positives on a body-less module; registerPortTable and ruleWidthGround (HDL004) stay unconditional, and HDL020/021/025 + HDL024 run for every def. Called by checkModuleTreeAll (hdl-check-graph.typort) with the phase-3 rangeSafe list.
 def runChecks(md: ModuleDef, rangeSafe: List[String]): Unit =
     let mfRaw = scanAll(md.expr, ModFacts.mk(lnil, lnil, lnil, lnil, lnil, lnil));
     let mf = ModFacts.mk(dropShadowedWires(mfRaw.decls), mfRaw.reads, mfRaw.conns, mfRaw.insts, mfRaw.facts, mfRaw.seen);
@@ -978,20 +1107,19 @@ def runChecks(md: ModuleDef, rangeSafe: List[String]): Unit =
     let _ = ruleInsts(md.name, mf.insts, mf.conns, tbl);
     unit
 
-// Module-macro CREATE-side hook: analyze the completed head def and
-// return the tree unchanged (checks are pure diagnostics). The empty
-// head (headModuleDef's fallback for an empty tree) is skipped.
-// Also registers the def in the design-wide ModuleRegistry (see
-// hdl-core.typort) — this is the single choke point every completed
-// module body passes through.
-//
-// PHASE 2-4 NOTE: the module/blackbox macros now call the graph file's
-// checkModuleTreeAll instead (hdl-check-graph.typort, loaded after this
-// file — a typort def cannot call later-loaded defs, hence the entry
-// inversion). This def stays as the phase-1-only entry (roll-back path:
-// point the macros' three `_res` lines back here and delete the prelude's
-// hdl-check-graph entry); it passes an empty rangeSafe, i.e. exactly the
-// phase-1 behavior.
+/// Module-macro CREATE-side hook (phase 1 only): analyze the completed head
+/// def and return the tree unchanged (checks are pure diagnostics). The
+/// empty head (headModuleDef's fallback for an empty tree) is skipped.
+/// Also registers the def in the design-wide ModuleRegistry (see
+/// hdl-core.typort) via registerModuleTree.
+///
+/// PHASE 2-4 NOTE: the module/blackbox macros now call the graph file's
+/// checkModuleTreeAll instead (hdl-check-graph.typort, loaded after this
+/// file — a typort def cannot call later-loaded defs, hence the entry
+/// inversion). The roll-back path is to point the macros' four `_res` lines
+/// (hdl-macros.typort) back here and delete the prelude's hdl-check-graph
+/// entry; that path cannot reproduce the graph rules, since this def passes
+/// an empty rangeSafe, i.e. exactly the phase-1 behavior.
 def checkModuleTree(t: ModuleTree): ModuleTree =
     let md = headModuleDef(t.data);
     let skip = str_eq(md.name, "");

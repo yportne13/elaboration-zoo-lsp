@@ -1,4 +1,8 @@
-//! HDL surface-syntax macros (Expr, when, module).
+//! HDL surface-syntax macros: `module` (typort + Verilog-compat arms),
+//! `when` (expression form), `Expr` (statement DSL table), `blackbox`, plus
+//! the simulation-assertion and blackbox-parameter helper defs those macros
+//! call.  This file is the last HDL file before hdl-verilog-compat /
+//! hdl-verilog, so everything here may reference any earlier HDL name.
 // ============================================================
 // HDL Macros: Expr (ergonomic hardware DSL), when, and module
 // ============================================================
@@ -9,26 +13,47 @@
 // 落树为 when(完整使能条件, assertExpr(...), None)，与 assign 同机制）。
 // 设计文档建议放 hdl-signals 工厂族旁；本批 hdl-signals 所有权受限，故落在
 // hdl-macros（加载序 hdl-types 之后，Bool 可见；hdl-verilog 更晚，不受影响）。
+/// Emit a simulation assertion with an explicit severity.  Records one
+/// `assertExpr(cond, msg, sev)` statement; inside a `when` context it folds
+/// into that when's full enable condition exactly like an assignment.
+/// Verilog: a `// synthesis translate_off` / `always @(posedge <clk>)` block
+/// holding `if (!(cond)) $display("TYPORT_ASSERT_<SEV> %0t %m: <msg>", $time);`
+/// (`AssertFatal` additionally appends `$finish;`).
 def assertSev(cond: Bool, msg: String, sev: AssertSeverity): Unit =
     let dummy = createSignalExpr("", assertExpr(cond.expr, msg, sev));
     unit
 
 // 默认严重级 ERROR（与 SpinalHDL 的偏差：不用 FAILURE/$finish 默认——
 // 标记行 + 继续跑让宿主一次仿真收集全部违规，见设计文档 §8）。
+/// Emit an ERROR-severity simulation assertion (`assertSev` with
+/// `AssertError`).  Deviation from SpinalHDL: the default is not
+/// FAILURE/`$finish`, so one simulation run collects every violation.
 def assert(cond: Bool, msg: String): Unit = assertSev(cond, msg, AssertError)
 
+/// Emit a FATAL-severity simulation assertion (`assertSev` with
+/// `AssertFatal`).  Tagged `ERROR` in the marker line and followed by
+/// `$finish;`, so the sim host reads "model closed stdout" as the fatal signal.
 def assertFatal(cond: Bool, msg: String): Unit = assertSev(cond, msg, AssertFatal)
 
+/// Emit an INFO-severity simulation assertion (`assertSev` with `AssertInfo`).
 def assertInfo(cond: Bool, msg: String): Unit = assertSev(cond, msg, AssertInfo)
 
+/// Emit a WARNING-severity simulation assertion (`assertSev` with
+/// `AssertWarning`).
 def assertWarning(cond: Bool, msg: String): Unit = assertSev(cond, msg, AssertWarning)
 
 // 额外时钟域变体：产码进 cd 自己的 translate_off 断言块，clk 端口经
 // collectClockCds 合并收集器进端口表。
+/// Emit a simulation assertion clocked by the explicit domain `cd` instead of
+/// the module's default clock domain.  Records `assertExprCd`; `cd`'s clock
+/// (and its reset, when that domain has init regs) reach the port table via
+/// `collectClockCds` / `extraCdPortsVL`.
 def assertSevCd(cond: Bool, msg: String, sev: AssertSeverity, cd: ClockDomain): Unit =
     let dummy = createSignalExpr("", assertExprCd(cond.expr, msg, sev, cd));
     unit
 
+/// Emit an ERROR-severity assertion clocked by `cd` (`assertSevCd` with
+/// `AssertError`).
 def assertCd(cond: Bool, msg: String, cd: ClockDomain): Unit = assertSevCd(cond, msg, AssertError, cd)
 
 
@@ -83,6 +108,8 @@ def assertCd(cond: Bool, msg: String, cd: ClockDomain): Unit = assertSevCd(cond,
 // 交错不支持，与 module 宏"连续 run"约束同类）。`output reg` 端口与显式
 // 时钟域参数不支持（设计 §4.3：黑盒 cd 恒 defaultClockDomain、不合成
 // clk/reset）。
+/// Remove the first registry entry named `name` (recursively keeps the rest).
+/// Helper for `bbRegisterLast`'s last-wins upsert.
 def bbDropEntryHelp(es: List[BlackBoxEntry], name: String): List[BlackBoxEntry] = match es {
     case lnil => lnil
     case lcons(e, t) => match str_eq(e.name, name) {
@@ -94,16 +121,27 @@ def bbDropEntryHelp(es: List[BlackBoxEntry], name: String): List[BlackBoxEntry] 
 // 地面化种子（lvl2ix 纪律）：全局 seed 里的多态 lnil 会在类体求值上下文
 // （含类参 rigid）中使后续 List match 停滞——先用带类型注记的 let 解出
 // 具体元素类型，再构造，全局里永远只存 ground 值。
+/// Empty `BlackBoxCtx` seed.  The typed `let` is deliberate: a polymorphic
+/// `lnil` stored in a global stalls later `List` matches under class-body
+/// evaluation (lvl2ix discipline), so globals only ever hold ground values.
 def bbCtxFresh: BlackBoxCtx =
     let empty: List[BbGeneric] = lnil;
     BlackBoxCtx.mk(empty)
 
+/// Empty `BlackBoxRegistry` seed (typed `lnil`, same ground-value rule as
+/// `bbCtxFresh`).
 def bbRegistryFresh: BlackBoxRegistry =
     let empty: List[BlackBoxEntry] = lnil;
     BlackBoxRegistry.mk(empty)
 
 // last-wins 注册（见上）：同名项先摘除再前插，检查轮被 create 轮覆盖。
 // 仅在 blackbox 宏展开体内（用户文件上下文）调用——prelude 加载期不会执行。
+/// Register a blackbox as `name -> info`, LAST-WINS: the existing same-named
+/// entry is dropped first, then the new one is prepended.  The class body is
+/// evaluated several times before `create` runs with ground params, so
+/// last-wins lets the ground `create` round overwrite the neutral check
+/// rounds.  Only called from the `blackbox` macro expansion (never at prelude
+/// load).
 def bbRegisterLast(name: String, info: BlackBoxInfo): Unit =
     let _ = change_mutable_default("BlackBoxRegistry", x => x, bbRegistryFresh);
     let _ = change_mutable("BlackBoxRegistry", x => BlackBoxRegistry.mk(lcons (BlackBoxEntry.mk(name, info)) (bbDropEntryHelp(x.entries, name))));
@@ -111,6 +149,10 @@ def bbRegisterLast(name: String, info: BlackBoxInfo): Unit =
 
 // 读走并清空：清空时写入 ground 种子（不用 hdl-core 的 blackboxCtxTake——
 // 其清空分支写入多态 lnil，同样会毒化 drain）。
+/// Read and clear the `BlackBoxCtx` generic list collected by the `blackbox`
+/// macro prologue, leaving the ground seed `bbCtxFresh` behind (hdl-core's
+/// `blackboxCtxTake` writes a polymorphic `lnil` instead, which poisons the
+/// end-of-run drain).
 def bbCtxTakeGround: List[BbGeneric] =
     let gens = (get_global("BlackBoxCtx")).gens;
     let _ = create_global("BlackBoxCtx", bbCtxFresh);
@@ -118,12 +160,19 @@ def bbCtxTakeGround: List[BbGeneric] =
 
 // 参数串渲染（create 期、参数 ground 时调用；从 hdl-verilog 移来——发射链
 // 零全局读纪律下，渲染必须在 create 期完成，hdl-verilog 只做字面拾取）。
+/// Render one generic value as a Verilog decimal/string literal (`Nat` via
+/// `nat_to_dec`, `String` verbatim).  Runs at CREATE time where the params are
+/// ground; the emission chain in hdl-verilog only picks the finished string up.
 def bbGenValStr(v: BbGenVal): String = match v {
     case bbGenNat(n) => nat_to_dec(n)
     case bbGenStr(s) => s
 }
 
 // stub 头参数串："parameter WIDTH = 8, parameter DEPTH = 64"。
+/// Verilog parameter declaration list for a blackbox stub header, e.g.
+/// `parameter WIDTH = 8, parameter DEPTH = 64` ("" when there are no
+/// generics).  Carried on the SELF `bbMarkerExpr` and emitted by
+/// `blackboxDefVL` as `module Name #(<this>) (...)`.
 def bbParamsDeclStr(gs: List[BbGeneric]): String = match list_reverse(gs) {
     case lnil => ""
     case lcons(g, lnil) => "parameter " + g.key + " = " + bbGenValStr(g.val)
@@ -131,6 +180,8 @@ def bbParamsDeclStr(gs: List[BbGeneric]): String = match list_reverse(gs) {
 }
 
 // 实例参数项：".WIDTH(8), .DEPTH(64)"。
+/// Named instance-parameter item list, e.g. `.WIDTH(8), .DEPTH(64)`
+/// (interior of `bbInstParamsStr`).
 def bbInstItemsStr(gs: List[BbGeneric]): String = match list_reverse(gs) {
     case lnil => ""
     case lcons(g, lnil) => "." + g.key + "(" + bbGenValStr(g.val) + ")"
@@ -138,6 +189,9 @@ def bbInstItemsStr(gs: List[BbGeneric]): String = match list_reverse(gs) {
 }
 
 // 实例参数串：" #(.WIDTH(8), .DEPTH(64))"；无泛型黑盒为 ""。
+/// Verilog instance-parameter suffix, e.g. ` #(.WIDTH(8), .DEPTH(64))`; ""
+/// for a generic-less blackbox.  Carried on the INSTANCE `bbMarkerExpr` so
+/// `collectInstHelp` emits `Name #(.K(v), ...) inst (...)`.
 def bbInstParamsStr(gs: List[BbGeneric]): String = match gs {
     case lnil => ""
     case _ => " #(" + bbInstItemsStr(gs) + ")"
@@ -147,6 +201,23 @@ def bbInstParamsStr(gs: List[BbGeneric]): String = match gs {
 // 每个脚手架绑定都是 `let _ = ...`（class 体里折叠进同一个 `_` 字段）；
 // 端口先以 Some(name) 句柄声明，restore 后以 subSignal 句柄覆盖，父级
 // `u.port := sig` 层次连接免费复用。
+/// Declare a blackbox: `blackbox Name[args] generic K = v <ports> {}`.
+/// Expands to a `class Name ... impl Module` mirroring the plain `module` arm
+/// (same port factories, same ModuleTree push/restore sandwich, same
+/// ModuleRegistry registration, same `checkModuleTreeAll` self-check, same
+/// subSignal handles).  Two differences: (1) the body must be the empty `{}`
+/// — a blackbox carries only port declarations; (2) the blackbox side effects:
+/// a fresh `BlackBoxCtx` per evaluation, `generic K = v` appended via
+/// `bbGenericAddNat`, `bbCtxTakeGround` + `bbRegisterLast` registration, and
+/// two `bbMarkerExpr` parameter-string channels — SELF (`isInst=false`, stub
+/// header params, stays in the blackbox def) and INSTANCE (`isInst=true`,
+/// ` #(...)` suffix, appended to the parent right before `mkInstanceIfParent`
+/// so it follows the instance node in walk order).  Generated Verilog:
+/// `ifndef TYPORT_BB_<Name>` / `module <Name> #(parameter K = v, ...) (ports);`
+/// / `endmodule` / `endif`, or `Name #(.K(v), ...) inst (...)` at each use
+/// site.  Limits: generics are Nat-only (no literal fragment), `output reg`
+/// ports and explicit clock domains are unsupported (always
+/// `defaultClockDomain`, no synthesized clk/reset).
 #[macro_export]
 macro_rules blackbox {
     ($name: ident $( $args: params )* $( generic $gk: ident = $gv: raw )* $( $db: ident $pb: ident = Bool )* $( $d: ident $p: ident = $t: ident [$w: raw] )* $( $db2: ident $pb2: ident = Bool )* {}) => {
@@ -200,6 +271,18 @@ macro_rules blackbox {
 //       体里每个 let 都是 struct 字段（用户语义：class body 的每个 let
 //       都是字段，无特例），丢弃名让它们折叠进同一个 `_` 字段（last-wins），
 //       而不是成为 w_push/w_pop 之类的额外成员。
+/// Standalone `when` expression:
+/// `when c { ... } elsewhen c2 { ... } otherwise { ... }`.
+/// Expands to ONE shared WhenStack level — `whenBegin(cond)`, the body, one
+/// `whenElseBegin(cond2)` per `elsewhen`, `whenOtherwiseBegin(unit)` for
+/// `otherwise`, then a single `whenEnd(unit)` — with a `unit` tail so the form
+/// is a complete expression.  Each assignment is recorded as an independent
+/// `when(cond, assign, None)` node carrying its FULL accumulated enable
+/// condition, so the generator emits independent ifs (no else-if chain
+/// reconstruction).  Used at raw-expression positions (unbraced `def` bodies,
+/// plain match arms); statement positions in module/when/switch/for bodies
+/// dispatch through the `Expr` macro's own when arms instead.  The two tables
+/// are duplicated and independently maintained — change both together.
 #[macro_export]
 macro_rules when {
     // when + elsewhen* + otherwise
@@ -262,6 +345,23 @@ macro_rules when {
 //     default { ... }
 //   }
 
+/// The statement-level hardware DSL table.  Dispatched from every statement
+/// block through the `$x: Expr` named fragment: module bodies,
+/// when/elsewhen/otherwise/switch/for bodies, braced `def` bodies and braced
+/// match arms.  Signal arms transcribe `let x = UInt[8]` / `input x = ...` /
+/// `output reg x = ...` into ANNOTATED `let`s bound to the matching `new*`
+/// factory (`newUInt` / `newUIntInput` / `newUIntReg` /
+/// `newUIntOutRegInitNat` / ...), the binder name reaching the factory through
+/// the implicit `BindingName`; the annotation pins a concrete type up front so
+/// a field whose type depends on a class Nat parameter leaves no unsolved meta.
+/// `reg x = T[w] init v` -> the `*RegInitNat` factory; `output reg` ports stay
+/// `reg` in Verilog.  Control-flow arms expand `when` / `switch` into one
+/// shared WhenStack level (`whenBegin` / `whenElseBegin` /
+/// `whenOtherwiseBegin` / `whenEnd`; a `switch` becomes a plain when chain and
+/// runs NO HDL040 exhaustiveness check) and `for i in a until b { ... }` into
+/// `rangeFor(a until b, i => ...)`.  `let x = expr` becomes `nameWire(expr)`
+/// (named wire for arithmetic results, plain alias otherwise); `let _ = e`
+/// passes through unchanged.  The trailing `$x: raw` arm is a raw passthrough.
 #[macro_export]
 macro_rules Expr {
     // ---- signal declarations ----
@@ -547,6 +647,30 @@ macro_rules Expr {
 // parameter (`x.num + 1` / `:: x.data`) leaves stuck GADT indices that make
 // every later tree access O(n²).
 
+/// The module-definition macro; expands to a `class ... impl Module`.
+/// Two shapes: (1) the Verilog-compat ANSI arm
+/// `module m(input clk, input [hi:lo] a, output reg [hi:lo] q); <VExpr>... endmodule`,
+/// tried FIRST because it requires a literal `(` right after the name — its
+/// body statements dispatch through hdl-verilog-compat's `VExpr` table, leading
+/// and trailing scalar inputs are folded into the clock domain by
+/// `compatFoldPort` (clk / reset / rst_n) and also become real Bool ports, and
+/// the port groups are matched as contiguous runs (scalar inputs, `[hi:lo]`
+/// ports, `output reg [hi:lo]`, scalar `output reg`, remaining scalars);
+/// (2) the typort arms `module m[cd]?[args] <ports> { <Expr>* }`, with
+/// `output reg` / typed / Bool port groups likewise matched as contiguous runs.
+/// The expansion is a class whose body holds the side-effect chain FLATTENED
+/// into fields (every class-body `let` is a struct field, so the repeated
+/// `let _ = ...` scaffolding collapses last-wins into one `_` field) and whose
+/// constructor binds them in declaration order, so field order == side-effect
+/// order (reset -> push -> ports -> body -> pop -> instance record).  Ports are
+/// declared TWICE — once as the module's own signal, once as a subSignal handle
+/// after the restore — so a parent can write `u.a := sig`; the module records
+/// itself into its parent via `mkInstanceIfParent(bn.name, ...)` at the end of
+/// the create chain.  `def tree: ModuleTree = this._res` returns the create-time
+/// snapshot instead of replaying the chain, and the ModuleDef push keeps the
+/// constant shape `ModuleTree.mk(0 + 1, ... :: nil)` (deriving the head from
+/// the lambda parameter leaves stuck GADT indices and makes later tree access
+/// O(n^2)).
 #[macro_export]
 macro_rules module {
 	// ---- Verilog-compat arm (M1): ANSI header + endmodule -------------

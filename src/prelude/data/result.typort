@@ -92,3 +92,31 @@ def option_to_result[A, E](o: Option[A], default_err: E): Result[A, E] =
 
 /// Keep the success value as an `Option`, discarding the error.
 def result_to_option[A, E](r: Result[A, E]): Option[A] = r.ok_to_option
+
+// Option 的 `ok_or` 必须住本文件：`Result` 定义在 option.typort 之后，
+// option.typort 内部引用不到 `Result`（加载序所迫，与 list.typort 里
+// 为 Option/Vec 补 `to_list` 同一先例）。
+impl[T] Option[T] {
+    /// `Some t` becomes `ok t`; `None` becomes `err e`.
+    def ok_or[E](e: E): Result[T, E] =
+        match this {
+            case Some(t) => ok(t)
+            case None => err(e)
+        }
+}
+
+// 本轮补齐：惰性错误恢复形式（与 unwrap_or / map_or 的立即求值形式互补）。
+impl[Ok, Err] Result[Ok, Err] {
+    /// The success value, or `f e` on error.
+    def unwrap_or_else(f: Err -> Ok): Ok =
+        match this {
+            case ok(v) => v
+            case err(e) => f e
+        }
+    /// Map the success value, or fall back to `default e` on error.
+    def map_or_else[U](default: Err -> U, f: Ok -> U): U =
+        match this {
+            case ok(v) => f v
+            case err(e) => default e
+        }
+}

@@ -1672,7 +1672,7 @@ fn test_examples_hdl_dir() {
             "input wire rstB",
             "always @(posedge clkA or posedge rstA) begin",
             "always @(posedge clkB or posedge rstB) begin",
-            "reg [1:0] _d_wrPtr;",
+            "reg [2:0] _d_wrPtr;",  // wrap 位（task-4 G1：ptrBits+1，使 full/empty 可区分）
             "reg [7:0] _d_mem [0:3];",
             "assign popValid = !(_d_rdPtr == _d_wrPtrSync2)",  // empty 检测
         ]),

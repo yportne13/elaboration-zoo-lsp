@@ -13,6 +13,10 @@
 // drive is not modeled). Defined before `trait Data` because Data's `<>`
 // default body references it (default bodies elaborate when an impl is
 // filled, i.e. within this same file).
+/// True when `e` is an input or inout port node (`createIn`, `createInWidth`,
+/// `createSIntInWidth`, `createInOut`, `createInOutWidth`, `createSIntInOutWidth`).
+/// Bidirectional `<>` connections use this to never drive a module's own input or
+/// inout pin (driving an input is illegal Verilog; tri-state drive is not modeled).
 def isInputPort(e: Expr): Boolean = match e {
     case createIn(_) => true
     case createInWidth(_, _) => true
@@ -24,8 +28,19 @@ def isInputPort(e: Expr): Boolean = match e {
 }
 
 // Drive `lhs` from `rhs`, respecting register semantics (a reg signal is
-// assigned inside the clocked always block). Shared by the Data `:=` impls
-// and the `<>` default; keep them in sync when changing assignment rules.
+// assigned inside the clocked always block). Used ONLY by the `<>` default
+// below: the `Data` `:=` impls go through hdl-core's pickAssign instead,
+// which adds the Verilog-compat branch (a plain `assign` plus HDV002 when
+// combDepth > 0), so the two paths are not interchangeable.
+/// Records one directional drive of `lhs` from `rhs`: `regAssign` when `lhs` names a
+/// register (the assignment must land inside the clocked block), plain `assign`
+/// otherwise. The assignment is emitted through a throwaway `createSignalExpr` so it
+/// is picked up by the module accumulator.
+///
+/// Callers: only the `Data` `<>` default below. The four `Data` `:=` impls use
+/// hdl-core's `pickAssign`, whose register branch additionally handles the
+/// Verilog-compat `always @(*)` context (`assign` + HDV002 when `combDepth > 0`); this
+/// helper deliberately does not reproduce that branch.
 def driveExpr(lhs: Expr, rhs: Expr): Unit =
     let isReg = isRegExpr(lhs);
     let assignment = match isReg {
@@ -35,6 +50,13 @@ def driveExpr(lhs: Expr, rhs: Expr): Unit =
     let dummy_expr = createSignalExpr("", assignment);
     unit
 
+/// A value that can appear in generated hardware. `expr` exposes the underlying
+/// `Expr`; `:=` converts the right-hand side with `Into[Self]` and drives the left;
+/// `<>` is the SpinalHDL-style bidirectional connect.
+///
+/// The `<>` default body drives both directions and skips any side that
+/// `isInputPort` reports as an input/inout, so a master/slave port pair can be
+/// connected either way. Both sides must have the same type.
 trait Data {
     def :=[T](that: T): Unit where T: Into[Self]
     def expr: Expr
@@ -63,6 +85,9 @@ trait Data {
 //  Hardware Bit Type (wire-level boolean)
 // ============================================================
 
+/// Hardware boolean: a single bit in generated Verilog. `zz_expr` is the backing
+/// expression and `name` is `Some` only once a `LetNamed` instance has materialized
+/// the value as a named wire.
 struct Bool {
     name: Option[String]
     zz_expr: Expr
@@ -89,6 +114,9 @@ impl Into[Bool] for Boolean {
 
 // ---------- Bits (raw bit vector) ----------
 
+/// A raw `width`-bit vector with no arithmetic interpretation. Only bit-level
+/// operations are provided (`Cat`, shifts, `|`, `&`, `^`); use `UInt`/`SInt` for
+/// numeric operators.
 struct Bits[width: Nat] {
     name: Option[String]
     zz_expr: Expr
@@ -109,12 +137,18 @@ impl[width: Nat] Data for Bits[width] {
 
 // ---------- UInt (unsigned integer) ----------
 
+/// Unsigned `width`-bit integer. Width growth on `+`/`-`/`*`, comparison and the
+/// `Nat` literal conversions are supplied by instances in `hdl-ops.typort`;
+/// `UInt` itself only carries the expression and an optional wire name.
 struct UInt[width: Nat] {
     name: Option[String]
     zz_expr: Expr
 }
 
 // Check if a Nat value fits in a given bit width
+/// True iff the literal `value` is representable in `width` bits, i.e. `value < 2^width`.
+/// Recurses in lockstep on `succ value` and on `width`, returning `false` when `value`
+/// still has bits left but `width` has reached `zero`.
 def natFitsIn(width: Nat, value: Nat): Boolean = match value {
     case zero => true
     case succ(v) => match width {
@@ -142,6 +176,8 @@ impl[width: Nat] Data for UInt[width] {
 
 // ---------- SInt (signed integer) ----------
 
+/// Two's-complement signed `width`-bit integer. `literal` seeds it and the operator
+/// instances in `hdl-ops.typort` use signed comparison, unlike `UInt`.
 struct SInt[width: Nat] {
     name: Option[String]
     zz_expr: Expr
@@ -191,6 +227,13 @@ impl[width: Nat] Data for SInt[width] {
 // Fixed-width modules are exact. The HDL004 self-check (hdl-check.typort)
 // reports the degraded signal instead of letting it pass silently — see
 // docs/l13-typeclass-instance-nat-param-bug.md.
+/// Turns a `let`-bound expression into a real named Verilog wire. `mkNamed(name)`
+/// returns a value whose `zz_expr` *reads* the freshly created wire (and emits
+/// `wire [w-1:0] name; assign name = <expr>;`) instead of the expression itself, so
+/// every later use of the binder refers to the wire.
+///
+/// Already-declared signals (ports, regs, factory products) are returned unchanged:
+/// for those the `let` stays a plain alias.
 trait LetNamed[T] {
     def mkNamed(name: String): T
 }
@@ -248,4 +291,7 @@ impl[T] LetNamed[T] for T {
 
 // The let-RHS wrapper: bn is synthesized from the let binder name by the
 // compiler, exactly like the new- and auto- factories.
+/// The `let` macro arm's entry point: names the wire from the synthesized let binder
+/// (`bn.name`, passed through `loopName`) and dispatches the materialization to the
+/// `LetNamed` instance for the value's type.
 def nameWire[bn: BindingName, T][ln: LetNamed[T]](value: T): T = ln.mkNamed(value, loopName(bn.name))

@@ -5,10 +5,14 @@
 
 // Convert Nat to decimal string (for Verilog width ranges like [7:0])
 // Uses the Rust builtin nat_to_dec which correctly counts Peano successors
+/// Decimal string for a `Nat` (wraps the Rust `nat_to_dec` builtin,
+/// which counts Peano successors correctly).  Used for Verilog width ranges like
+/// `[7:0]`.
 def natToDec(n: Nat): String = nat_to_dec(n)
 
 // String concat helpers (avoid Add trait to prevent typeclass issues with dep-types)
 
+/// Join a `List[String]` with "\n" ("" for the empty list).
 def joinLines(ls: List[String]): String = match ls {
     case lnil => ""
     case lcons(s, lnil) => s
@@ -21,6 +25,10 @@ def joinLines(ls: List[String]): String = match ls {
 // may stay stuck through elaboration (see docs/l13-proof-candidates-notes.md
 // §2.3), so a stuck literal still falls through to the `if (...)` form, which is
 // valid (if redundant) Verilog.
+/// Is this Expr the always-true write enable (`literal(succ(zero))`)?
+/// Recognising it lets `memWriteLineRaw` drop the redundant `if (enable)` guard.
+/// Only the constructor form is recognised: a stuck numeric literal falls through
+/// to the guarded form, which is still legal (if redundant) Verilog.
 def isTrueLit(e: Expr): Boolean = match e {
     case literal(v) => match v {
         case succ(zero) => true
@@ -37,6 +45,11 @@ def isTrueLit(e: Expr): Boolean = match e {
 // top bit is explicit and survives nesting/inlining. The branches below
 // are defensive fallbacks for hand-built Exprs that still carry `+^`/`-^`;
 // they map to plain `+` / `-` so the emitted Verilog stays legal.
+/// Normalize a typort binary operator to a legal Verilog token: the
+/// defensive `+^` / `-^` fallbacks map to plain `+` / `-` (neither is a Verilog
+/// token); every other operator passes through.  hdl-ops no longer emits
+/// `+^`/`-^` (it builds an explicit pad-concat plus plain add/sub), so these
+/// branches only protect hand-built Exprs.
 def verilogBinOp(op: String): String =
     let is_plus_carry = str_eq(op, "+^");
     match is_plus_carry {
@@ -56,6 +69,12 @@ def verilogBinOp(op: String): String =
 // shift (review 2026-09-29 HDL P1-4). Wrapping the left operand in
 // `$signed(...)` pins the signedness at the shift site; for operands that
 // already carry a signed declaration it is a no-op.
+/// Wrap a left operand in `$signed(...)` for an arithmetic right shift.
+/// IEEE 1364-2001 §4.1.10 makes `>>>` arithmetic only when the LEFT operand is
+/// signed, and an `SInt` value does not always live on a signed-declared wire
+/// (`b.asSInt >> 1` keeps the unsigned wire `b`), so a bare `(b >>> 1)` silently
+/// degrades to a logical shift.  For an already-signed operand the wrapper is a
+/// no-op.
 def arithShiftLhsStr(lstr: String): String =
     "$signed(" + lstr + ")"
 
@@ -65,6 +84,10 @@ def arithShiftLhsStr(lstr: String): String =
 // (hdl-ops.typort) always concatenate a Bool or a named signal — so it is
 // emitted as a sized 1-bit literal; anything else keeps the plain decimal
 // form (defensive fallback, not reachable through the Cat impls).
+/// Sized 1-bit literal for a concatenation operand: zero -> `1'b0`,
+/// succ(zero) -> `1'b1`; anything else keeps the plain decimal form (defensive,
+/// unreachable through the Cat impls).  IEEE 1364-2001 §4.1.14 forbids unsized
+/// constants inside concatenations, so `{0, x}` is not legal Verilog.
 def catLitStr(v: Nat): String = match v {
     case zero => "1'b0"
     case succ(zero) => "1'b1"
@@ -73,6 +96,9 @@ def catLitStr(v: Nat): String = match v {
 
 // A sized Verilog literal `w'dv` for `sizedLiteral(v, w)` (parser desugar of
 // `8'h2A` etc.). Legal inside concatenations, unlike an unsized decimal.
+/// A sized Verilog literal `w'dv` for `sizedLiteral(v, w)` (the parser
+/// desugar of `8'h2A` etc.).  Legal inside concatenations, unlike an unsized
+/// decimal.
 def sizedLitStr(v: Nat, w: Nat): String =
     natToDec(w) + "'d" + natToDec(v)
 
@@ -83,6 +109,9 @@ def sizedLitStr(v: Nat, w: Nat): String =
 // capture failures off stdout while `%m` fills the hierarchical instance path
 // at simulation time (more precise than baking module names into the msg).
 
+/// Marker tag for an assertion severity: `INFO` / `WARNING` / `ERROR`.
+/// `AssertFatal` also maps to `ERROR` — its fatality is signalled by the appended
+/// `$finish;`, not by a distinct tag.
 def assertSevTag(s: AssertSeverity): String = match s {
     case AssertInfo => "INFO"
     case AssertWarning => "WARNING"
@@ -90,6 +119,8 @@ def assertSevTag(s: AssertSeverity): String = match s {
     case AssertFatal => "ERROR"
 }
 
+/// Is this severity fatal (`AssertFatal`)?  Fatal assertions append
+/// `$finish;` after the `$display`, so the sim host sees "model closed stdout".
 def assertIsFatal(s: AssertSeverity): Boolean = match s {
     case AssertFatal => true
     case _ => false
@@ -98,6 +129,11 @@ def assertIsFatal(s: AssertSeverity): Boolean = match s {
 // Procedural form (4-space if indent, display at 6 — the clocked-block body
 // style). AssertFatal appends `$finish;` (the model exits early; the host
 // sees "model closed stdout" as the fatal signal).
+/// One assertion statement in procedural style (4-space `if` indent,
+/// 6-space display): `if (!(condStr)) begin` / `$display("TYPORT_ASSERT_<SEV> %0t
+/// %m: <msg>", $time);` / (`$finish;` when fatal) / `end`.  The marker word plus
+/// `%0t` and `%m` let the sim host capture failures off stdout with the time and
+/// the hierarchical instance path.
 def assertLineRaw(condStr: String, msg: String, sev: AssertSeverity): String =
     let disp = "      $display(\"TYPORT_ASSERT_" + assertSevTag(sev) + " %0t %m: " + msg + "\", $time);";
     let fin = match assertIsFatal(sev) {
@@ -111,6 +147,10 @@ def assertLineRaw(condStr: String, msg: String, sev: AssertSeverity): String =
 // An enable that evaluates to literal 1 (constructor form `literal(succ(zero))`)
 // collapses to the bare assignment; any other enable keeps the guard.
 // Operand strings are already emitted (avoids a forward ref to exprVL).
+/// One memory write statement for the clocked always block:
+/// `if (enable) mem[addr] <= data;`, or the bare `mem[addr] <= data;` when
+/// `enable` is the recognised always-true literal.  Operand strings are already
+/// rendered (avoids a forward reference to `exprVL`).
 def memWriteLineRaw(memStr: String, addrStr: String, dataStr: String, enableStr: String, enable: Expr): String =
     let always_en = isTrueLit(enable);
     match always_en {
@@ -121,6 +161,11 @@ def memWriteLineRaw(memStr: String, addrStr: String, dataStr: String, enableStr:
 // Emit an expression in "procedural" context (inside always block):
 // assign becomes blocking assignment, block/when recurse procedurally.
 // Self-contained (no forward ref to exprVL).
+/// Render an Expr in PROCEDURAL context (inside an always block):
+/// assign becomes blocking (`lhs = rhs`), `regAssign` / `regAssignCd` become
+/// non-blocking (`lhs <= rhs`), `when` recurses into `if / else if / else`,
+/// `memWrite` / `assertExpr*` go through their line helpers, and the expression
+/// forms mirror `exprVL`.  Self-contained (no forward reference to `exprVL`).
 def exprVL_proc(e: Expr): String = match e {
     case create(name) => name
     case createIn(name) => name
@@ -227,6 +272,9 @@ def exprVL_proc(e: Expr): String = match e {
 }
 
 // Helper: emit condition string without redundant outer parens
+/// Render a condition WITHOUT redundant outer parentheses: a binary node
+/// becomes `<lhs> <op> <rhs>` (still `$signed(...)`-wrapped for `>>>`), anything
+/// else goes through `exprVL_proc`.
 def emitCondStr(cond: Expr): String = match cond {
     case binary(lhs, op, rhs) =>
         match str_eq(op, ">>>") {
@@ -239,6 +287,17 @@ def emitCondStr(cond: Expr): String = match cond {
 // Convert a single Expr to a Verilog expression string.
 // Handles one level of else-if nesting; deeper nesting may produce
 // nested if-statements (still functionally correct).
+/// Render one Expr as a Verilog expression or standalone statement string:
+/// signals by name; `literal` as decimal; `sizedLiteral` as `w'dv`; `##` as
+/// `{lhs, rhs}` with sized literals; other binaries as `(<lhs> <op> <rhs>)` (with
+/// `$signed(...)` on a `>>>` left operand); `unary` as `op expr`; `mux` as
+/// `(c ? a : b)`; `bitsel` / `partsel` as `x[i]` / `x[hi:lo]`; `subSignal` as the
+/// flat name `<inst>_<port>`; `memRead` as `mem[addr]`; `memWrite` and
+/// `assertExpr*` via their line helpers; `instance*` as an instantiation line;
+/// `assign` / `regAssign*` as a continuous / procedural assignment; `when` as an
+/// if-block whose body is rendered procedurally (one level of `else if` nesting;
+/// deeper nesting emits nested ifs, still correct); `switch` as a `case`; `nop`
+/// and a blackbox marker as "".
 def exprVL(e: Expr): String = match e {
     case create(name) => name
     case createIn(name) => name
@@ -342,6 +401,7 @@ def exprVL(e: Expr): String = match e {
     case bbMarkerExpr(_, _) => ""
 }
 
+/// Is this Expr a `subSignal(inst, port)` handle?
 def isSubSignal(e: Expr): Boolean = match e {
     case subSignal(_, _) => true
     case _ => false
@@ -351,18 +411,25 @@ def isSubSignal(e: Expr): Boolean = match e {
 // sub-module output: `sig := u.port`). Defined here (before assignLineCheck)
 // because Typort has no forward references; the expr decomposition helpers
 // used by collectInstHelp live further down.
+/// Is this `assign(_, rhs)` whose RHS is a subSignal — i.e. a READ of a
+/// child output (`sig := u.port`, emitted as a port connection)?
 def isSubSignalRhs(e: Expr): Boolean = match e {
     case assign(_, rhs) => isSubSignal(rhs)
     case _ => false
 }
 
 // Check if an expression is an assign targeting a subSignal (port connection)
+/// Is this an assign TARGETING a subSignal (`u.port := sig`, a port
+/// connection on the LHS)?
 def isSubSigAssign(e: Expr): Boolean = match e {
     case assign(lhs, _) => isSubSignal(lhs)
     case _ => false
 }
 
 // Helper: check if Vec[Expr] contains any port declarations
+/// Does the expr list declare ANY port (plain or sized input / output /
+/// inout, including `output reg`)?  NOTE: no call site other than its own
+/// recursion — kept as a spare predicate, not wired into the emitter.
 def hasPorts[ne: Nat](es: Vec[Expr] ne): Boolean = match es {
     case nil => false
     case cons(e, tail) => match e {
@@ -385,6 +452,7 @@ def hasPorts[ne: Nat](es: Vec[Expr] ne): Boolean = match es {
 }
 
 // Check if a string is in a list
+/// Membership test for a `String` in a `List[String]`.
 def strInList(s: String, ls: List[String]): Boolean = match ls {
     case lnil => false
     case lcons(h, tail) =>
@@ -396,6 +464,8 @@ def strInList(s: String, ls: List[String]): Boolean = match ls {
 }
 
 // Helper: generate output port wire/reg keyword
+/// `reg` when `name` is in the non-clocked when-driven set, else `wire` —
+/// the declaration keyword for an output port that is not an `output reg` port.
 def outWireOrReg(name: String, whenSigs: List[String]): String =
     let isWhen = strInList(name, whenSigs);
     match isWhen {
@@ -405,6 +475,9 @@ def outWireOrReg(name: String, whenSigs: List[String]): String =
 
 // Helper: generate width range string, omit for 1-bit signals
 // Uses Rust builtin width_range which can force Nat evaluation
+/// Verilog width range text `[w-1:0]` (wraps the Rust `width_range` builtin,
+/// which forces Nat evaluation); the EMPTY string for 1-bit signals, so callers
+/// concatenate it directly.
 def widthRange(w: Nat): String = width_range(w)
 
 // ============================================================
@@ -413,10 +486,14 @@ def widthRange(w: Nat): String = width_range(w)
 
 // Emit one memory declaration:  reg [w-1:0] name [0:wordCount-1];
 // widthRange returns "" for 1-bit cells →  reg name [0:wordCount-1];
+/// One memory declaration: `reg [w-1:0] name [0:words-1];`, or
+/// `reg name [0:words-1];` for 1-bit cells (since `widthRange` returns "").
 def memDeclLine(name: String, wordCount: Nat, width: Nat): String =
     "  reg " + widthRange(width) + name + " [0:" + natToDec(pred(wordCount)) + "];"
 
 // Collect memory declarations from Vec[Expr]
+/// `memDeclLine` for every `createMem(name, wordCount, width)` in the
+/// expr list.
 def collectMemLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
     case nil => lnil
     case cons(e, tail) => match e {
@@ -425,6 +502,8 @@ def collectMemLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
     }
 }
 
+/// Memory declaration section text: all memory declarations joined by
+/// newlines plus a trailing newline ("" when there are none).
 def memsVL[ne: Nat](es: Vec[Expr] ne): String =
     let ls = list_reverse(collectMemLines es);
     match ls {
@@ -436,6 +515,11 @@ def memsVL[ne: Nat](es: Vec[Expr] ne): String =
 // output-reg ports are ALWAYS emitted `output reg` — no wire/reg inference
 // from the when-driven set (outWireOrReg), so a register output port stays a
 // reg even when its `:=` drive lives outside any non-clocked when.
+/// The Verilog port line(s) for one port declaration expr: `input wire
+/// name` / `output wire|reg name` / `inout wire name`, with `[w-1:0]` and
+/// `signed` modifiers as applicable.  `output reg` ports are ALWAYS `output reg`
+/// (no wire/reg inference from the when-driven set).  Any other expr yields no
+/// line.
 def portLineSingle(e: Expr, whenSigs: List[String]): List[String] = match e {
     case createIn(name) => lcons ("  input wire " + name) lnil
     case createOut(name) => lcons ("  output " + outWireOrReg(name, whenSigs) + " " + name) lnil
@@ -455,6 +539,8 @@ def portLineSingle(e: Expr, whenSigs: List[String]): List[String] = match e {
 }
 
 // Collect port declarations (input/output) from Vec[Expr]
+/// `portLineSingle` over the whole expr list, preserving declaration
+/// order.
 def collectPortLines[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): List[String] = match es {
     case nil => lnil
     case cons(e, tail) => list_append(portLineSingle(e, whenSigs), collectPortLines(tail, whenSigs))
@@ -465,6 +551,11 @@ def collectPortLines[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): List[St
 // over a wire — e.g. `AxiLite.create.asMaster` rebuilds its fields as ports
 // while the plain TypeName.create wires from the inner call still sit in the
 // module tree, and declaring both would emit illegal duplicate Verilog lines.
+/// The names of all declared ports.  Wire/reg declarations skip
+/// same-named signals, because a port declaration takes precedence over an inner
+/// wire — e.g. `AxiLite.create.asMaster` rebuilds its fields as ports while the
+/// plain `TypeName.create` wires from the inner call still sit in the module
+/// tree, and declaring both would emit illegal duplicate Verilog lines.
 def collectPortNames[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
     case nil => lnil
     case cons(e, tail) => match e {
@@ -486,12 +577,14 @@ def collectPortNames[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
     }
 }
 
+/// Join port lines with ",\n" for a Verilog port list.
 def joinPortLines(ls: List[String]): String = match ls {
     case lnil => ""
     case lcons(s, lnil) => s
     case lcons(s, tail) => s + ",\n" + joinPortLines(tail)
 }
 
+/// The complete port list text (declaration order) for a module header.
 def portsVL[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): String =
     joinPortLines(list_reverse(collectPortLines(es, whenSigs)))
 
@@ -539,6 +632,12 @@ def portsVL[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): String =
 // dispatch.
 // NOTE: flat element patterns only - nested deconstruction inside a cons
 // pattern compiles to dangling-level pattern quotes (lvl2ix, measured).
+/// Is this def a blackbox?  True iff its expr list carries a SELF marker
+/// (`bbMarkerExpr(isInst=false)`); the INSTANCE marker (`isInst=true`) lives in a
+/// PARENT def and must not trip this.  PURE (no global read — the emission chain
+/// must stay global-free).  Uses flat element patterns only: nested
+/// deconstruction inside a `cons` pattern compiles to dangling-level pattern
+/// quotes (lvl2ix).
 def bbIsBlackBox[en: Nat](es: Vec[Expr] en): Boolean = match es {
     case nil => false
     case cons(e, tail) =>
@@ -554,6 +653,9 @@ def bbIsBlackBox[en: Nat](es: Vec[Expr] en): Boolean = match es {
 
 // The stub header params string carried by the SELF marker ("parameter K = v,
 // ..."; "" for a generic-less blackbox). PURE. Flat patterns (see above).
+/// The stub-header parameter string carried by the SELF marker
+/// (`parameter K = v, ...`; "" for a generic-less blackbox).  PURE, flat
+/// patterns (see `bbIsBlackBox`).
 def bbStubParams[en: Nat](es: Vec[Expr] en): String = match es {
     case nil => ""
     case cons(e, tail) =>
@@ -576,6 +678,14 @@ def bbStubParams[en: Nat](es: Vec[Expr] en): String = match es {
 // portsVL path as ordinary modules (directions/widths/signedness identical);
 // there are no wire/reg/assign/always/instance sections and NO synthesized
 // clk/reset ports — the blackbox def's expr list holds only port declarations.
+/// Emit a blackbox's guarded EMPTY stub: `` `ifndef TYPORT_BB_<Name> ``,
+/// `module <Name> #(<params>) (ports);`, `endmodule`, `` `endif ``.  A hand-written
+/// behaviour model whose first line is `` `define TYPORT_BB_<Name> `` (joined via
+/// the simulator's extra_args channel) replaces the stub without a
+/// duplicate-module error; without a replacement the stub elaborates fine.
+/// Ports go through the same `portsVL` path as ordinary modules; there are no
+/// wire/reg/assign/always/instance sections and NO synthesized clk/reset
+/// ports.
 def blackboxDefVL(md: ModuleDef, params: String): String =
     let port_decls = portsVL(md.expr, lnil);
     let genhead = match str_eq(params, "") {
@@ -586,6 +696,8 @@ def blackboxDefVL(md: ModuleDef, params: String): String =
 
 
 // Helper: generate wire or reg declaration based on when-driven status
+/// One internal-signal declaration line: `reg <width> name;` when the name
+/// is driven by a non-clocked when, else `wire <width> name;`.
 def wireOrRegLine(name: String, widthStr: String, whenSigs: List[String]): String =
     let isWhen = strInList(name, whenSigs);
     match isWhen {
@@ -598,6 +710,9 @@ def wireOrRegLine(name: String, widthStr: String, whenSigs: List[String]): Strin
 // port declaration (input/output) takes precedence over a same-named wire.
 // whenSigs semantics are unchanged: non-port signals driven by a non-clocked
 // when are declared as reg instead of wire.
+/// The wire/reg declaration line(s) for one expr: `create` /
+/// `createWidth` / `createSIntWidth` become declarations (with `signed` for
+/// SInt), unless the name is already a port — the port declaration wins.
 def wireLineSingle(e: Expr, portNames: List[String], whenSigs: List[String]): List[String] = match e {
     case create(name) =>
         let isPort = strInList(name, portNames);
@@ -622,6 +737,8 @@ def wireLineSingle(e: Expr, portNames: List[String], whenSigs: List[String]): Li
 
 // Collect wire declarations (internal signals) from Vec[Expr]
 // When-driven signals are declared as reg instead of wire
+/// `wireLineSingle` over the expr list — the internal signal
+/// declarations.
 def collectWireLines[ne: Nat](es: Vec[Expr] ne, portNames: List[String], whenSigs: List[String]): List[String] = match es {
     case nil => lnil
     case cons(e, tail) => list_append(wireLineSingle(e, portNames, whenSigs), collectWireLines(tail, portNames, whenSigs))
@@ -633,6 +750,11 @@ def collectWireLines[ne: Nat](es: Vec[Expr] ne, portNames: List[String], whenSig
 // reset value) is skipped: the `output reg` port line already declares the
 // storage, and emitting both would be an illegal redeclaration. The port's
 // own init Expr still feeds the reset branch via collectInitLinesCd.
+/// `reg` declaration lines for every register factory (`createReg*`,
+/// `createSIntReg*`).  A reg whose name is already a port is skipped: an
+/// `output reg` header port plus a body `reg [7:0] q = 0;` would be an illegal
+/// redeclaration, and the port's own init still feeds the reset branch through
+/// `collectInitLinesCd`.
 def collectRegLines[ne: Nat](es: Vec[Expr] ne, portNames: List[String]): List[String] = match es {
     case nil => lnil
     case cons(e, tail) => match e {
@@ -689,6 +811,10 @@ def collectRegLines[ne: Nat](es: Vec[Expr] ne, portNames: List[String]): List[St
 // elements (clocked regAssign targets with optional init), so the module
 // header needs the clock (and reset) ports even though no standalone `reg`
 // declaration exists — the `output reg` port line itself declares the reg.
+/// Does the module declare any `output reg` PORT?  Such a port is a
+/// sequential element (clocked regAssign target with optional init), so the
+/// module needs clock/reset ports even though the port line itself declares the
+/// reg.
 def hasOutRegPorts[ne: Nat](es: Vec[Expr] ne): Boolean = match es {
     case nil => false
     case cons(e, tail) => match e {
@@ -702,6 +828,7 @@ def hasOutRegPorts[ne: Nat](es: Vec[Expr] ne): Boolean = match es {
 }
 
 // Compare two clock domains by (clockName, resetName)
+/// Compare two clock domains by (clockName, resetName).
 def cdEq(a: ClockDomain, b: ClockDomain): Boolean = match str_eq(a.clockName, b.clockName) {
     case true => str_eq(a.resetName, b.resetName)
     case false => false
@@ -709,6 +836,8 @@ def cdEq(a: ClockDomain, b: ClockDomain): Boolean = match str_eq(a.clockName, b.
 
 // Does an Expr tree contain regAssignCd for THIS cd? (regAssign non-Cd forms do
 // NOT count here — they belong to the module default cd.)
+/// Does this expr tree contain a `regAssignCd` for THIS clock domain?
+/// Plain `regAssign` does not count — it belongs to the module's default cd.
 def hasRegAssignCd(e: Expr, cd: ClockDomain): Boolean = match e {
     case regAssignCd(_, _, c) =>
         let same = cdEq(c, cd);
@@ -737,6 +866,10 @@ def hasRegAssignCd(e: Expr, cd: ClockDomain): Boolean = match e {
 // Does an Expr tree contain a MAIN-cd assertExpr? (assertExprCd belongs to
 // its own extra domain and does NOT count here — mirror hasRegAssign vs
 // hasRegAssignCd.)
+/// Does this expr tree contain a MAIN-cd `assertExpr`?  `assertExprCd`
+/// belongs to its own extra domain and does not count (mirrors
+/// hasRegAssign / hasRegAssignCd), and a blackbox parameter marker is explicitly
+/// not an assert.
 def hasAssert(e: Expr): Boolean = match e {
     case assertExpr(_, _, _) => true
     // blackbox parameter marker: not an assert, never counts (explicit arm —
@@ -761,6 +894,8 @@ def hasAssert(e: Expr): Boolean = match e {
 }
 
 // Extra-domain version: assertExprCd nodes matching THIS cd.
+/// Does this expr tree contain an `assertExprCd` matching THIS clock
+/// domain?
 def hasAssertCd(e: Expr, cd: ClockDomain): Boolean = match e {
     case assertExpr(_, _, _) => false
     case assertExprCd(_, _, _, c) =>
@@ -791,6 +926,10 @@ def hasAssertCd(e: Expr, cd: ClockDomain): Boolean = match e {
 // when-wrapped asserts must NOT be emitted there (they are clocked, and
 // assertsVL owns them) — keeps has-clock and has-assert gating from
 // polluting each other (design doc §9-6).
+/// Does this expr tree contain any assert (either variant, any cd)?  Gates
+/// the combinational always block: when-wrapped asserts are CLOCKED and owned by
+/// `assertsVL`, so they must not be emitted there, and a lone assert-when must not
+/// produce an empty `always @(*)`.
 def hasAnyAssert(e: Expr): Boolean = match e {
     case assertExpr(_, _, _) => true
     case assertExprCd(_, _, _, _) => true
@@ -817,6 +956,9 @@ def hasAnyAssert(e: Expr): Boolean = match e {
 // Collect the set of extra clock domains referenced by regAssignCd OR
 // assertExprCd (dedup by name) — one merged walker so extra-domain asserts
 // also get their `input wire <clk>` port (extraCdPortsVL reads this list).
+/// The clock domains referenced by `regAssignCd` or `assertExprCd` inside
+/// one expr, deduped by clock name against `seen`.  One merged walker, so
+/// extra-domain asserts also get their `input wire <clk>` port.
 def collectClockCdsOne(e: Expr, seen: List[String]): List[ClockDomain] = match e {
     case regAssignCd(_, _, c) =>
         let nm = c.clockName;
@@ -846,11 +988,15 @@ def collectClockCdsOne(e: Expr, seen: List[String]): List[ClockDomain] = match e
 }
 
 // Add clock names of a cd list to the seen-names list (accumulate in reverse)
+/// Append the clock names of a cd list onto an accumulator list (accumulates
+/// in reverse).
 def cdNamesAdd(acc: List[String], cds: List[ClockDomain]): List[String] = match cds {
     case lnil => acc
     case lcons(c, tail) => cdNamesAdd(lcons c.clockName acc, tail)
 }
 
+/// `collectClockCdsOne` over an expr list, threading the seen-name list so
+/// each clock name is collected once.
 def collectClockCdsHelp[ne: Nat](es: Vec[Expr] ne, seen: List[String]): List[ClockDomain] = match es {
     case nil => lnil
     case cons(e, tail) =>
@@ -859,6 +1005,8 @@ def collectClockCdsHelp[ne: Nat](es: Vec[Expr] ne, seen: List[String]): List[Clo
         list_append(fromE, collectClockCdsHelp(tail, newSeen))
 }
 
+/// All extra clock domains a module references (`regAssignCd` /
+/// `assertExprCd`), deduped by clock name, in source order.
 def collectClockCds[ne: Nat](es: Vec[Expr] ne): List[ClockDomain] =
     list_reverse(collectClockCdsHelp(es, lnil))
 
@@ -866,6 +1014,10 @@ def collectClockCds[ne: Nat](es: Vec[Expr] ne): List[ClockDomain] =
 // domain. regAssign / memWrite belong to the module default cd only (isMain);
 // regAssignCd(cd) belongs to that cd. when-nodes go to a cd only if they contain
 // its regAssign (main uses any regAssign; extra cds use Cd-matched only).
+/// The clocked statements (rendered by `exprVL`) belonging to ONE clock
+/// domain: `regAssign` / `memWrite` only when `isMain`, `regAssignCd(cd)` when its
+/// cd matches, and a `when` node only when it contains a matching regAssign
+/// (main: any regAssign; extra cd: a Cd-matched one).
 def collectClockLinesCd[ne: Nat](es: Vec[Expr] ne, cd: ClockDomain, isMain: Boolean): List[String] = match es {
     case nil => lnil
     case cons(e, tail) => match e {
@@ -899,6 +1051,8 @@ def collectClockLinesCd[ne: Nat](es: Vec[Expr] ne, cd: ClockDomain, isMain: Bool
 }
 
 // Collect ALL clocked lines regardless of cd (for has-clock detection)
+/// ALL clocked lines regardless of clock domain (for has-clock
+/// detection).
 def collectClockLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
     case nil => lnil
     case cons(e, tail) => match e {
@@ -915,6 +1069,8 @@ def collectClockLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
     }
 }
 
+/// Internal-signal declaration section text (all wire/reg declaration
+/// lines plus a trailing newline; "" when empty).
 def wiresVL[ne: Nat](es: Vec[Expr] ne, portNames: List[String], whenSigs: List[String]): String =
     let ls = list_reverse(collectWireLines(es, portNames, whenSigs));
     match ls {
@@ -923,6 +1079,9 @@ def wiresVL[ne: Nat](es: Vec[Expr] ne, portNames: List[String], whenSigs: List[S
     }
 
 // Emit always @* blocks for when-nodes
+/// Does the expr list contain a top-level `when` node?  NOTE: no call site
+/// other than its own recursion — kept as a spare predicate, not wired into the
+/// emitter.
 def hasWhenInList[ne: Nat](es: Vec[Expr] ne): Boolean = match es {
     case nil => false
     case cons(e, tail) => match e {
@@ -932,6 +1091,9 @@ def hasWhenInList[ne: Nat](es: Vec[Expr] ne): Boolean = match es {
 }
 
 // Extract the driven signal name from a when block's body
+/// The signal name driven by a when node's body: descends `assign` /
+/// `block` / nested `when` and returns the LHS name ("" when the body drives
+/// nothing).
 def getWhenDrivenSigName(e: Expr): String = match e {
     case assign(lhs, _) => exprVL(lhs)
     case block(h, _) => getWhenDrivenSigName(h)
@@ -940,6 +1102,9 @@ def getWhenDrivenSigName(e: Expr): String = match e {
 }
 
 // Helper: process a single when expression, return its driven sig as a list
+/// The driven signal of one when node as a singleton list, or `lnil`
+/// when the when contains a clocked regAssign (clocked whens are not declared
+/// `reg` from the combinational set).
 def whenExprToSigList(e: Expr): List[String] =
     let has_clk = hasRegAssign(e);
     match has_clk {
@@ -948,6 +1113,8 @@ def whenExprToSigList(e: Expr): List[String] =
     }
 
 // Collect signal names driven by non-clocked when blocks
+/// The signal names driven by non-clocked when blocks — the set
+/// declared `reg` and emitted inside the merged combinational always block.
 def collectWhenDrivenSigs[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
     case nil => lnil
     case cons(e, tail) => match e {
@@ -957,12 +1124,14 @@ def collectWhenDrivenSigs[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
 }
 
 // Helper: get LHS name from an assign expr
+/// The rendered LHS name of an `assign` ("" for other exprs).
 def getAssignLhsName(e: Expr): String = match e {
     case assign(lhs, _) => exprVL(lhs)
     case _ => ""
 }
 
 // Helper: get RHS string from an assign expr
+/// The rendered RHS string of an `assign` ("" for other exprs).
 def getAssignRhsStr(e: Expr): String = match e {
     case assign(_, rhs) => exprVL(rhs)
     case _ => ""
@@ -971,6 +1140,10 @@ def getAssignRhsStr(e: Expr): String = match e {
 // Helper: assign 的 LHS 是否 reg/outreg（含其位选/片选）。compat 的
 // always @(*) 内 reg 赋值经 pickAssign（HDV002 分支）落成普通 assign
 // 节点——此处判别后路由进合并 always 块做阻塞赋值。
+/// Is an assign's LHS a reg / `output reg` (including its bit / part
+/// selects)?  Verilog-compat `always @(*)` reg assignments arrive as plain
+/// `assign` nodes through `pickAssign` (the HDV002 branch), and this predicate
+/// routes them into the merged always block as blocking assignments.
 def assignLhsIsReg(e: Expr): Boolean = match e {
     case assign(lhs, _) => isRegExpr(lhs)
     case _ => false
@@ -986,6 +1159,11 @@ def assignLhsIsReg(e: Expr): Boolean = match e {
 // 对 reg 目标非法（iverilog: "reg y cannot be driven by primitives or
 // continuous assignment"，2026-09-29 评审 P0-1，经 iverilog 12 实证）。
 // 它们由 collectAlwaysBodyLines 的 reg 臂收进 always @(*) 做阻塞赋值。
+/// Decide whether one assign expr becomes a CONTINUOUS assign: not a
+/// when-driven LHS, no subSignal on either side (those are port connections), and
+/// not a reg-LHS — IEEE 1364 allows only nets on a continuous-assign LHS, and
+/// iverilog rejects `reg y` driven by a continuous assignment (review 2026-09-29
+/// P0-1).
 def assignLineCheck(e: Expr, whenSigs: List[String]): List[String] =
     let lhsName = getAssignLhsName(e);
     let isWhen = strInList(lhsName, whenSigs);
@@ -1008,6 +1186,10 @@ def assignLineCheck(e: Expr, whenSigs: List[String]): List[String] =
     }
 
 // Collect assign lines, skipping assigns whose LHS is in the when-driven set
+/// The continuous-assign lines of an expr list, skipping every
+/// declaration / regAssign / when / instance / assert / blackbox-marker node.
+/// The explicit skip arms exist because the catch-all would otherwise emit
+/// asserts and parameter markers as continuous assigns.
 def collectAssignLinesFiltered[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): List[String] = match es {
     case nil => lnil
     case cons(e, tail) => match e {
@@ -1060,12 +1242,14 @@ def collectAssignLinesFiltered[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]
 }
 
 // Helper: get cond from a when expr
+/// The condition of a `when` node (`nop` for other exprs).
 def getWhenCond(e: Expr): Expr = match e {
     case when(c, _, _) => c
     case _ => nop
 }
 
 // Helper: get body from a when expr
+/// The body of a `when` node (`nop` for other exprs).
 def getWhenBody(e: Expr): Expr = match e {
     case when(_, b, _) => b
     case _ => nop
@@ -1074,6 +1258,9 @@ def getWhenBody(e: Expr): Expr = match e {
 // Emit one non-clocked when node as an independent if-block. The node body is
 // a single assignment (createSignalExpr wraps each statement separately), so
 // it emits `if (cond) begin lhs = rhs; end`.
+/// One NON-clocked, assert-free when node as an independent
+/// `if (cond) begin <body> end` ("" when the node is clocked or carries an
+/// assert — `assertsVL` owns those).
 def emitWhenLine(e: Expr): String =
     let has_clk = hasRegAssign(e);
     let has_asrt = hasAnyAssert(e);
@@ -1098,6 +1285,12 @@ def emitWhenLine(e: Expr): String =
 // Each assignment carries its FULL enable condition (see hdl-core.typort
 // WhenStack), so independent whens stay independent, nested whens are folded
 // into the condition, and no else-if chain reconstruction is needed.
+/// In insertion order, the lines of the single merged combinational always
+/// block: non-clocked assert-free when nodes as independent `if` blocks, and
+/// plain assigns whose LHS is when-driven (or a reg) as blocking assignments.
+/// Each assignment carries its FULL enable condition, so independent whens stay
+/// independent and nested whens are folded into the condition — a later bare
+/// `x := v` is last-wins by source order; use `otherwise` for else semantics.
 def collectAlwaysBodyLines[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): List[String] = match es {
     case nil => lnil
     case cons(e, tail) => match e {
@@ -1133,6 +1326,8 @@ def collectAlwaysBodyLines[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): L
 
 // Build a single merged always block: every when-driven combinational
 // assignment becomes an independent if (or blocking default) in source order.
+/// Wrap the collected body lines as `always @(*) begin ... end` ("" when
+/// there is nothing to drive).
 def buildMergedAlwaysBlock[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): String =
     let lines = list_reverse(collectAlwaysBodyLines(es, whenSigs));
     match lines {
@@ -1140,9 +1335,13 @@ def buildMergedAlwaysBlock[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): S
         case _ => "  always @(*) begin\n" + joinLines(lines) + "\n  end\n"
     }
 
+/// The combinational always-block section text for a module's expr
+/// list.
 def alwaysVL[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): String =
     buildMergedAlwaysBlock(es, whenSigs)
 
+/// The continuous-assign section text (all filtered assign lines plus a
+/// trailing newline; "" when empty).
 def assignsVL[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): String =
     let ls = list_reverse(collectAssignLinesFiltered(es, whenSigs));
     match ls {
@@ -1151,6 +1350,8 @@ def assignsVL[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): String =
     }
 
 // Generate reg declarations (with leading newline if non-empty)
+/// The reg-declaration section text (all reg lines plus a trailing newline;
+/// "" when empty).
 def regsVL[ne: Nat](es: Vec[Expr] ne, portNames: List[String]): String =
     let ls = list_reverse(collectRegLines es portNames);
     match ls {
@@ -1159,6 +1360,8 @@ def regsVL[ne: Nat](es: Vec[Expr] ne, portNames: List[String]): String =
     }
 
 // Generate clocked always @(posedge clk) block from regAssign entries
+/// Are there any clocked lines at all (regAssign / regAssignCd / memWrite /
+/// clocked when)?
 def hasClockLines[ne: Nat](es: Vec[Expr] ne): Boolean =
     match list_reverse(collectClockLines es) {
         case lnil => false
@@ -1166,6 +1369,8 @@ def hasClockLines[ne: Nat](es: Vec[Expr] ne): Boolean =
     }
 
 // Helper: add 2-space indent to each line in a list (handles multi-line strings)
+/// Prepend two spaces to every line of each string (multi-line statements are
+/// indented line-by-line).
 def indentLines(ls: List[String]): List[String] = match ls {
     case lnil => lnil
     case lcons(s, tail) => lcons ("  " + str_indent2(s)) (indentLines tail)
@@ -1173,21 +1378,28 @@ def indentLines(ls: List[String]): List[String] = match ls {
 
 // ---- Clock domain helpers (names / edge keywords from a ClockDomain) ----
 
+/// The clock-domain clock name.
 def clockName(cd: ClockDomain): String = cd.clockName
 
+/// The clock-domain reset name.
 def resetName(cd: ClockDomain): String = cd.resetName
 
+/// `posedge` / `negedge` for the clock edge.
 def clockEdgeStr(cd: ClockDomain): String = match cd.clockEdge {
     case RisingEdge => "posedge"
     case FallingEdge => "negedge"
 }
 
+/// `posedge` / `negedge` for the reset POLARITY (ActiveHigh -> posedge,
+/// ActiveLow -> negedge).
 def resetEdgeStr(cd: ClockDomain): String = match cd.resetPolarity {
     case ActiveHigh => "posedge"
     case ActiveLow => "negedge"
 }
 
 // Reset condition text: "reset" or "!reset" for ActiveLow
+/// The reset condition text: `reset` for ActiveHigh, `!reset` for
+/// ActiveLow.
 def resetCondStr(cd: ClockDomain): String = match cd.resetPolarity {
     case ActiveHigh => resetName(cd)
     case ActiveLow => "!" + resetName(cd)
@@ -1201,6 +1413,12 @@ def resetCondStr(cd: ClockDomain): String = match cd.resetPolarity {
 // collected only when its body contains a matching assert, mirroring
 // collectClockLinesCd's when gating. Blocks recurse (defensive; generated
 // trees wrap one statement per when node).
+/// Assert lines for ONE statement node and clock domain `cd`:
+/// `assertExpr` only when `isMain`, `assertExprCd` when its cd matches; a `when`
+/// wrapper is emitted as `if (cond) begin` + the indented inner lines + `end`
+/// only when its body contains a matching assert.  Blocks recurse (defensive:
+/// generated trees wrap one statement per when node).  A blackbox parameter
+/// marker contributes nothing.
 def collectAssertLinesOne(e: Expr, cd: ClockDomain, isMain: Boolean): List[String] = match e {
     // with the dedicated bbMarkerExpr marker channel, EVERY assertExpr node is
     // a user assert — no marker discrimination left here
@@ -1242,6 +1460,10 @@ def collectAssertLinesOne(e: Expr, cd: ClockDomain, isMain: Boolean): List[Strin
 // Each statement is folded into ONE string (joinLines) BEFORE consing, so the
 // trailing list_reverse in assertsBlockVL flips whole statements — never the
 // lines inside one statement (the collectClockLinesCd discipline).
+/// Assert lines across a module's whole expr list for ONE cd, one entry
+/// per statement: each statement's lines are joined BEFORE consing, so the later
+/// `list_reverse` in `assertsBlockVL` flips whole statements and never the lines
+/// inside one.
 def collectAssertLinesCd[ne: Nat](es: Vec[Expr] ne, cd: ClockDomain, isMain: Boolean): List[String] = match es {
     case nil => lnil
     case cons(e, tail) =>
@@ -1261,6 +1483,11 @@ def collectAssertLinesCd[ne: Nat](es: Vec[Expr] ne, cd: ClockDomain, isMain: Boo
 //     end
 //   end
 //   // synthesis translate_on
+/// The assertion block for ONE clock domain (no reset branch — asserts
+/// never reset; "" when the domain has no assert lines): `// synthesis
+/// translate_off`, `always @(<edge> <clk>) begin`, the assert statements, `end`,
+/// `// synthesis translate_on`.  The comment marker is composed from
+/// `"/" + "/"` because the typort lexer strips `//` inside string literals.
 def assertsBlockVL[ne: Nat](es: Vec[Expr] ne, cd: ClockDomain, isMain: Boolean): String =
     let ls = list_reverse(collectAssertLinesCd(es, cd, isMain));
     match ls {
@@ -1281,6 +1508,8 @@ def assertsBlockVL[ne: Nat](es: Vec[Expr] ne, cd: ClockDomain, isMain: Boolean):
 
 // Recursively emit assert blocks for the EXTRA cds (skipping the main cd),
 // using the merged collectClockCds list (assertExprCd domains included).
+/// `assertsBlockVL` for every EXTRA clock domain (skipping any cd equal to
+/// the main one).
 def assertsExtrasVL[ne: Nat](es: Vec[Expr] ne, mainCd: ClockDomain, cds: List[ClockDomain]): String = match cds {
     case lnil => ""
     case lcons(c, tail) =>
@@ -1294,6 +1523,8 @@ def assertsExtrasVL[ne: Nat](es: Vec[Expr] ne, mainCd: ClockDomain, cds: List[Cl
 }
 
 // All assert blocks of a module: main cd first, then extra-cd blocks.
+/// All assertion blocks of a module: the main clock domain first, then one
+/// block per extra cd (`collectClockCds`).
 def assertsVL[ne: Nat](es: Vec[Expr] ne, cd: ClockDomain): String =
     let main = assertsBlockVL(es, cd, true);
     let extras = collectClockCds es;
@@ -1302,6 +1533,9 @@ def assertsVL[ne: Nat](es: Vec[Expr] ne, cd: ClockDomain): String =
 // Collect reset-init lines for ONE clock domain. Non-Cd init regs belong to
 // the module default cd only (isMain=true); createRegWidthInitCd belongs to
 // its own cd.
+/// Reset-init lines (`    <name> <= <literal>;`) for ONE clock domain: the
+/// plain `*Init` factories only when `isMain`, the `*InitCd` factories when their
+/// cd matches.  The literal comes from `verilogLiteral`.
 def collectInitLinesCd[ne: Nat](es: Vec[Expr] ne, cd: ClockDomain, isMain: Boolean): List[String] = match es {
     case nil => lnil
     case cons(e, tail) => match e {
@@ -1342,6 +1576,10 @@ def collectInitLinesCd[ne: Nat](es: Vec[Expr] ne, cd: ClockDomain, isMain: Boole
 }
 
 // Emit ONE clocked always block for an EXTRA cd (non-main: only Cd-init)
+/// ONE clocked always block for an EXTRA clock domain (non-main: only the
+/// Cd-matched statements and init regs).  The reset edge enters the sensitivity
+/// list only for an `Async` domain that actually needs a reset branch; `Sync`
+/// keeps it out.
 def clockedBlockExtraVL[ne: Nat](es: Vec[Expr] ne, cd: ClockDomain): String =
     let ls = list_reverse(collectClockLinesCd(es, cd, false));
     let has_clk = match ls {
@@ -1389,6 +1627,13 @@ def clockedBlockExtraVL[ne: Nat](es: Vec[Expr] ne, cd: ClockDomain): String =
     }
 
 // Emit ONE clocked always block for the main cd (only if it has lines)
+/// ONE clocked always block for the MAIN clock domain ("" when it has no
+/// clocked lines).  The reset edge enters the sensitivity list when a generated
+/// reset branch exists (init regs) or the source DECLARED the reset as a real
+/// port (Verilog-compat writes its own reset body); an `Async` domain is required
+/// for the edge to be emitted.  The reset branch itself
+/// (`if (<resetCond>) begin <inits> end else begin <clocked> end`) exists only
+/// when there are init lines.
 def clockedBlockVL[ne: Nat](es: Vec[Expr] ne, cd: ClockDomain, resetDeclared: Boolean): String =
     let ls = list_reverse(collectClockLinesCd(es, cd, true));
     let has_clk = match ls {
@@ -1450,6 +1695,8 @@ def clockedBlockVL[ne: Nat](es: Vec[Expr] ne, cd: ClockDomain, resetDeclared: Bo
     }
 
 
+/// `clockedBlockExtraVL` for every extra clock domain (skipping the main
+/// one).
 def clockedExtrasVL[ne: Nat](es: Vec[Expr] ne, mainCd: ClockDomain, cds: List[ClockDomain]): String = match cds {
     case lnil => ""
     case lcons(c, tail) =>
@@ -1463,24 +1710,27 @@ def clockedExtrasVL[ne: Nat](es: Vec[Expr] ne, mainCd: ClockDomain, cds: List[Cl
 }
 
 // Collect reset-init lines for ONE clock domain. Non-Cd init regs belong to
-// the module default cd; createRegWidthInitCd belongs to its own cd.
-// `resetDeclared` mirrors moduleDefVL's port list (the cd's reset name is a
-// real port — Verilog-compat folds `input reset`/`rst_n` into a port).
+// the module default cd only (isMain=true); createRegWidthInitCd belongs to
+// its own cd.
+/// ALL clocked always blocks of a module: the main-cd block — with
+/// `resetDeclared` mirroring whether the cd's reset name is a REAL port, which is
+/// true for Verilog-compat folded `input reset` / `rst_n` — followed by one block
+/// per extra cd.
 def clockedVL[ne: Nat](es: Vec[Expr] ne, cd: ClockDomain, resetDeclared: Boolean): String =
     let main = clockedBlockVL(es, cd, resetDeclared);
     let extras = collectClockCds es;
     let extraBlocks = clockedExtrasVL(es, cd, extras);
     main + extraBlocks
 
-// Recursively emit extra-cd blocks, skipping the one equal to the default cd
 // ============================================================
 //  Hierarchical Verilog Generation (ModuleTree-based)
 // ============================================================
+//
+// Instance port connections ARE implemented — see `collectInstHelp` /
+// `filterConns` below (an older note here claimed the port list was still
+// empty and deferred to an architecture upgrade; that is obsolete).
 
-// Collect port connections for a given instance from assign(subSignal(...), ...) patterns.
-// TODO: requires mutual recursion support or Expr AST extension for full port mapping.
-// Currently generates empty port list; port connections deferred to architecture upgrade.
-
+/// Join port connections with ", " for an instantiation port list.
 def joinPortConns(ls: List[String]): String = match ls {
     case lnil => ""
     case lcons(s, lnil) => s
@@ -1489,21 +1739,27 @@ def joinPortConns(ls: List[String]): String = match ls {
 
 // Helpers to decompose assign(lhs, rhs) / subSignal(inst, port) without
 // nested constructor patterns (which the match compiler does not handle).
+/// The LHS Expr of an `assign` (`nop` for other exprs) — a decomposition
+/// helper avoiding nested constructor patterns, which the match compiler does not
+/// handle.
 def getAssignLhsExpr(e: Expr): Expr = match e {
     case assign(lhs, _) => lhs
     case _ => nop
 }
 
+/// The RHS Expr of an `assign` (`nop` for other exprs).
 def getAssignRhsExpr(e: Expr): Expr = match e {
     case assign(_, rhs) => rhs
     case _ => nop
 }
 
+/// The instance name of a `subSignal(inst, port)` handle ("" otherwise).
 def getSubSignalInst(e: Expr): String = match e {
     case subSignal(inst, _) => inst
     case _ => ""
 }
 
+/// The port name of a `subSignal(inst, port)` handle ("" otherwise).
 def getSubSignalPort(e: Expr): String = match e {
     case subSignal(_, port) => port
     case _ => ""
@@ -1534,6 +1790,10 @@ def getSubSignalPort(e: Expr): String = match e {
 // Filter connections belonging to one instance from parallel seen lists.
 // (pattern_match misbinds closure variables referenced inside match branches,
 // so everything here is threaded through pattern variables only.)
+/// Filter the connections belonging to one instance out of the parallel
+/// seen-instance / seen-connection lists.  Everything is threaded through pattern
+/// variables only, because the match compiler misbinds closure variables
+/// referenced inside match branches.
 def filterConns(instName: String, seenInsts: List[String], seenConns: List[String]): List[String] = match seenInsts {
     case lnil => lnil
     case lcons(i, restInsts) => match seenConns {
@@ -1547,6 +1807,17 @@ def filterConns(instName: String, seenInsts: List[String], seenConns: List[Strin
     }
 }
 
+/// Walk the exprs collecting instantiation lines: `instance` nodes become
+/// `Name inst (.a(x), ...);` with the connections filtered per instance; an
+/// INSTANCE `bbMarkerExpr` immediately after the instance injects the
+/// ` #(.K(v), ...)` parameter suffix (a pure literal pick-up — the values come
+/// from the declared blackbox's own generics, not the instantiation site);
+/// `instanceWithPorts` is emitted verbatim; and assigns touching a subSignal on
+/// EITHER side become `.port(other)` connections (`u.port := sig` and
+/// `sig := u.port` both work).  There is no port-direction knowledge here — the
+/// child ModuleDef is not in the parent tree — so a complex RHS on
+/// `u.port := expr` is emitted verbatim: legal for an input port, illegal for an
+/// output port (read a child output instead).
 def collectInstHelp[elen: Nat](exprs: Vec[Expr] elen, seenInsts: List[String], seenConns: List[String]): List[String] = match exprs {
     case nil => lnil
     case cons(e, tail) => match e {
@@ -1615,11 +1886,17 @@ def collectInstHelp[elen: Nat](exprs: Vec[Expr] elen, seenInsts: List[String], s
     }
 }
 
+/// All instantiation lines of a module's expr list (`collectInstHelp`
+/// seeded with empty seen lists).
 def collectInstanceLinesTree[elen: Nat](exprs: Vec[Expr] elen): List[String] = collectInstHelp(exprs, lnil, lnil)
 
 // Append clk/reset ports for every extra clock domain referenced by
 // regAssignCd (dedup list from collectClockCds). Reset port only added when
 // that cd has init regs.
+/// Append `input wire <clk>` for every extra clock domain, plus
+/// `input wire <reset>` when that cd has init regs, skipping the main cd.  Handles
+/// the first-port case with no leading comma (an assert-only extra cd can be a
+/// module's ONLY clock content).
 def extraCdPortsVL[ne: Nat](es: Vec[Expr] ne, cds: List[ClockDomain], acc: String, mainCd: ClockDomain): String = match cds {
     case lnil => acc
     case lcons(c, tail) =>
@@ -1651,6 +1928,15 @@ def extraCdPortsVL[ne: Nat](es: Vec[Expr] ne, cds: List[ClockDomain], acc: Strin
 
 // The ORIGINAL module emission body (plain, non-blackbox path), kept verbatim;
 // moduleDefVL above dispatches registered blackboxes to the guarded stub.
+/// The plain (non-blackbox) module emission body, in this order: the
+/// when-driven set, port names, then each section — ports, wires, regs, memories,
+/// continuous assigns, clocked blocks, assertion blocks, merged combinational
+/// always, instances.  Synthesizes `input wire <clk>` exactly when a clocked
+/// always block (or a main-cd assert) is actually emitted AND the source did not
+/// declare it (a Verilog-compat folded `input clk` is already a real port), and
+/// `input wire <reset>` when there are main-cd init regs and it is not already a
+/// port; appends the extra-cd ports; wraps everything as
+/// `module <name> (<ports>); ... endmodule`.
 def moduleDefVLPlain(md: ModuleDef): String =
     let whenSigs = list_reverse(collectWhenDrivenSigs md.expr);
     let port_names = collectPortNames md.expr;
@@ -1769,12 +2055,16 @@ def moduleDefVLPlain(md: ModuleDef): String =
 // Generate Verilog for a single ModuleDef. A registered blackbox def emits
 // the guarded empty stub instead of the full body; everything else takes the
 // plain path above (original body, verbatim).
+/// Verilog for one ModuleDef: a blackbox (SELF marker present) emits the
+/// guarded empty stub `blackboxDefVL(md, bbStubParams(md.expr))`; everything else
+/// takes the plain path `moduleDefVLPlain`.
 def moduleDefVL(md: ModuleDef): String = match bbIsBlackBox(md.expr) {
     case true => blackboxDefVL(md, bbStubParams(md.expr))
     case false => moduleDefVLPlain(md)
 }
 
 // Generate Verilog for all ModuleDefs in a Vec
+/// `moduleDefVL` for every ModuleDef in a Vec, in order.
 def collectModuleVLs[n: Nat](data: Vec[ModuleDef] n): List[String] = match data {
     case nil => lnil
     case cons(md, tail) => lcons (moduleDefVL(md)) (collectModuleVLs tail)
@@ -1782,6 +2072,8 @@ def collectModuleVLs[n: Nat](data: Vec[ModuleDef] n): List[String] = match data 
 
 // Generate Verilog for all modules in the design (multi-module hierarchical output)
 // Takes a ModuleTree (obtained via `m.tree` on a module value implementing `Module`).
+/// Verilog for EVERY module of a module tree (`t.data`), joined by
+/// newlines — the multi-module hierarchical output.
 def allModulesVL(t: ModuleTree): String =
     let ls = list_reverse(collectModuleVLs t.data);
     match ls {
@@ -1792,6 +2084,9 @@ def allModulesVL(t: ModuleTree): String =
 // Alias: moduleTreeVL is the public API expected by test/legacy_tests
 // Extracts the first ModuleDef from a module tree and generates Verilog.
 // Usage: moduleTreeVL(myModule.create.tree)
+/// Verilog for the FIRST ModuleDef of a tree — the single-module public
+/// API (`moduleTreeVL(m.create.tree)`).  A single tree does not carry its
+/// submodule definitions; use `designVL` for a self-contained output.
 def moduleTreeVL(t: ModuleTree): String =
     let mod_def = headModuleDef(t.data);
     moduleDefVL(mod_def)
@@ -1805,6 +2100,8 @@ def moduleTreeVL(t: ModuleTree): String =
 
 // Instance records sit flat in a ModuleDef's expr list (mkInstance /
 // mkInstancePorts add them directly, not under when-wrappers).
+/// The module names instantiated by a def (the flat `instance` /
+/// `instanceWithPorts` records in its expr list).
 def instNamesOfDef[n: Nat](exprs: Vec[Expr] n): List[String] = match exprs {
     case nil => lnil
     case cons(e, rest) => match e {
@@ -1814,6 +2111,8 @@ def instNamesOfDef[n: Nat](exprs: Vec[Expr] n): List[String] = match exprs {
     }
 }
 
+/// Find a `ModuleDef` by name, falling back to an EMPTY def (`""` name)
+/// when absent.
 def lookupModuleDef[n: Nat](defs: Vec[ModuleDef] n, name: String): ModuleDef = match defs {
     case nil => ModuleDef.mk("", defaultClockDomain, 0, nil)
     case cons(md, rest) => match str_eq(md.name, name) {
@@ -1824,6 +2123,9 @@ def lookupModuleDef[n: Nat](defs: Vec[ModuleDef] n, name: String): ModuleDef = m
 
 // Worklist walk from the top over instance edges; returns visited names
 // (top first, children deduped by name).
+/// Worklist walk from a starting queue over instance edges, returning the
+/// visited names (start first, children deduped by name, accumulating in
+/// reverse).
 def designVisit[n: Nat](defs: Vec[ModuleDef] n, seen: List[String], queue: List[String], acc: List[String]): List[String] = match queue {
     case lnil => acc
     case lcons(name, rest) => match chkStrIn(name, seen) {
@@ -1836,6 +2138,8 @@ def designVisit[n: Nat](defs: Vec[ModuleDef] n, seen: List[String], queue: List[
     }
 }
 
+/// `moduleDefVL` for each name of a design-closure name list, looking the defs
+/// up in the registry.
 def renderDesignNames[n: Nat](defs: Vec[ModuleDef] n, names: List[String]): List[String] = match names {
     case lnil => lnil
     case lcons(name, rest) => lcons(moduleDefVL(lookupModuleDef(defs, name)), renderDesignNames(defs, rest))
@@ -1843,6 +2147,12 @@ def renderDesignNames[n: Nat](defs: Vec[ModuleDef] n, names: List[String]): List
 
 // Public API: Verilog for the top module plus every registered module it
 // transitively instantiates. Usage: designVL(myTop.create.tree)
+/// PUBLIC API: self-contained Verilog for the top module plus every
+/// registered module it transitively instantiates (the `ModuleRegistry` global is
+/// reset, then walked from the top).  A single `ModuleTree` does not carry
+/// submodule definitions, so this pulls them from the registry — every
+/// instantiated name gets its `module ... endmodule`, as verilator requires.
+/// Returns "" for an empty top name.
 def designVL(t: ModuleTree): String =
     let top = headModuleDef(t.data);
     match str_eq(top.name, "") {
@@ -1860,35 +2170,45 @@ def designVL(t: ModuleTree): String =
 // instance records. Consumed by the simulation harness (src/sim) instead of
 // parsing the emitted Verilog. Port variants mirror portLineSingle.
 
+/// `"true"` / `"false"` for a Boolean (manifest JSON helper).
 def boolJson(b: Boolean): String = match b {
     case true => "true"
     case false => "false"
 }
 
+/// Clock-domain config as JSON text: `"sync"` / `"async"`.
 def cdKindJson(c: ClockDomainConfig): String = match c {
     case Sync => "sync"
     case Async => "async"
 }
 
+/// Clock edge as JSON text: `"posedge"` / `"negedge"`.
 def cdEdgeJson(e: ClockEdge): String = match e {
     case RisingEdge => "posedge"
     case FallingEdge => "negedge"
 }
 
+/// Reset polarity as JSON text: `"high"` / `"low"`.
 def cdPolJson(p: ResetPolarity): String = match p {
     case ActiveHigh => "high"
     case ActiveLow => "low"
 }
 
+/// The manifest JSON object for a clock domain: clock name, reset name, kind,
+/// edge and resetActive.
 def clockJson(cd: ClockDomain): String =
     let head = "{\"clk\": \"" + cd.clockName + "\", \"reset\": \"" + cd.resetName + "\", ";
     let kind = "\"kind\": \"" + cdKindJson(cd.config) + "\", \"edge\": \"" + cdEdgeJson(cd.clockEdge) + "\", ";
     head + kind + "\"resetActive\": \"" + cdPolJson(cd.resetPolarity) + "\"}"
 
+/// One manifest port entry: name, direction, width, signedness and
+/// reg-ness.
 def portJsonLine(name: String, dir: String, width: Nat, signed: Boolean, reg: Boolean): String =
     let front = "{\"name\": \"" + name + "\", \"dir\": \"" + dir + "\", \"width\": " + nat_to_dec(width);
     front + ", \"signed\": " + boolJson(signed) + ", \"reg\": " + boolJson(reg) + "}"
 
+/// The manifest port entry (or no entry) for one port declaration expr;
+/// mirrors `portLineSingle`'s variant set.
 def portJsonSingle(e: Expr): List[String] = match e {
     case createIn(name) => lcons(portJsonLine(name, "input", 1, false, false), lnil)
     case createOut(name) => lcons(portJsonLine(name, "output", 1, false, false), lnil)
@@ -1907,28 +2227,34 @@ def portJsonSingle(e: Expr): List[String] = match e {
     case _ => lnil
 }
 
+/// The manifest instance entry (`inst` / `module`) for an instance record
+/// (no entry for other exprs).
 def instJsonSingle(e: Expr): List[String] = match e {
     case instance(i, m) => lcons("{\"inst\": \"" + i + "\", \"module\": \"" + m + "\"}", lnil)
     case instanceWithPorts(i, m, _) => lcons("{\"inst\": \"" + i + "\", \"module\": \"" + m + "\"}", lnil)
     case _ => lnil
 }
 
+/// The manifest port entries of an expr list.
 def collectPortJson[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
     case nil => lnil
     case cons(e, tail) => list_append(portJsonSingle(e), collectPortJson(tail))
 }
 
+/// The manifest instance entries of an expr list.
 def collectInstJson[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
     case nil => lnil
     case cons(e, tail) => list_append(instJsonSingle(e), collectInstJson(tail))
 }
 
+/// Join JSON items with ", ".
 def joinJsonList(ls: List[String]): String = match ls {
     case lnil => ""
     case lcons(s, lnil) => s
     case lcons(s, tail) => s + ", " + joinJsonList(tail)
 }
 
+/// Join JSON items with ",\n".
 def joinJsonLines(ls: List[String]): String = match ls {
     case lnil => ""
     case lcons(s, lnil) => s
@@ -1939,6 +2265,8 @@ def joinJsonLines(ls: List[String]): String = match ls {
 // (not cdEq to the main cd) the clk input port is always declared and the
 // reset input port only when that cd has init regs — the same condition
 // extraCdPortsVL uses to emit `input wire <reset>`.
+/// Manifest twin of `extraCdPortsVL`: one input entry per extra-cd clock
+/// (plus its reset when that cd has init regs), main cd skipped.
 def manifestExtraCdPorts[ne: Nat](es: Vec[Expr] ne, cds: List[ClockDomain], mainCd: ClockDomain): List[String] = match cds {
     case lnil => lnil
     case lcons(c, tail) =>
@@ -1966,6 +2294,11 @@ def manifestExtraCdPorts[ne: Nat](es: Vec[Expr] ne, cds: List[ClockDomain], main
 // collectClockCds list (regAssignCd / assertExprCd references) gets its
 // clk/reset ports via extraCdPortsVL (p3 there) — mirror both so the
 // manifest lists every port the emitted Verilog declares.
+/// Manifest twin of the SYNTHESIZED clk/reset ports.  Mirrors
+/// `moduleDefVL`'s conditions: the clk exists iff a clocked always block or a
+/// main-cd assert is emitted and the name is not already a port; the reset iff
+/// there are main-cd init lines and it is not already a port.  Appends the
+/// extra-cd ports.
 def manifestSynthPorts(md: ModuleDef): List[String] =
     let port_names = collectPortNames md.expr;
     // Mirror moduleDefVL's p1 condition: the clk port exists iff a clocked
@@ -2007,6 +2340,8 @@ def manifestSynthPorts(md: ModuleDef): List[String] =
     // appends to the Verilog header.
     with_reset.append(manifestExtraCdPorts(md.expr, collectClockCds md.expr, md.cd))
 
+/// The manifest JSON object for one module: name, clock object, ports
+/// (declared + synthesized) and instances.
 def moduleJsonFull(md: ModuleDef): String =
     let ports = collectPortJson(md.expr).append(manifestSynthPorts(md));
     let insts = collectInstJson(md.expr);
@@ -2014,6 +2349,7 @@ def moduleJsonFull(md: ModuleDef): String =
     let tail = "],\n      \"instances\": [" + joinJsonList(insts) + "]\n    }";
     head + ",\n      \"ports\": [" + joinJsonList(ports) + tail
 
+/// `moduleJsonFull` for each name of a design-closure name list.
 def renderManifestNames[n: Nat](defs: Vec[ModuleDef] n, names: List[String]): List[String] = match names {
     case lnil => lnil
     case lcons(name, rest) => lcons(moduleJsonFull(lookupModuleDef(defs, name)), renderManifestNames(defs, rest))
@@ -2021,6 +2357,11 @@ def renderManifestNames[n: Nat](defs: Vec[ModuleDef] n, names: List[String]): Li
 
 // Public API: design manifest for the top module's design closure.
 // Usage: designManifestVL(myTop.create.tree)
+/// PUBLIC API: structured JSON manifest for the top module's design closure
+/// (name, clock domain, ports and instances per module), consumed by the
+/// simulation harness instead of parsing the emitted Verilog.  Ports mirror
+/// `portLineSingle` and every synthesized clock/reset port is included.  Returns
+/// an empty-top object for an empty design.
 def designManifestVL(t: ModuleTree): String =
     let top = headModuleDef(t.data);
     match str_eq(top.name, "") {

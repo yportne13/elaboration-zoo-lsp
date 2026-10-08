@@ -24,20 +24,28 @@
 impl[T] Stream[T] {
     // 注意：payload 泛型操作需要 Data[T] 约束（语言不可用），
     // 这里只提供 valid/ready 层面的方法；payload 连接按类型在下方实现。
+    /// Force `this.ready := true` (this side never applies backpressure) and
+    /// return the stream.
     def freeRun(): Stream[T] =
         let _ = this.ready := Bool.mk(None, literal(1));
         this
+    /// Is the stream free right now: `!valid || ready`.
     def isFree: Bool = Bool.mk(None, binary(unary("!", this.valid.zz_expr), "||", this.ready.zz_expr))
+    /// Is the stream stalled right now: `valid && !ready`.
     def isStall: Bool = Bool.mk(None, binary(this.valid.zz_expr, "&&", unary("!", this.ready.zz_expr)))
 }
 
 // 按类型连接：out << in
+/// Connect `out << input` for a UInt payload: `out.valid := input.valid`,
+/// `out.payload := input.payload`, `input.ready := out.ready`.  Pure wiring, no
+/// registers.
 def streamConnectUInt[w: Nat](out: Stream[UInt[w]], input: Stream[UInt[w]]): Unit =
     let _ = out.valid := input.valid;
     let _ = out.payload := input.payload;
     let _ = input.ready := out.ready;
     unit
 
+/// Bits-payload variant of `streamConnectUInt` (identical wiring).
 def streamConnectBits[w: Nat](out: Stream[Bits[w]], input: Stream[Bits[w]]): Unit =
     let _ = out.valid := input.valid;
     let _ = out.payload := input.payload;
@@ -48,16 +56,23 @@ def streamConnectBits[w: Nat](out: Stream[Bits[w]], input: Stream[Bits[w]]): Uni
 //  combStage —— 组合级（无寄存器，等价直接连接）
 // ============================================================
 
+/// Combinational stage for a UInt payload: no register at all — a fresh
+/// `<bn>_ready` wire is fed back as `input.ready`, and the output stream re-uses
+/// the input's valid/payload.  Verilog: one extra wire, no storage.
 def streamCombStageUInt[bn: BindingName][w: Nat](input: Stream[UInt[w]]): Stream[UInt[w]] =
     let outReady = newBoolNamed(bn.name + "_ready");
     let _ = input.ready := outReady;
     Stream.mk(input.valid, outReady, input.payload)
 
+/// Bits-payload variant of `streamCombStageUInt`.
 def streamCombStageBits[bn: BindingName][w: Nat](input: Stream[Bits[w]]): Stream[Bits[w]] =
     let outReady = newBoolNamed(bn.name + "_ready");
     let _ = input.ready := outReady;
     Stream.mk(input.valid, outReady, input.payload)
 
+/// Bool-payload (no width) variant of `streamCombStageUInt`.  NOTE: this is the
+/// only combStage variant with no call site anywhere in the repo (prelude,
+/// examples, tests) — pinned by `prelude_hdl_c_tests`.
 def streamCombStageBool[bn: BindingName](input: Stream[Bool]): Stream[Bool] =
     let outReady = newBoolNamed(bn.name + "_ready");
     let _ = input.ready := outReady;
@@ -72,6 +87,14 @@ def streamCombStageBool[bn: BindingName](input: Stream[Bool]): Stream[Bool] =
 //    —— 空时随时收，满时等下游；原 rValid || outReady 为满/空写反，F1 已修）
 // ============================================================
 
+/// Master-to-slave pipe (m2sPipe) for a UInt payload: valid and payload are
+/// registered one cycle (`rValid = RegNextWhen(input.valid, input.ready)` init 0,
+/// `rData = RegNextWhen(input.payload, input.ready)`), and
+/// `input.ready = out.ready || !rValid` — an empty pipe accepts immediately, a
+/// full one waits for the downstream (Stream.scala:493-495; the earlier
+/// `rValid || outReady` had full/empty swapped).  Output valid/payload come from
+/// the registers.  Verilog: two `reg`s written inside one
+/// `when (<bn>_ready || !<bn>_valid)` clocked block.
 def streamM2sPipeUInt[bn: BindingName][w: Nat](input: Stream[UInt[w]]): Stream[UInt[w]] =
     let rValid = newBoolRegInitNatNamed(bn.name + "_valid", 0);
     let rData = newUIntRegNamed(bn.name + "_data", w);
@@ -83,6 +106,7 @@ def streamM2sPipeUInt[bn: BindingName][w: Nat](input: Stream[UInt[w]]): Stream[U
     let _ = input.ready := Bool.mk(None, binary(outReady.zz_expr, "||", unary("!", rValid.zz_expr)));
     Stream.mk(Bool.mk(None, rValid.zz_expr), outReady, UInt.mk(None, rData.zz_expr))
 
+/// Bits-payload variant of `streamM2sPipeUInt`.
 def streamM2sPipeBits[bn: BindingName][w: Nat](input: Stream[Bits[w]]): Stream[Bits[w]] =
     let rValid = newBoolRegInitNatNamed(bn.name + "_valid", 0);
     let rData = newBitsRegNamed(bn.name + "_data", w);
@@ -94,6 +118,7 @@ def streamM2sPipeBits[bn: BindingName][w: Nat](input: Stream[Bits[w]]): Stream[B
     let _ = input.ready := Bool.mk(None, binary(outReady.zz_expr, "||", unary("!", rValid.zz_expr)));
     Stream.mk(Bool.mk(None, rValid.zz_expr), outReady, Bits.mk(None, rData.zz_expr))
 
+/// Bool-payload (no width) variant of `streamM2sPipeUInt`.
 def streamM2sPipeBool[bn: BindingName](input: Stream[Bool]): Stream[Bool] =
     let rValid = newBoolRegInitNatNamed(bn.name + "_valid", 0);
     let rData = newBoolRegNamed(bn.name + "_data");
@@ -117,6 +142,14 @@ def streamM2sPipeBool[bn: BindingName](input: Stream[Bool]): Stream[Bool] =
 //  （原实现只把 ready 打一拍、无 rValidN/rData/bypass，反压沿上会丢数据，F2 已修）
 // ============================================================
 
+/// Slave-to-master pipe (s2mPipe) = skid buffer with zero latency:
+/// `rValidN = RegInit(1)`, cleared while `input.valid`, set while `out.ready`;
+/// `input.ready = rValidN` (combinational passthrough); `out.valid =
+/// input.valid || !rValidN`; `out.payload = rValidN ? input.payload : rData` with
+/// `rData = RegNextWhen(input.payload, rValidN)` (Stream.scala:498-512).  The
+/// `rData` capture happens exactly on the cycle backpressure starts, so no data
+/// is lost on the backpressure edge (the earlier ready-only one-cycle version was
+/// the F2 defect).
 def streamS2mPipeUInt[bn: BindingName][w: Nat](input: Stream[UInt[w]]): Stream[UInt[w]] =
     let outReady = newBoolNamed(bn.name + "_ready");
     let rValidN = newBoolRegInitNatNamed(bn.name + "_validN", 1);
@@ -135,6 +168,7 @@ def streamS2mPipeUInt[bn: BindingName][w: Nat](input: Stream[UInt[w]]): Stream[U
               outReady,
               UInt.mk(None, Expr.mux(rValidN.zz_expr, input.payload.zz_expr, rData.zz_expr)))
 
+/// Bits-payload variant of `streamS2mPipeUInt`.
 def streamS2mPipeBits[bn: BindingName][w: Nat](input: Stream[Bits[w]]): Stream[Bits[w]] =
     let outReady = newBoolNamed(bn.name + "_ready");
     let rValidN = newBoolRegInitNatNamed(bn.name + "_validN", 1);
@@ -153,6 +187,7 @@ def streamS2mPipeBits[bn: BindingName][w: Nat](input: Stream[Bits[w]]): Stream[B
               outReady,
               Bits.mk(None, Expr.mux(rValidN.zz_expr, input.payload.zz_expr, rData.zz_expr)))
 
+/// Bool-payload (no width) variant of `streamS2mPipeUInt`.
 def streamS2mPipeBool[bn: BindingName](input: Stream[Bool]): Stream[Bool] =
     let outReady = newBoolNamed(bn.name + "_ready");
     let rValidN = newBoolRegInitNatNamed(bn.name + "_validN", 1);
@@ -175,6 +210,10 @@ def streamS2mPipeBool[bn: BindingName](input: Stream[Bool]): Stream[Bool] =
 //  halfPipe —— 半流水：valid 打一拍；空时提前接受
 // ============================================================
 
+/// Half pipe for a UInt payload: only valid/payload are registered, captured
+/// while `input.valid || out.ready` (an empty pipe accepts immediately);
+/// `input.ready = out.ready || !rValid`; output valid/payload come from the
+/// registers.
 def streamHalfPipeUInt[bn: BindingName][w: Nat](input: Stream[UInt[w]]): Stream[UInt[w]] =
     let rValid = newBoolRegInitNatNamed(bn.name + "_valid", 0);
     let rData = newUIntRegNamed(bn.name + "_data", w);
@@ -186,6 +225,7 @@ def streamHalfPipeUInt[bn: BindingName][w: Nat](input: Stream[UInt[w]]): Stream[
     let _ = input.ready := Bool.mk(None, binary(outReady.zz_expr, "||", unary("!", rValid.zz_expr)));
     Stream.mk(Bool.mk(None, rValid.zz_expr), outReady, UInt.mk(None, rData.zz_expr))
 
+/// Bits-payload variant of `streamHalfPipeUInt`.
 def streamHalfPipeBits[bn: BindingName][w: Nat](input: Stream[Bits[w]]): Stream[Bits[w]] =
     let rValid = newBoolRegInitNatNamed(bn.name + "_valid", 0);
     let rData = newBitsRegNamed(bn.name + "_data", w);
@@ -204,39 +244,53 @@ def streamHalfPipeBits[bn: BindingName][w: Nat](input: Stream[Bits[w]]): Stream[
 //  haltWhen(cond) = continueWhen(!cond)；takeWhen(cond) = throwWhen(!cond)（F4 已修）
 // ============================================================
 
+/// `throwWhen(cond)` for a UInt payload: the current beat is dropped while
+/// `cond`, and the DROPPED beat must still be consumed —
+/// `input.ready = cond || out.ready` (F3), `out.valid = input.valid && !cond`,
+/// payload passes through combinationally.
 def streamThrowWhenUInt[w: Nat](input: Stream[UInt[w]], cond: Bool): Stream[UInt[w]] =
     let outReady = newBoolNamed("tw_ready");
     let _ = input.ready := Bool.mk(None, binary(cond.zz_expr, "||", outReady.zz_expr));
     Stream.mk(Bool.mk(None, binary(input.valid.zz_expr, "&&", unary("!", cond.zz_expr))), outReady, input.payload)
 
+/// Bits-payload variant of `streamThrowWhenUInt`.
 def streamThrowWhenBits[w: Nat](input: Stream[Bits[w]], cond: Bool): Stream[Bits[w]] =
     let outReady = newBoolNamed("tw_ready");
     let _ = input.ready := Bool.mk(None, binary(cond.zz_expr, "||", outReady.zz_expr));
     Stream.mk(Bool.mk(None, binary(input.valid.zz_expr, "&&", unary("!", cond.zz_expr))), outReady, input.payload)
 
+/// `haltWhen(cond)`: stall the whole stream while `cond` — `out.valid =
+/// input.valid && !cond` and `input.ready = out.ready && !cond` (equivalent to
+/// `continueWhen(!cond)`).
 def streamHaltWhenUInt[w: Nat](input: Stream[UInt[w]], cond: Bool): Stream[UInt[w]] =
     let outReady = newBoolNamed("hw_ready");
     let _ = input.ready := Bool.mk(None, binary(outReady.zz_expr, "&&", unary("!", cond.zz_expr)));
     Stream.mk(Bool.mk(None, binary(input.valid.zz_expr, "&&", unary("!", cond.zz_expr))), outReady, input.payload)
 
+/// Bits-payload variant of `streamHaltWhenUInt`.
 def streamHaltWhenBits[w: Nat](input: Stream[Bits[w]], cond: Bool): Stream[Bits[w]] =
     let outReady = newBoolNamed("hw_ready");
     let _ = input.ready := Bool.mk(None, binary(outReady.zz_expr, "&&", unary("!", cond.zz_expr)));
     Stream.mk(Bool.mk(None, binary(input.valid.zz_expr, "&&", unary("!", cond.zz_expr))), outReady, input.payload)
 
+/// `continueWhen(cond)`: positive gating — `out.valid = input.valid && cond`,
+/// `input.ready = out.ready && cond` (Stream.scala:553-560).
 def streamContinueWhenUInt[w: Nat](input: Stream[UInt[w]], cond: Bool): Stream[UInt[w]] =
     let outReady = newBoolNamed("cw_ready");
     let _ = input.ready := Bool.mk(None, binary(outReady.zz_expr, "&&", cond.zz_expr));
     Stream.mk(Bool.mk(None, binary(input.valid.zz_expr, "&&", cond.zz_expr)), outReady, input.payload)
 
+/// Bits-payload variant of `streamContinueWhenUInt`.
 def streamContinueWhenBits[w: Nat](input: Stream[Bits[w]], cond: Bool): Stream[Bits[w]] =
     let outReady = newBoolNamed("cw_ready");
     let _ = input.ready := Bool.mk(None, binary(outReady.zz_expr, "&&", cond.zz_expr));
     Stream.mk(Bool.mk(None, binary(input.valid.zz_expr, "&&", cond.zz_expr)), outReady, input.payload)
 
+/// `takeWhen(cond) = throwWhen(!cond)` (Stream.scala:600).
 def streamTakeWhenUInt[w: Nat](input: Stream[UInt[w]], cond: Bool): Stream[UInt[w]] =
     streamThrowWhenUInt(input, Bool.mk(None, unary("!", cond.zz_expr)))
 
+/// Bits-payload variant of `streamTakeWhenUInt`.
 def streamTakeWhenBits[w: Nat](input: Stream[Bits[w]], cond: Bool): Stream[Bits[w]] =
     streamThrowWhenBits(input, Bool.mk(None, unary("!", cond.zz_expr)))
 
@@ -246,6 +300,8 @@ def streamTakeWhenBits[w: Nat](input: Stream[Bits[w]], cond: Bool): Stream[Bits[
 //  用法：streamFifoConnect(bn)(depth, push, pop) 返回 occupancy
 // ============================================================
 
+/// The StreamFifo I/O bundle: push-side valid/ready/payload, pop-side
+/// valid/ready/payload, plus `occupancy` (width `ow`), `full` and `empty`.
 struct StreamFifoIO[w: Nat, ow: Nat] {
     push_valid: Bool
     push_ready: Bool
@@ -260,6 +316,16 @@ struct StreamFifoIO[w: Nat, ow: Nat] {
 
 // 指针宽度 = log2Up(depth)+1（高位置 1 区分满/空）。
 // pw/ow 由调用方按 depth 提供（语言对"刚性参数上的计算宽度"不可归约）。
+/// RAM-pointer synchronous FIFO, returning its `StreamFifoIO`.  `w` is the
+/// payload width, `pw` the pointer width (= log2Up(depth)+1, the top bit
+/// distinguishing full from empty) and `ow` the occupancy width — all supplied by
+/// the caller because the language cannot reduce a width computed from a rigid
+/// parameter.  `full = (ptrPush ^ ptrPop) == 1 << (pw-1)`, `empty = ptrPush ==
+/// ptrPop`, `occupancy = ptrPush - ptrPop`; each pointer advances on its own fire
+/// (pushReady = !full, popValid = !empty); the write is synchronous and the read
+/// combinational, addresses masked to the pointer's low bits.  Verilog: one
+/// `reg [w-1:0] <bn>_mem [0:depth-1]`, two pointer regs, one clocked write and a
+/// combinational read.
 def streamFifo[w: Nat, ow: Nat, pw: Nat][bn: BindingName](depth: Nat): StreamFifoIO[w, ow] =
     let mem = createSignalExpr(bn.name + "_mem", createMem(bn.name + "_mem", depth, w));
     let ptrPush = newUIntRegInitNatNamed(bn.name + "_ptrPush", pw, 0);
@@ -294,6 +360,9 @@ def streamFifo[w: Nat, ow: Nat, pw: Nat][bn: BindingName](depth: Nat): StreamFif
                            UInt.mk(None, occ), Bool.mk(None, full), Bool.mk(None, empty))
 
 // 简化接口：接 push/pop 两个 Stream
+/// Convenience wrapper: instantiate `streamFifo` and wire it to a push/pop
+/// `Stream[UInt[w]]` pair, returning the FIFO occupancy.  Call it as
+/// `streamFifoConnect[w][ow][pw]` with `(depth, push, pop)`.
 def streamFifoConnect[w: Nat, ow: Nat, pw: Nat][bn: BindingName](depth: Nat, push: Stream[UInt[w]], pop: Stream[UInt[w]]): UInt[ow] =
     let fifo = streamFifo[w][ow][pw](depth);
     let _ = fifo.push_valid := push.valid;
@@ -309,6 +378,8 @@ def streamFifoConnect[w: Nat, ow: Nat, pw: Nat][bn: BindingName](depth: Nat, pus
 // ============================================================
 
 // 选中输入的 valid（mux 树）
+/// The selected input's valid as a mux chain over `select == k` (false for an
+/// empty input Vec).
 def muxSelValid[sc: Nat, w: Nat, count: Nat](select: UInt[sc], inputs: Vec[Stream[UInt[w]]] count, k: Nat): Bool =
     match inputs {
         case nil => Bool.mk(None, literal(0))
@@ -317,6 +388,8 @@ def muxSelValid[sc: Nat, w: Nat, count: Nat](select: UInt[sc], inputs: Vec[Strea
             Bool.mk(None, Expr.mux(m, h.valid.zz_expr, (muxSelValid(select, t, k + 1)).zz_expr))
     }
 
+/// The selected input's payload as a mux chain over `select == k` (0 for an
+/// empty input Vec).
 def muxSelPayload[sc: Nat, w: Nat, count: Nat](select: UInt[sc], inputs: Vec[Stream[UInt[w]]] count, k: Nat): UInt[w] =
     match inputs {
         case nil => UInt.mk(None, literal(0))
@@ -326,6 +399,9 @@ def muxSelPayload[sc: Nat, w: Nat, count: Nat](select: UInt[sc], inputs: Vec[Str
     }
 
 // ready 扇出：input[k].ready = (select == k) && out.ready
+/// Fan the output ready back to every input:
+/// `inputs[k].ready = (select == k) && out.ready`.  Side-effecting, returns
+/// Unit.
 def muxSelReady[sc: Nat, w: Nat, count: Nat](k: Nat, select: UInt[sc], inputs: Vec[Stream[UInt[w]]] count, outReady: Bool): Unit =
     match inputs {
         case nil => unit
@@ -336,6 +412,9 @@ def muxSelReady[sc: Nat, w: Nat, count: Nat](k: Nat, select: UInt[sc], inputs: V
     }
 
 // streamMuxUInt(select, inputs)：选中输入连到输出
+/// Stream mux: the valid/payload of the input selected by `select`, with the
+/// ready fanned back to that input.  An empty input Vec yields an all-zero
+/// stream.
 def streamMuxUInt[sc: Nat, w: Nat, count: Nat](select: UInt[sc], inputs: Vec[Stream[UInt[w]]] count): Stream[UInt[w]] =
     match inputs {
         case nil => Stream.mk(Bool.mk(None, literal(0)), Bool.mk(None, literal(0)), UInt.mk(None, literal(0)))
@@ -347,6 +426,12 @@ def streamMuxUInt[sc: Nat, w: Nat, count: Nat](select: UInt[sc], inputs: Vec[Str
             Stream.mk(outValid, outReady, outPayload)
     }
 
+/// Build `portCount` demux output ports (from index `k`): port k gets
+/// `valid = input.valid && (select == k)`, a fresh ready wire driven by
+/// `(select == k) && input.ready`, and the shared payload.  NOTE
+/// (direction, design decision): the branch readys are derived FROM
+/// `input.ready` (supplied by the caller) — the design doc's phase-1 decision
+/// (docs/hdl-stream-fsm-design.md §5.4), not Stream.scala's reverse direction.
 def streamDemuxBuild[w: Nat, sc: Nat](k: Nat, input: Stream[UInt[w]], select: UInt[sc], portCount: Nat): Vec[Stream[UInt[w]]] portCount =
     match portCount {
         case zero => nil
@@ -360,6 +445,9 @@ def streamDemuxBuild[w: Nat, sc: Nat](k: Nat, input: Stream[UInt[w]], select: UI
     }
 
 // streamDemuxUInt(input, select, portCount)
+/// Stream demux: `portCount` output streams built by `streamDemuxBuild` from
+/// port 0.  `input.ready` is READ, not driven — the caller supplies it (see
+/// `streamDemuxBuild`).
 def streamDemuxUInt[w: Nat, sc: Nat](input: Stream[UInt[w]], select: UInt[sc], portCount: Nat): Vec[Stream[UInt[w]]] portCount =
     streamDemuxBuild(0, input, select, portCount)
 
@@ -370,6 +458,7 @@ def streamDemuxUInt[w: Nat, sc: Nat](input: Stream[UInt[w]], select: UInt[sc], p
 // ============================================================
 
 // 所有输入的 valid 的 OR
+/// OR of every input's valid (`!(1'b1)` = false for an empty Vec).
 def arbValidOr[w: Nat, count: Nat](inputs: Vec[Stream[UInt[w]]] count): Expr = match inputs {
     case nil => unary("!", literal(1))
     case cons(h, t) =>
@@ -380,6 +469,11 @@ def arbValidOr[w: Nat, count: Nat](inputs: Vec[Stream[UInt[w]]] count): Expr = m
 }
 
 // 优先 grant 位串 {grant[count-1], ..., grant[0]}（accValid = 低位 valid 的 OR）
+/// LSB-priority grant bit string `{grant[count-1], ..., grant[0]}` with
+/// `grant[k] = valid[k] && !OR(valid[0..k-1])`, where `accValid` threads the
+/// running OR.  NOTE: no call site other than its own recursion —
+/// `streamArbiterLowerPriorityUInt` uses `arbPayloadSel` / `arbReadyFanout`
+/// directly.
 def prioGrantVec[w: Nat, count: Nat](accValid: Expr, inputs: Vec[Stream[UInt[w]]] count): Expr = match inputs {
     case nil => unary("!", literal(1))
     case cons(h, t) =>
@@ -390,6 +484,8 @@ def prioGrantVec[w: Nat, count: Nat](accValid: Expr, inputs: Vec[Stream[UInt[w]]
         }
 }
 
+/// The payload of the first granted input, as a mux chain over the running
+/// priority accumulator.
 def arbPayloadSel[w: Nat, count: Nat](k: Nat, inputs: Vec[Stream[UInt[w]]] count, accValid: Expr): UInt[w] =
     match inputs {
         case nil => UInt.mk(None, literal(0))
@@ -399,6 +495,8 @@ def arbPayloadSel[w: Nat, count: Nat](k: Nat, inputs: Vec[Stream[UInt[w]]] count
                                     (arbPayloadSel(k + 1, t, binary(accValid, "|", h.valid.zz_expr))).zz_expr))
     }
 
+/// Fan the output ready to the granted input:
+/// `inputs[k].ready = grant[k] && out.ready`.  Side-effecting, returns Unit.
 def arbReadyFanout[w: Nat, count: Nat](k: Nat, inputs: Vec[Stream[UInt[w]]] count, accValid: Expr, outReady: Bool): Unit =
     match inputs {
         case nil => unit
@@ -408,6 +506,10 @@ def arbReadyFanout[w: Nat, count: Nat](k: Nat, inputs: Vec[Stream[UInt[w]]] coun
             arbReadyFanout(k + 1, t, binary(accValid, "|", h.valid.zz_expr), outReady)
     }
 
+/// LSB-priority (lowest index first) stream arbiter: output valid = OR of all
+/// input valids, payload from the first granted input, ready fanned out per grant.
+/// All recursion walks the Vec (never a concatenation expression, whose
+/// bit-select would be illegal Verilog-2001).
 def streamArbiterLowerPriorityUInt[w: Nat, count: Nat](inputs: Vec[Stream[UInt[w]]] count): Stream[UInt[w]] =
     match inputs {
         case nil => Stream.mk(Bool.mk(None, literal(0)), Bool.mk(None, literal(0)), UInt.mk(None, literal(0)))
@@ -425,6 +527,8 @@ def streamArbiterLowerPriorityUInt[w: Nat, count: Nat](inputs: Vec[Stream[UInt[w
 //  StreamFork —— 同步 fork：input.ready = AND(输出 ready)
 // ============================================================
 
+/// Build `count` fork outputs sharing the input's valid/payload; each output's
+/// ready is a fresh wire that the consumer drives.
 def streamForkBuild[w: Nat](k: Nat, input: Stream[UInt[w]], count: Nat): Vec[Stream[UInt[w]]] count =
     match count {
         case zero => nil
@@ -434,6 +538,7 @@ def streamForkBuild[w: Nat](k: Nat, input: Stream[UInt[w]], count: Nat): Vec[Str
             cons(thisOut, streamForkBuild(k + 1, input, t))
     }
 
+/// AND of all fork output readys (true for an empty list).
 def streamForkReadyAnd[w: Nat, count: Nat](k: Nat, outputs: Vec[Stream[UInt[w]]] count): Bool =
     match outputs {
         case nil => Bool.mk(None, literal(1))
@@ -441,6 +546,8 @@ def streamForkReadyAnd[w: Nat, count: Nat](k: Nat, outputs: Vec[Stream[UInt[w]]]
             Bool.mk(None, binary(h.ready.zz_expr, "&&", (streamForkReadyAnd(k + 1, t)).zz_expr))
     }
 
+/// Synchronous stream fork: every output sees the same beat and the input's ready
+/// is the AND of all output readys, so a stall on any branch stalls all.
 def streamForkUInt[count: Nat, w: Nat][bn: BindingName](input: Stream[UInt[w]]): Vec[Stream[UInt[w]]] count =
     let outputs = streamForkBuild(0, input, count);
     let _ = input.ready := streamForkReadyAnd(0, outputs);
@@ -450,11 +557,13 @@ def streamForkUInt[count: Nat, w: Nat][bn: BindingName](input: Stream[UInt[w]]):
 //  Fragment —— last 位（SpinalHDL Fragment）
 // ============================================================
 
+/// A payload plus its `last` flag (SpinalHDL Fragment).
 struct Fragment[T] {
     fragment: T
     last: Bool
 }
 
+/// The stream form of a `Fragment`: valid/ready plus the payload and `last`.
 struct StreamFragment[T] {
     valid: Bool
     ready: Bool
@@ -463,12 +572,15 @@ struct StreamFragment[T] {
 }
 
 // Stream -> StreamFragment（last 常 1）
+/// Stream -> StreamFragment: `last` is constantly true (a single-beat
+/// fragment).
 def streamToFragmentUInt[w: Nat](input: Stream[UInt[w]]): StreamFragment[UInt[w]] =
     let outReady = newBoolNamed("frag_ready");
     let _ = input.ready := outReady;
     StreamFragment.mk(input.valid, outReady, input.payload, Bool.mk(None, literal(1)))
 
 // StreamFragment -> Stream（丢弃 last）
+/// StreamFragment -> Stream: the `last` flag is dropped.
 def fragmentToStreamUInt[w: Nat](input: StreamFragment[UInt[w]]): Stream[UInt[w]] =
     let outReady = newBoolNamed("str_ready");
     let _ = input.ready := outReady;
@@ -477,6 +589,11 @@ def fragmentToStreamUInt[w: Nat](input: StreamFragment[UInt[w]]): Stream[UInt[w]
 // Fragment 的 throwWhen（与 streamThrowWhen 同一语义，Stream.scala 的
 // Fragment.throwWhen 复用 Stream.throwWhen）：丢弃拍必须强制消费 ——
 // ready = cond || outReady（原缺陷 ready = outReady，丢弃拍滞留，F3 同款）
+/// `Fragment.throwWhen`: same semantics as `streamThrowWhenUInt` (Stream.scala
+/// reuses Stream.throwWhen) — the dropped beat is force-consumed,
+/// `input.ready = cond || out.ready`; `last` passes through unchanged.  The
+/// earlier `ready = outReady` let a dropped beat linger (the P2-3 residue of
+/// F3).
 def fragmentThrowWhenUInt[w: Nat](input: StreamFragment[UInt[w]], cond: Bool): StreamFragment[UInt[w]] =
     let outReady = newBoolNamed("ftw_ready");
     let _ = input.ready := Bool.mk(None, binary(cond.zz_expr, "||", outReady.zz_expr));
@@ -487,6 +604,7 @@ def fragmentThrowWhenUInt[w: Nat](input: StreamFragment[UInt[w]], cond: Bool): S
 //  Flow —— 无 ready；FlowMux 按 select 选 flow
 // ============================================================
 
+/// The payload of the flow selected by `select == k` (mux chain).
 def flowMuxPayload[s2: Nat, w: Nat, count: Nat](select: UInt[s2], inputs: Vec[Flow[UInt[w]]] count, k: Nat): UInt[w] =
     match inputs {
         case nil => UInt.mk(None, literal(0))
@@ -495,6 +613,7 @@ def flowMuxPayload[s2: Nat, w: Nat, count: Nat](select: UInt[s2], inputs: Vec[Fl
             UInt.mk(None, Expr.mux(m, h.payload.zz_expr, (flowMuxPayload(select, t, k + 1)).zz_expr))
     }
 
+/// The valid of the flow selected by `select == k` (mux chain).
 def flowMuxValid[s2: Nat, w: Nat, count: Nat](select: UInt[s2], inputs: Vec[Flow[UInt[w]]] count, k: Nat): Bool =
     match inputs {
         case nil => Bool.mk(None, literal(0))
@@ -503,5 +622,7 @@ def flowMuxValid[s2: Nat, w: Nat, count: Nat](select: UInt[s2], inputs: Vec[Flow
             Bool.mk(None, Expr.mux(m, h.valid.zz_expr, (flowMuxValid(select, t, k + 1)).zz_expr))
     }
 
+/// Flow mux: a `Flow` (no ready) carrying the selected input's payload and
+/// valid.
 def flowMuxUInt[s2: Nat, w: Nat, count: Nat](select: UInt[s2], inputs: Vec[Flow[UInt[w]]] count): Flow[UInt[w]] =
     Flow.mk(flowMuxPayload(select, inputs, 0), flowMuxValid(select, inputs, 0))

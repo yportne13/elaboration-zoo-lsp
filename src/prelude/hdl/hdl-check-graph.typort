@@ -14,7 +14,10 @@
 //   - typort (this file): everything Expr-shape sensitive — the DriveSrc
 //     statement scan, condition-leaf extraction, bit-range extraction,
 //     cross-layer summary edges, domain propagation, synchronizer chain
-//     recognition, per-module caching.
+//     recognition. (A per-module cache was designed here but cancelled —
+//     see docs/hdl-selfcheck-phase234-design.md §11.4: the mutable global
+//     behaves differently across class-check rounds, so analysis runs every
+//     round instead of being cache-gated.)
 //   - Rust builtin check_comb_cycles (cxt.rs): Tarjan SCC + mutual-exclusion
 //     exemption + cycle-path reconstruction over the edge list (index arrays
 //     and deep recursion must not run in typort — DFS depth = |V| would
@@ -51,44 +54,55 @@
 //   - non-ground literal operand  -> "b:==(" + exprKey(l) + "," + exprKey(r) + ")"
 //     (exprKey-consistent, conservative: never matches anything)
 
+/// One literal of a branch condition, stored as `(neg, key)`: `key` is the exprKey of the atom (or the `eq:` / `b:==` encoding) and `neg` says whether that atom appears negated.
+/// Keys are compared polarity-BLIND (`keyInLeaves`, `leafResidue`), so `x` and `!x` share one `key` and differ only in `neg`.
 struct NegLeaf {
     neg: Boolean
     key: String
 }
 
+/// Builds the one-element leaf list `[(neg, key)]` - the base case every leaf walker (`leavesOfN`, `eqLeavesOf`) bottoms out in.
 def singleLeaf(neg: Boolean, key: String): List[NegLeaf] =
     lcons (NegLeaf.mk(neg, key)) lnil
 
+/// Tail-recursive reversal of a leaf list; callers pass the typed seed `nlEmpty` (never bare `lnil`) so the mutable-global drain sees a monomorphic list.
 def nlReverse(l: List[NegLeaf], acc: List[NegLeaf]): List[NegLeaf] = match l {
     case lnil => acc
     case lcons(h, t) => nlReverse(t, lcons h acc)
 }
 
+/// Concatenation `a ++ b` of leaf lists; used to merge an accumulated enable with a mux branch's condition leaves and with the other side of a cross edge.
 def nlAppend(a: List[NegLeaf], b: List[NegLeaf]): List[NegLeaf] = match a {
     case lnil => b
     case lcons(h, t) => lcons h (nlAppend(t, b))
 }
 
+/// Concatenation of two `List[String]`; `combReach` uses it to merge the flood frontier with the visited set.
 def strAppend(a: List[String], b: List[String]): List[String] = match a {
     case lnil => b
     case lcons(h, t) => lcons h (strAppend(t, b))
 }
 
+/// Reverses a `List[String]`; `cdcEdgeVerdict` uses it to turn `chainWalk`'s prepend order `[Rk..R0]` back into source order before pairing stages.
 def strReverse(l: List[String], acc: List[String]): List[String] = match l {
     case lnil => acc
     case lcons(h, t) => strReverse(t, lcons h acc)
 }
 
+/// Reverses a `List[List[NegLeaf]]`; `t2Scan`/`t3Scan` use it to put the already-scanned prefix back in front of the remaining condition sets.
 def nllReverse(l: List[List[NegLeaf]], acc: List[List[NegLeaf]]): List[List[NegLeaf]] = match l {
     case lnil => acc
     case lcons(h, t) => nllReverse(t, lcons h acc)
 }
 
+/// Concatenation of a `List[List[NegLeaf]]`; joins the seen prefix with the not-yet-seen suffix in the T2/T3 coverage scans.
 def nllAppend(a: List[List[NegLeaf]], b: List[List[NegLeaf]]): List[List[NegLeaf]] = match a {
     case lnil => b
     case lcons(h, t) => lcons h (nllAppend(t, b))
 }
 
+/// Leaf encoding of an equality `l == r` under polarity `neg`. With a GROUND literal `r` the key is `eq:<exprKey(l)>:<dec v>` and BOTH polarities get the same key - that is what makes `when c {} otherwise {}` and switch arms mutually exclusive.
+/// Any non-ground operand falls back to the conservative `b:==(<l>,<r>)` key, which can never match another atom.
 def eqLeavesOf(l: Expr, r: Expr, neg: Boolean): List[NegLeaf] = match r {
     case literal(v) => match nat_is_ground(v) {
         case true => singleLeaf(neg, "eq:" + exprKey(l) + ":" + nat_to_dec(v))
@@ -97,14 +111,14 @@ def eqLeavesOf(l: Expr, r: Expr, neg: Boolean): List[NegLeaf] = match r {
     case _ => singleLeaf(neg, "b:==(" + exprKey(l) + "," + exprKey(r) + ")")
 }
 
-// Condition leaves under a polarity flag. typort defs elaborate in file
-// order, so the (mutually recursive) positive/negative walkers are ONE def:
-//   - `&&` distributes only in positive polarity (`!(a && b)` stays ONE
-//     atomic negated leaf — negation does not distribute over conjunction);
-//   - `!` flips the polarity (`!!x == x`);
-//   - an equality keeps the eq-encoding with the current polarity, which is
-//     what makes `when c {} otherwise {}` and switch arms mutually exclusive
-//     under the T2/contradiction rules.
+/// Condition leaves under a polarity flag. typort defs elaborate in file
+/// order, so the (mutually recursive) positive/negative walkers are ONE def:
+///   - `&&` distributes only in positive polarity (`!(a && b)` stays ONE
+///     atomic negated leaf — negation does not distribute over conjunction);
+///   - `!` flips the polarity (`!!x == x`);
+///   - an equality keeps the eq-encoding with the current polarity, which is
+///     what makes `when c {} otherwise {}` and switch arms mutually exclusive
+///     under the T2/contradiction rules.
 def leavesOfN(e: Expr, neg: Boolean): List[NegLeaf] = match e {
     case binary(l, op, r) => match str_eq(op, "&&") {
         case true => match neg {
@@ -123,12 +137,14 @@ def leavesOfN(e: Expr, neg: Boolean): List[NegLeaf] = match e {
     case _ => singleLeaf(neg, exprKey(e))
 }
 
+/// Positive-polarity entry point: the leaves that must ALL hold for `e` (`&&` distributes; a negation stays one atomic negative leaf).
 def leavesOf(e: Expr): List[NegLeaf] = leavesOfN(e, false)
 
+/// Negative-polarity entry point for `!e`; the `mux` false branch is scanned with these leaves appended.
 def negLeavesOf(x: Expr): List[NegLeaf] = leavesOfN(x, true)
 
-// The ";"-joined string form of a leaf list (channel to check_comb_cycles;
-// the builtin re-derives the negation from the leading "!").
+/// The ";"-joined string form of a leaf list (channel to check_comb_cycles;
+/// the builtin re-derives the negation from the leading "!").
 def leafStr(l: NegLeaf): String = match l.neg {
     case true => "!" + l.key
     case false => l.key
@@ -145,6 +161,7 @@ def leafStr(l: NegLeaf): String = match l.neg {
 // dedupDrives (target,rhsKey) first-copy-wins and the CheckIssues line-level
 // dedup at the drain, nlDedup is what actually carries the leaf rules'
 // (HDL032/033/034/035) correctness across replay rounds.
+/// Polarity-blind key membership; the primitive behind both `leafResidue` and the `nlDedup` canonicalization.
 def keyInLeaves(k: String, ls: List[NegLeaf]): Boolean = match ls {
     case lnil => false
     case lcons(h, t) => match str_eq(k, h.key) {
@@ -153,12 +170,12 @@ def keyInLeaves(k: String, ls: List[NegLeaf]): Boolean = match ls {
     }
 }
 
-// Same leaf KEY twice (any polarity combination) would be WhenStack residue:
-// `en && en` as well as `!en && en`. REDUNDANT INSURANCE, not a live defense
-// (review 2026-09-27): enables are nlDedup-ed BEFORE any DriveSrc is stored,
-// so this predicate is constant-false on every drive it is consulted about.
-// Kept as a cheap tripwire in the leaf-sensitive rules in case a future
-// call site forgets the nlDedup canonicalization.
+/// Same leaf KEY twice (any polarity combination) would be WhenStack residue:
+/// `en && en` as well as `!en && en`. REDUNDANT INSURANCE, not a live defense
+/// (review 2026-09-27): enables are nlDedup-ed BEFORE any DriveSrc is stored,
+/// so this predicate is constant-false on every drive it is consulted about.
+/// Kept as a cheap tripwire in the leaf-sensitive rules in case a future
+/// call site forgets the nlDedup canonicalization.
 def leafResidue(ls: List[NegLeaf]): Boolean = match ls {
     case lnil => false
     case lcons(h, t) => match keyInLeaves(h.key, t) {
@@ -172,10 +189,13 @@ def leafResidue(ls: List[NegLeaf]): Boolean = match ls {
 // when-level's condition twice (`en && en`, `!en && en`) - key-dedup
 // restores the intended condition. Generated conditions (switch/elsewhen
 // chains) never repeat a leaf key, so this is a no-op on clean trees.
+/// Typed empty `List[NegLeaf]` seed (the annotated `let` keeps the drain monomorphic): the initial accumulator of `nlDedup` and the terminator of its reversal.
 def nlEmpty: List[NegLeaf] =
     let e: List[NegLeaf] = lnil;
     e
 
+/// Canonicalizes an enable by KEY: keeps the first leaf of each key (the first polarity wins) and drops later duplicates.
+/// This is what neutralizes WhenStack residue (`en && en`, `!en && en`) before any `DriveSrc` exists; the accumulator is prepend-ordered, so the result is reversed on the way out.
 def nlDedup(ls: List[NegLeaf], acc: List[NegLeaf]): List[NegLeaf] = match ls {
     case lnil => nlReverse(acc, nlEmpty)
     case lcons(h, t) => match keyInLeaves(h.key, acc) {
@@ -184,6 +204,8 @@ def nlDedup(ls: List[NegLeaf], acc: List[NegLeaf]): List[NegLeaf] = match ls {
     }
 }
 
+/// Renders a leaf list as one `;`-joined string, prefixing `!` for negated leaves - the channel to the Rust `check_comb_cycles` builtin.
+/// `acc` seeds the accumulator, so starting from an empty string avoids a leading separator.
 def joinLeaves(ls: List[NegLeaf], acc: String): String = match ls {
     case lnil => acc
     case lcons(h, t) => match str_eq(acc, "") {
@@ -192,15 +214,17 @@ def joinLeaves(ls: List[NegLeaf], acc: String): String = match ls {
     }
 }
 
-// Structured equality atoms of a condition: `sel == v` with GROUND v.
-// typort-side mutual exclusion over switch arms needs the value
-// STRUCTURALLY (nat_sub on ground values); the string channel keeps its
-// own parse in the builtin.
+/// Structured equality atoms of a condition: `sel == v` with GROUND v.
+/// typort-side mutual exclusion over switch arms needs the value
+/// STRUCTURALLY (nat_sub on ground values); the string channel keeps its
+/// own parse in the builtin.
 struct EqTerm {
     sel: String
     v: Nat
 }
 
+/// Appends the structured atom `(exprKey(l), v)` when `r` is a GROUND literal, otherwise returns `acc` untouched.
+/// It is the structural twin of the `eq:` string key, kept so typort can compare selector values with `nat_sub` instead of parsing strings.
 def eqTermOf(l: Expr, r: Expr, acc: List[EqTerm]): List[EqTerm] = match r {
     case literal(v) => match nat_is_ground(v) {
         case true => lcons (EqTerm.mk(exprKey(l), v)) acc
@@ -209,6 +233,8 @@ def eqTermOf(l: Expr, r: Expr, acc: List[EqTerm]): List[EqTerm] = match r {
     case _ => acc
 }
 
+/// Collects the ground equality atoms of a condition: only `&&` is traversed, so a `sel == v` under `||` or `!` contributes nothing, and non-equality leaves contribute nothing.
+/// Atoms accumulate in reverse traversal order.
 def eqLeavesOfTerms(e: Expr, acc: List[EqTerm]): List[EqTerm] = match e {
     case binary(l, op, r) => match str_eq(op, "&&") {
         case true => eqLeavesOfTerms(r, eqLeavesOfTerms(l, acc))
@@ -220,10 +246,12 @@ def eqLeavesOfTerms(e: Expr, acc: List[EqTerm]): List[EqTerm] = match e {
     case _ => acc
 }
 
+/// Typed empty `List[EqTerm]` seed (annotated `let` for the monomorphic drain); resets the atom accumulator for each mux condition.
 def eqsFresh: List[EqTerm] =
     let e: List[EqTerm] = lnil;
     e
 
+/// Concatenation of two `List[EqTerm]`; the `when` handler uses it to carry the enclosing atoms onto the nested enable.
 def eqAppend(a: List[EqTerm], b: List[EqTerm]): List[EqTerm] = match a {
     case lnil => b
     case lcons(h, t) => lcons h (eqAppend(t, b))
@@ -235,12 +263,15 @@ def eqAppend(a: List[EqTerm], b: List[EqTerm]): List[EqTerm] = match a {
 // range (normalized hi >= lo); any dynamic index is rUnknown (excluded from
 // overlap detection AND from rangeSafe suppression — keeps phase-1
 // behavior; the ground round gate also skips HDL033 in Phase-A rounds).
+/// LHS bit-range of one drive, normalized to `hi >= lo`: `rFull` for a bare `create*` target, `rPart(hi, lo)` for a bitsel/partsel with ground literal indexes, `rUnknown` for any dynamic index.
+/// Only `rPart` takes part in overlap detection and in `rangeSafe` suppression, so dynamic indexes keep the phase-1 behaviour.
 enum DrvRange {
     rFull
     rPart(hi: Nat, lo: Nat)
     rUnknown
 }
 
+/// `Some(v)` iff `e` is a literal whose Nat is ground; the gate that keeps every width/index comparison off stuck Nats.
 def litNat(e: Expr): Option[Nat] = match e {
     case literal(v) => match nat_is_ground(v) {
         case true => Some(v)
@@ -249,6 +280,8 @@ def litNat(e: Expr): Option[Nat] = match e {
     case _ => None
 }
 
+/// Classifies a drive LHS: a `bitsel` with a ground index gives `rPart(v, v)`; a `partsel` with BOTH bounds ground gives `rPart` normalized through `maxNat`/`minNat`; either bound dynamic gives `rUnknown`.
+/// Everything else - including a `bitsel` with a dynamic index - is `rFull`, i.e. the whole signal is driven.
 def lhsRange(e: Expr): DrvRange = match e {
     case bitsel(_, i) => match litNat(i) {
         case Some(v) => rPart(v, v)
@@ -264,12 +297,13 @@ def lhsRange(e: Expr): DrvRange = match e {
     case _ => rFull
 }
 
-// a <= b on ground Nats (nat_sub saturates: a-b == 0 iff a <= b).
+/// a <= b on ground Nats (nat_sub saturates: a-b == 0 iff a <= b).
 def chkNatLe(a: Nat, b: Nat): Boolean = match nat_sub(a, b) {
     case zero => true
     case succ(_) => false
 }
 
+/// Interval intersection of two `rPart` ranges (`lo1 <= hi2 && lo2 <= hi1`); FALSE whenever either side is `rFull`/`rUnknown`, so HDL033 never fires on those.
 def rangesOverlap(r1: DrvRange, r2: DrvRange): Boolean = match r1 {
     case rPart(hi1, lo1) => match r2 {
         case rPart(hi2, lo2) => chkBand(chkNatLe(lo1, hi2), chkNatLe(lo2, hi1))
@@ -278,6 +312,7 @@ def rangesOverlap(r1: DrvRange, r2: DrvRange): Boolean = match r1 {
     case _ => false
 }
 
+/// True only for two `rPart` ranges that do not intersect; a `rFull`/`rUnknown` operand is NOT disjoint, so `restSafeVs` then demands condition exclusivity instead.
 def rangesDisjoint(r1: DrvRange, r2: DrvRange): Boolean = match r1 {
     case rPart(hi1, lo1) => match r2 {
         case rPart(hi2, lo2) => chkBor(chkBnot(chkNatLe(lo2, hi1)), chkBnot(chkNatLe(lo1, hi2)))
@@ -286,6 +321,7 @@ def rangesDisjoint(r1: DrvRange, r2: DrvRange): Boolean = match r1 {
     case _ => false
 }
 
+/// True when `r1`'s high bit is at or above `r2`'s (`hi2 <= hi1`), and vacuously true for non-`rPart` operands; `pairsVsRest` uses it to print the HDL033 pair hi-descending.
 def rangeOrder(r1: DrvRange, r2: DrvRange): Boolean = match r1 {
     case rPart(hi1, _) => match r2 {
         case rPart(hi2, _) => chkNatLe(hi2, hi1)
@@ -294,6 +330,7 @@ def rangeOrder(r1: DrvRange, r2: DrvRange): Boolean = match r1 {
     case _ => true
 }
 
+/// Renders an `rPart` range as `[hi:lo]`; `rFull` and `rUnknown` both render `[?]`.
 def rangeStr(r: DrvRange): String = match r {
     case rPart(hi, lo) => "[" + nat_to_dec(hi) + ":" + nat_to_dec(lo) + "]"
     case _ => "[?]"
@@ -304,12 +341,14 @@ def rangeStr(r: DrvRange): String = match r {
 // condition leaves they flow under (statement enable ++ mux branch
 // refinement); the leaf lists are ALREADY the accumulated result.
 
+/// One RHS read of a driving statement: the read's `src` name plus the condition leaves/atoms it flows under (the statement enable already refined by the enclosing mux branches).
 struct CondSrc {
     src: String
     leaves: List[NegLeaf]
     eqs: List[EqTerm]
 }
 
+/// One driving statement's complete graph fact set: `target`, `clocked`/`cd`, the accumulated `enable`/`eqs` and their `enableKey`, the RHS `rhsKey`, the LHS `rng`, and the reads (`srcs`) that produced it.
 struct DriveSrc {
     target: String
     clocked: Boolean
@@ -322,13 +361,14 @@ struct DriveSrc {
     srcs: List[CondSrc]
 }
 
+/// Reverses the `DriveSrc` accumulator back into statement order; `checkModuleAll` calls it before `dedupDrives` so the OLDEST copy of a statement wins.
 def drvReverse(l: List[DriveSrc], acc: List[DriveSrc]): List[DriveSrc] = match l {
     case lnil => acc
     case lcons(h, t) => drvReverse(t, lcons h acc)
 }
 
-// A hierarchical connection with its statement enable ("u.port := p" /
-// "q := u.op"); sig = the parent-side signal ("" when not a bare signal).
+/// A hierarchical connection with its statement enable ("u.port := p" /
+/// "q := u.op"); sig = the parent-side signal ("" when not a bare signal).
 struct ConnEx {
     inst: String
     port: String
@@ -337,12 +377,13 @@ struct ConnEx {
     leaves: List[NegLeaf]
 }
 
+/// Reverses the `ConnEx` accumulator into statement order during `checkModuleAll`'s normalization.
 def connReverse(l: List[ConnEx], acc: List[ConnEx]): List[ConnEx] = match l {
     case lnil => acc
     case lcons(h, t) => connReverse(t, lcons h acc)
 }
 
-// A declaration with the width/cd the phase-1 SigDecl drops.
+/// A declaration with the width/cd the phase-1 SigDecl drops.
 struct GDecl {
     name: String
     kind: SigKind
@@ -351,23 +392,26 @@ struct GDecl {
     key: String
 }
 
+/// Reverses the `GDecl` accumulator into creation order - `dropShadowedWires` depends on wire-before-port ordering.
 def gdeclReverse(l: List[GDecl], acc: List[GDecl]): List[GDecl] = match l {
     case lnil => acc
     case lcons(h, t) => gdeclReverse(t, lcons h acc)
 }
 
-// Statement-level enable context threaded through the scan.
+/// Statement-level enable context threaded through the scan.
 struct EnableCtx {
     leaves: List[NegLeaf]
     eqs: List[EqTerm]
     key: String
 }
 
+/// The empty enable context (no leaves, no atoms, empty key) that `scanAllEx` gives every top-level statement.
 def enableCtxEmpty: EnableCtx =
     let l: List[NegLeaf] = lnil;
     let q: List[EqTerm] = lnil;
     EnableCtx.mk(l, q, "")
 
+/// The scan accumulator: `drives`/`conns`/`insts`/`decls` (all prepend-ordered, reversed later), the `seen` statement-key list, the concatenated `key`, and `pending` - the RHS reads of the statement being scanned, which become the next `DriveSrc.srcs`.
 struct GraphAcc {
     drives: List[DriveSrc]
     conns: List[ConnEx]
@@ -378,6 +422,7 @@ struct GraphAcc {
     pending: List[CondSrc]
 }
 
+/// All-empty `GraphAcc` seed, with one annotated `let` per list type (the monomorphic-drain rule); starts the per-module scan.
 def graphAccFresh: GraphAcc =
     let eD: List[DriveSrc] = lnil;
     let eC: List[ConnEx] = lnil;
@@ -387,6 +432,7 @@ def graphAccFresh: GraphAcc =
     let eP: List[CondSrc] = lnil;
     GraphAcc.mk(eD, eC, eI, eG, eS, "", eP)
 
+/// Prepends a `DriveSrc` to the accumulator (reverse statement order, undone by `drvReverse`).
 def accAddDrive(acc: GraphAcc, d: DriveSrc): GraphAcc =
     GraphAcc.mk(lcons d acc.drives, acc.conns, acc.insts, acc.decls, acc.seen, acc.key, acc.pending)
 
@@ -401,30 +447,38 @@ def accAddDrive(acc: GraphAcc, d: DriveSrc): GraphAcc =
 // (HDL032/034/035) never see residue. Same accepted blind spot as
 // phase-1's exprKey dedup: two distinct statements with identical
 // target+RHS count as one driver.
+/// Typed empty `List[ConnEx]` seed, used as the `connReverse` terminator in `checkModuleAll`.
 def connEmpty: List[ConnEx] =
     let e: List[ConnEx] = lnil;
     e
 
+/// Typed empty `List[InstInfo]` seed, used as the `instReverse` terminator.
 def instEmpty: List[InstInfo] =
     let e: List[InstInfo] = lnil;
     e
 
+/// Typed empty `List[GDecl]` seed, used as the `gdeclReverse` terminator.
 def gdeclEmpty: List[GDecl] =
     let e: List[GDecl] = lnil;
     e
 
+/// Typed empty `List[List[NegLeaf]]` seed; the accumulator terminator of `nllReverse` inside the T2/T3 scans.
 def nllEmpty: List[List[NegLeaf]] =
     let e: List[List[NegLeaf]] = lnil;
     e
 
+/// Typed empty `List[String]` seed: `dedupDrives`'s seen list, the `done` list of `rangeSafeOf`/`ruleRangeOverlap`, and T3's key-multiset accumulators.
 def strListEmpty: List[String] =
     let e: List[String] = lnil;
     e
 
+/// Typed empty `List[DriveSrc]` seed; the `drvReverse` terminator in both `dedupDrives` and `checkModuleAll`.
 def drvListEmpty: List[DriveSrc] =
     let e: List[DriveSrc] = lnil;
     e
 
+/// The dedup worker: walking the statement-ordered drive list, keeps the FIRST drive per `target|rhsKey` and drops every later copy (the WhenStack-residue copies).
+/// `acc` is prepend-ordered and reversed with `drvListEmpty` on exit, so the surviving order is statement order.
 def chkDriveDupSeen(ds: List[DriveSrc], seen: List[String], acc: List[DriveSrc]): List[DriveSrc] = match ds {
     case lnil => drvReverse(acc, drvListEmpty)
     case lcons(d, t) =>
@@ -435,33 +489,41 @@ def chkDriveDupSeen(ds: List[DriveSrc], seen: List[String], acc: List[DriveSrc])
         }
 }
 
+/// Entry point for the `(target, rhsKey)` first-copy-wins dedup; it must run AFTER the drives are back in statement order.
 def dedupDrives(ds: List[DriveSrc]): List[DriveSrc] =
     chkDriveDupSeen(ds, strListEmpty, drvListEmpty)
 
+/// Prepends a `ConnEx` to the accumulator.
 def accAddConn(acc: GraphAcc, c: ConnEx): GraphAcc =
     GraphAcc.mk(acc.drives, lcons c acc.conns, acc.insts, acc.decls, acc.seen, acc.key, acc.pending)
 
+/// Prepends an `InstInfo` (reversed later by `instReverse`).
 def accAddInst(acc: GraphAcc, i: InstInfo): GraphAcc =
     GraphAcc.mk(acc.drives, acc.conns, lcons i acc.insts, acc.decls, acc.seen, acc.key, acc.pending)
 
+/// Reverses the `InstInfo` accumulator into statement order.
 def instReverse(l: List[InstInfo], acc: List[InstInfo]): List[InstInfo] = match l {
     case lnil => acc
     case lcons(h, t) => instReverse(t, lcons h acc)
 }
 
+/// Prepends a `GDecl` (reversed later by `gdeclReverse`).
 def accAddDecl(acc: GraphAcc, d: GDecl): GraphAcc =
     GraphAcc.mk(acc.drives, acc.conns, acc.insts, lcons d acc.decls, acc.seen, acc.key, acc.pending)
 
+/// Drops `pending` once a `DriveSrc` has consumed this statement's RHS reads.
 def accClearPending(acc: GraphAcc): GraphAcc =
     let eP: List[CondSrc] = lnil;
     GraphAcc.mk(acc.drives, acc.conns, acc.insts, acc.decls, acc.seen, acc.key, eP)
 
+/// Records one RHS read (name plus the current leaves/atoms) to be attached to the `DriveSrc` built at the end of the statement.
 def accAddPending(acc: GraphAcc, s: CondSrc): GraphAcc =
     GraphAcc.mk(acc.drives, acc.conns, acc.insts, acc.decls, acc.seen, acc.key, lcons s acc.pending)
 
 // ---------- leaf-level predicates (typort side; the builtin keeps its own
 // string-form copy for the edge channel) ----------
 
+/// True iff the two leaves share a key with OPPOSITE polarity - `x` against `!x`. Equal polarity is never contradictory, so `x && x` is not dead.
 def leafPairContradicts(a: NegLeaf, b: NegLeaf): Boolean = match a.neg {
     case true => match b.neg {
         case true => false
@@ -473,6 +535,7 @@ def leafPairContradicts(a: NegLeaf, b: NegLeaf): Boolean = match a.neg {
     }
 }
 
+/// True iff `l` has an opposite-polarity partner anywhere in `ls` (both argument orders of `leafPairContradicts` are tried).
 def leafInContradicts(l: NegLeaf, ls: List[NegLeaf]): Boolean = match ls {
     case lnil => false
     case lcons(h, t) => match chkBor(leafPairContradicts(l, h), leafPairContradicts(h, l)) {
@@ -481,6 +544,7 @@ def leafInContradicts(l: NegLeaf, ls: List[NegLeaf]): Boolean = match ls {
     }
 }
 
+/// True iff some leaf of `l1` contradicts some leaf of `l2`.
 def leavesContradict(l1: List[NegLeaf], l2: List[NegLeaf]): Boolean = match l1 {
     case lnil => false
     case lcons(h, t) => match leafInContradicts(h, l2) {
@@ -489,6 +553,7 @@ def leavesContradict(l1: List[NegLeaf], l2: List[NegLeaf]): Boolean = match l1 {
     }
 }
 
+/// Ground-Nat inequality built from the saturating `nat_sub` in both directions (`a - b == 0` iff `a <= b`); never call it on a stuck Nat.
 def natNeq(a: Nat, b: Nat): Boolean = match nat_sub(a, b) {
     case zero => match nat_sub(b, a) {
         case zero => false
@@ -497,6 +562,7 @@ def natNeq(a: Nat, b: Nat): Boolean = match nat_sub(a, b) {
     case succ(_) => true
 }
 
+/// True iff `ts` holds an atom over the SAME selector with a DIFFERENT ground value - the `sel == v1` / `sel == v2` exclusivity test.
 def eqTermInContradicts(t: EqTerm, ts: List[EqTerm]): Boolean = match ts {
     case lnil => false
     case lcons(h, t2) => match str_eq(t.sel, h.sel) {
@@ -508,6 +574,7 @@ def eqTermInContradicts(t: EqTerm, ts: List[EqTerm]): Boolean = match ts {
     }
 }
 
+/// True iff two atom lists disagree on the value of some selector they share.
 def eqListsContradict(l1: List[EqTerm], l2: List[EqTerm]): Boolean = match l1 {
     case lnil => false
     case lcons(h, t) => match eqTermInContradicts(h, l2) {
@@ -516,16 +583,18 @@ def eqListsContradict(l1: List[EqTerm], l2: List[EqTerm]): Boolean = match l1 {
     }
 }
 
-// Full condition mutual exclusion (§3.3): `c` vs `!c` leaf pairs, or
-// `sel == v1` vs `sel == v2` over the same selector with ground v1 != v2.
+/// Full condition mutual exclusion (§3.3): `c` vs `!c` leaf pairs, or
+/// `sel == v1` vs `sel == v2` over the same selector with ground v1 != v2.
 def condsContradict(ls1: List[NegLeaf], eqs1: List[EqTerm], ls2: List[NegLeaf], eqs2: List[EqTerm]): Boolean =
     chkBor(leavesContradict(ls1, ls2), eqListsContradict(eqs1, eqs2))
 
 // ---------- declaration extraction ----------
 
+/// Builds a `GDecl`; `key` is `exprKey` of the whole `create*` node (not the name), which is exactly what `xorKeyOf` compares against an RHS `b:^(...)` key.
 def gdecl(n: String, k: SigKind, w: Option[Nat], cd: Option[ClockDomain], e: Expr): GDecl =
     GDecl.mk(n, k, w, cd, exprKey(e))
 
+/// Recognizes the ~30 `create*` / `createMem` declaration shapes and maps each to `(name, SigKind, Option[width], Option[cd])`; a `createMem` width is the CELL width and mems carry no cd. Returns `None` for anything that is not a declaration.
 def gDeclOf(e: Expr): Option[GDecl] = match e {
     case create(n) => Some(gdecl(n, kWire, None, None, e))
     case createWidth(n, w) => Some(gdecl(n, kWire, Some(w), None, e))
@@ -557,11 +626,13 @@ def gDeclOf(e: Expr): Option[GDecl] = match e {
     case _ => None
 }
 
+/// Projects `GDecl` back down to the phase-1 `SigDecl` shape (name + kind only, width and cd dropped) for `registerPortTable` after `dropShadowedWires`.
 def sigDeclsOf(ds: List[GDecl]): List[SigDecl] = match ds {
     case lnil => lnil
     case lcons(d, t) => lcons (SigDecl.mk(d.name, d.kind)) (sigDeclsOf(t))
 }
 
+/// Names of the declarations of one `SigKind`, in list order; `buildCombSummary` uses it for the module's input and output port lists.
 def gdeclNamesOfKind(ds: List[GDecl], k: SigKind): List[String] = match ds {
     case lnil => lnil
     case lcons(d, t) => match kindEq(d.kind, k) {
@@ -577,6 +648,8 @@ def gdeclNamesOfKind(ds: List[GDecl], k: SigKind): List[String] = match ds {
 // The exprKey top-level dedup collapses the ~3x field-evaluation replays
 // exactly like phase-1 scanAll.
 
+/// Expression walker of the graph scan: recurses through indexes (`bitsel`/`partsel`/`memRead`) and the defensive statement shapes.
+/// For `mux(c, tv, fv)` it scans `c`, then `tv` with `leavesOf(c)` and the cond's ground atoms appended, then `fv` with `negLeavesOf(c)` appended - the atom list is deliberately NOT extended for the false branch. Every other named sub-expression becomes a `pending` `CondSrc` read.
 def scanExprEx(e: Expr, leaves: List[NegLeaf], eqs: List[EqTerm], acc: GraphAcc): GraphAcc = match e {
     case subSignal(_, _) => acc
     case literal(_) => acc
@@ -635,15 +708,16 @@ def scanExprEx(e: Expr, leaves: List[NegLeaf], eqs: List[EqTerm], acc: GraphAcc)
         }
 }
 
+/// Scans an LHS index expression for reads, skipping ground literals - a constant index reads nothing.
 def lhsIdxInto(i: Expr, leaves: List[NegLeaf], eqs: List[EqTerm], acc: GraphAcc): GraphAcc = match i {
     case literal(_) => acc
     case sizedLiteral(_, _) => acc
     case _ => scanExprEx(i, leaves, eqs, acc)
 }
 
-// LHS dynamic-index reads: `t[i] := x` reads i (the base is the drive
-// target, not a read) — same discipline as phase-1 scanLhsIdx, but the
-// reads become comb edges i -> t.
+/// LHS dynamic-index reads: `t[i] := x` reads i (the base is the drive
+/// target, not a read) — same discipline as phase-1 scanLhsIdx, but the
+/// reads become comb edges i -> t.
 def lhsIdxReads(e: Expr, leaves: List[NegLeaf], eqs: List[EqTerm], acc: GraphAcc): GraphAcc = match e {
     case bitsel(b, i) =>
         let a1 = lhsIdxReads(b, leaves, eqs, acc);
@@ -655,6 +729,8 @@ def lhsIdxReads(e: Expr, leaves: List[NegLeaf], eqs: List[EqTerm], acc: GraphAcc
     case _ => acc
 }
 
+/// Handles one assignment: a `subSignal` LHS becomes a LHS `ConnEx`, otherwise the LHS indexes are scanned for reads; then the RHS is scanned, collecting `pending` reads, and a `subSignal` RHS becomes a RHS `ConnEx`.
+/// If the LHS has a name root, one `DriveSrc` is stored with this statement's pending reads as its `srcs` and the pending list is cleared; without a root the reads are simply dropped.
 def stmtAssign(lhs: Expr, rhs: Expr, clocked: Boolean, cd: Option[ClockDomain], ectx: EnableCtx, acc: GraphAcc): GraphAcc =
     let a0 = match lhs {
         case subSignal(inm, pnm) => accAddConn(acc, ConnEx.mk(inm, pnm, exprName(rhs), true, ectx.leaves))
@@ -673,6 +749,8 @@ def stmtAssign(lhs: Expr, rhs: Expr, clocked: Boolean, cd: Option[ClockDomain], 
             accClearPending(accAddDrive(a1b, drv))
     }
 
+/// Statement dispatcher. `assign`/`regAssign`/`regAssignCd` go through `stmtAssign` with the right `clocked`/`cd`; `instance` and `instanceWithPorts` record `InstInfo` with the raw flag; `memWrite`/`assert*`/`bbMarkerExpr` only contribute reads or nothing.
+/// `when` extends the `EnableCtx` by key-deduping `leaves ++ leavesOf(cond)` and appending the cond's ground atoms. hdl-core already folds the whole elsewhen/otherwise negation into that cond, so the body and the `elseBody` field are scanned with the SAME context; `block` walks sequentially, and anything else is first tried as a declaration.
 def scanStmtEx(e: Expr, ectx: EnableCtx, acc: GraphAcc): GraphAcc = match e {
     case assign(lhs, rhs) => stmtAssign(lhs, rhs, false, None, ectx, acc)
     case regAssign(lhs, rhs) => stmtAssign(lhs, rhs, true, None, ectx, acc)
@@ -680,7 +758,14 @@ def scanStmtEx(e: Expr, ectx: EnableCtx, acc: GraphAcc): GraphAcc = match e {
     case when(cond, body, elseBody) =>
         let e2 = EnableCtx.mk(
             nlDedup(nlAppend(ectx.leaves, leavesOf(cond)), nlEmpty),
-            eqAppend(ectx.eqs, eqLeavesOfTerms(cond, ectx.eqs)),
+            // eqLeavesOfTerms ALREADY conses onto its accumulator, so passing
+            // eqsFresh here (as the mux arm does) yields exactly
+            // ectx.eqs ++ atoms(cond). The previous `eqLeavesOfTerms(cond,
+            // ectx.eqs)` seed, wrapped in `eqAppend(ectx.eqs, ...)`, duplicated
+            // ectx.eqs at every nesting level; all consumers (condsContradict,
+            // eqSelContradicted, selInEqs) are existential, so the atom set and
+            // ruleDeadCond's first-contradiction answer are unchanged.
+            eqAppend(ectx.eqs, eqLeavesOfTerms(cond, eqsFresh)),
             match str_eq(ectx.key, "") {
                 case true => exprKey(cond)
                 case false => ectx.key + "+" + exprKey(cond)
@@ -711,6 +796,8 @@ def scanStmtEx(e: Expr, ectx: EnableCtx, acc: GraphAcc): GraphAcc = match e {
         }
 }
 
+/// Walks the module's statement `Vec`: a statement whose exprKey was already seen is NOT re-scanned (the ~3x class-field replay collapse), but EVERY key is still recorded into `seen` and appended to `key`.
+/// So `seenLen(acc.seen)` counts statements, not unique keys - the invariant that makes `checkModuleAll`'s `dupFree` gate constant-true.
 def scanAllEx[ne: Nat](es: Vec[Expr] ne, acc: GraphAcc): GraphAcc = match es {
     case nil => acc
     case cons(h, t) =>
@@ -731,6 +818,7 @@ def scanAllEx[ne: Nat](es: Vec[Expr] ne, acc: GraphAcc): GraphAcc = match es {
 
 // ---------- combinational edges (design §3.2) ----------
 
+/// A combinational edge for the Rust cycle detector: `dst` is driven from `src`, `cross` names the instance when the edge came from a child passthrough (empty for internal edges), and `leaves` are the conditions under which the edge is live.
 struct CombEdge {
     dst: String
     src: String
@@ -738,20 +826,24 @@ struct CombEdge {
     leaves: List[NegLeaf]
 }
 
+/// Concatenation of two `List[CombEdge]`; `checkModuleAll` merges the internal and cross edge lists with it before the cycle call.
 def ceAppend(a: List[CombEdge], b: List[CombEdge]): List[CombEdge] = match a {
     case lnil => b
     case lcons(h, t) => lcons h (ceAppend(t, b))
 }
 
+/// Typed empty `List[CombEdge]` seed.
 def combEdgesFresh: List[CombEdge] =
     let e: List[CombEdge] = lnil;
     e
 
+/// Turns one drive's `srcs` into `dst <- src` edges carrying that read's leaves; `cross` stays empty, so these are internal edges.
 def driveEdges(d: DriveSrc, srcs: List[CondSrc], acc: List[CombEdge]): List[CombEdge] = match srcs {
     case lnil => acc
     case lcons(s, t) => driveEdges(d, t, lcons (CombEdge.mk(d.target, s.src, "", s.leaves)) acc)
 }
 
+/// All internal edges: exactly the NON-clocked drives, since a clocked drive is a register boundary and not combinational logic.
 def edgesOfDrives(drives: List[DriveSrc], acc: List[CombEdge]): List[CombEdge] = match drives {
     case lnil => acc
     case lcons(d, t) =>
@@ -762,6 +854,7 @@ def edgesOfDrives(drives: List[DriveSrc], acc: List[CombEdge]): List[CombEdge] =
         edgesOfDrives(t, acc2)
 }
 
+/// Serializes edges one per line as `dst|src|cross|leaves` - the string channel to `check_comb_cycles`; `acc` seeds the accumulator, so an empty seed yields no leading newline.
 def joinEdges(es: List[CombEdge], acc: String): String = match es {
     case lnil => acc
     case lcons(h, t) =>
@@ -774,24 +867,29 @@ def joinEdges(es: List[CombEdge], acc: String): String = match es {
 
 // ---------- cross-layer passthrough edges (design §3.5) ----------
 
+/// One input-to-output passthrough of a module: `from` an input port, `to` an output port.
 struct CombPath {
     from: String
     to: String
 }
 
+/// One module's passthrough table, keyed by the module name.
 struct CombSumEntry {
     mdl: String
     paths: List[CombPath]
 }
 
+/// Wrapper struct for the `ModuleCombSummary` mutable global (a global's name must equal its type name), so child summaries persist across `checkModuleAll` calls.
 struct ModuleCombSummary {
     entries: List[CombSumEntry]
 }
 
+/// Empty `ModuleCombSummary` seed for `change_mutable_default` / `get_global_default`.
 def combSumFresh: ModuleCombSummary =
     let e: List[CombSumEntry] = lnil;
     ModuleCombSummary.mk(e)
 
+/// Removes every entry for `mdl` - the drop half of the `combSumAdd` upsert.
 def combSumDrop(es: List[CombSumEntry], mdl: String): List[CombSumEntry] = match es {
     case lnil => lnil
     case lcons(e, t) => match str_eq(e.mdl, mdl) {
@@ -800,9 +898,11 @@ def combSumDrop(es: List[CombSumEntry], mdl: String): List[CombSumEntry] = match
     }
 }
 
+/// Upsert: drops any existing entry for the same module name and prepends the new one, so a module's summary never goes stale.
 def combSumAdd(tbl: ModuleCombSummary, e: CombSumEntry): ModuleCombSummary =
     ModuleCombSummary.mk(lcons e (combSumDrop(tbl.entries, e.mdl)))
 
+/// Looks up a module's passthrough entry; `None` when the module has not been summarized (yet).
 def combSumFind(es: List[CombSumEntry], mdl: String): Option[CombSumEntry] = match es {
     case lnil => None
     case lcons(e, t) => match str_eq(e.mdl, mdl) {
@@ -811,6 +911,7 @@ def combSumFind(es: List[CombSumEntry], mdl: String): Option[CombSumEntry] = mat
     }
 }
 
+/// Exact `(from, to)` membership in a passthrough table.
 def combPathIn(ps: List[CombPath], from: String, to: String): Boolean = match ps {
     case lnil => false
     case lcons(p, t) => match chkBand(str_eq(p.from, from), str_eq(p.to, to)) {
@@ -824,6 +925,7 @@ def combPathIn(ps: List[CombPath], from: String, to: String): Boolean = match ps
 // register output). Runs on internal + cross edges, so child passthroughs
 // compose transitively.
 
+/// Successors of `from` in the edge set (edges whose `src` is `from`), skipping destinations already in `visited`.
 def combNexts(edges: List[CombEdge], from: String, visited: List[String]): List[String] = match edges {
     case lnil => lnil
     case lcons(e, t) => match str_eq(e.src, from) {
@@ -835,6 +937,7 @@ def combNexts(edges: List[CombEdge], from: String, visited: List[String]): List[
     }
 }
 
+/// Flood fill from `frontier` over the edge set, returning the accumulated `visited` set; it is called with the seed as both frontier and visited, so the source is never reported as reached through itself.
 def combReach(edges: List[CombEdge], frontier: List[String], visited: List[String]): List[String] = match frontier {
     case lnil => visited
     case lcons(h, t) =>
@@ -842,6 +945,7 @@ def combReach(edges: List[CombEdge], frontier: List[String], visited: List[Strin
         combReach(edges, strAppend(t, nexts), strAppend(visited, nexts))
 }
 
+/// Records `from -> o` for every output `o` of `outs` that the flood reached.
 def outsToPaths(outs: List[String], from: String, reached: List[String], acc: List[CombPath]): List[CombPath] = match outs {
     case lnil => acc
     case lcons(o, t) => match chkStrIn(o, reached) {
@@ -850,6 +954,7 @@ def outsToPaths(outs: List[String], from: String, reached: List[String], acc: Li
     }
 }
 
+/// Runs the flood once per input port and collects all input-to-output passthroughs of the module.
 def sumPaths(ins: List[String], outs: List[String], edges: List[CombEdge], acc: List[CombPath]): List[CombPath] = match ins {
     case lnil => acc
     case lcons(i, t) =>
@@ -858,12 +963,14 @@ def sumPaths(ins: List[String], outs: List[String], edges: List[CombEdge], acc: 
         sumPaths(t, outs, edges, outsToPaths(outs, i, reached, acc))
 }
 
+/// Builds a module's passthrough table from its `kIn`/`kOut` declarations and the edge set (internal + cross, so child passthroughs compose transitively).
 def buildCombSummary(mname: String, decls: List[GDecl], edges: List[CombEdge]): CombSumEntry =
     let ins = gdeclNamesOfKind(decls, kIn);
     let outs = gdeclNamesOfKind(decls, kOut);
     let p: List[CombPath] = lnil;
     CombSumEntry.mk(mname, sumPaths(ins, outs, edges, p))
 
+/// Upserts the entry into the `ModuleCombSummary` global; called once per named module after the cycle check.
 def registerCombSummary(e: CombSumEntry): Unit =
     let _ = change_mutable_default("ModuleCombSummary", x => combSumAdd(x, e), combSumFresh);
     unit
@@ -871,6 +978,8 @@ def registerCombSummary(e: CombSumEntry): Unit =
 // ---- parent-side wiring: for u.ip := p with q := u.op on the same
 // instance, a child passthrough ip -> op yields the cross edge p -> q.
 
+/// Parent-side wiring: for a LHS connection `u.port_l := p` and a RHS connection `q := u.port_r` on the SAME instance with non-empty parent signals, a child passthrough `port_l -> port_r` yields the cross edge `dst = q, src = p`, tagged with the instance and the concatenated leaves.
+/// Returns `None` for any missing piece: wrong LHS/RHS roles, different instances, empty signal names, unknown module, or no such passthrough path.
 def pairEdge(c1: ConnEx, c2: ConnEx, insts: List[InstInfo], entries: List[CombSumEntry]): Option[CombEdge] =
     let base = chkBand(c1.isLhs, chkBnot(c2.isLhs));
     match base {
@@ -895,6 +1004,7 @@ def pairEdge(c1: ConnEx, c2: ConnEx, insts: List[InstInfo], entries: List[CombSu
             }
     }
 
+/// Inner loop of the cross-edge build: pairs one LHS connection against every connection.
 def crossEdgesRhs(c1: ConnEx, conns: List[ConnEx], insts: List[InstInfo], entries: List[CombSumEntry], acc: List[CombEdge]): List[CombEdge] = match conns {
     case lnil => acc
     case lcons(c2, t) =>
@@ -905,6 +1015,7 @@ def crossEdgesRhs(c1: ConnEx, conns: List[ConnEx], insts: List[InstInfo], entrie
         crossEdgesRhs(c1, t, insts, entries, acc2)
 }
 
+/// Outer loop of the cross-edge build: O(n^2) pairing over all connections of the module.
 def crossEdges(c1s: List[ConnEx], conns: List[ConnEx], insts: List[InstInfo], entries: List[CombSumEntry], acc: List[CombEdge]): List[CombEdge] = match c1s {
     case lnil => acc
     case lcons(c1, t1) =>
@@ -914,13 +1025,14 @@ def crossEdges(c1s: List[ConnEx], conns: List[ConnEx], insts: List[InstInfo], en
 
 // ---------- phase 3 rules: HDL033 / rangeSafe / HDL032 / HDL034 / HDL035 ----
 
-// One root's comb drives with their ranges/conditions.
+/// One root's comb drives with their ranges/conditions.
 struct RootDrv {
     rng: DrvRange
     leaves: List[NegLeaf]
     eqs: List[EqTerm]
 }
 
+/// Collects the `RootDrv` facts of one target: only NON-clocked drives on `root` whose enable has no repeated key (`leafResidue` false) - the residue-free precondition of HDL032/033.
 def rootDrvsOf(drives: List[DriveSrc], root: String, acc: List[RootDrv]): List[RootDrv] = match drives {
     case lnil => acc
     case lcons(d, t) =>
@@ -931,20 +1043,23 @@ def rootDrvsOf(drives: List[DriveSrc], root: String, acc: List[RootDrv]): List[R
         rootDrvsOf(t, root, acc2)
 }
 
+/// Typed empty `List[RootDrv]` seed.
 def rootDrvEmpty: List[RootDrv] =
     let e: List[RootDrv] = lnil;
     e
 
+/// True iff `d1` is safe against every one of `rest`: the ranges are provably disjoint OR the conditions are mutually exclusive.
+/// `rangesDisjoint` is false for `rFull`/`rUnknown`, so those ranges must be condition-exclusive to count as safe.
 def restSafeVs(d1: RootDrv, rest: List[RootDrv]): Boolean = match rest {
     case lnil => true
     case lcons(d2, t) =>
         chkBand(chkBor(rangesDisjoint(d1.rng, d2.rng), condsContradict(d1.leaves, d1.eqs, d2.leaves, d2.eqs)), restSafeVs(d1, t))
 }
 
-// rangeSafe (design §4.4): roots whose comb drives are ALL partial static
-// ranges with every pair either disjoint or condition-exclusive. Handed to
-// runChecks; ruleDrivers skips HDL010/011 for these roots (a bit-sliced bus
-// is legally driven from several statements).
+/// rangeSafe (design §4.4): roots whose comb drives are ALL partial static
+/// ranges with every pair either disjoint or condition-exclusive. Handed to
+/// runChecks; ruleDrivers skips HDL010/011 for these roots (a bit-sliced bus
+/// is legally driven from several statements).
 def rootRangeSafe(ds: List[RootDrv]): Boolean = match ds {
     case lnil => true
     case lcons(d, t) => match d.rng {
@@ -953,6 +1068,7 @@ def rootRangeSafe(ds: List[RootDrv]): Boolean = match ds {
     }
 }
 
+/// Collects each distinct non-clocked target whose whole drive set is `rootRangeSafe`; `done` keeps one answer per target.
 def rangeSafeScan(drives: List[DriveSrc], done: List[String], acc: List[String]): List[String] = match drives {
     case lnil => acc
     case lcons(d, t) =>
@@ -967,9 +1083,11 @@ def rangeSafeScan(drives: List[DriveSrc], done: List[String], acc: List[String])
         rangeSafeScan(t, lcons d.target done, acc2)
 }
 
+/// The rangeSafe target list handed to phase-1 `runChecks`, which skips HDL010/011 for those roots (a bit-sliced bus may legally be driven from several statements).
 def rangeSafeOf(drives: List[DriveSrc]): List[String] =
     rangeSafeScan(drives, strListEmpty, strListEmpty)
 
+/// Reports HDL033 for every later drive whose static range INTERSECTS `d1`'s while the conditions are not mutually exclusive; the two ranges are printed hi-descending (`rangeOrder`) to match the design's expected message.
 def pairsVsRest(mname: String, root: String, d1: RootDrv, rest: List[RootDrv]): Unit = match rest {
     case lnil => unit
     case lcons(d2, t) =>
@@ -988,6 +1106,7 @@ def pairsVsRest(mname: String, root: String, d1: RootDrv, rest: List[RootDrv]): 
         pairsVsRest(mname, root, d1, t)
 }
 
+/// Applies `pairsVsRest` to every unordered pair of one target's drive set.
 def pairsOverlap(mname: String, root: String, ds: List[RootDrv]): Unit = match ds {
     case lnil => unit
     case lcons(d1, t) =>
@@ -995,9 +1114,9 @@ def pairsOverlap(mname: String, root: String, ds: List[RootDrv]): Unit = match d
         pairsOverlap(mname, root, t)
 }
 
-// HDL033: two comb drives on one root whose static ranges intersect while
-// their conditions are not mutually exclusive. Pair order in the message is
-// canonicalized hi-descending (matches the design's §9.3 expectation).
+/// HDL033: two comb drives on one root whose static ranges intersect while
+/// their conditions are not mutually exclusive. Pair order in the message is
+/// canonicalized hi-descending (matches the design's §9.3 expectation).
 def rangeRootScan(drives: List[DriveSrc], done: List[String], mname: String): Unit = match drives {
     case lnil => unit
     case lcons(d, t) =>
@@ -1010,21 +1129,24 @@ def rangeRootScan(drives: List[DriveSrc], done: List[String], mname: String): Un
         rangeRootScan(t, lcons d.target done, mname)
 }
 
+/// HDL033 entry point: one `rangeRootScan` pass with an empty `done` list.
 def ruleRangeOverlap(mname: String, drives: List[DriveSrc]): Unit =
     rangeRootScan(drives, strListEmpty, mname)
 
 // ---------- HDL032: inferred latch (design §4.2/§4.3) ----------
 
-// T2: complementary condition pair — every leaf of one set has its
-// negation in the other and vice versa (covers when/otherwise two-branch).
+/// T2: complementary condition pair — every leaf of one set has its
+/// negation in the other and vice versa (covers when/otherwise two-branch).
 def leafListNegIn(as: List[NegLeaf], bs: List[NegLeaf]): Boolean = match as {
     case lnil => true
     case lcons(h, t) => chkBand(leafInContradicts(h, bs), leafListNegIn(t, bs))
 }
 
+/// True iff `a` and `b` are mutual polarity flips: every leaf of `a` has an opposite-polarity partner in `b` and vice versa. Two empty sets count as complements (both directions hold vacuously).
 def isComplement(a: List[NegLeaf], b: List[NegLeaf]): Boolean =
     chkBand(leafListNegIn(a, b), leafListNegIn(b, a))
 
+/// True iff some set in `others` is a complement of `c`.
 def anyComplement(c: List[NegLeaf], others: List[List[NegLeaf]]): Boolean = match others {
     case lnil => false
     case lcons(h, t) => match isComplement(c, h) {
@@ -1033,6 +1155,7 @@ def anyComplement(c: List[NegLeaf], others: List[List[NegLeaf]]): Boolean = matc
     }
 }
 
+/// T2 detector: walks the condition sets and returns true as soon as one set has a complement among all the OTHERS (`prefRev` holds those already passed, `rest` those still to come).
 def t2Scan(prefRev: List[List[NegLeaf]], cur: List[List[NegLeaf]]): Boolean = match cur {
     case lnil => false
     case lcons(c, rest) =>
@@ -1045,6 +1168,7 @@ def t2Scan(prefRev: List[List[NegLeaf]], cur: List[List[NegLeaf]]): Boolean = ma
 // T3: some condition set is all-negated and its negated atoms equal the
 // multiset of all positive atoms of the other sets (covers switch+default
 // and when, elsewhen chains and otherwise).
+/// True iff EVERY leaf of the condition set is negated; the empty set is vacuously all-negated. It is T3's precondition, not the T3 test itself.
 def allNegForm(ls: List[NegLeaf]): Boolean = match ls {
     case lnil => true
     case lcons(h, t) => match h.neg {
@@ -1053,6 +1177,7 @@ def allNegForm(ls: List[NegLeaf]): Boolean = match ls {
     }
 }
 
+/// Keys of the negated leaves only (positive leaves are skipped).
 def negKeys(ls: List[NegLeaf], acc: List[String]): List[String] = match ls {
     case lnil => acc
     case lcons(h, t) => match h.neg {
@@ -1061,6 +1186,7 @@ def negKeys(ls: List[NegLeaf], acc: List[String]): List[String] = match ls {
     }
 }
 
+/// Keys of the positive leaves only (negated leaves are skipped).
 def posKeys(ls: List[NegLeaf], acc: List[String]): List[String] = match ls {
     case lnil => acc
     case lcons(h, t) => match h.neg {
@@ -1069,11 +1195,13 @@ def posKeys(ls: List[NegLeaf], acc: List[String]): List[String] = match ls {
     }
 }
 
+/// Concatenation of `posKeys` over all given sets - a MULTISET, so repeated keys are kept and counted.
 def posKeysOfAll(ls: List[List[NegLeaf]], acc: List[String]): List[String] = match ls {
     case lnil => acc
     case lcons(h, t) => posKeysOfAll(t, posKeys(h, acc))
 }
 
+/// Removes the FIRST occurrence of `x` and returns the rest; `None` when `x` is absent. Multiset remove-one.
 def strMsetRemove(x: String, ls: List[String]): Option[List[String]] = match ls {
     case lnil => None
     case lcons(h, t) => match str_eq(h, x) {
@@ -1085,6 +1213,7 @@ def strMsetRemove(x: String, ls: List[String]): Option[List[String]] = match ls 
     }
 }
 
+/// Multiset equality: each element of `a` consumes one occurrence in `b`, so `[x, x]` is not equal to `[x]`.
 def strMsetEq(a: List[String], b: List[String]): Boolean = match a {
     case lnil => match b {
         case lnil => true
@@ -1096,9 +1225,11 @@ def strMsetEq(a: List[String], b: List[String]): Boolean = match a {
     }
 }
 
+/// T3: `c` is all-negated and its negated-key multiset equals the multiset of positive keys across all OTHER sets - the switch-with-default / when-elsewhen-otherwise coverage shape.
 def t3Check(c: List[NegLeaf], others: List[List[NegLeaf]]): Boolean =
     chkBand(allNegForm(c), strMsetEq(negKeys(c, strListEmpty), posKeysOfAll(others, strListEmpty)))
 
+/// T3 detector over all condition sets; the `prefRev` accumulator is reversed back so the others list is the complete set minus `c`.
 def t3Scan(prefRev: List[List[NegLeaf]], cur: List[List[NegLeaf]]): Boolean = match cur {
     case lnil => false
     case lcons(c, rest) =>
@@ -1108,13 +1239,17 @@ def t3Scan(prefRev: List[List[NegLeaf]], cur: List[List[NegLeaf]]): Boolean = ma
         }
 }
 
+/// Typed empty `List[List[NegLeaf]]` seed used as the enable-set accumulator in `ruleLatch` and as the empty argument of `coveredBy`.
 def strEnableListEmpty: List[List[NegLeaf]] =
     let e: List[List[NegLeaf]] = lnil;
     e
 
+/// True iff the enable sets cover all cases by either rule: T2 (a complementary pair) or T3 (an exhaustive all-negated set).
 def coveredBy(ls: List[List[NegLeaf]]): Boolean =
     chkBor(t2Scan(strEnableListEmpty, ls), t3Scan(strEnableListEmpty, ls))
 
+/// Recognizes the semantically unconditional `when(literal(1))` wrapper: exactly ONE leaf, positive, whose key equals the key freshly computed from `leavesOf(literal(1))` (never hard-codes a literal key, so an exprKey change follows automatically).
+/// Needed because hdl-fsm wraps an FSM's default first assignment in `when(1)`; without it every FSM `stateNext` would be misreported as a latch by HDL032.
 def enableAlwaysTrue(en: List[NegLeaf]): Boolean = match en {
     // 恰一个正极性叶子、key 等于 literal(1) 的叶子——fsmNew 的 default
     // 首赋值被 when(literal(1)) 包裹（hdl-fsm.typort 对 HDL011 D5 的
@@ -1134,6 +1269,8 @@ def enableAlwaysTrue(en: List[NegLeaf]): Boolean = match en {
     case _ => false
 }
 
+/// True iff `name` has a non-clocked drive whose enable is empty or recognized as `enableAlwaysTrue` - the no-latch-risk side of HDL032.
+/// False when `name` has no non-clocked drive at all, so a never-driven wire is not HDL032's business.
 def hasUncondComb(drives: List[DriveSrc], name: String): Boolean = match drives {
     case lnil => false
     case lcons(d, t) => match chkBand(chkBnot(d.clocked), str_eq(d.target, name)) {
@@ -1148,6 +1285,7 @@ def hasUncondComb(drives: List[DriveSrc], name: String): Boolean = match drives 
     }
 }
 
+/// Collects the non-empty enables of `name`'s non-clocked, residue-free drives; drives with an empty enable are covered by `hasUncondComb` instead.
 def condEnablesOf(drives: List[DriveSrc], name: String, acc: List[List[NegLeaf]]): List[List[NegLeaf]] = match drives {
     case lnil => acc
     case lcons(d, t) =>
@@ -1161,11 +1299,13 @@ def condEnablesOf(drives: List[DriveSrc], name: String, acc: List[List[NegLeaf]]
         condEnablesOf(t, name, acc2)
 }
 
+/// True iff at least one conditional enable was collected.
 def condEnablesNonEmpty(ls: List[List[NegLeaf]]): Boolean = match ls {
     case lnil => false
     case lcons(_, _) => true
 }
 
+/// HDL032 for `wire`/`out` declarations: with at least one conditional driver and NO unconditional one, the enable sets must be covered (T2/T3); otherwise some case is uncovered and an inferred latch is reported.
 def ruleLatch(mname: String, decls: List[GDecl], drives: List[DriveSrc]): Unit = match decls {
     case lnil => unit
     case lcons(d, t) =>
@@ -1190,9 +1330,19 @@ def ruleLatch(mname: String, decls: List[GDecl], drives: List[DriveSrc]): Unit =
 }
 
 // ---------- HDL034: always-false (dead) driver condition ----------
-// A drive whose own condition contains p and !p (or eq:s:v1 / eq:s:v2 over
-// one selector) can never be active. Name/leaf-level: safe in every round.
+// Scope (docs/hdl-selfcheck-phase234-design.md §11.5, review 2026-09-27): only
+// the eq-term form is reported — one drive whose own condition constrains the
+// same selector to two different ground values, e.g.
+// `when (sel == 0) && (sel == 1)`. The bare-signal form `when c && !c` is
+// deliberately NOT reported: at leaf level it is structurally identical to the
+// cross-branch WhenStack residue (`!en && en`) produced by the replay rounds,
+// so reporting it would false-positive on every latchOk/loopExempt-style
+// module. The extra guard in ruleDeadCond skips even the eq form when the
+// contradicting selector also appears in another drive's condition (switch-arm
+// residue rather than a user-written dead condition). Name/leaf-level: safe in
+// every round.
 
+/// Returns the first selector that has two atoms with different ground values inside `eqs` - a condition like `sel == 0 && sel == 1`.
 def eqSelContradicted(eqs: List[EqTerm], rest: List[EqTerm]): Option[String] = match eqs {
     case lnil => None
     case lcons(h, t) => match eqTermInContradicts(h, rest) {
@@ -1201,6 +1351,7 @@ def eqSelContradicted(eqs: List[EqTerm], rest: List[EqTerm]): Option[String] = m
     }
 }
 
+/// Selector membership; the atom's value is ignored.
 def selInEqs(sel: String, eqs: List[EqTerm]): Boolean = match eqs {
     case lnil => false
     case lcons(h, t) => match str_eq(sel, h.sel) {
@@ -1209,6 +1360,7 @@ def selInEqs(sel: String, eqs: List[EqTerm]): Boolean = match eqs {
     }
 }
 
+/// True iff some OTHER drive (different `rhsKey`, i.e. a different statement) mentions `sel` in its atoms; used to tell a user-written dead condition from cross-branch WhenStack residue.
 def selInOtherDrives(drives: List[DriveSrc], sel: String, myKey: String): Boolean = match drives {
     case lnil => false
     case lcons(d, t) => match str_eq(d.rhsKey, myKey) {
@@ -1220,6 +1372,8 @@ def selInOtherDrives(drives: List[DriveSrc], sel: String, myKey: String): Boolea
     }
 }
 
+/// HDL034, eq-term form only: a drive whose own condition pins the same selector to two different ground values can never fire. The bare `when c && !c` form is deliberately NOT reported, because at leaf level it is indistinguishable from cross-branch WhenStack residue (`!en && en`).
+/// Also skipped when the enable shows leaf residue, and when the contradicting selector also appears in another drive's condition (switch-arm residue rather than a user-written dead condition).
 def ruleDeadCond(mname: String, drives: List[DriveSrc]): Unit = match drives {
     case lnil => unit
     case lcons(d, t) =>
@@ -1248,6 +1402,7 @@ def ruleDeadCond(mname: String, drives: List[DriveSrc]): Unit = match drives {
 // driver with a byte-identical enable key is dead. Documented false
 // positive: deliberate last-wins restatement of the same guard.
 
+/// True iff a drive LATER in statement order has the same target and a byte-identical `enableKey` - under always-block last-wins semantics the earlier one is dead.
 def shadowedByLater(rest: List[DriveSrc], target: String, key: String): Boolean = match rest {
     case lnil => false
     case lcons(d, t) => match chkBand(str_eq(d.target, target), str_eq(d.enableKey, key)) {
@@ -1256,6 +1411,7 @@ def shadowedByLater(rest: List[DriveSrc], target: String, key: String): Boolean 
     }
 }
 
+/// HDL035: reports the earlier of two same-target drives with identical enable keys. Drives with residue or an empty `enableKey` are excluded.
 def ruleShadow(mname: String, drives: List[DriveSrc]): Unit = match drives {
     case lnil => unit
     case lcons(d, t) =>
@@ -1276,15 +1432,18 @@ def ruleShadow(mname: String, drives: List[DriveSrc]): Unit = match drives {
 // Pure typort fixpoint, <= V rounds x O(E), chkCdEq only compares
 // clock/reset names (perf red line).
 
+/// One signal's propagated clock-domain set; it is a list rather than a set because `chkCdInList` dedups on insert.
 struct DomEntry {
     name: String
     doms: List[ClockDomain]
 }
 
+/// Typed empty `List[DomEntry]` seed for the domain fixpoint.
 def domListEmpty: List[DomEntry] =
     let e: List[DomEntry] = lnil;
     e
 
+/// Looks up a signal's domain set; `None` means the signal is not in the table at all.
 def domEntryOf(es: List[DomEntry], name: String): Option[List[ClockDomain]] = match es {
     case lnil => None
     case lcons(e, t) => match str_eq(e.name, name) {
@@ -1293,7 +1452,7 @@ def domEntryOf(es: List[DomEntry], name: String): Option[List[ClockDomain]] = ma
     }
 }
 
-// Union one domain into an entry (append-only, dedup via chkCdInList).
+/// Union one domain into an entry (append-only, dedup via chkCdInList).
 def domUnionOne(es: List[DomEntry], name: String, cd: ClockDomain): List[DomEntry] = match es {
     case lnil =>
         let ds: List[ClockDomain] = lcons cd lnil;
@@ -1307,11 +1466,13 @@ def domUnionOne(es: List[DomEntry], name: String, cd: ClockDomain): List[DomEntr
     }
 }
 
+/// Unions a whole domain list into one signal's entry, one domain at a time (each insert deduped by `chkCdInList`).
 def domUnionAll(es: List[DomEntry], name: String, doms: List[ClockDomain]): List[DomEntry] = match doms {
     case lnil => es
     case lcons(cd, t) => domUnionAll(domUnionOne(es, name, cd), name, t)
 }
 
+/// Declared `SigKind` of a name; `None` when nothing is declared under it.
 def gdeclKindOf(ds: List[GDecl], name: String): Option[SigKind] = match ds {
     case lnil => None
     case lcons(d, t) => match str_eq(d.name, name) {
@@ -1320,6 +1481,7 @@ def gdeclKindOf(ds: List[GDecl], name: String): Option[SigKind] = match ds {
     }
 }
 
+/// Declared width of a name; `None` when the declaration carries no width or no declaration exists.
 def gdeclWidthOf(ds: List[GDecl], name: String): Option[Nat] = match ds {
     case lnil => None
     case lcons(d, t) => match str_eq(d.name, name) {
@@ -1328,6 +1490,7 @@ def gdeclWidthOf(ds: List[GDecl], name: String): Option[Nat] = match ds {
     }
 }
 
+/// The declaration's stored `exprKey` of its `create*` node (empty string when undeclared); `xorKeyOf` composes these into the XOR RHS key.
 def gdeclKeyOf(ds: List[GDecl], name: String): String = match ds {
     case lnil => ""
     case lcons(d, t) => match str_eq(d.name, name) {
@@ -1336,6 +1499,7 @@ def gdeclKeyOf(ds: List[GDecl], name: String): String = match ds {
     }
 }
 
+/// `kReg` or `kOutReg` - the kinds that make a signal a register for CDC and domain-anchor purposes.
 def isRegKind(k: SigKind): Boolean =
     chkBor(kindEq(k, kReg), kindEq(k, kOutReg))
 
@@ -1354,8 +1518,8 @@ def isRegKind(k: SigKind): Boolean =
 // trips the parser's brace tracking ("expected `}`" xN, spans off; the same
 // shape recovers in user files but poisons the next prelude decls).
 
-// Mem/unknown-width bases yield None; only ground widths of non-mem signals
-// pass through.
+/// Mem/unknown-width bases yield None; only ground widths of non-mem signals
+/// pass through.
 def oobWidthOf(ds: List[GDecl], nm: String): Option[Nat] = match gdeclKindOf(ds, nm) {
     case None => None
     case Some(k) => match kindEq(k, kMem) {
@@ -1370,11 +1534,13 @@ def oobWidthOf(ds: List[GDecl], nm: String): Option[Nat] = match gdeclKindOf(ds,
     }
 }
 
+/// HDL041 unless `idx + 1 <= w` (`succ` on ground Nats); otherwise the constant index reads or writes x outside the declared width.
 def oobIdxBad(mname: String, nm: String, idx: Nat, w: Nat): Unit = match chkNatLe(succ(idx), w) {
     case true => unit
     case false => chkReport("HDL041", mname, nm, "constant bit index " + nat_to_dec(idx) + " out of declared width " + nat_to_dec(w) + " - Verilog reads/writes x")
 }
 
+/// HDL041 when either end of `[hi:lo]` fails `succ(end) <= w` - BOTH bounds of a part-select are checked.
 def oobRangeBad(mname: String, nm: String, hi: Nat, lo: Nat, w: Nat): Unit =
     let badHi = chkBnot(chkNatLe(succ(hi), w));
     let badLo = chkBnot(chkNatLe(succ(lo), w));
@@ -1383,6 +1549,7 @@ def oobRangeBad(mname: String, nm: String, hi: Nat, lo: Nat, w: Nat): Unit =
         case false => unit
     }
 
+/// Guards the index check: only a NAMED base with a known ground width and a GROUND literal index is compared, so dynamic indexes and mems are skipped.
 def oobCheckIdx(mname: String, decls: List[GDecl], b: Expr, i: Expr): Unit =
     let nm = exprName(b);
     match str_eq(nm, "") {
@@ -1396,6 +1563,7 @@ def oobCheckIdx(mname: String, decls: List[GDecl], b: Expr, i: Expr): Unit =
         }
     }
 
+/// Same guard for part-selects: both bounds must be ground literals before the width comparison happens.
 def oobCheckRange(mname: String, decls: List[GDecl], b: Expr, hiE: Expr, loE: Expr): Unit =
     let nm = exprName(b);
     match str_eq(nm, "") {
@@ -1412,9 +1580,9 @@ def oobCheckRange(mname: String, decls: List[GDecl], b: Expr, hiE: Expr, loE: Ex
         }
     }
 
-// Structural walker over statements AND sub-expressions (same shape coverage
-// as scanStmtEx/scanExprEx; create and createMem nodes are declarations without
-// selects and need no recursion).
+/// Structural walker over statements AND sub-expressions (same shape coverage
+/// as scanStmtEx/scanExprEx; create and createMem nodes are declarations without
+/// selects and need no recursion).
 def oobScanExpr(mname: String, decls: List[GDecl], e: Expr): Unit = match e {
     case subSignal(_, _) => unit
     case literal(_) => unit
@@ -1475,6 +1643,7 @@ def oobScanExpr(mname: String, decls: List[GDecl], e: Expr): Unit = match e {
     case _ => unit
 }
 
+/// Runs the HDL041 walk over every statement of the module.
 def oobScanAll[ne: Nat](es: Vec[Expr] ne, mname: String, decls: List[GDecl]): Unit = match es {
     case nil => unit
     case cons(h, t) =>
@@ -1483,11 +1652,11 @@ def oobScanAll[ne: Nat](es: Vec[Expr] ne, mname: String, decls: List[GDecl]): Un
 }
 
 
-// Anchors from declarations. A decl carrying an explicit cd anchors there;
-// a register WITHOUT one is pre-anchored to the module default (mdcd) right
-// here — the lazy resolveCd fallback (decl cd > mdcd) would land on the same
-// answer, so seeding early simply hands the propagation fixpoint a complete
-// starting table. Comb decls stay unanchored (propagation fills them).
+/// Anchors from declarations. A decl carrying an explicit cd anchors there;
+/// a register WITHOUT one is pre-anchored to the module default (mdcd) right
+/// here — the lazy resolveCd fallback (decl cd > mdcd) would land on the same
+/// answer, so seeding early simply hands the propagation fixpoint a complete
+/// starting table. Comb decls stay unanchored (propagation fills them).
 def domInitEntries(decls: List[GDecl], drives: List[DriveSrc], mdcd: ClockDomain, acc: List[DomEntry]): List[DomEntry] = match decls {
     case lnil => acc
     case lcons(d, t) =>
@@ -1502,6 +1671,7 @@ def domInitEntries(decls: List[GDecl], drives: List[DriveSrc], mdcd: ClockDomain
 }
 
 // One Gauss-Seidel propagation round over comb drives.
+/// Propagates the domains of ONE comb drive: for each of its reads whose entry holds a non-empty domain set, that set is unioned into the drive's target. Reads with an empty or absent entry contribute nothing.
 def domRoundSrcs(entries: List[DomEntry], d: DriveSrc, srcs: List[CondSrc]): List[DomEntry] = match srcs {
     case lnil => entries
     case lcons(s, t) =>
@@ -1515,6 +1685,8 @@ def domRoundSrcs(entries: List[DomEntry], d: DriveSrc, srcs: List[CondSrc]): Lis
         domRoundSrcs(entries1, d, t)
 }
 
+/// One full sweep over the drive list, applying `domRoundSrcs` to each comb drive in list order; clocked drives are boundaries and are skipped.
+/// It is Gauss-Seidel rather than Jacobi: a later drive in the same round already sees an earlier drive's update.
 def domRound(entries: List[DomEntry], drives: List[DriveSrc]): List[DomEntry] = match drives {
     case lnil => entries
     case lcons(d, t) =>
@@ -1527,17 +1699,20 @@ def domRound(entries: List[DomEntry], drives: List[DriveSrc]): List[DomEntry] = 
         entries1
 }
 
+/// Number of domains in one entry.
 def domCountOf(ds: List[ClockDomain], acc: Nat): Nat = match ds {
     case lnil => acc
     case lcons(_, t) => domCountOf(t, succ(acc))
 }
 
 // Fixpoint: iterate until the domain sets stop growing (budget = rounds).
+/// Total number of domain memberships in the table - the monotone growth metric of the fixpoint (not a count of entries).
 def domsTotal(es: List[DomEntry], acc: Nat): Nat = match es {
     case lnil => acc
     case lcons(e, t) => domsTotal(t, nat_add(domCountOf(e.doms, 0), acc))
 }
 
+/// Fixpoint loop: run a round, stop as soon as the membership total stops growing, or when the budget runs out. Termination is by budget; the growth test only lets it stop earlier.
 def domFix(entries: List[DomEntry], drives: List[DriveSrc], budget: Nat): List[DomEntry] = match budget {
     case zero => entries
     case succ(m) =>
@@ -1548,8 +1723,8 @@ def domFix(entries: List[DomEntry], drives: List[DriveSrc], budget: Nat): List[D
         }
 }
 
-// Fixpoint round budget: one comb drive per round (+1 slack) — every target
-// is reached after at most V passes.
+/// Fixpoint round budget: one comb drive per round (+1 slack) — every target
+/// is reached after at most V passes.
 def driveRoundBudget(drives: List[DriveSrc], acc: Nat): Nat = match drives {
     case lnil => succ(acc)
     case lcons(d, t) => match d.clocked {
@@ -1558,7 +1733,7 @@ def driveRoundBudget(drives: List[DriveSrc], acc: Nat): Nat = match drives {
     }
 }
 
-// Clock name list rendering for HDL036 ("clkA/clkB").
+/// Clock name list rendering for HDL036 ("clkA/clkB").
 def domNamesJoin(ds: List[ClockDomain], acc: String): String = match ds {
     case lnil => acc
     case lcons(cd, t) => match str_eq(acc, "") {
@@ -1567,8 +1742,8 @@ def domNamesJoin(ds: List[ClockDomain], acc: String): String = match ds {
     }
 }
 
-// HDL036: a combinational signal (wire/out decl, not a register) whose
-// propagated domain set holds two or more domains.
+/// HDL036: a combinational signal (wire/out decl, not a register) whose
+/// propagated domain set holds two or more domains.
 def ruleDomMix(mname: String, decls: List[GDecl], entries: List[DomEntry]): Unit = match decls {
     case lnil => unit
     case lcons(d, t) =>
@@ -1592,6 +1767,7 @@ def ruleDomMix(mname: String, decls: List[GDecl], entries: List[DomEntry]): Unit
 
 // ---------- synchronizer chain recognition (design §5.3) ----------
 
+/// One clock-domain crossing: the source signal and its domain, the clocked target and its domain, and whether the source is registered. Edges exist only for sources with exactly one known domain that differs from the target's.
 struct CdcEdge {
     src: String
     dst: String
@@ -1600,12 +1776,14 @@ struct CdcEdge {
     srcReg: Boolean
 }
 
+/// Typed empty `List[CdcEdge]` seed for the edge collection.
 def cdcListEmpty: List[CdcEdge] =
     let e: List[CdcEdge] = lnil;
     e
 
 // Resolved clock domain of a clocked drive target: explicit drive cd >
 // decl variant cd > module default.
+/// The declaration's OWN explicit clock domain (from the `*Cd` create variants); `None` when the name is undeclared or carries no cd - the middle priority of `resolveCd`.
 def gdeclCdOf(ds: List[GDecl], name: String): Option[ClockDomain] = match ds {
     case lnil => None
     case lcons(d, t) => match str_eq(d.name, name) {
@@ -1614,6 +1792,7 @@ def gdeclCdOf(ds: List[GDecl], name: String): Option[ClockDomain] = match ds {
     }
 }
 
+/// Domain resolution priority for a clocked target: the drive's explicit `cd`, else the declaration's cd, else the module default.
 def resolveCd(name: String, dcd: Option[ClockDomain], decls: List[GDecl], mdcd: ClockDomain): ClockDomain = match dcd {
     case Some(cd) => cd
     case None => match gdeclCdOf(decls, name) {
@@ -1622,6 +1801,7 @@ def resolveCd(name: String, dcd: Option[ClockDomain], decls: List[GDecl], mdcd: 
     }
 }
 
+/// True iff any of a drive's reads names `name`.
 def srcHasOf(srcs: List[CondSrc], name: String): Boolean = match srcs {
     case lnil => false
     case lcons(s, t) => match str_eq(s.src, name) {
@@ -1630,8 +1810,10 @@ def srcHasOf(srcs: List[CondSrc], name: String): Boolean = match srcs {
     }
 }
 
+/// True iff this drive reads `name`; a thin wrapper over `srcHasOf`.
 def driveSrcHas(d: DriveSrc, name: String): Boolean = srcHasOf(d.srcs, name)
 
+/// True iff some clocked drive targets `name`.
 def hasClockedDrive(drives: List[DriveSrc], name: String): Boolean = match drives {
     case lnil => false
     case lcons(d, t) => match chkBand(d.clocked, str_eq(d.target, name)) {
@@ -1640,16 +1822,16 @@ def hasClockedDrive(drives: List[DriveSrc], name: String): Boolean = match drive
     }
 }
 
-// Classify a CDC source: "registered" or "combinational".
+/// Classify a CDC source: "registered" or "combinational".
 def srcIsRegistered(drives: List[DriveSrc], decls: List[GDecl], name: String): Boolean =
     chkBor(hasClockedDrive(drives, name), match gdeclKindOf(decls, name) {
         case None => false
         case Some(k) => isRegKind(k)
     })
 
-// CDC edges: a clocked drive sampling a single-known-domain signal of a
-// DIFFERENT domain. Sources with unknown/multi domains are skipped (the
-// multi case is HDL036's business; mems/ports are domain-neutral).
+/// CDC edges: a clocked drive sampling a single-known-domain signal of a
+/// DIFFERENT domain. Sources with unknown/multi domains are skipped (the
+/// multi case is HDL036's business; mems/ports are domain-neutral).
 def cdcEdgesSrcs(drives: List[DriveSrc], d: DriveSrc, srcs: List[CondSrc], dstCd: ClockDomain, decls: List[GDecl], entries: List[DomEntry], mdcd: ClockDomain, acc: List[CdcEdge]): List[CdcEdge] = match srcs {
     case lnil => acc
     case lcons(s, t) =>
@@ -1673,6 +1855,7 @@ def cdcEdgesSrcs(drives: List[DriveSrc], d: DriveSrc, srcs: List[CondSrc], dstCd
 // The unique clocked-uncond single-reader successor of r in the clock-driven
 // graph, if one exists and is a registered same-domain stage.
 // Returns Some(next) when ALL chain-extension qualifications hold.
+/// Collects the CDC edges of the whole module: for each CLOCKED drive it resolves the target's domain (`resolveCd`) and asks `cdcEdgesSrcs` for that drive's crossings; comb drives produce no edges.
 def cdcEdgesOf(drives: List[DriveSrc], decls: List[GDecl], entries: List[DomEntry], mdcd: ClockDomain, acc: List[CdcEdge]): List[CdcEdge] = match drives {
     case lnil => acc
     case lcons(d, t) =>
@@ -1685,6 +1868,7 @@ def cdcEdgesOf(drives: List[DriveSrc], decls: List[GDecl], entries: List[DomEntr
         cdcEdgesOf(t, decls, entries, mdcd, acc1)
 }
 
+/// Targets of the clocked drives that read `r` AND are unconditional (empty `enableKey`, which means no enclosing `when` guard at all) and residue-free.
 def clockedReaderTargets(drives: List[DriveSrc], r: String, acc: List[String]): List[String] = match drives {
     case lnil => acc
     case lcons(d, t) =>
@@ -1698,12 +1882,13 @@ def clockedReaderTargets(drives: List[DriveSrc], r: String, acc: List[String]): 
         clockedReaderTargets(t, r, acc1)
 }
 
+/// Typed empty `List[String]` seed used by the chain walks and the chain-head lists.
 def cdcStrEmpty: List[String] =
     let e: List[String] = lnil;
     e
 
-// r has exactly one clocked drive and it is unconditional (design §5.3
-// qualification: uncondClk == 1, condClk == 0). Flat matches only.
+/// r has exactly one clocked drive and it is unconditional (design §5.3
+/// qualification: uncondClk == 1, condClk == 0). Flat matches only.
 def uncondClockedCount(drives: List[DriveSrc], name: String, acc: Nat): Nat = match drives {
     case lnil => acc
     case lcons(d, t) => match chkBand(d.clocked, str_eq(d.target, name)) {
@@ -1715,6 +1900,7 @@ def uncondClockedCount(drives: List[DriveSrc], name: String, acc: Nat): Nat = ma
     }
 }
 
+/// The complement counter: clocked drives of `name` whose enable is non-empty.
 def condClockedCount(drives: List[DriveSrc], name: String, acc: Nat): Nat = match drives {
     case lnil => acc
     case lcons(d, t) => match chkBand(d.clocked, str_eq(d.target, name)) {
@@ -1726,6 +1912,7 @@ def condClockedCount(drives: List[DriveSrc], name: String, acc: Nat): Nat = matc
     }
 }
 
+/// Peano equality with 1 (no Nat is forced); `singleUncondClockedDrive` and `headQualified` use it to demand exactly one unconditional clocked drive and exactly one source.
 def countIsOne(n: Nat): Boolean = match n {
     case zero => false
     case succ(m) => match m {
@@ -1734,6 +1921,7 @@ def countIsOne(n: Nat): Boolean = match n {
     }
 }
 
+/// The design 5.3 head qualification: exactly ONE unconditional clocked drive AND zero conditional clocked drives for `name`.
 def singleUncondClockedDrive(drives: List[DriveSrc], name: String): Boolean =
     match countIsOne(uncondClockedCount(drives, name, 0)) {
         case true => match condClockedCount(drives, name, 0) {
@@ -1745,11 +1933,11 @@ def singleUncondClockedDrive(drives: List[DriveSrc], name: String): Boolean =
 
 // ---------- HDL037/038/039 report pass ----------
 
-// The explicit regAssignCd anchor of the unique unconditional clocked drive
-// that reads r and targets x (None when that drive carries no explicit cd).
-// Lets the chain walk resolve the next stage's domain with the SAME priority
-// as the chain head (drive cd > decl cd > module default) instead of
-// ignoring the drive-side anchor.
+/// The explicit regAssignCd anchor of the unique unconditional clocked drive
+/// that reads r and targets x (None when that drive carries no explicit cd).
+/// Lets the chain walk resolve the next stage's domain with the SAME priority
+/// as the chain head (drive cd > decl cd > module default) instead of
+/// ignoring the drive-side anchor.
 def readerDriveCd(drives: List[DriveSrc], x: String, r: String): Option[ClockDomain] = match drives {
     case lnil => None
     case lcons(d, t) =>
@@ -1766,6 +1954,8 @@ def readerDriveCd(drives: List[DriveSrc], x: String, r: String): Option[ClockDom
 // exactly binary(Ri, "^", R(i+1)) — the pulseCCByToggle/toggle-sync form.
 // The reference exprKeys are the DECL nodes (references are the same create*
 // nodes the decls carry).
+/// Chain extension test for `r` in domain `D`: `r` must have exactly ONE clocked unconditional reader `x` (and `x != r`), `x` must itself be single-uncond-clocked and registered, and `x`'s resolved domain - with the reader drive's own cd taking priority - must equal `D`. Anything else returns `None` and ends the chain.
+/// The XOR edge-detect exemption is NOT applied here; that lives in `midStageScan`.
 def chainNextOf(drives: List[DriveSrc], decls: List[GDecl], mdcd: ClockDomain, r: String, D: ClockDomain): Option[String] =
     match clockedReaderTargets(drives, r, cdcStrEmpty) {
         case lcons(x, lnil) =>
@@ -1791,14 +1981,16 @@ def chainNextOf(drives: List[DriveSrc], decls: List[GDecl], mdcd: ClockDomain, r
         case _ => None
     }
 
-// exprKey rendering of binary(a, "^", b) over the decl keys. XOR is
-// symmetric; the MATCHER below accepts both operand orders (typort has no
-// lexicographic string compare to normalize the pair itself), so
-// `sync1 ^ sync2` and `sync2 ^ sync1` are the same exempt edge-detect form.
+/// exprKey rendering of binary(a, "^", b) over the decl keys. XOR is
+/// symmetric; the MATCHER below accepts both operand orders (typort has no
+/// lexicographic string compare to normalize the pair itself), so
+/// `sync1 ^ sync2` and `sync2 ^ sync1` are the same exempt edge-detect form.
 def xorKeyOf(a: String, b: String, decls: List[GDecl]): String =
     "b:^(" + gdeclKeyOf(decls, a) + "," + gdeclKeyOf(decls, b) + ")"
 
 // All targets that read r (any drive kind).
+/// Every drive target that reads `r`, regardless of clocked or conditional status - the unrestricted twin of `clockedReaderTargets`.
+/// Currently DEAD CODE: the only references in the tree are this definition and its own recursion, so nothing calls it.
 def allReaderTargets(drives: List[DriveSrc], r: String, acc: List[String]): List[String] = match drives {
     case lnil => acc
     case lcons(d, t) =>
@@ -1810,6 +2002,7 @@ def allReaderTargets(drives: List[DriveSrc], r: String, acc: List[String]): List
 }
 
 // str in list (local, List[String]).
+/// Local linear membership test over `List[String]`; `cdcEdgeVerdict`/`cdcVerdicts` use it to skip already-identified chain heads (the file's other membership tests use the `chkStrIn` builtin instead).
 def cdcStrIn(s: String, ls: List[String]): Boolean = match ls {
     case lnil => false
     case lcons(h, t) => match str_eq(h, s) {
@@ -1818,8 +2011,8 @@ def cdcStrIn(s: String, ls: List[String]): Boolean = match ls {
     }
 }
 
-// Mid-stage HDL039: every reader of Ri (i < k) must be R(i+1) or an
-// XOR-with-next reader (either operand order — XOR is symmetric).
+/// Mid-stage HDL039: every reader of Ri (i < k) must be R(i+1) or an
+/// XOR-with-next reader (either operand order — XOR is symmetric).
 def midStageScan(drives: List[DriveSrc], mname: String, decls: List[GDecl], ri: String, rnext: String): Unit = match drives {
     case lnil => unit
     case lcons(d, t) =>
@@ -1840,9 +2033,12 @@ def midStageScan(drives: List[DriveSrc], mname: String, decls: List[GDecl], ri: 
 
 // Chain walk from R0: collect [R0, R1, ...] while the next stage is a
 // registered, single-uncond-clocked, same-domain unique reader. Depth cap 8.
+/// Thin entry point for one chain pair: reports HDL039 for every drive that reads `ri` but is neither `rnext` nor an XOR of `ri` with `rnext`. The body is a single `midStageScan` call.
 def ruleMidStage(mname: String, drives: List[DriveSrc], decls: List[GDecl], ri: String, rnext: String): Unit =
     midStageScan(drives, mname, decls, ri, rnext)
 
+/// Extends the chain from `cur` in domain `D`: repeatedly takes `chainNextOf`, stopping on `None`, on a stage already in `acc` (cycle guard), or when `depth` reaches zero (the caller passes 8).
+/// Stages are CONSED onto `acc`, so the raw result is reverse order - `cdcEdgeVerdict` reverses it back.
 def chainWalk(drives: List[DriveSrc], decls: List[GDecl], mdcd: ClockDomain, cur: String, D: ClockDomain, depth: Nat, acc: List[String]): List[String] = match depth {
     case zero => acc
     case succ(m) =>
@@ -1855,12 +2051,13 @@ def chainWalk(drives: List[DriveSrc], decls: List[GDecl], mdcd: ClockDomain, cur
         }
 }
 
-// R0 head qualification part 2: its single drive reads exactly ONE source.
+/// R0 head qualification part 2: its single drive reads exactly ONE source.
 def srcCountOf(srcs: List[CondSrc], acc: Nat): Nat = match srcs {
     case lnil => acc
     case lcons(_, t) => srcCountOf(t, succ(acc))
 }
 
+/// Source count of `name`'s unconditional clocked drive; 0 when there is no such drive (conditional clocked drives are not counted).
 def headDriveSrcCount(drives: List[DriveSrc], name: String): Nat = match drives {
     case lnil => 0
     case lcons(d, t) => match chkBand(d.clocked, str_eq(d.target, name)) {
@@ -1872,9 +2069,11 @@ def headDriveSrcCount(drives: List[DriveSrc], name: String): Nat = match drives 
     }
 }
 
+/// Full chain-head qualification: a single uncond clocked drive AND that drive reads exactly one source.
 def headQualified(drives: List[DriveSrc], name: String): Boolean =
     chkBand(singleUncondClockedDrive(drives, name), countIsOne(headDriveSrcCount(drives, name)))
 
+/// `n >= 2`, i.e. the identified chain has at least two stages. Byte-identical to `natGtOne`; the two names only document the different call sites (chain stage count vs signal width).
 def chainLen(n: Nat): Boolean = match n {
     case zero => false
     case succ(m) => match m {
@@ -1883,6 +2082,7 @@ def chainLen(n: Nat): Boolean = match n {
     }
 }
 
+/// `n > 1` in Peano form (no Nat is forced); used on a GROUND width to decide whether an HDL038 crossing is multi-bit.
 def natGtOne(n: Nat): Boolean = match n {
     case zero => false
     case succ(m) => match m {
@@ -1891,12 +2091,13 @@ def natGtOne(n: Nat): Boolean = match n {
     }
 }
 
+/// Length of the identified chain; its result is what `chainLen` classifies.
 def chainCount(ls: List[String], acc: Nat): Nat = match ls {
     case lnil => acc
     case lcons(_, t) => chainCount(t, succ(acc))
 }
 
-// Consecutive-pair walk over the identified chain for HDL039.
+/// Consecutive-pair walk over the identified chain for HDL039.
 def midPairs(mname: String, drives: List[DriveSrc], decls: List[GDecl], chain: List[String]): Unit = match chain {
     case lnil => unit
     case lcons(a, t) =>
@@ -1908,8 +2109,19 @@ def midPairs(mname: String, drives: List[DriveSrc], decls: List[GDecl], chain: L
 }
 
 // One CDC edge's verdicts. heads = already-identified chain heads (dedup).
-// Returns the updated heads list. The walk only starts when the edge target
-// qualifies as a chain head (§5.3: single uncond clocked drive, single src).
+// Returns the updated heads list.
+//
+// NOTE (task-3 audit): the design sketch (§5.3) reads as "the walk only
+// starts when the edge target qualifies as a chain head (single uncond
+// clocked drive, single src)". The code's skip test is
+// `chkBand(cdcStrIn(e.dst, heads), headQualified(drives, e.dst))` — an AND of
+// "already recorded as a head" and "still qualifies" — so a target that does
+// NOT qualify but is also not yet recorded is walked anyway. Whether that is
+// intended (the unqualified target simply gets no HDL038/HDL039 verdicts) or
+// is a gap in head qualification needs a design decision; the comment
+// documents the code as written.
+/// Processes one CDC edge. The skip test is `chkBand(cdcStrIn(e.dst, heads), headQualified(drives, e.dst))`, so the walk is skipped only when the target is ALREADY a recorded head AND still qualifies - an unqualified, not-yet-recorded target is walked too.
+/// On the walk path it starts the chain at the edge target in the edge's source domain, reverses `chainWalk`'s prepend order into source order, and when the chain has at least 2 stages it emits HDL038 for a ground multi-bit target, runs the HDL039 mid-stage pairs, and records the target as a head. Returns the (possibly extended) head list.
 def cdcEdgeVerdict(mname: String, drives: List[DriveSrc], decls: List[GDecl], mdcd: ClockDomain, ground: Boolean, e: CdcEdge, heads: List[String]): List[String] =
     match chkBand(cdcStrIn(e.dst, heads), headQualified(drives, e.dst)) {
         case true => heads
@@ -1946,7 +2158,7 @@ def cdcEdgeVerdict(mname: String, drives: List[DriveSrc], decls: List[GDecl], md
             }
     }
 
-// HDL037 for an edge whose target is not an identified chain head.
+/// HDL037 for an edge whose target is not an identified chain head.
 def reportHdl037(mname: String, e: CdcEdge, qualified: Boolean): Unit =
     let kind = match e.srcReg {
         case true => "registered"
@@ -1960,6 +2172,7 @@ def reportHdl037(mname: String, e: CdcEdge, qualified: Boolean): Unit =
     unit
 
 // Full CDC pass: HDL036 + HDL037/038/039.
+/// Walks the CDC edge list in order: each edge gets `cdcEdgeVerdict` (which may claim its target as a chain head), and an edge whose target is still not a head gets the HDL037 report. Heads accumulate across the whole list, so one chain is only reported once.
 def cdcVerdicts(mname: String, drives: List[DriveSrc], decls: List[GDecl], mdcd: ClockDomain, ground: Boolean, edges: List[CdcEdge], heads: List[String]): Unit = match edges {
     case lnil => unit
     case lcons(e, t) =>
@@ -1972,6 +2185,7 @@ def cdcVerdicts(mname: String, drives: List[DriveSrc], decls: List[GDecl], mdcd:
         };
         cdcVerdicts(mname, drives, decls, mdcd, ground, t, heads2)
 }
+/// Full CDC pass: build the edge list with `cdcEdgesOf`, then run the verdicts. `ground` gates only HDL038, the width-sensitive part.
 def ruleCdc(mname: String, decls: List[GDecl], drives: List[DriveSrc], entries: List[DomEntry], mdcd: ClockDomain, ground: Boolean): Unit =
     let edges = cdcEdgesOf(drives, decls, entries, mdcd, cdcListEmpty);
     let _ = cdcVerdicts(mname, drives, decls, mdcd, ground, edges, cdcStrEmpty);
@@ -2001,28 +2215,30 @@ def ruleCdc(mname: String, decls: List[GDecl], drives: List[DriveSrc], entries: 
 // CheckIssues line-level dedup. See isPortKind for why the keys are ports
 // (internal declarations are round-unstable).
 
+/// One port's HDL042 signature: the port name plus its ground width.
 struct DeclKey {
     name: String
     width: Nat
 }
 
+/// Typed empty `List[DeclKey]` seed for the HDL042 signature.
 def declKeysEmpty: List[DeclKey] =
     let e: List[DeclKey] = lnil;
     e
 
-// HDL042 keys are PORT declarations only. The reported failure mode is an
-// instance connecting to the wrong port widths (designVL emits one def per
-// name), and ports are the one part of the declaration set that is stable
-// across the checker's repeated rounds - the ground gate below already
-// guarantees a round only reaches the rule when its widths are ground, and the
-// runtime round's port widths are always ground (see the HDL004 note in
-// hdl-check.typort). INTERNAL declarations are not stable: a for-loop body's
-// `let x` materializes as `x` in one round and as x_0..x_n in another (the same
-// residue that makes the leaf rules re-run every round), and their widths can
-// be ground in one round and stuck in the next. Counting them made a module
-// that was never re-parameterized look like a second registration with a
-// different signature (review-1 F1: a port-less for-loop module warned HDL042
-// twice on the twin engine while the reference engine stayed silent).
+/// HDL042 keys are PORT declarations only. The reported failure mode is an
+/// instance connecting to the wrong port widths (designVL emits one def per
+/// name), and ports are the one part of the declaration set that is stable
+/// across the checker's repeated rounds - the ground gate below already
+/// guarantees a round only reaches the rule when its widths are ground, and the
+/// runtime round's port widths are always ground (see the HDL004 note in
+/// hdl-check.typort). INTERNAL declarations are not stable: a for-loop body's
+/// `let x` materializes as `x` in one round and as x_0..x_n in another (the same
+/// residue that makes the leaf rules re-run every round), and their widths can
+/// be ground in one round and stuck in the next. Counting them made a module
+/// that was never re-parameterized look like a second registration with a
+/// different signature (review-1 F1: a port-less for-loop module warned HDL042
+/// twice on the twin engine while the reference engine stayed silent).
 def isPortKind(k: SigKind): Boolean = match k {
     case kIn => true
     case kOut => true
@@ -2031,6 +2247,8 @@ def isPortKind(k: SigKind): Boolean = match k {
     case _ => false
 }
 
+/// Extracts this round's HDL042 signature from the module's statements: PORT declarations only (`isPortKind`) whose width is GROUND - internal declarations are excluded because their names and widths are round-unstable.
+/// Keys are accumulated in reverse order; `keysEqual` is order- and duplicate-insensitive.
 def declKeysOf[ne: Nat](es: Vec[Expr] ne, acc: List[DeclKey]): List[DeclKey] = match es {
     case nil => acc
     case cons(h, t) =>
@@ -2049,7 +2267,7 @@ def declKeysOf[ne: Nat](es: Vec[Expr] ne, acc: List[DeclKey]): List[DeclKey] = m
         }
 }
 
-// same name AND same width (natNeq on ground widths only)
+/// same name AND same width (natNeq on ground widths only)
 def keysContain(keys: List[DeclKey], nm: String, w: Nat): Boolean = match keys {
     case lnil => false
     case lcons(k, t) =>
@@ -2062,6 +2280,7 @@ def keysContain(keys: List[DeclKey], nm: String, w: Nat): Boolean = match keys {
         }
 }
 
+/// True iff every key of `keys` appears in `against` with the same width; `against` may hold EXTRA keys.
 def allKeysMatch(keys: List[DeclKey], against: List[DeclKey]): Boolean = match keys {
     case lnil => true
     case lcons(k, t) =>
@@ -2071,25 +2290,29 @@ def allKeysMatch(keys: List[DeclKey], against: List[DeclKey]): Boolean = match k
         }
 }
 
+/// Mutual containment of two signatures - order- and duplicate-insensitive equality.
 def keysEqual(a: List[DeclKey], b: List[DeclKey]): Boolean =
     chkBand(allKeysMatch(a, b), allKeysMatch(b, a))
 
+/// The HDL042 record of one module name: its clock domain plus the ground port signature recorded in the first ground round.
 struct ModuleSigRec {
     name: String
     cd: ClockDomain
     keys: List[DeclKey]
 }
 
-// Mutable-global names must equal their type name (ModuleRegistry et al.):
-// the wrapper struct carries the record list under the global "ModuleSigs".
+/// Mutable-global names must equal their type name (ModuleRegistry et al.):
+/// the wrapper struct carries the record list under the global "ModuleSigs".
 struct ModuleSigs {
     recs: List[ModuleSigRec]
 }
 
+/// Empty `ModuleSigs` seed; the global must be a struct whose type name equals the global name.
 def moduleSigsFresh: ModuleSigs =
     let r: List[ModuleSigRec] = lnil;
     ModuleSigs.mk(r)
 
+/// Looks up a module's HDL042 record.
 def sigRecFind(recs: List[ModuleSigRec], name: String): Option[ModuleSigRec] = match recs {
     case lnil => None
     case lcons(r, t) => match str_eq(r.name, name) {
@@ -2098,6 +2321,7 @@ def sigRecFind(recs: List[ModuleSigRec], name: String): Option[ModuleSigRec] = m
     }
 }
 
+/// Removes every record for the name - the drop half of the upsert.
 def sigRecDrop(recs: List[ModuleSigRec], name: String): List[ModuleSigRec] = match recs {
     case lnil => recs
     case lcons(r, t) => match str_eq(r.name, name) {
@@ -2106,9 +2330,11 @@ def sigRecDrop(recs: List[ModuleSigRec], name: String): List[ModuleSigRec] = mat
     }
 }
 
+/// Upsert: prepends the new record after dropping any older record for the same module name.
 def sigRecUpsert(recs: List[ModuleSigRec], rec: ModuleSigRec): List[ModuleSigRec] =
     lcons rec (sigRecDrop(recs, rec.name))
 
+/// HDL042: on the first ground round of a module name it records `(clock domain, ground port keys)`; on any later ground round whose signature differs in port keys (order-insensitive) or clock domain it reports the collision, because `ModuleRegistry` dedups by name and the first def wins. Identical re-registrations stay silent.
 def ruleRegistryCollision[ne: Nat](mname: String, cd: ClockDomain, es: Vec[Expr] ne): Unit =
     let fresh = declKeysOf(es, declKeysEmpty);
     let sigs: ModuleSigs = get_global_default("ModuleSigs", moduleSigsFresh);
@@ -2123,19 +2349,24 @@ def ruleRegistryCollision[ne: Nat](mname: String, cd: ClockDomain, es: Vec[Expr]
             }
     }
 
+/// Number of statements in the module's statement `Vec`.
 def cntVec[ne: Nat](es: Vec[Expr] ne, acc: Nat): Nat = match es {
     case nil => acc
     case cons(_, t) => cntVec(t, succ(acc))
 }
 
+/// Number of statement keys `scanAllEx` recorded - EVERY statement, duplicates included.
 def seenLen(ls: List[String], acc: Nat): Nat = match ls {
     case lnil => acc
     case lcons(_, t) => seenLen(t, succ(acc))
 }
 
+/// Ground-Nat equality written as `a <= b && b <= a`; `checkModuleAll` uses it for the `dupFree` gate.
 def bothWaysLe(a: Nat, b: Nat): Boolean =
     chkBand(chkNatLe(a, b), chkNatLe(b, a))
 
+/// The whole per-module pipeline: scan -> reverse into source order -> dedup drives -> register the port table -> ground gate -> `rangeSafe` -> phase-1 `runChecks` -> HDL042 (ground rounds only) -> internal + cross edges -> Rust `check_comb_cycles` -> register the comb summary -> domain fixpoint -> HDL036 + CDC -> HDL033 (ground + dupFree) -> HDL032/034/035 and HDL041.
+/// `dupFree` is in fact constant-true (`scanAllEx` records every key), so the leaf-sensitive rules do run every round; their replay correctness comes from `nlDedup` + `dedupDrives` + the drain's line dedup.
 def checkModuleAll(md: ModuleDef): Unit =
     let acc0 = scanAllEx(md.expr, graphAccFresh);
     // prepend-order -> statement order (later statements were prepended).
@@ -2213,6 +2444,7 @@ def checkModuleAll(md: ModuleDef): Unit =
     };
     unit
 
+/// The macros' `_res` entry point (the design's entry inversion): takes the tree's head module def, runs the full analysis only when its name is non-empty, then re-registers the tree and returns it UNCHANGED - the checks report through `chkReport` instead of rewriting the tree.
 def checkModuleTreeAll(t: ModuleTree): ModuleTree =
     let md = headModuleDef(t.data);
     let skip = str_eq(md.name, "");

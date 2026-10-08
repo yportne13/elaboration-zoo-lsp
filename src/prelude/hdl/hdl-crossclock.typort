@@ -10,6 +10,15 @@
 // ============================================================
 
 // 级联寄存器链（内部助手，先定义）
+/// Cascaded-register synchronizer chain for `UInt`, the internals of
+/// `bufferCCUInt`. `depth` registers are created, each with a clocked
+/// assignment from the previous one, and the last one is returned:
+/// `depth = 0` returns `input` unchanged (no flop, no synchronization),
+/// `depth = 1` creates one register named `prefix + "_sync"`, and `depth = n`
+/// creates `prefix + "_sync<n>"`, …, `prefix + "_sync2"`, `prefix + "_sync"`
+/// in that order (the returned, most-delayed register is the unsuffixed one).
+/// All registers land in the module's default domain — for a real
+/// domain-crossing chain use `bufferCCUIntChainCd`. Internal helper.
 def bufferCCUIntChain[w: Nat](prefix: String, input: UInt[w], depth: Nat): UInt[w] = match depth {
     case zero => input
     case succ(zero) =>
@@ -22,6 +31,9 @@ def bufferCCUIntChain[w: Nat](prefix: String, input: UInt[w], depth: Nat): UInt[
         bufferCCUIntChain(prefix, r, t)
 }
 
+/// `Bits` variant of `bufferCCUIntChain`: same depth/naming/return contract
+/// (`depth = 0` passes through, `depth = 1` is `prefix + "_sync"`), registers
+/// in the module's default domain. Internal helper for `bufferCCBits`.
 def bufferCCBitsChain[w: Nat](prefix: String, input: Bits[w], depth: Nat): Bits[w] = match depth {
     case zero => input
     case succ(zero) =>
@@ -34,6 +46,10 @@ def bufferCCBitsChain[w: Nat](prefix: String, input: Bits[w], depth: Nat): Bits[
         bufferCCBitsChain(prefix, r, t)
 }
 
+/// 1-bit variant of `bufferCCUIntChain` (registers without an explicit width,
+/// so each is 1 bit): `depth = 0` passes `input` through, otherwise the last
+/// of the cascaded `prefix + "_sync"` registers is returned. Internal helper
+/// for `bufferCCBool`.
 def bufferCCBoolChain(prefix: String, input: Bool, depth: Nat): Bool = match depth {
     case zero => input
     case succ(zero) =>
@@ -46,23 +62,34 @@ def bufferCCBoolChain(prefix: String, input: Bool, depth: Nat): Bool = match dep
         bufferCCBoolChain(prefix, r, t)
 }
 
-// 公共接口：BufferCC(input, bufferDepth) —— 级联同步链
+/// BufferCC for `UInt`: synchronizes `input` through `bufferDepth`
+/// cascaded registers in the **module's** clock domain (the registers are
+/// named from the caller's let binding, so `let synced = bufferCCUInt(x, 2)`
+/// creates `synced_sync2` → `synced_sync`). `bufferDepth` is the number of
+/// flops: 2 is the usual metastability margin (`bufferCCUInt2`), 0 is a pure
+/// pass-through and therefore **not** a synchronizer. The chain output is the
+/// last register, so the input is delayed by `bufferDepth` cycles.
 def bufferCCUInt[bn: BindingName][w: Nat](input: UInt[w], bufferDepth: Nat): UInt[w] =
     bufferCCUIntChain(bn.name, input, bufferDepth)
 
+/// `Bits` BufferCC: same contract and naming as `bufferCCUInt`, registers in
+/// the module's default clock domain.
 def bufferCCBits[bn: BindingName][w: Nat](input: Bits[w], bufferDepth: Nat): Bits[w] =
     bufferCCBitsChain(bn.name, input, bufferDepth)
 
+/// 1-bit BufferCC: same contract as `bufferCCUInt`, one-bit registers.
 def bufferCCBool[bn: BindingName](input: Bool, bufferDepth: Nat): Bool =
     bufferCCBoolChain(bn.name, input, bufferDepth)
 
-// BufferCC 默认深度 2（SpinalHDL 默认）
+/// `bufferCCUInt` with SpinalHDL's default synchronizer depth of 2 flops.
 def bufferCCUInt2[bn: BindingName][w: Nat](input: UInt[w]): UInt[w] =
     bufferCCUInt[bn][w](input, 2)
 
+/// `bufferCCBits` with the default depth of 2 flops.
 def bufferCCBits2[bn: BindingName][w: Nat](input: Bits[w]): Bits[w] =
     bufferCCBits[bn][w](input, 2)
 
+/// `bufferCCBool` with the default depth of 2 flops.
 def bufferCCBool2[bn: BindingName](input: Bool): Bool =
     bufferCCBool[bn](input, 2)
 
@@ -74,6 +101,13 @@ def bufferCCBool2[bn: BindingName](input: Bool): Bool =
 // ---- BufferCC with explicit output clock domain ----
 // 级联同步寄存器全部挂 outCd（输入信号来自 inCd 异步区域）
 
+/// Cascaded synchronizer whose flops are declared **on `outCd`** through
+/// `createRegWidthCd` + `regAssignCd`, so the Verilog generator emits them in
+/// `outCd`'s own always block and adds that domain's clk/reset ports. `input`
+/// is expected to come from an asynchronous region (the `inCd` of the calling
+/// design); the returned signal is `depth` `outCd` cycles old. Same
+/// depth/naming contract as `bufferCCUIntChain` (`depth = 0` = pass-through,
+/// `depth = 1` = `prefix + "_sync"`). Internal helper for `bufferCCUIntCd`.
 def bufferCCUIntChainCd[w: Nat](prefix: String, input: UInt[w], depth: Nat, outCd: ClockDomain): UInt[w] = match depth {
     case zero => input
     case succ(zero) =>
@@ -86,6 +120,8 @@ def bufferCCUIntChainCd[w: Nat](prefix: String, input: UInt[w], depth: Nat, outC
         bufferCCUIntChainCd(prefix, r, t, outCd)
 }
 
+/// `Bits` variant of `bufferCCUIntChainCd`: flops declared on `outCd`, same
+/// depth/naming contract. Internal helper for `bufferCCBitsCd`.
 def bufferCCBitsChainCd[w: Nat](prefix: String, input: Bits[w], depth: Nat, outCd: ClockDomain): Bits[w] = match depth {
     case zero => input
     case succ(zero) =>
@@ -98,6 +134,8 @@ def bufferCCBitsChainCd[w: Nat](prefix: String, input: Bits[w], depth: Nat, outC
         bufferCCBitsChainCd(prefix, r, t, outCd)
 }
 
+/// 1-bit variant of `bufferCCUIntChainCd`: the `prefix + "_sync"` flop chain
+/// is declared on `outCd`. Internal helper for `bufferCCBoolCd`.
 def bufferCCBoolChainCd(prefix: String, input: Bool, depth: Nat, outCd: ClockDomain): Bool = match depth {
     case zero => input
     case succ(zero) =>
@@ -110,12 +148,22 @@ def bufferCCBoolChainCd(prefix: String, input: Bool, depth: Nat, outCd: ClockDom
         bufferCCBoolChainCd(prefix, r, t, outCd)
 }
 
+/// BufferCC with an explicit destination domain: `input` is sampled from the
+/// asynchronous region and synchronized through `bufferDepth` flops that live
+/// in `outCd` (each is a `createRegWidthCd` node driven by `regAssignCd`, so
+/// they appear in `outCd`'s always block, not the module's main clock).
+/// `bufferDepth = 2` is the usual margin and `0` is a pass-through. The
+/// output is named from the caller's let binding (`<bn>_sync…`).
 def bufferCCUIntCd[bn: BindingName][w: Nat](input: UInt[w], bufferDepth: Nat, outCd: ClockDomain): UInt[w] =
     bufferCCUIntChainCd(bn.name, input, bufferDepth, outCd)
 
+/// `Bits` BufferCC into an explicit `outCd` domain; same contract as
+/// `bufferCCUIntCd`.
 def bufferCCBitsCd[bn: BindingName][w: Nat](input: Bits[w], bufferDepth: Nat, outCd: ClockDomain): Bits[w] =
     bufferCCBitsChainCd(bn.name, input, bufferDepth, outCd)
 
+/// 1-bit BufferCC into an explicit `outCd` domain; same contract as
+/// `bufferCCUIntCd`.
 def bufferCCBoolCd[bn: BindingName](input: Bool, bufferDepth: Nat, outCd: ClockDomain): Bool =
     bufferCCBoolChainCd(bn.name, input, bufferDepth, outCd)
 
@@ -123,14 +171,22 @@ def bufferCCBoolCd[bn: BindingName](input: Bool, bufferDepth: Nat, outCd: ClockD
 // inCd 中的单周期脉冲 → outCd 中的单周期脉冲（toggle 翻转 + 边沿检测）
 // 输入脉冲在 inCd 时钟翻转 toggle；outCd 两级同步 toggle；xor 检测翻转。
 
+/// Single-cycle pulse crossing from `inCd` to `outCd` by toggle + edge
+/// detection: a `input` pulse in `inCd` flips `<bn>_toggle` (a flop in
+/// `inCd`), `outCd` samples it through `<bn>_sync1`/`<bn>_sync2`, and the
+/// return value is `sync1 ^ sync2` — high for exactly one `outCd` cycle per
+/// flip. Constraints: `input` must be a single-`inCd`-cycle pulse (a level
+/// would flip the toggle every cycle and produce a pulse train), pulses must
+/// be at least two `outCd` cycles apart or the edge detector merges them, and
+/// the toggle flop inits to 0, so the first pulse after reset produces one
+/// pulse. Both domains need their own clk port (added automatically).
 def pulseCCByToggle[bn: BindingName](input: Bool, inCd: ClockDomain, outCd: ClockDomain): Bool =
     let toggle = newBoolRegCdNamed(bn.name + "_toggle", inCd);
     let sync1 = newBoolRegCdNamed(bn.name + "_sync1", outCd);
     let sync2 = newBoolRegCdNamed(bn.name + "_sync2", outCd);
-    // inCd: 脉冲翻转
-    let _ = whenBegin(input.zz_expr);
-    let _ = createSignalExpr("", regAssignCd(toggle.zz_expr, unary("~", toggle.zz_expr), inCd));
-    let _ = whenEnd(unit);
+    // inCd: 脉冲翻转（条件写进值里：when+Cd 赋值会被双域发射，见 streamFifoCC）
+    let toggleNext = Expr.mux(input.zz_expr, unary("~", toggle.zz_expr), toggle.zz_expr);
+    let _ = createSignalExpr("", regAssignCd(toggle.zz_expr, toggleNext, inCd));
     // outCd: 两级同步
     let _ = createSignalExpr("", regAssignCd(sync1.zz_expr, toggle.zz_expr, outCd));
     let _ = createSignalExpr("", regAssignCd(sync2.zz_expr, sync1.zz_expr, outCd));
@@ -141,21 +197,34 @@ def pulseCCByToggle[bn: BindingName](input: Bool, inCd: ClockDomain, outCd: Cloc
 // inCd 数据（valid 时锁存 + toggle 翻转）→ outCd 数据（valid 时输出）
 // 输出在 toggle 翻转后保持（SpinalHDL CCByToggle 语义）。
 
+/// Output of `ccByToggleUInt`: `valid` is the one-`outCd`-cycle strobe and
+/// `payload` the data that was latched in the source domain for that strobe
+/// (it holds the last latched value afterwards, so sample it only when
+/// `valid` is high).
 struct CcByToggleIO[w: Nat] {
     valid: Bool
     payload: UInt[w]
 }
 
+/// Data crossing from `inCd` to `outCd` by toggle + edge detection: while
+/// `inputValid` is high, `inCd` latches `inputPayload` into `<bn>_buffer` and
+/// flips `<bn>_toggle`; `outCd` synchronizes the toggle through
+/// `<bn>_sync1`/`<bn>_sync2` and returns `valid = sync1 ^ sync2` with
+/// `payload = buffer`. Constraints: `inputValid` must be a pulse (not a
+/// level) and consecutive pulses must be ≥2 `outCd` cycles apart; the source
+/// must hold `inputPayload` stable during the valid cycle (it is captured by
+/// the `inCd` flop on that edge); the output `payload` is stable while
+/// `valid` is high and stays after it — always gate consumers with `valid`.
 def ccByToggleUInt[bn: BindingName][w: Nat](inputValid: Bool, inputPayload: UInt[w], inCd: ClockDomain, outCd: ClockDomain): CcByToggleIO[w] =
     let toggle = newBoolRegCdNamed(bn.name + "_toggle", inCd);
     let buffer = newUIntRegCdNamed(bn.name + "_buffer", w, inCd);
     let sync1 = newBoolRegCdNamed(bn.name + "_sync1", outCd);
     let sync2 = newBoolRegCdNamed(bn.name + "_sync2", outCd);
-    // inCd: valid 时锁存数据 + 翻转 toggle
-    let _ = whenBegin(inputValid.zz_expr);
-    let _ = createSignalExpr("", regAssignCd(toggle.zz_expr, unary("~", toggle.zz_expr), inCd));
-    let _ = createSignalExpr("", regAssignCd(buffer.zz_expr, inputPayload.zz_expr, inCd));
-    let _ = whenEnd(unit);
+    // inCd: valid 时锁存数据 + 翻转 toggle（条件写进值里，避免 when+Cd 双域发射）
+    let toggleNext = Expr.mux(inputValid.zz_expr, unary("~", toggle.zz_expr), toggle.zz_expr);
+    let _ = createSignalExpr("", regAssignCd(toggle.zz_expr, toggleNext, inCd));
+    let bufferNext = Expr.mux(inputValid.zz_expr, inputPayload.zz_expr, buffer.zz_expr);
+    let _ = createSignalExpr("", regAssignCd(buffer.zz_expr, bufferNext, inCd));
     // outCd: 两级同步 toggle
     let _ = createSignalExpr("", regAssignCd(sync1.zz_expr, toggle.zz_expr, outCd));
     let _ = createSignalExpr("", regAssignCd(sync2.zz_expr, sync1.zz_expr, outCd));
@@ -168,6 +237,16 @@ def ccByToggleUInt[bn: BindingName][w: Nat](inputValid: Bool, inputPayload: UInt
 // RAM 读端口跨时钟：memRead（组合）后接 outCd 寄存器 —— 同步读端口在 outCd
 // 时钟下采样。写端口仍用模块主时钟。
 
+/// Cross-domain synchronous RAM read for `Mem[UInt[w]]`: the combinational
+/// `memRead(mem, address)` is sampled by a register in `outCd` (named
+/// `<bn>_r`, created with `createRegWidthCd` and driven with `regAssignCd`),
+/// so the read port lives in `outCd`'s always block. `depth` only types the
+/// address (`UInt[log2Up depth]`) — the memory must be declared with that
+/// word count; the width `w` must match the memory element type. The write
+/// port of `mem` is untouched and stays in the module's main clock. This is
+/// the true-CDC read that `MemOps.readSyncCCD` now also offers (same shape for
+/// all data types); neither inserts synchronizer flops, so the address/data
+/// need their own `bufferCC*` chain when they cross a real domain boundary.
 def readSyncCCUInt[w: Nat][depth: Nat][bn: BindingName](mem: Mem[UInt[w]], address: UInt[log2Up depth], outCd: ClockDomain): UInt[w] =
     let r = newUIntRegCdNamed(bn.name + "_r", w, outCd);
     let _ = createSignalExpr("", regAssignCd(r.zz_expr, memRead(mem.zz_expr, address.zz_expr), outCd));
@@ -176,9 +255,19 @@ def readSyncCCUInt[w: Nat][depth: Nat][bn: BindingName](mem: Mem[UInt[w]], addre
 // ---- StreamFifoCC（核心简化版）----
 // 跨时钟流 FIFO：写端口在模块主时钟（inCd），读端口在 outCd。
 // 满/空由跨时钟同步的二进制指针比较决定（两级同步；二进制指针跨时钟
-// 存在亚稳态风险，正式版需 gray code，此处行为验证等价，文档已注明）。
+// 存在亚稳态风险，正式版需 gray code）。指针带一位 wrap 位（ptrBits+1），
+// 因此复位后 full 与 empty 不再同时为真：empty 为全等比较，full 为
+// 「同步后读指针最高位取反」比较。
+// 历史注记（2026-10，task-4）：修复前指针只有 log2Up depth 位，full 与
+// empty 判据相同（wr == rs2 / rd == ws2），复位后两者同时为真、FIFO 不动；
+// 而 tools/spinalhdl-verify/verify.py 的 RefFifoCC 用同一组判据，属同构对照
+// 而非独立参考，L3 因此长期"全绿"。参考模型已交 verifier 独立重写。
 // push.ready 在写域；pop.valid 在读域。
 
+/// Port bundle of `streamFifoCC`, split by domain: `pushValid`/`pushData` and
+/// `pushReady` belong to the **write** domain (the module's main clock), the
+/// `pop*` signals to `outCd`. `occupancy` is a `UInt[log2Up (d + 1)]` count of
+/// elements currently in the FIFO, expressed on the write side.
 struct StreamFifoCCIO[w: Nat, d: Nat] {
     pushValid: Bool
     pushReady: Bool
@@ -188,44 +277,82 @@ struct StreamFifoCCIO[w: Nat, d: Nat] {
     occupancy: UInt[log2Up (d + 1)]
 }
 
-// depth: 2 的幂（指针用 log2Up depth 位）
+/// Dual-clock stream FIFO: a `newMemUIntNamed` RAM plus write/read binary
+/// pointers that carry one extra **wrap bit** (`ptrBits + 1` bits, with
+/// `ptrBits = log2Up depth`) — that bit is what makes full and empty
+/// distinguishable. The write pointer and its synchronizer chain live in the
+/// module's **main clock**, the read pointer (`<bn>_rdPtr`, init 0) and its
+/// chain live in `outCd`. Rules: `empty = (rdPtr == wrPtrSync2)` on the read
+/// side; `full = (wrPtr == {~rdPtrSync2[MSB], rdPtrSync2[MSB-1:0]})` on the
+/// write side — equal to the synchronized read pointer except for the inverted
+/// top bit. `pushValid && !full` writes the RAM and advances the write pointer,
+/// `pushReady = !full`, and `occupancy` is the plain pointer difference (the
+/// wrap bit cancels out). The RAM itself is addressed with the pointer's low
+/// `ptrBits` bits (`ptr[ptrBits-1:0]`), so the wrap bit never indexes past the
+/// `depth` words. Reads are **free-running** — there is no `pop.ready`:
+/// `popValid = !empty` and the read pointer advances on every `outCd` cycle
+/// where the FIFO is non-empty, so a slow consumer loses data.
+/// Preconditions and limits: `depth` must be a power of two **and at least 2**
+/// (with `depth = 1` the wrap bit degenerates and the full comparison would mix
+/// widths — unsupported); the `inCd` parameter is *not* referenced by the body,
+/// the write side always uses the module's main clock, so `inCd` must be that
+/// same domain; and the binary (non-gray) pointers are not skew-safe across the
+/// synchronizers, so this version is for structural/behavioral equivalence
+/// testing rather than production CDC hardening
+/// (docs/spinalhdl-lib-replication.md §5).
 def streamFifoCC[w: Nat][depth: Nat][bn: BindingName](io: StreamFifoCCIO[w, depth], inCd: ClockDomain, outCd: ClockDomain): Unit =
     let ptrBits = log2Up depth;
+    // wrap 位：指针多一位，使 full/empty 可区分（depth=1 不支持，见文档前置条件）
+    let ptrBitsW = ptrBits + 1;
     let mem = newMemUIntNamed(bn.name + "_mem", depth, w);
     // 写指针（inCd / 主时钟）
-    let wrPtr = newUIntRegInitNatNamed(bn.name + "_wrPtr", ptrBits, 0);
+    let wrPtr = newUIntRegInitNatNamed(bn.name + "_wrPtr", ptrBitsW, 0);
     // 读指针（outCd）
-    let rdPtr = newUIntRegInitCdNamed(bn.name + "_rdPtr", ptrBits, 0, outCd);
+    let rdPtr = newUIntRegInitCdNamed(bn.name + "_rdPtr", ptrBitsW, 0, outCd);
     // 读域同步写指针（outCd 采样写指针，两级）
-    let wrPtrSync1 = newUIntRegCdNamed(bn.name + "_wrPtrSync1", ptrBits, outCd);
-    let wrPtrSync2 = newUIntRegCdNamed(bn.name + "_wrPtrSync2", ptrBits, outCd);
+    let wrPtrSync1 = newUIntRegCdNamed(bn.name + "_wrPtrSync1", ptrBitsW, outCd);
+    let wrPtrSync2 = newUIntRegCdNamed(bn.name + "_wrPtrSync2", ptrBitsW, outCd);
     // 写域同步读指针（inCd 采样读指针，两级）
-    let rdPtrSync1 = newUIntRegInitNatNamed(bn.name + "_rdPtrSync1", ptrBits, 0);
-    let rdPtrSync2 = newUIntRegInitNatNamed(bn.name + "_rdPtrSync2", ptrBits, 0);
+    let rdPtrSync1 = newUIntRegInitNatNamed(bn.name + "_rdPtrSync1", ptrBitsW, 0);
+    let rdPtrSync2 = newUIntRegInitNatNamed(bn.name + "_rdPtrSync2", ptrBitsW, 0);
     // outCd: 同步写指针
     let _ = createSignalExpr("", regAssignCd(wrPtrSync1.zz_expr, wrPtr.zz_expr, outCd));
     let _ = createSignalExpr("", regAssignCd(wrPtrSync2.zz_expr, wrPtrSync1.zz_expr, outCd));
     // inCd(主): 同步读指针
     let _ = createSignalExpr("", regAssign(rdPtrSync1.zz_expr, rdPtr.zz_expr));
     let _ = createSignalExpr("", regAssign(rdPtrSync2.zz_expr, rdPtrSync1.zz_expr));
-    // 空 = 读指针 == 同步后的写指针（读域）
+    // 空 = 读指针 == 同步后的写指针（读域，含 wrap 位全等）
     let empty = binary(rdPtr.zz_expr, "==", wrPtrSync2.zz_expr);
-    // 满 = 写指针 == 同步后的读指针（写域）
-    let full = binary(wrPtr.zz_expr, "==", rdPtrSync2.zz_expr);
+    // 满 = 写指针 == 同步后读指针的「最高位取反」形式（写域；同为 ptrBitsW 位比较）
+    let full = binary(wrPtr.zz_expr, "==",
+        binary(unary("~", bitsel(rdPtrSync2.zz_expr, literal(ptrBits))),
+               "##", partsel(rdPtrSync2.zz_expr, literal(pred ptrBits), literal(0))));
+    // RAM 地址只取低 ptrBits 位（wrap 位不参与寻址，否则 mem[4..7] 越界）
+    let wrAddr = partsel(wrPtr.zz_expr, literal(pred ptrBits), literal(0));
+    let rdAddr = partsel(rdPtr.zz_expr, literal(pred ptrBits), literal(0));
     // push: valid && !full → 写 RAM + 指针 +1
     let _ = whenBegin(binary(io.pushValid.zz_expr, "&&", unary("!", full)));
-    let _ = createSignalExpr("", memWrite(mem.zz_expr, wrPtr.zz_expr, io.pushData.zz_expr, literal(1)));
+    let _ = createSignalExpr("", memWrite(mem.zz_expr, wrAddr, io.pushData.zz_expr, literal(1)));
     let _ = createSignalExpr("", regAssign(wrPtr.zz_expr, binary(wrPtr.zz_expr, "+", literal(1))));
     let _ = whenEnd(unit);
     // pop 读端口：组合 memRead 后接 outCd 寄存器（同步读）
     let popReg = newUIntRegCdNamed(bn.name + "_pop", w, outCd);
-    let _ = createSignalExpr("", regAssignCd(popReg.zz_expr, memRead(mem.zz_expr, rdPtr.zz_expr), outCd));
+    let _ = createSignalExpr("", regAssignCd(popReg.zz_expr, memRead(mem.zz_expr, rdAddr), outCd));
     let _ = io.popData := popReg;
     let _ = io.popValid := Bool.mk(None, unary("!", empty));
     let _ = io.pushReady := Bool.mk(None, unary("!", full));
     let _ = io.occupancy := UInt.mk(None, binary(wrPtr.zz_expr, "-", rdPtrSync2.zz_expr));
-    // pop 推进：读域每拍取走一个（ready 恒真，简化版）
-    let _ = whenBegin(unary("!", empty));
-    let _ = createSignalExpr("", regAssignCd(rdPtr.zz_expr, binary(rdPtr.zz_expr, "+", literal(1)), outCd));
-    let _ = whenEnd(unit);
+    // pop 推进：读域每拍取走一个（ready 恒真，简化版）。
+    // 注意 1：不能用 whenBegin 包裹 regAssignCd —— when 没有 Cd 变体，
+    // 「when 包裹 + Cd 赋值」会被主域与 outCd 域各发射一次，导致 `_d_rdPtr`
+    // 同时出现在两个 always 块里（双驱动，综合非法；锁步仿真每拍 +2）。
+    // 注意 2：条件要先落成**具名组合线**再进 mux。若 mux 直接读 `empty`，
+    // `_d_rdPtr` 的时钟赋值 RHS 就含 `_d_wrPtrSync2`，CDC 检查（hdl-check-graph
+    // 的 chainWalk）会把它当成同步链的"下一级"，从而把链末级升级成中间级，
+    // 对末级的其它合法读者（popValid）误报 HDL039。
+    let popGoE = createSignalExpr(bn.name + "_popGo", create(bn.name + "_popGo"));
+    let popGo = Bool.mk(Some(bn.name + "_popGo"), popGoE);
+    let _ = createSignalExpr("", assign(popGoE, unary("!", empty)));
+    let rdNext = Expr.mux(popGo.zz_expr, binary(rdPtr.zz_expr, "+", literal(1)), rdPtr.zz_expr);
+    let _ = createSignalExpr("", regAssignCd(rdPtr.zz_expr, rdNext, outCd));
     unit

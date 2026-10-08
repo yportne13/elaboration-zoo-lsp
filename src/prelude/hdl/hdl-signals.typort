@@ -9,164 +9,204 @@
 // Usage:  let mySignal = autoUInt(8)
 //         => mySignal gets name "mySignal" automatically
 
+/// Auto-named UInt[w] wire: the signal name is the caller's let binding (`loopName(bn.name)`, which appends the `_<i>` loop index inside `rangeFor`/`genFrom` loops), and the node recorded is `createWidth`. Plain wire: no clock, no reset, driven only by `:=` assignments.
 def autoUInt[bn: BindingName](w: Nat): UInt[w] =
     let e = createSignalExpr(loopName(bn.name), createWidth(loopName(bn.name), w));
     UInt.mk(Some(loopName(bn.name)), e)
 
+/// Auto-named Bits[w] wire: the signal name is the caller's let binding (`loopName(bn.name)`, which appends the `_<i>` loop index inside `rangeFor`/`genFrom` loops), and the node recorded is `createWidth`. Plain wire: no clock, no reset, driven only by `:=` assignments.
 def autoBits[bn: BindingName](w: Nat): Bits[w] =
     let e = createSignalExpr(loopName(bn.name), createWidth(loopName(bn.name), w));
     Bits.mk(Some(loopName(bn.name)), e)
 
+/// Auto-named SInt[w] signed wire: the signal name is the caller's let binding (`loopName(bn.name)`, which appends the `_<i>` loop index inside `rangeFor`/`genFrom` loops), and the node recorded is `createSIntWidth`. Plain wire: no clock, no reset, driven only by `:=` assignments.
 def autoSInt[bn: BindingName](w: Nat): SInt[w] =
     let e = createSignalExpr(loopName(bn.name), createSIntWidth(loopName(bn.name), w));
     SInt.mk(Some(loopName(bn.name)), e)
 
+/// Auto-named Bool 1-bit wire: the signal name is the caller's let binding (`loopName(bn.name)`, which appends the `_<i>` loop index inside `rangeFor`/`genFrom` loops), and the node recorded is `create`. Plain wire: no clock, no reset, driven only by `:=` assignments.
 def autoBool[bn: BindingName]: Bool =
     let e = createSignalExpr(loopName(bn.name), create(loopName(bn.name)));
     Bool.mk(Some(loopName(bn.name)), e)
 
+/// Auto-named UInt[w] input port: the signal name is the caller's let binding (`loopName(bn.name)`, which appends the `_<i>` loop index inside `rangeFor`/`genFrom` loops), and the node recorded is `createInWidth`. Records a port-port node directly, so the generated Verilog port list gains `port wire` plus the width for UInt/Bits/SInt (Bool has no width).
 def autoUIntInput[bn: BindingName](w: Nat): UInt[w] =
     let e = createSignalExpr(loopName(bn.name), createInWidth(loopName(bn.name), w));
     UInt.mk(Some(loopName(bn.name)), e)
 
+/// Auto-named Bits[w] input port: the signal name is the caller's let binding (`loopName(bn.name)`, which appends the `_<i>` loop index inside `rangeFor`/`genFrom` loops), and the node recorded is `createInWidth`. Records a port-port node directly, so the generated Verilog port list gains `port wire` plus the width for UInt/Bits/SInt (Bool has no width).
 def autoBitsInput[bn: BindingName](w: Nat): Bits[w] =
     let e = createSignalExpr(loopName(bn.name), createInWidth(loopName(bn.name), w));
     Bits.mk(Some(loopName(bn.name)), e)
 
+/// Auto-named SInt[w] signed input port: the signal name is the caller's let binding (`loopName(bn.name)`, which appends the `_<i>` loop index inside `rangeFor`/`genFrom` loops), and the node recorded is `createSIntInWidth`. Records a port-port node directly, so the generated Verilog port list gains `port wire` plus the width for UInt/Bits/SInt (Bool has no width).
 def autoSIntInput[bn: BindingName](w: Nat): SInt[w] =
     let e = createSignalExpr(loopName(bn.name), createSIntInWidth(loopName(bn.name), w));
     SInt.mk(Some(loopName(bn.name)), e)
 
+/// Auto-named Bool 1-bit input port: the signal name is the caller's let binding (`loopName(bn.name)`, which appends the `_<i>` loop index inside `rangeFor`/`genFrom` loops), and the node recorded is `createIn`. Records a port-port node directly, so the generated Verilog port list gains `port wire` plus the width for UInt/Bits/SInt (Bool has no width).
 def autoBoolInput[bn: BindingName]: Bool =
     let e = createSignalExpr(loopName(bn.name), createIn(loopName(bn.name)));
     Bool.mk(Some(loopName(bn.name)), e)
 
+/// Auto-named UInt[w] output port: the signal name is the caller's let binding (`loopName(bn.name)`, which appends the `_<i>` loop index inside `rangeFor`/`genFrom` loops), and the node recorded is `createOutWidth`. Records a port-port node directly, so the generated Verilog port list gains `port wire` plus the width for UInt/Bits/SInt (Bool has no width).
 def autoUIntOutput[bn: BindingName](w: Nat): UInt[w] =
     let e = createSignalExpr(loopName(bn.name), createOutWidth(loopName(bn.name), w));
     UInt.mk(Some(loopName(bn.name)), e)
 
+/// Auto-named Bits[w] output port: the signal name is the caller's let binding (`loopName(bn.name)`, which appends the `_<i>` loop index inside `rangeFor`/`genFrom` loops), and the node recorded is `createOutWidth`. Records a port-port node directly, so the generated Verilog port list gains `port wire` plus the width for UInt/Bits/SInt (Bool has no width).
 def autoBitsOutput[bn: BindingName](w: Nat): Bits[w] =
     let e = createSignalExpr(loopName(bn.name), createOutWidth(loopName(bn.name), w));
     Bits.mk(Some(loopName(bn.name)), e)
 
+/// Auto-named SInt[w] signed output port: the signal name is the caller's let binding (`loopName(bn.name)`, which appends the `_<i>` loop index inside `rangeFor`/`genFrom` loops), and the node recorded is `createSIntOutWidth`. Records a port-port node directly, so the generated Verilog port list gains `port wire` plus the width for UInt/Bits/SInt (Bool has no width).
 def autoSIntOutput[bn: BindingName](w: Nat): SInt[w] =
     let e = createSignalExpr(loopName(bn.name), createSIntOutWidth(loopName(bn.name), w));
     SInt.mk(Some(loopName(bn.name)), e)
 
+/// Auto-named Bool 1-bit output port: the signal name is the caller's let binding (`loopName(bn.name)`, which appends the `_<i>` loop index inside `rangeFor`/`genFrom` loops), and the node recorded is `createOut`. Records a port-port node directly, so the generated Verilog port list gains `port wire` plus the width for UInt/Bits/SInt (Bool has no width).
 def autoBoolOutput[bn: BindingName]: Bool =
     let e = createSignalExpr(loopName(bn.name), createOut(loopName(bn.name)));
     Bool.mk(Some(loopName(bn.name)), e)
 
+/// Auto-named UInt[w] inout port: the signal name is the caller's let binding (`loopName(bn.name)`, which appends the `_<i>` loop index inside `rangeFor`/`genFrom` loops), and the node recorded is `createInOutWidth`. Records a port-port node directly, so the generated Verilog port list gains `port wire` plus the width for UInt/Bits/SInt (Bool has no width).
 def autoUIntInOut[bn: BindingName](w: Nat): UInt[w] =
     let e = createSignalExpr(loopName(bn.name), createInOutWidth(loopName(bn.name), w));
     UInt.mk(Some(loopName(bn.name)), e)
 
+/// Auto-named Bits[w] inout port: the signal name is the caller's let binding (`loopName(bn.name)`, which appends the `_<i>` loop index inside `rangeFor`/`genFrom` loops), and the node recorded is `createInOutWidth`. Records a port-port node directly, so the generated Verilog port list gains `port wire` plus the width for UInt/Bits/SInt (Bool has no width).
 def autoBitsInOut[bn: BindingName](w: Nat): Bits[w] =
     let e = createSignalExpr(loopName(bn.name), createInOutWidth(loopName(bn.name), w));
     Bits.mk(Some(loopName(bn.name)), e)
 
+/// Auto-named SInt[w] signed inout port: the signal name is the caller's let binding (`loopName(bn.name)`, which appends the `_<i>` loop index inside `rangeFor`/`genFrom` loops), and the node recorded is `createSIntInOutWidth`. Records a port-port node directly, so the generated Verilog port list gains `port wire` plus the width for UInt/Bits/SInt (Bool has no width).
 def autoSIntInOut[bn: BindingName](w: Nat): SInt[w] =
     let e = createSignalExpr(loopName(bn.name), createSIntInOutWidth(loopName(bn.name), w));
     SInt.mk(Some(loopName(bn.name)), e)
 
+/// Auto-named Bool 1-bit inout port: the signal name is the caller's let binding (`loopName(bn.name)`, which appends the `_<i>` loop index inside `rangeFor`/`genFrom` loops), and the node recorded is `createInOut`. Records a port-port node directly, so the generated Verilog port list gains `port wire` plus the width for UInt/Bits/SInt (Bool has no width).
 def autoBoolInOut[bn: BindingName]: Bool =
     let e = createSignalExpr(loopName(bn.name), createInOut(loopName(bn.name)));
     Bool.mk(Some(loopName(bn.name)), e)
 
+/// Auto-named UInt[w] register: the signal name is the caller's let binding (`loopName(bn.name)`, which appends the `_<i>` loop index inside `rangeFor`/`genFrom` loops), and the node recorded is `createRegWidth`. Registers are driven by clocked assignments, so the module gains a clock port (and a reset port once an init value is used).
 def autoUIntReg[bn: BindingName](w: Nat): UInt[w] =
     let e = createSignalExpr(loopName(bn.name), createRegWidth(loopName(bn.name), w));
     UInt.mk(Some(loopName(bn.name)), e)
 
+/// Auto-named Bits[w] register: the signal name is the caller's let binding (`loopName(bn.name)`, which appends the `_<i>` loop index inside `rangeFor`/`genFrom` loops), and the node recorded is `createRegWidth`. Registers are driven by clocked assignments, so the module gains a clock port (and a reset port once an init value is used).
 def autoBitsReg[bn: BindingName](w: Nat): Bits[w] =
     let e = createSignalExpr(loopName(bn.name), createRegWidth(loopName(bn.name), w));
     Bits.mk(Some(loopName(bn.name)), e)
 
+/// Auto-named SInt[w] signed register: the signal name is the caller's let binding (`loopName(bn.name)`, which appends the `_<i>` loop index inside `rangeFor`/`genFrom` loops), and the node recorded is `createSIntRegWidth`. Registers are driven by clocked assignments, so the module gains a clock port (and a reset port once an init value is used).
 def autoSIntReg[bn: BindingName](w: Nat): SInt[w] =
     let e = createSignalExpr(loopName(bn.name), createSIntRegWidth(loopName(bn.name), w));
     SInt.mk(Some(loopName(bn.name)), e)
 
+/// Auto-named Bool 1-bit register: the signal name is the caller's let binding (`loopName(bn.name)`, which appends the `_<i>` loop index inside `rangeFor`/`genFrom` loops), and the node recorded is `createReg`. Registers are driven by clocked assignments, so the module gains a clock port (and a reset port once an init value is used).
 def autoBoolReg[bn: BindingName]: Bool =
     let e = createSignalExpr(loopName(bn.name), createReg(loopName(bn.name)));
     Bool.mk(Some(loopName(bn.name)), e)
 
 // ---------- per-clock-domain registers (multi-clock support) ----------
 
+/// Auto-named UInt[w] register on `cd`: the signal name is the caller's let binding (`loopName(bn.name)`, which appends the `_<i>` loop index inside `rangeFor`/`genFrom` loops), and the node recorded is `createRegWidthCd`. The register lives in the clock domain `cd` (createRegWidthCd / createRegWidthInitCd), so the Verilog generator emits it in `cd`'s own always block and adds that domain's clk (and reset when an init value is given) ports.
 def autoUIntRegCd[bn: BindingName](w: Nat, cd: ClockDomain): UInt[w] =
     let e = createSignalExpr(loopName(bn.name), createRegWidthCd(loopName(bn.name), w, cd));
     UInt.mk(Some(loopName(bn.name)), e)
 
+/// Auto-named Bits[w] register on `cd`: the signal name is the caller's let binding (`loopName(bn.name)`, which appends the `_<i>` loop index inside `rangeFor`/`genFrom` loops), and the node recorded is `createRegWidthCd`. The register lives in the clock domain `cd` (createRegWidthCd / createRegWidthInitCd), so the Verilog generator emits it in `cd`'s own always block and adds that domain's clk (and reset when an init value is given) ports.
 def autoBitsRegCd[bn: BindingName](w: Nat, cd: ClockDomain): Bits[w] =
     let e = createSignalExpr(loopName(bn.name), createRegWidthCd(loopName(bn.name), w, cd));
     Bits.mk(Some(loopName(bn.name)), e)
 
+/// Auto-named SInt[w] signed register on `cd`: the signal name is the caller's let binding (`loopName(bn.name)`, which appends the `_<i>` loop index inside `rangeFor`/`genFrom` loops), and the node recorded is `createSIntRegWidthCd`. The register lives in the clock domain `cd` (createRegWidthCd / createRegWidthInitCd), so the Verilog generator emits it in `cd`'s own always block and adds that domain's clk (and reset when an init value is given) ports.
 def autoSIntRegCd[bn: BindingName](w: Nat, cd: ClockDomain): SInt[w] =
     let e = createSignalExpr(loopName(bn.name), createSIntRegWidthCd(loopName(bn.name), w, cd));
     SInt.mk(Some(loopName(bn.name)), e)
 
+/// Auto-named Bool 1-bit register on `cd`: the signal name is the caller's let binding (`loopName(bn.name)`, which appends the `_<i>` loop index inside `rangeFor`/`genFrom` loops), and the node recorded is `createRegWidthCd(..., 1, cd)`. The register lives in the clock domain `cd` (createRegWidthCd / createRegWidthInitCd), so the Verilog generator emits it in `cd`'s own always block and adds that domain's clk (and reset when an init value is given) ports.
 def autoBoolRegCd[bn: BindingName](cd: ClockDomain): Bool =
     let e = createSignalExpr(loopName(bn.name), createRegWidthCd(loopName(bn.name), 1, cd));
     Bool.mk(Some(loopName(bn.name)), e)
 
+/// Auto-named UInt[w] register on `cd` with async-reset value `initVal`: the signal name is the caller's let binding (`loopName(bn.name)`, which appends the `_<i>` loop index inside `rangeFor`/`genFrom` loops), and the node recorded is `createRegWidthInitCd`. The register lives in the clock domain `cd` (createRegWidthCd / createRegWidthInitCd), so the Verilog generator emits it in `cd`'s own always block and adds that domain's clk (and reset when an init value is given) ports.
 def autoUIntRegInitCd[bn: BindingName](w: Nat, initVal: Nat, cd: ClockDomain): UInt[w] =
     let e = createSignalExpr(loopName(bn.name), createRegWidthInitCd(loopName(bn.name), w, literal(initVal), cd));
     UInt.mk(Some(loopName(bn.name)), e)
 
+/// Auto-named Bits[w] register on `cd` with async-reset value `initVal`: the signal name is the caller's let binding (`loopName(bn.name)`, which appends the `_<i>` loop index inside `rangeFor`/`genFrom` loops), and the node recorded is `createRegWidthInitCd`. The register lives in the clock domain `cd` (createRegWidthCd / createRegWidthInitCd), so the Verilog generator emits it in `cd`'s own always block and adds that domain's clk (and reset when an init value is given) ports.
 def autoBitsRegInitCd[bn: BindingName](w: Nat, initVal: Nat, cd: ClockDomain): Bits[w] =
     let e = createSignalExpr(loopName(bn.name), createRegWidthInitCd(loopName(bn.name), w, literal(initVal), cd));
     Bits.mk(Some(loopName(bn.name)), e)
 
+/// Auto-named SInt[w] signed register on `cd` with async-reset value `initVal`: the signal name is the caller's let binding (`loopName(bn.name)`, which appends the `_<i>` loop index inside `rangeFor`/`genFrom` loops), and the node recorded is `createSIntRegWidthInitCd`. The register lives in the clock domain `cd` (createRegWidthCd / createRegWidthInitCd), so the Verilog generator emits it in `cd`'s own always block and adds that domain's clk (and reset when an init value is given) ports.
 def autoSIntRegInitCd[bn: BindingName](w: Nat, initVal: Nat, cd: ClockDomain): SInt[w] =
     let e = createSignalExpr(loopName(bn.name), createSIntRegWidthInitCd(loopName(bn.name), w, literal(initVal), cd));
     SInt.mk(Some(loopName(bn.name)), e)
 
+/// Auto-named Bool 1-bit register on `cd` with async-reset value `initVal`: the signal name is the caller's let binding (`loopName(bn.name)`, which appends the `_<i>` loop index inside `rangeFor`/`genFrom` loops), and the node recorded is `createRegWidthInitCd(..., 1, ...)`. The register lives in the clock domain `cd` (createRegWidthCd / createRegWidthInitCd), so the Verilog generator emits it in `cd`'s own always block and adds that domain's clk (and reset when an init value is given) ports.
 def autoBoolRegInitCd[bn: BindingName](initVal: Nat, cd: ClockDomain): Bool =
     let e = createSignalExpr(loopName(bn.name), createRegWidthInitCd(loopName(bn.name), 1, literal(initVal), cd));
     Bool.mk(Some(loopName(bn.name)), e)
 
+/// Auto-named UInt[w] register with async-reset value `initVal`: the signal name is the caller's let binding (`loopName(bn.name)`, which appends the `_<i>` loop index inside `rangeFor`/`genFrom` loops), and the node recorded is `createRegWidthInit`. `initVal` is a plain `Nat` and becomes the async-reset value (`literal(initVal)`), so the module also gains a reset port and a reset branch.
 def autoUIntRegInit[bn: BindingName](w: Nat, initVal: Nat): UInt[w] =
     let e = createSignalExpr(loopName(bn.name), createRegWidthInit(loopName(bn.name), w, literal(initVal)));
     UInt.mk(Some(loopName(bn.name)), e)
 
+/// Auto-named Bits[w] register with async-reset value `initVal`: the signal name is the caller's let binding (`loopName(bn.name)`, which appends the `_<i>` loop index inside `rangeFor`/`genFrom` loops), and the node recorded is `createRegWidthInit`. `initVal` is a plain `Nat` and becomes the async-reset value (`literal(initVal)`), so the module also gains a reset port and a reset branch.
 def autoBitsRegInit[bn: BindingName](w: Nat, initVal: Nat): Bits[w] =
     let e = createSignalExpr(loopName(bn.name), createRegWidthInit(loopName(bn.name), w, literal(initVal)));
     Bits.mk(Some(loopName(bn.name)), e)
 
+/// Auto-named SInt[w] signed register with async-reset value `initVal`: the signal name is the caller's let binding (`loopName(bn.name)`, which appends the `_<i>` loop index inside `rangeFor`/`genFrom` loops), and the node recorded is `createSIntRegWidthInit`. `initVal` is a plain `Nat` and becomes the async-reset value (`literal(initVal)`), so the module also gains a reset port and a reset branch.
 def autoSIntRegInit[bn: BindingName](w: Nat, initVal: Nat): SInt[w] =
     let e = createSignalExpr(loopName(bn.name), createSIntRegWidthInit(loopName(bn.name), w, literal(initVal)));
     SInt.mk(Some(loopName(bn.name)), e)
 
+/// Auto-named Bool 1-bit register with async-reset value `initVal`: the signal name is the caller's let binding (`loopName(bn.name)`, which appends the `_<i>` loop index inside `rangeFor`/`genFrom` loops), and the node recorded is `createRegWidthInit(..., 1, ...)`. `initVal` is a plain `Nat` and becomes the async-reset value (`literal(initVal)`), so the module also gains a reset port and a reset branch.
 def autoBoolRegInit[bn: BindingName](initVal: Nat): Bool =
     let e = createSignalExpr(loopName(bn.name), createRegWidthInit(loopName(bn.name), 1, literal(initVal)));
     Bool.mk(Some(loopName(bn.name)), e)
 
+/// Auto-named UInt[w] `output reg` port (its `:=` drives are clocked): the signal name is the caller's let binding (`loopName(bn.name)`, which appends the `_<i>` loop index inside `rangeFor`/`genFrom` loops), and the node recorded is `createOutRegWidth`. The declaration is forced to `output reg` and every `:=` drive of the signal is clocked; without an init value there is no reset branch.
 def autoUIntOutReg[bn: BindingName](w: Nat): UInt[w] =
     let e = createSignalExpr(loopName(bn.name), createOutRegWidth(loopName(bn.name), w));
     UInt.mk(Some(loopName(bn.name)), e)
 
+/// Auto-named Bits[w] `output reg` port (clocked drives): the signal name is the caller's let binding (`loopName(bn.name)`, which appends the `_<i>` loop index inside `rangeFor`/`genFrom` loops), and the node recorded is `createOutRegWidth`. The declaration is forced to `output reg` and every `:=` drive of the signal is clocked; without an init value there is no reset branch.
 def autoBitsOutReg[bn: BindingName](w: Nat): Bits[w] =
     let e = createSignalExpr(loopName(bn.name), createOutRegWidth(loopName(bn.name), w));
     Bits.mk(Some(loopName(bn.name)), e)
 
+/// Auto-named SInt[w] signed `output reg` port (clocked drives): the signal name is the caller's let binding (`loopName(bn.name)`, which appends the `_<i>` loop index inside `rangeFor`/`genFrom` loops), and the node recorded is `createSIntOutRegWidth`. The declaration is forced to `output reg` and every `:=` drive of the signal is clocked; without an init value there is no reset branch.
 def autoSIntOutReg[bn: BindingName](w: Nat): SInt[w] =
     let e = createSignalExpr(loopName(bn.name), createSIntOutRegWidth(loopName(bn.name), w));
     SInt.mk(Some(loopName(bn.name)), e)
 
+/// Auto-named Bool 1-bit `output reg` port (clocked drives): the signal name is the caller's let binding (`loopName(bn.name)`, which appends the `_<i>` loop index inside `rangeFor`/`genFrom` loops), and the node recorded is `createOutReg`. The declaration is forced to `output reg` and every `:=` drive of the signal is clocked; without an init value there is no reset branch.
 def autoBoolOutReg[bn: BindingName]: Bool =
     let e = createSignalExpr(loopName(bn.name), createOutReg(loopName(bn.name)));
     Bool.mk(Some(loopName(bn.name)), e)
 
+/// Auto-named UInt[w] `output reg` port with async-reset value `initVal`: the signal name is the caller's let binding (`loopName(bn.name)`, which appends the `_<i>` loop index inside `rangeFor`/`genFrom` loops), and the node recorded is `createOutRegWidthInit`. The declaration is forced to `output reg` and every `:=` drive of the signal is clocked; without an init value there is no reset branch.
 def autoUIntOutRegInit[bn: BindingName](w: Nat, initVal: Nat): UInt[w] =
     let e = createSignalExpr(loopName(bn.name), createOutRegWidthInit(loopName(bn.name), w, literal(initVal)));
     UInt.mk(Some(loopName(bn.name)), e)
 
+/// Auto-named Bits[w] `output reg` port with async-reset value `initVal`: the signal name is the caller's let binding (`loopName(bn.name)`, which appends the `_<i>` loop index inside `rangeFor`/`genFrom` loops), and the node recorded is `createOutRegWidthInit`. The declaration is forced to `output reg` and every `:=` drive of the signal is clocked; without an init value there is no reset branch.
 def autoBitsOutRegInit[bn: BindingName](w: Nat, initVal: Nat): Bits[w] =
     let e = createSignalExpr(loopName(bn.name), createOutRegWidthInit(loopName(bn.name), w, literal(initVal)));
     Bits.mk(Some(loopName(bn.name)), e)
 
+/// Auto-named SInt[w] signed `output reg` port with async-reset value `initVal`: the signal name is the caller's let binding (`loopName(bn.name)`, which appends the `_<i>` loop index inside `rangeFor`/`genFrom` loops), and the node recorded is `createSIntOutRegWidthInit`. The declaration is forced to `output reg` and every `:=` drive of the signal is clocked; without an init value there is no reset branch.
 def autoSIntOutRegInit[bn: BindingName](w: Nat, initVal: Nat): SInt[w] =
     let e = createSignalExpr(loopName(bn.name), createSIntOutRegWidthInit(loopName(bn.name), w, literal(initVal)));
     SInt.mk(Some(loopName(bn.name)), e)
 
+/// Auto-named Bool 1-bit `output reg` port with async-reset value `initVal`: the signal name is the caller's let binding (`loopName(bn.name)`, which appends the `_<i>` loop index inside `rangeFor`/`genFrom` loops), and the node recorded is `createOutRegWidthInit(..., 1, ...)`. The declaration is forced to `output reg` and every `:=` drive of the signal is clocked; without an init value there is no reset branch.
 def autoBoolOutRegInit[bn: BindingName](initVal: Nat): Bool =
     let e = createSignalExpr(loopName(bn.name), createOutRegWidthInit(loopName(bn.name), 1, literal(initVal)));
     Bool.mk(Some(loopName(bn.name)), e)
@@ -181,164 +221,204 @@ def autoBoolOutRegInit[bn: BindingName](initVal: Nat): Bool =
 // delegates to these with loopName(bn.name), so `let mySignal = newUInt(8)` behaves
 // exactly like `let mySignal = autoUInt(8)`.
 
+/// Explicit-name variant of the `auto*` factory: same Bits[w] wire and `createWidth` node, but the name is the `name` argument verbatim (no `BindingName`). Used where no let binding exists — the Bundle derive, direction helpers, RegNext impls and library internals.
 def newBitsNamed(name: String, w: Nat): Bits[w] =
     let e = createSignalExpr(name, createWidth(name, w));
     Bits.mk(Some(name), e)
 
+/// Explicit-name variant of the `auto*` factory: same UInt[w] wire and `createWidth` node, but the name is the `name` argument verbatim (no `BindingName`). Used where no let binding exists — the Bundle derive, direction helpers, RegNext impls and library internals.
 def newUIntNamed(name: String, w: Nat): UInt[w] =
     let e = createSignalExpr(name, createWidth(name, w));
     UInt.mk(Some(name), e)
 
+/// Explicit-name variant of the `auto*` factory: same SInt[w] signed wire and `createSIntWidth` node, but the name is the `name` argument verbatim (no `BindingName`). Used where no let binding exists — the Bundle derive, direction helpers, RegNext impls and library internals.
 def newSIntNamed(name: String, w: Nat): SInt[w] =
     let e = createSignalExpr(name, createSIntWidth(name, w));
     SInt.mk(Some(name), e)
 
+/// Explicit-name variant of the `auto*` factory: same Bool 1-bit wire and `create` node, but the name is the `name` argument verbatim (no `BindingName`). Used where no let binding exists — the Bundle derive, direction helpers, RegNext impls and library internals.
 def newBoolNamed(name: String): Bool =
     let e = createSignalExpr(name, create(name));
     Bool.mk(Some(name), e)
 
+/// Explicit-name variant of the `auto*` factory: same UInt[w] input port and `createInWidth` node, but the name is the `name` argument verbatim (no `BindingName`). Used where no let binding exists — the Bundle derive, direction helpers, RegNext impls and library internals.
 def newUIntInputNamed(name: String, w: Nat): UInt[w] =
     let e = createSignalExpr(name, createInWidth(name, w));
     UInt.mk(Some(name), e)
 
+/// Explicit-name variant of the `auto*` factory: same Bits[w] input port and `createInWidth` node, but the name is the `name` argument verbatim (no `BindingName`). Used where no let binding exists — the Bundle derive, direction helpers, RegNext impls and library internals.
 def newBitsInputNamed(name: String, w: Nat): Bits[w] =
     let e = createSignalExpr(name, createInWidth(name, w));
     Bits.mk(Some(name), e)
 
+/// Explicit-name variant of the `auto*` factory: same SInt[w] signed input port and `createSIntInWidth` node, but the name is the `name` argument verbatim (no `BindingName`). Used where no let binding exists — the Bundle derive, direction helpers, RegNext impls and library internals.
 def newSIntInputNamed(name: String, w: Nat): SInt[w] =
     let e = createSignalExpr(name, createSIntInWidth(name, w));
     SInt.mk(Some(name), e)
 
+/// Explicit-name variant of the `auto*` factory: same Bool 1-bit input port and `createIn` node, but the name is the `name` argument verbatim (no `BindingName`). Used where no let binding exists — the Bundle derive, direction helpers, RegNext impls and library internals.
 def newBoolInputNamed(name: String): Bool =
     let e = createSignalExpr(name, createIn(name));
     Bool.mk(Some(name), e)
 
+/// Explicit-name variant of the `auto*` factory: same Bits[w] output port and `createOutWidth` node, but the name is the `name` argument verbatim (no `BindingName`). Used where no let binding exists — the Bundle derive, direction helpers, RegNext impls and library internals.
 def newBitsOutputNamed(name: String, w: Nat): Bits[w] =
     let e = createSignalExpr(name, createOutWidth(name, w));
     Bits.mk(Some(name), e)
 
+/// Explicit-name variant of the `auto*` factory: same UInt[w] output port and `createOutWidth` node, but the name is the `name` argument verbatim (no `BindingName`). Used where no let binding exists — the Bundle derive, direction helpers, RegNext impls and library internals.
 def newUIntOutputNamed(name: String, w: Nat): UInt[w] =
     let e = createSignalExpr(name, createOutWidth(name, w));
     UInt.mk(Some(name), e)
 
+/// Explicit-name variant of the `auto*` factory: same SInt[w] signed output port and `createSIntOutWidth` node, but the name is the `name` argument verbatim (no `BindingName`). Used where no let binding exists — the Bundle derive, direction helpers, RegNext impls and library internals.
 def newSIntOutputNamed(name: String, w: Nat): SInt[w] =
     let e = createSignalExpr(name, createSIntOutWidth(name, w));
     SInt.mk(Some(name), e)
 
+/// Explicit-name variant of the `auto*` factory: same Bool 1-bit output port and `createOut` node, but the name is the `name` argument verbatim (no `BindingName`). Used where no let binding exists — the Bundle derive, direction helpers, RegNext impls and library internals.
 def newBoolOutputNamed(name: String): Bool =
     let e = createSignalExpr(name, createOut(name));
     Bool.mk(Some(name), e)
 
+/// Explicit-name variant of the `auto*` factory: same UInt[w] inout port and `createInOutWidth` node, but the name is the `name` argument verbatim (no `BindingName`). Used where no let binding exists — the Bundle derive, direction helpers, RegNext impls and library internals.
 def newUIntInOutNamed(name: String, w: Nat): UInt[w] =
     let e = createSignalExpr(name, createInOutWidth(name, w));
     UInt.mk(Some(name), e)
 
+/// Explicit-name variant of the `auto*` factory: same Bits[w] inout port and `createInOutWidth` node, but the name is the `name` argument verbatim (no `BindingName`). Used where no let binding exists — the Bundle derive, direction helpers, RegNext impls and library internals.
 def newBitsInOutNamed(name: String, w: Nat): Bits[w] =
     let e = createSignalExpr(name, createInOutWidth(name, w));
     Bits.mk(Some(name), e)
 
+/// Explicit-name variant of the `auto*` factory: same SInt[w] signed inout port and `createSIntInOutWidth` node, but the name is the `name` argument verbatim (no `BindingName`). Used where no let binding exists — the Bundle derive, direction helpers, RegNext impls and library internals.
 def newSIntInOutNamed(name: String, w: Nat): SInt[w] =
     let e = createSignalExpr(name, createSIntInOutWidth(name, w));
     SInt.mk(Some(name), e)
 
+/// Explicit-name variant of the `auto*` factory: same Bool 1-bit inout port and `createInOut` node, but the name is the `name` argument verbatim (no `BindingName`). Used where no let binding exists — the Bundle derive, direction helpers, RegNext impls and library internals.
 def newBoolInOutNamed(name: String): Bool =
     let e = createSignalExpr(name, createInOut(name));
     Bool.mk(Some(name), e)
 
+/// Explicit-name variant of the `auto*` factory: same UInt[w] register and `createRegWidth` node, but the name is the `name` argument verbatim (no `BindingName`). Used where no let binding exists — the Bundle derive, direction helpers, RegNext impls and library internals.
 def newUIntRegNamed(name: String, w: Nat): UInt[w] =
     let e = createSignalExpr(name, createRegWidth(name, w));
     UInt.mk(Some(name), e)
 
+/// Explicit-name variant of the `auto*` factory: same Bits[w] register and `createRegWidth` node, but the name is the `name` argument verbatim (no `BindingName`). Used where no let binding exists — the Bundle derive, direction helpers, RegNext impls and library internals.
 def newBitsRegNamed(name: String, w: Nat): Bits[w] =
     let e = createSignalExpr(name, createRegWidth(name, w));
     Bits.mk(Some(name), e)
 
+/// Explicit-name variant of the `auto*` factory: same SInt[w] signed register and `createSIntRegWidth` node, but the name is the `name` argument verbatim (no `BindingName`). Used where no let binding exists — the Bundle derive, direction helpers, RegNext impls and library internals.
 def newSIntRegNamed(name: String, w: Nat): SInt[w] =
     let e = createSignalExpr(name, createSIntRegWidth(name, w));
     SInt.mk(Some(name), e)
 
+/// Explicit-name variant of the `auto*` factory: same Bool 1-bit register and `createReg` node, but the name is the `name` argument verbatim (no `BindingName`). Used where no let binding exists — the Bundle derive, direction helpers, RegNext impls and library internals.
 def newBoolRegNamed(name: String): Bool =
     let e = createSignalExpr(name, createReg(name));
     Bool.mk(Some(name), e)
 
+/// Explicit-name variant of the `auto*` factory: same UInt[w] register with async-reset value `initVal` and `createRegWidthInit` node, but the name is the `name` argument verbatim (no `BindingName`). Used where no let binding exists — the Bundle derive, direction helpers, RegNext impls and library internals.
 def newUIntRegInitNatNamed(name: String, w: Nat, initVal: Nat): UInt[w] =
     let e = createSignalExpr(name, createRegWidthInit(name, w, literal(initVal)));
     UInt.mk(Some(name), e)
 
+/// Explicit-name variant of the `auto*` factory: same SInt[w] signed register with async-reset value `initVal` and `createSIntRegWidthInit` node, but the name is the `name` argument verbatim (no `BindingName`). Used where no let binding exists — the Bundle derive, direction helpers, RegNext impls and library internals.
 def newSIntRegInitNatNamed(name: String, w: Nat, initVal: Nat): SInt[w] =
     let e = createSignalExpr(name, createSIntRegWidthInit(name, w, literal(initVal)));
     SInt.mk(Some(name), e)
 
+/// Explicit-name variant of the `auto*` factory: same Bits[w] register with async-reset value `initVal` and `createRegWidthInit` node, but the name is the `name` argument verbatim (no `BindingName`). Used where no let binding exists — the Bundle derive, direction helpers, RegNext impls and library internals.
 def newBitsRegInitNatNamed(name: String, w: Nat, initVal: Nat): Bits[w] =
     let e = createSignalExpr(name, createRegWidthInit(name, w, literal(initVal)));
     Bits.mk(Some(name), e)
 
+/// Explicit-name variant of the `auto*` factory: same Bool 1-bit register with async-reset value `initVal` and `createRegWidthInit(..., 1, ...)` node, but the name is the `name` argument verbatim (no `BindingName`). Used where no let binding exists — the Bundle derive, direction helpers, RegNext impls and library internals.
 def newBoolRegInitNatNamed(name: String, initVal: Nat): Bool =
     let e = createSignalExpr(name, createRegWidthInit(name, 1, literal(initVal)));
     Bool.mk(Some(name), e)
 
 // ---------- named per-clock-domain registers ----------
 
+/// Explicit-name variant of the `auto*` factory: same UInt[w] register on `cd` and `createRegWidthCd` node, but the name is the `name` argument verbatim (no `BindingName`). Used where no let binding exists — the Bundle derive, direction helpers, RegNext impls and library internals.
 def newUIntRegCdNamed(name: String, w: Nat, cd: ClockDomain): UInt[w] =
     let e = createSignalExpr(name, createRegWidthCd(name, w, cd));
     UInt.mk(Some(name), e)
 
+/// Explicit-name variant of the `auto*` factory: same Bits[w] register on `cd` and `createRegWidthCd` node, but the name is the `name` argument verbatim (no `BindingName`). Used where no let binding exists — the Bundle derive, direction helpers, RegNext impls and library internals.
 def newBitsRegCdNamed(name: String, w: Nat, cd: ClockDomain): Bits[w] =
     let e = createSignalExpr(name, createRegWidthCd(name, w, cd));
     Bits.mk(Some(name), e)
 
+/// Explicit-name variant of the `auto*` factory: same SInt[w] signed register on `cd` and `createSIntRegWidthCd` node, but the name is the `name` argument verbatim (no `BindingName`). Used where no let binding exists — the Bundle derive, direction helpers, RegNext impls and library internals.
 def newSIntRegCdNamed(name: String, w: Nat, cd: ClockDomain): SInt[w] =
     let e = createSignalExpr(name, createSIntRegWidthCd(name, w, cd));
     SInt.mk(Some(name), e)
 
+/// Explicit-name variant of the `auto*` factory: same Bool 1-bit register on `cd` and `createRegWidthCd(..., 1, cd)` node, but the name is the `name` argument verbatim (no `BindingName`). Used where no let binding exists — the Bundle derive, direction helpers, RegNext impls and library internals.
 def newBoolRegCdNamed(name: String, cd: ClockDomain): Bool =
     let e = createSignalExpr(name, createRegWidthCd(name, 1, cd));
     Bool.mk(Some(name), e)
 
+/// Explicit-name variant of the `auto*` factory: same UInt[w] register on `cd` with async-reset value `initVal` and `createRegWidthInitCd` node, but the name is the `name` argument verbatim (no `BindingName`). Used where no let binding exists — the Bundle derive, direction helpers, RegNext impls and library internals.
 def newUIntRegInitCdNamed(name: String, w: Nat, initVal: Nat, cd: ClockDomain): UInt[w] =
     let e = createSignalExpr(name, createRegWidthInitCd(name, w, literal(initVal), cd));
     UInt.mk(Some(name), e)
 
+/// Explicit-name variant of the `auto*` factory: same Bits[w] register on `cd` with async-reset value `initVal` and `createRegWidthInitCd` node, but the name is the `name` argument verbatim (no `BindingName`). Used where no let binding exists — the Bundle derive, direction helpers, RegNext impls and library internals.
 def newBitsRegInitCdNamed(name: String, w: Nat, initVal: Nat, cd: ClockDomain): Bits[w] =
     let e = createSignalExpr(name, createRegWidthInitCd(name, w, literal(initVal), cd));
     Bits.mk(Some(name), e)
 
+/// Explicit-name variant of the `auto*` factory: same SInt[w] signed register on `cd` with async-reset value `initVal` and `createSIntRegWidthInitCd` node, but the name is the `name` argument verbatim (no `BindingName`). Used where no let binding exists — the Bundle derive, direction helpers, RegNext impls and library internals.
 def newSIntRegInitCdNamed(name: String, w: Nat, initVal: Nat, cd: ClockDomain): SInt[w] =
     let e = createSignalExpr(name, createSIntRegWidthInitCd(name, w, literal(initVal), cd));
     SInt.mk(Some(name), e)
 
+/// Explicit-name variant of the `auto*` factory: same Bool 1-bit register on `cd` with async-reset value `initVal` and `createRegWidthInitCd(..., 1, ...)` node, but the name is the `name` argument verbatim (no `BindingName`). Used where no let binding exists — the Bundle derive, direction helpers, RegNext impls and library internals.
 def newBoolRegInitCdNamed(name: String, initVal: Nat, cd: ClockDomain): Bool =
     let e = createSignalExpr(name, createRegWidthInitCd(name, 1, literal(initVal), cd));
     Bool.mk(Some(name), e)
 
+/// Explicit-name variant of the `auto*` factory: same UInt[w] `output reg` port (clocked drives) and `createOutRegWidth` node, but the name is the `name` argument verbatim (no `BindingName`). Used where no let binding exists — the Bundle derive, direction helpers, RegNext impls and library internals.
 def newUIntOutRegNamed(name: String, w: Nat): UInt[w] =
     let e = createSignalExpr(name, createOutRegWidth(name, w));
     UInt.mk(Some(name), e)
 
+/// Explicit-name variant of the `auto*` factory: same Bits[w] `output reg` port (clocked drives) and `createOutRegWidth` node, but the name is the `name` argument verbatim (no `BindingName`). Used where no let binding exists — the Bundle derive, direction helpers, RegNext impls and library internals.
 def newBitsOutRegNamed(name: String, w: Nat): Bits[w] =
     let e = createSignalExpr(name, createOutRegWidth(name, w));
     Bits.mk(Some(name), e)
 
+/// Explicit-name variant of the `auto*` factory: same SInt[w] signed `output reg` port (clocked drives) and `createSIntOutRegWidth` node, but the name is the `name` argument verbatim (no `BindingName`). Used where no let binding exists — the Bundle derive, direction helpers, RegNext impls and library internals.
 def newSIntOutRegNamed(name: String, w: Nat): SInt[w] =
     let e = createSignalExpr(name, createSIntOutRegWidth(name, w));
     SInt.mk(Some(name), e)
 
+/// Explicit-name variant of the `auto*` factory: same Bool 1-bit `output reg` port (clocked drives) and `createOutReg` node, but the name is the `name` argument verbatim (no `BindingName`). Used where no let binding exists — the Bundle derive, direction helpers, RegNext impls and library internals.
 def newBoolOutRegNamed(name: String): Bool =
     let e = createSignalExpr(name, createOutReg(name));
     Bool.mk(Some(name), e)
 
+/// Explicit-name variant of the `auto*` factory: same UInt[w] `output reg` port with async-reset value `initVal` and `createOutRegWidthInit` node, but the name is the `name` argument verbatim (no `BindingName`). Used where no let binding exists — the Bundle derive, direction helpers, RegNext impls and library internals.
 def newUIntOutRegInitNatNamed(name: String, w: Nat, initVal: Nat): UInt[w] =
     let e = createSignalExpr(name, createOutRegWidthInit(name, w, literal(initVal)));
     UInt.mk(Some(name), e)
 
+/// Explicit-name variant of the `auto*` factory: same Bits[w] `output reg` port with async-reset value `initVal` and `createOutRegWidthInit` node, but the name is the `name` argument verbatim (no `BindingName`). Used where no let binding exists — the Bundle derive, direction helpers, RegNext impls and library internals.
 def newBitsOutRegInitNatNamed(name: String, w: Nat, initVal: Nat): Bits[w] =
     let e = createSignalExpr(name, createOutRegWidthInit(name, w, literal(initVal)));
     Bits.mk(Some(name), e)
 
+/// Explicit-name variant of the `auto*` factory: same SInt[w] signed `output reg` port with async-reset value `initVal` and `createSIntOutRegWidthInit` node, but the name is the `name` argument verbatim (no `BindingName`). Used where no let binding exists — the Bundle derive, direction helpers, RegNext impls and library internals.
 def newSIntOutRegInitNatNamed(name: String, w: Nat, initVal: Nat): SInt[w] =
     let e = createSignalExpr(name, createSIntOutRegWidthInit(name, w, literal(initVal)));
     SInt.mk(Some(name), e)
 
+/// Explicit-name variant of the `auto*` factory: same Bool 1-bit `output reg` port with async-reset value `initVal` and `createOutRegWidthInit(..., 1, ...)` node, but the name is the `name` argument verbatim (no `BindingName`). Used where no let binding exists — the Bundle derive, direction helpers, RegNext impls and library internals.
 def newBoolOutRegInitNatNamed(name: String, initVal: Nat): Bool =
     let e = createSignalExpr(name, createOutRegWidthInit(name, 1, literal(initVal)));
     Bool.mk(Some(name), e)
@@ -349,68 +429,100 @@ def newBoolOutRegInitNatNamed(name: String, initVal: Nat): Bool =
 //   let mySignal = newUInt(8)      // mySignal gets name "mySignal"
 //   let myInput = newUIntInput(8)  // ... "myInput"
 
+/// Legacy-name wrapper for `autoBits`: identical semantics and node, with the signal name taken from the caller's let binding, so `let s = newBits(...)` behaves exactly like `let s = autoBits(...)`.
 def newBits[bn: BindingName](w: Nat): Bits[w] = newBitsNamed(loopName(bn.name), w)
 
+/// Legacy-name wrapper for `autoUInt`: identical semantics and node, with the signal name taken from the caller's let binding, so `let s = newUInt(...)` behaves exactly like `let s = autoUInt(...)`.
 def newUInt[bn: BindingName](w: Nat): UInt[w] = newUIntNamed(loopName(bn.name), w)
 
+/// Legacy-name wrapper for `autoSInt`: identical semantics and node, with the signal name taken from the caller's let binding, so `let s = newSInt(...)` behaves exactly like `let s = autoSInt(...)`.
 def newSInt[bn: BindingName](w: Nat): SInt[w] = newSIntNamed(loopName(bn.name), w)
 
+/// Legacy-name wrapper for `autoBool`: identical semantics and node, with the signal name taken from the caller's let binding, so `let s = newBool(...)` behaves exactly like `let s = autoBool(...)`.
 def newBool[bn: BindingName]: Bool = newBoolNamed(loopName(bn.name))
 
+/// Legacy-name wrapper for `autoUIntInput`: identical semantics and node, with the signal name taken from the caller's let binding, so `let s = newUIntInput(...)` behaves exactly like `let s = autoUIntInput(...)`.
 def newUIntInput[bn: BindingName](w: Nat): UInt[w] = newUIntInputNamed(loopName(bn.name), w)
 
+/// Legacy-name wrapper for `autoBitsInput`: identical semantics and node, with the signal name taken from the caller's let binding, so `let s = newBitsInput(...)` behaves exactly like `let s = autoBitsInput(...)`.
 def newBitsInput[bn: BindingName](w: Nat): Bits[w] = newBitsInputNamed(loopName(bn.name), w)
 
+/// Legacy-name wrapper for `autoSIntInput`: identical semantics and node, with the signal name taken from the caller's let binding, so `let s = newSIntInput(...)` behaves exactly like `let s = autoSIntInput(...)`.
 def newSIntInput[bn: BindingName](w: Nat): SInt[w] = newSIntInputNamed(loopName(bn.name), w)
 
+/// Legacy-name wrapper for `autoBoolInput`: identical semantics and node, with the signal name taken from the caller's let binding, so `let s = newBoolInput(...)` behaves exactly like `let s = autoBoolInput(...)`.
 def newBoolInput[bn: BindingName]: Bool = newBoolInputNamed(loopName(bn.name))
 
+/// Legacy-name wrapper for `autoBitsOutput`: identical semantics and node, with the signal name taken from the caller's let binding, so `let s = newBitsOutput(...)` behaves exactly like `let s = autoBitsOutput(...)`.
 def newBitsOutput[bn: BindingName](w: Nat): Bits[w] = newBitsOutputNamed(loopName(bn.name), w)
 
+/// Legacy-name wrapper for `autoUIntOutput`: identical semantics and node, with the signal name taken from the caller's let binding, so `let s = newUIntOutput(...)` behaves exactly like `let s = autoUIntOutput(...)`.
 def newUIntOutput[bn: BindingName](w: Nat): UInt[w] = newUIntOutputNamed(loopName(bn.name), w)
 
+/// Legacy-name wrapper for `autoSIntOutput`: identical semantics and node, with the signal name taken from the caller's let binding, so `let s = newSIntOutput(...)` behaves exactly like `let s = autoSIntOutput(...)`.
 def newSIntOutput[bn: BindingName](w: Nat): SInt[w] = newSIntOutputNamed(loopName(bn.name), w)
 
+/// Legacy-name wrapper for `autoBoolOutput`: identical semantics and node, with the signal name taken from the caller's let binding, so `let s = newBoolOutput(...)` behaves exactly like `let s = autoBoolOutput(...)`.
 def newBoolOutput[bn: BindingName]: Bool = newBoolOutputNamed(loopName(bn.name))
 
+/// Legacy-name wrapper for `autoUIntInOut`: identical semantics and node, with the signal name taken from the caller's let binding, so `let s = newUIntInOut(...)` behaves exactly like `let s = autoUIntInOut(...)`.
 def newUIntInOut[bn: BindingName](w: Nat): UInt[w] = newUIntInOutNamed(loopName(bn.name), w)
 
+/// Legacy-name wrapper for `autoBitsInOut`: identical semantics and node, with the signal name taken from the caller's let binding, so `let s = newBitsInOut(...)` behaves exactly like `let s = autoBitsInOut(...)`.
 def newBitsInOut[bn: BindingName](w: Nat): Bits[w] = newBitsInOutNamed(loopName(bn.name), w)
 
+/// Legacy-name wrapper for `autoSIntInOut`: identical semantics and node, with the signal name taken from the caller's let binding, so `let s = newSIntInOut(...)` behaves exactly like `let s = autoSIntInOut(...)`.
 def newSIntInOut[bn: BindingName](w: Nat): SInt[w] = newSIntInOutNamed(loopName(bn.name), w)
 
+/// Legacy-name wrapper for `autoBoolInOut`: identical semantics and node, with the signal name taken from the caller's let binding, so `let s = newBoolInOut(...)` behaves exactly like `let s = autoBoolInOut(...)`.
 def newBoolInOut[bn: BindingName]: Bool = newBoolInOutNamed(loopName(bn.name))
 
+/// Legacy-name wrapper for `autoUIntReg`: identical semantics and node, with the signal name taken from the caller's let binding, so `let s = newUIntReg(...)` behaves exactly like `let s = autoUIntReg(...)`.
 def newUIntReg[bn: BindingName](w: Nat): UInt[w] = newUIntRegNamed(loopName(bn.name), w)
 
+/// Legacy-name wrapper for `autoBitsReg`: identical semantics and node, with the signal name taken from the caller's let binding, so `let s = newBitsReg(...)` behaves exactly like `let s = autoBitsReg(...)`.
 def newBitsReg[bn: BindingName](w: Nat): Bits[w] = newBitsRegNamed(loopName(bn.name), w)
 
+/// Legacy-name wrapper for `autoSIntReg`: identical semantics and node, with the signal name taken from the caller's let binding, so `let s = newSIntReg(...)` behaves exactly like `let s = autoSIntReg(...)`.
 def newSIntReg[bn: BindingName](w: Nat): SInt[w] = newSIntRegNamed(loopName(bn.name), w)
 
+/// Legacy-name wrapper for `autoBoolReg`: identical semantics and node, with the signal name taken from the caller's let binding, so `let s = newBoolReg(...)` behaves exactly like `let s = autoBoolReg(...)`.
 def newBoolReg[bn: BindingName]: Bool = newBoolRegNamed(loopName(bn.name))
 
+/// Legacy-name wrapper for `autoUIntRegInit`: identical semantics and node, with the signal name taken from the caller's let binding, so `let s = newUIntRegInitNat(...)` behaves exactly like `let s = autoUIntRegInit(...)`.
 def newUIntRegInitNat[bn: BindingName](w: Nat, initVal: Nat): UInt[w] = newUIntRegInitNatNamed(loopName(bn.name), w, initVal)
 
+/// Legacy-name wrapper for `autoSIntRegInit`: identical semantics and node, with the signal name taken from the caller's let binding, so `let s = newSIntRegInitNat(...)` behaves exactly like `let s = autoSIntRegInit(...)`.
 def newSIntRegInitNat[bn: BindingName](w: Nat, initVal: Nat): SInt[w] = newSIntRegInitNatNamed(loopName(bn.name), w, initVal)
 
+/// Legacy-name wrapper for `autoBitsRegInit`: identical semantics and node, with the signal name taken from the caller's let binding, so `let s = newBitsRegInitNat(...)` behaves exactly like `let s = autoBitsRegInit(...)`.
 def newBitsRegInitNat[bn: BindingName](w: Nat, initVal: Nat): Bits[w] = newBitsRegInitNatNamed(loopName(bn.name), w, initVal)
 
+/// Legacy-name wrapper for `autoBoolRegInit`: identical semantics and node, with the signal name taken from the caller's let binding, so `let s = newBoolRegInitNat(...)` behaves exactly like `let s = autoBoolRegInit(...)`.
 def newBoolRegInitNat[bn: BindingName](initVal: Nat): Bool = newBoolRegInitNatNamed(loopName(bn.name), initVal)
 
+/// Legacy-name wrapper for `autoUIntOutReg`: identical semantics and node, with the signal name taken from the caller's let binding, so `let s = newUIntOutReg(...)` behaves exactly like `let s = autoUIntOutReg(...)`.
 def newUIntOutReg[bn: BindingName](w: Nat): UInt[w] = newUIntOutRegNamed(loopName(bn.name), w)
 
+/// Legacy-name wrapper for `autoBitsOutReg`: identical semantics and node, with the signal name taken from the caller's let binding, so `let s = newBitsOutReg(...)` behaves exactly like `let s = autoBitsOutReg(...)`.
 def newBitsOutReg[bn: BindingName](w: Nat): Bits[w] = newBitsOutRegNamed(loopName(bn.name), w)
 
+/// Legacy-name wrapper for `autoSIntOutReg`: identical semantics and node, with the signal name taken from the caller's let binding, so `let s = newSIntOutReg(...)` behaves exactly like `let s = autoSIntOutReg(...)`.
 def newSIntOutReg[bn: BindingName](w: Nat): SInt[w] = newSIntOutRegNamed(loopName(bn.name), w)
 
+/// Legacy-name wrapper for `autoBoolOutReg`: identical semantics and node, with the signal name taken from the caller's let binding, so `let s = newBoolOutReg(...)` behaves exactly like `let s = autoBoolOutReg(...)`.
 def newBoolOutReg[bn: BindingName]: Bool = newBoolOutRegNamed(loopName(bn.name))
 
+/// Legacy-name wrapper for `autoUIntOutRegInit`: identical semantics and node, with the signal name taken from the caller's let binding, so `let s = newUIntOutRegInitNat(...)` behaves exactly like `let s = autoUIntOutRegInit(...)`.
 def newUIntOutRegInitNat[bn: BindingName](w: Nat, initVal: Nat): UInt[w] = newUIntOutRegInitNatNamed(loopName(bn.name), w, initVal)
 
+/// Legacy-name wrapper for `autoSIntOutRegInit`: identical semantics and node, with the signal name taken from the caller's let binding, so `let s = newSIntOutRegInitNat(...)` behaves exactly like `let s = autoSIntOutRegInit(...)`.
 def newSIntOutRegInitNat[bn: BindingName](w: Nat, initVal: Nat): SInt[w] = newSIntOutRegInitNatNamed(loopName(bn.name), w, initVal)
 
+/// Legacy-name wrapper for `autoBitsOutRegInit`: identical semantics and node, with the signal name taken from the caller's let binding, so `let s = newBitsOutRegInitNat(...)` behaves exactly like `let s = autoBitsOutRegInit(...)`.
 def newBitsOutRegInitNat[bn: BindingName](w: Nat, initVal: Nat): Bits[w] = newBitsOutRegInitNatNamed(loopName(bn.name), w, initVal)
 
+/// Legacy-name wrapper for `autoBoolOutRegInit`: identical semantics and node, with the signal name taken from the caller's let binding, so `let s = newBoolOutRegInitNat(...)` behaves exactly like `let s = autoBoolOutRegInit(...)`.
 def newBoolOutRegInitNat[bn: BindingName](initVal: Nat): Bool = newBoolOutRegInitNatNamed(loopName(bn.name), initVal)
 
 // ---- Port creation helpers (used by the module macro's port list) ----
@@ -424,6 +536,7 @@ def newBoolOutRegInitNat[bn: BindingName](initVal: Nat): Bool = newBoolOutRegIni
 // Create a typed port signal (UInt/Bits share createInWidth/createOutWidth/
 // createInOutWidth; SInt uses the signed variants, Bool the no-width
 // variants). ty is the stringified type name; w is ignored for Bool.
+/// Module-macro port builder for a typed port: dispatches on the stringified type name `ty` (`"Bool"`, `"SInt"`, anything else = UInt/Bits) and on `dir` (`"input"` / `"inout"` / anything else = output), recording the matching `createIn*` / `createOut*` / `createInOut*` node under the port name from the macro's let binding (`bn`). `w` is ignored for Bool.
 def createPortExpr[bn: BindingName](dir: String, ty: String, w: Nat): Expr = match str_eq(ty, "Bool") {
     case true => match str_eq(dir, "input") {
         case true => createSignalExpr(loopName(bn.name), createIn(loopName(bn.name)))
@@ -451,6 +564,7 @@ def createPortExpr[bn: BindingName](dir: String, ty: String, w: Nat): Expr = mat
 }
 
 // Create a Bool port signal (no width).
+/// Bool-only variant of `createPortExpr`: maps `dir` to `createIn` / `createInOut` / `createOut` with no width, for the module macro's `input flag = Bool` style ports.
 def createBoolPortExpr[bn: BindingName](dir: String): Expr = match str_eq(dir, "input") {
     case true => createSignalExpr(loopName(bn.name), createIn(loopName(bn.name)))
     case false => match str_eq(dir, "inout") {
@@ -465,18 +579,22 @@ def createBoolPortExpr[bn: BindingName](dir: String): Expr = match str_eq(dir, "
 // Bits share the createOutRegWidth(Init) variants, SInt the signed ones.
 // Bool ports use the no-width / width-1 init variants (via
 // createOutRegBoolPortExpr below).
+/// Module-macro builder for an `output reg` port: `SInt` uses `createSIntOutRegWidth`, every other type `createOutRegWidth`, so the port declaration is `output reg` and its drives are clocked. No reset value (see `createOutRegPortExprInit`).
 def createOutRegPortExpr[bn: BindingName](ty: String, w: Nat): Expr = match str_eq(ty, "SInt") {
     case true => createSignalExpr(loopName(bn.name), createSIntOutRegWidth(loopName(bn.name), w))
     case false => createSignalExpr(loopName(bn.name), createOutRegWidth(loopName(bn.name), w))
 }
 
+/// `output reg` port builder with an async-reset init value: `SInt` uses `createSIntOutRegWidthInit`, others `createOutRegWidthInit`, with `literal(initVal)` as the reset value.
 def createOutRegPortExprInit[bn: BindingName](ty: String, w: Nat, initVal: Nat): Expr = match str_eq(ty, "SInt") {
     case true => createSignalExpr(loopName(bn.name), createSIntOutRegWidthInit(loopName(bn.name), w, literal(initVal)))
     case false => createSignalExpr(loopName(bn.name), createOutRegWidthInit(loopName(bn.name), w, literal(initVal)))
 }
 
+/// 1-bit `output reg` port builder for Bool (`createOutReg`); the module gains a clock port and the port's drives are clocked.
 def createOutRegBoolPortExpr[bn: BindingName]: Expr = createSignalExpr(loopName(bn.name), createOutReg(loopName(bn.name)))
 
+/// 1-bit `output reg` port builder for Bool with an async-reset value: `createOutRegWidthInit(name, 1, literal(initVal))`, which also adds the reset port/branch.
 def createOutRegBoolPortExprInit[bn: BindingName](initVal: Nat): Expr = createSignalExpr(loopName(bn.name), createOutRegWidthInit(loopName(bn.name), 1, literal(initVal)))
 
 // ---- Direction annotation helpers (SpinalHDL style) ----
@@ -485,72 +603,84 @@ def createOutRegBoolPortExprInit[bn: BindingName](initVal: Nat): Expr = createSi
 //   input a = UInt[8]    instead of   let a = in(UInt[8]())
 // The given signal's name (if any) is reused for the new directed port.
 
+/// SpinalHDL-style direction helper: rebuilds the given UInt signal of width `width` as a input port with the **same name** as the source signal (`Some(n)` → that name, `None` → empty name), via `newUIntInputNamed`. Used inside Bundle direction specs; for module ports use the `Expr` macro (`input a = ...`) instead.
 def in_u[width: Nat](t: UInt[width]): UInt[width] =
     match t.name {
         case Some(n) => newUIntInputNamed(n, width)
         case None => newUIntInputNamed("", width)
     }
 
+/// SpinalHDL-style direction helper: rebuilds the given UInt signal of width `width` as a output port with the **same name** as the source signal (`Some(n)` → that name, `None` → empty name), via `newUIntOutputNamed`. Used inside Bundle direction specs; for module ports use the `Expr` macro (`input a = ...`) instead.
 def out_u[width: Nat](t: UInt[width]): UInt[width] =
     match t.name {
         case Some(n) => newUIntOutputNamed(n, width)
         case None => newUIntOutputNamed("", width)
     }
 
+/// SpinalHDL-style direction helper: rebuilds the given Bits signal of width `width` as a input port with the **same name** as the source signal (`Some(n)` → that name, `None` → empty name), via `newBitsInputNamed`. Used inside Bundle direction specs; for module ports use the `Expr` macro (`input a = ...`) instead.
 def in_b[width: Nat](t: Bits[width]): Bits[width] =
     match t.name {
         case Some(n) => newBitsInputNamed(n, width)
         case None => newBitsInputNamed("", width)
     }
 
+/// SpinalHDL-style direction helper: rebuilds the given Bits signal of width `width` as a output port with the **same name** as the source signal (`Some(n)` → that name, `None` → empty name), via `newBitsOutputNamed`. Used inside Bundle direction specs; for module ports use the `Expr` macro (`input a = ...`) instead.
 def out_b[width: Nat](t: Bits[width]): Bits[width] =
     match t.name {
         case Some(n) => newBitsOutputNamed(n, width)
         case None => newBitsOutputNamed("", width)
     }
 
+/// SpinalHDL-style direction helper: rebuilds the given SInt signal of width `width` as a input port with the **same name** as the source signal (`Some(n)` → that name, `None` → empty name), via `newSIntInputNamed`. Used inside Bundle direction specs; for module ports use the `Expr` macro (`input a = ...`) instead.
 def in_s[width: Nat](t: SInt[width]): SInt[width] =
     match t.name {
         case Some(n) => newSIntInputNamed(n, width)
         case None => newSIntInputNamed("", width)
     }
 
+/// SpinalHDL-style direction helper: rebuilds the given SInt signal of width `width` as a output port with the **same name** as the source signal (`Some(n)` → that name, `None` → empty name), via `newSIntOutputNamed`. Used inside Bundle direction specs; for module ports use the `Expr` macro (`input a = ...`) instead.
 def out_s[width: Nat](t: SInt[width]): SInt[width] =
     match t.name {
         case Some(n) => newSIntOutputNamed(n, width)
         case None => newSIntOutputNamed("", width)
     }
 
+/// SpinalHDL-style direction helper: rebuilds the given UInt signal of width `width` as a inout port with the **same name** as the source signal (`Some(n)` → that name, `None` → empty name), via `newUIntInOutNamed`. Used inside Bundle direction specs; for module ports use the `Expr` macro (`input a = ...`) instead.
 def inout_u[width: Nat](t: UInt[width]): UInt[width] =
     match t.name {
         case Some(n) => newUIntInOutNamed(n, width)
         case None => newUIntInOutNamed("", width)
     }
 
+/// SpinalHDL-style direction helper: rebuilds the given Bits signal of width `width` as a inout port with the **same name** as the source signal (`Some(n)` → that name, `None` → empty name), via `newBitsInOutNamed`. Used inside Bundle direction specs; for module ports use the `Expr` macro (`input a = ...`) instead.
 def inout_b[width: Nat](t: Bits[width]): Bits[width] =
     match t.name {
         case Some(n) => newBitsInOutNamed(n, width)
         case None => newBitsInOutNamed("", width)
     }
 
+/// SpinalHDL-style direction helper: rebuilds the given SInt signal of width `width` as a inout port with the **same name** as the source signal (`Some(n)` → that name, `None` → empty name), via `newSIntInOutNamed`. Used inside Bundle direction specs; for module ports use the `Expr` macro (`input a = ...`) instead.
 def inout_s[width: Nat](t: SInt[width]): SInt[width] =
     match t.name {
         case Some(n) => newSIntInOutNamed(n, width)
         case None => newSIntInOutNamed("", width)
     }
 
+/// SpinalHDL-style direction helper: rebuilds the given Bool signal as a inout port with the **same name** as the source signal (`Some(n)` → that name, `None` → empty name), via `newBoolInOutNamed`. Used inside Bundle direction specs; for module ports use the `Expr` macro (`input a = ...`) instead.
 def inout_bool(t: Bool): Bool =
     match t.name {
         case Some(n) => newBoolInOutNamed(n)
         case None => newBoolInOutNamed("")
     }
 
+/// SpinalHDL-style direction helper: rebuilds the given Bool signal as a input port with the **same name** as the source signal (`Some(n)` → that name, `None` → empty name), via `newBoolInputNamed`. Used inside Bundle direction specs; for module ports use the `Expr` macro (`input a = ...`) instead.
 def in_bool(t: Bool): Bool =
     match t.name {
         case Some(n) => newBoolInputNamed(n)
         case None => newBoolInputNamed("")
     }
 
+/// SpinalHDL-style direction helper: rebuilds the given Bool signal as a output port with the **same name** as the source signal (`Some(n)` → that name, `None` → empty name), via `newBoolOutputNamed`. Used inside Bundle direction specs; for module ports use the `Expr` macro (`input a = ...`) instead.
 def out_bool(t: Bool): Bool =
     match t.name {
         case Some(n) => newBoolOutputNamed(n)
@@ -571,6 +701,7 @@ def out_bool(t: Bool): Bool =
 //  Self, and the impl methods read it via `this`.
 // ============================================================
 
+/// Delay-register typeclass: `mkReg` creates a register of the **same** type as the receiver and connects the receiver to it (one-cycle delay), `mkRegWhen` does the same under a `when(cond)` enable (the register holds when `cond` is low). Impls exist for UInt/Bits/SInt/Bool in this file and for EnumCraft in hdl-enum, so no per-type function names are needed. The register is named by the `name` argument (the `regNext` wrappers pass the caller's let binding).
 trait RegNext[T] {
     def mkReg(name: String): T
     def mkRegWhen(name: String, cond: Bool): T
@@ -628,30 +759,36 @@ impl RegNext[Bool] for Bool {
         r
 }
 
+/// One-cycle delay: creates a register of the receiver's type, names it after the caller's let binding (`let r = regNext(sig)` → register `r`) and drives it from `sig` every cycle. Dispatches through the `RegNext[T]` typeclass, so it works for any `T` that has an impl (UInt/Bits/SInt/Bool here, EnumCraft in hdl-enum).
 def regNext[bn: BindingName, T][r: RegNext[T]](value: T): T = r.mkReg(value, loopName(bn.name))
+/// Conditional one-cycle delay: same register as `regNext` but the clocked assignment is wrapped in `when(cond)`, so the register only updates on cycles where `cond` is high (it holds its value otherwise; there is no reset value).
 def regNextWhen[bn: BindingName, T][r: RegNext[T]](value: T, cond: Bool): T = r.mkRegWhen(value, loopName(bn.name), cond)
 
 // ============================================================
 //  Counter — SpinalHDL 风格计数器
 //  counter(w)       自增计数器：每周期 value := value + 1
 //  counterInc(w, en) 使能计数：when(en) { value := value + 1 }
-//  value 寄存器按 let 绑定名自动命名；willOverflow 为组合信号
-//  （value 全 1，即 (~value == 0)，下一个周期回绕到 0）。
+//  value 寄存器按 let 绑定名自动命名；willOverflow 为组合信号，
+//  按 hdl-utils counterIncMod 的口径由使能门控：
+//  counter: (~value == 0)；counterInc: enable && (~value == 0)。
 // ============================================================
 
+/// Free-running / enable-counted counter handle: `value` is the `UInt[w]` register (init 0, named after the let binding) and `willOverflow` is a combinational flag for the cycle in which the counter reaches its maximum and the next increment wraps to 0.
 struct Counter[w: Nat] {
     value: UInt[w]
     willOverflow: Bool
 }
 
+/// Free-running counter of width `w`: creates the register `value` (init 0) and drives it with `value + 1` every cycle, so it wraps from all-ones back to 0. `willOverflow` is `(~value == 0)` — high exactly on the cycle before the wrap (the counter is always enabled here).
 def counter[bn: BindingName](w: Nat): Counter[w] =
     let v = newUIntRegNamed(loopName(bn.name), w);
     let _ = createSignalExpr("", regAssign(v.expr, binary(v.expr, "+", literal(1))));
     Counter.mk(v, Bool.mk(None, binary(unary("~", v.expr), "==", literal(0))))
 
+/// Enable-counted counter of width `w`: the increment `value + 1` is wrapped in `when(enable)`, so the register holds while `enable` is low. `willOverflow` is `enable && (~value == 0)` — gated by the enable, matching the `counterIncMod` convention in hdl-utils (`willOverflow = inc && value == end`); an ungated flag would report a wrap on a cycle where the counter does not move.
 def counterInc[bn: BindingName](w: Nat, enable: Bool): Counter[w] =
     let v = newUIntRegNamed(loopName(bn.name), w);
     let _ = whenBegin(enable.expr);
     let _ = createSignalExpr("", regAssign(v.expr, binary(v.expr, "+", literal(1))));
     let _ = whenEnd(unit);
-    Counter.mk(v, Bool.mk(None, binary(unary("~", v.expr), "==", literal(0))))
+    Counter.mk(v, Bool.mk(None, binary(enable.expr, "&&", binary(unary("~", v.expr), "==", literal(0)))))

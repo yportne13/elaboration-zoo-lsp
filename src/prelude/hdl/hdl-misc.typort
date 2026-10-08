@@ -8,18 +8,29 @@
 //  Prescaler —— 分频器（counter 到 limit 时溢出）
 // ============================================================
 
+/// Prescaler handle: `overflow` is a combinational strobe and `counter` is the
+/// internal counter register (init 0, width `w`), exposed so callers can read
+/// the current count or reset it early.
 struct Prescaler[w: Nat] {
     overflow: Bool
     counter: UInt[w]
 }
 
 impl[w: Nat] Prescaler[w] {
+    /// Reset the counter to 0 with a clocked assignment. The assignment is
+    /// **unconditional**, so call it inside a `when` (or as the last statement
+    /// of a priority chain) — calling it unconditionally every cycle pins the
+    /// counter at 0 and the prescaler never overflows.
     def clear(): Unit =
         let _ = createSignalExpr("", regAssign(this.counter.zz_expr, literal(0)));
         unit
 }
 
-// prescaler(limit)：每 limit 拍输出一个 overflow 脉冲
+/// Divides the clock by `limit + 1`: the internal counter counts `0 .. limit`
+/// and `overflow` is high (`counter == limit`) for exactly one cycle per
+/// period, driving the counter back to 0 on the next edge. `limit` is a
+/// runtime `UInt[w]` signal (not a `Nat`), so the period can vary; `limit = 0`
+/// degenerates to a permanently asserted `overflow` (the counter stays 0).
 def prescaler[bn: BindingName][w: Nat](limit: UInt[w]): Prescaler[w] =
     let c = newUIntRegInitNatNamed(bn.name + "_cnt", w, 0);
     let ovf = binary(c.zz_expr, "==", limit.zz_expr);
@@ -35,6 +46,11 @@ def prescaler[bn: BindingName][w: Nat](limit: UInt[w]): Prescaler[w] =
 //  Timer —— tick/clear/limit → full/value（SpinalHDL misc/Timer）
 // ============================================================
 
+/// Vestigial interface description for the timer: `tick`/`clear`/`limit` in,
+/// `full`/`value` out. Nothing in the prelude, examples or verification corpus
+/// constructs it — the working factory is `timer`, which returns
+/// `TimerResult` — so this struct documents the SpinalHDL `TimerIO` port
+/// names only. Kept to avoid changing the exported API surface.
 struct TimerIO[w: Nat] {
     tick: Bool
     clear: Bool
@@ -43,12 +59,19 @@ struct TimerIO[w: Nat] {
     value: UInt[w]
 }
 
-// timer：tick 时计数；到 limit 输出 full 一拍
+/// Timer outputs: `full` is a one-cycle strobe, `value` the current count.
 struct TimerResult[w: Nat] {
     full: Bool
     value: UInt[w]
 }
 
+/// Up-counter gated by `tick`: while `tick` is high the count advances and
+/// stops at `limit` (`hit = count == limit` holds the count); `full` pulses
+/// for one ticked cycle when `limit` is reached, and an internal `inhibit`
+/// register suppresses further pulses while the count stays there. `clear`
+/// resets both the count and the inhibit flag; the clear `when` block is
+/// emitted **after** the tick block, so clear wins on a cycle where both are
+/// high. `limit = 0` fires `full` on the first ticked cycle after a clear.
 def timer[bn: BindingName][w: Nat](tick: Bool, clear: Bool, limit: UInt[w]): TimerResult[w] =
     let c = newUIntRegInitNatNamed(bn.name + "_cnt", w, 0);
     let inhibit = newBoolRegInitNatNamed(bn.name + "_inhibit", 0);
@@ -68,6 +91,10 @@ def timer[bn: BindingName][w: Nat](tick: Bool, clear: Bool, limit: UInt[w]): Tim
 //  pendings = (pendings & ~clears) | inputs
 // ============================================================
 
+/// Vestigial interface description for the interrupt controller (SpinalHDL
+/// `InterruptCtrl` port shape). Unused: `interruptCtrl` takes the three input
+/// vectors directly and returns the masked pending vector; nothing constructs
+/// this struct. Kept to avoid changing the exported API surface.
 struct InterruptCtrlIO[w: Nat] {
     inputs: Bits[w]
     clears: Bits[w]
@@ -75,7 +102,13 @@ struct InterruptCtrlIO[w: Nat] {
     pendings: Bits[w]
 }
 
-// interruptCtrl：挂起寄存器 + 掩码
+/// Pending-interrupt register with write-1-to-clear semantics: every cycle it
+/// updates to `(pending & ~clears) | inputs` (a single unconditional clocked
+/// assignment, init 0), and the return value is `pending & masks`. Because the
+/// mask is applied only on the way out, masked sources still set the internal
+/// pending bits; and since the OR comes last, a `set` beats a simultaneous
+/// `clear` of the same bit (matches the `RefInterruptCtrl` reference in
+/// tools/spinalhdl-verify/verify.py).
 def interruptCtrl[bn: BindingName][w: Nat](inputs: Bits[w], clears: Bits[w], masks: Bits[w]): Bits[w] =
     let pend = newBitsRegInitNatNamed(bn.name + "_pend", w, 0);
     let _ = createSignalExpr("", regAssign(pend.zz_expr,
@@ -83,26 +116,87 @@ def interruptCtrl[bn: BindingName][w: Nat](inputs: Bits[w], clears: Bits[w], mas
     Bits.mk(None, binary(pend.zz_expr, "&", masks.zz_expr))
 
 // ============================================================
-//  Plru —— 伪 LRU（entries 为 2 的幂）
-//  树形状态：log2Up(entries) 层，每层 entries/2^i 位
+//  Plru —— 树形伪 LRU（way 数 = 2^log2n，state 宽 = 2^log2n - 1）
+//  节点 k 的左右子为 2k+1 / 2k+2；节点位 = 1 表示"下次优先逐出右子树"。
+//  evict：从根开始按状态位逐层下降，log2n 层后得到应逐出的 way 索引。
+//  update(way)：把路径上的节点位反向置位（way 位 0 → 1，1 → 0），
+//  使刚被访问的 way 下次优先级最低。
 // ============================================================
 
-// plruUpdate：访问 id 后更新树状态（简化：逐层记录方向位）
-def plruUpdate[bn: BindingName][w: Nat](state: UInt[w], id: UInt[w], log2n: Nat): UInt[w] =
-    let updated = newUIntRegNamed(bn.name + "_next", w);
-    // 每层：取 id 的对应位写入状态对应位
-    let _ = createSignalExpr("", regAssign(updated.zz_expr, state.zz_expr));
-    updated
+/// Tree-traversal helper for `plruEvict`: walks `remaining` levels from
+/// `node` (root = 0), accumulating the way index in `acc` (shift left, append
+/// the state bit). Internal — use `plruEvict`.
+def plruEvictGo[w: Nat](state: UInt[w], node: Expr, acc: UInt[w], remaining: Nat): UInt[w] = match remaining {
+    case zero => acc
+    case succ(m) =>
+        let b = bitsel(state.zz_expr, node);
+        plruEvictGo[w](state,
+            binary(binary(literal(2), "*", node), "+", binary(literal(1), "+", b)),
+            UInt.mk(None, binary(binary(acc.zz_expr, "<<", literal(1)), "|", b)),
+            m)
+}
 
-// plruEvict：返回被逐出的 id（简化：状态位组合）
+/// Helper for `plruUpdate`: accumulates, over `remaining` levels, a mask whose
+/// bits are the path nodes where the accessed way's bit is 0 — i.e. the nodes
+/// that must be **set** to point away from the way. `iw` is the way index's own
+/// width (independent of the state width). Internal.
+def plruPathSetMask[iw: Nat](id: UInt[iw], node: Expr, acc: Expr, remaining: Nat): Expr = match remaining {
+    case zero => acc
+    case succ(m) =>
+        let wayBit = bitsel(id.zz_expr, literal(m));
+        plruPathSetMask(id,
+            binary(binary(literal(2), "*", node), "+", binary(literal(1), "+", wayBit)),
+            binary(acc, "|", binary(binary(literal(1), "<<", node), "*", binary(literal(1), "-", wayBit))),
+            m)
+}
+
+/// Helper for `plruUpdate`: same walk as `plruPathSetMask`, but collects the
+/// path nodes where the accessed way's bit is 1 — the nodes that must be
+/// **cleared**. Internal.
+def plruPathClrMask[iw: Nat](id: UInt[iw], node: Expr, acc: Expr, remaining: Nat): Expr = match remaining {
+    case zero => acc
+    case succ(m) =>
+        let wayBit = bitsel(id.zz_expr, literal(m));
+        plruPathClrMask(id,
+            binary(binary(literal(2), "*", node), "+", binary(literal(1), "+", wayBit)),
+            binary(acc, "|", binary(binary(literal(1), "<<", node), "*", wayBit)),
+            m)
+}
+
+/// Tree PLRU state update: returns the **combinational** next state for
+/// accessing way `id` — the path bits are set/cleared so the accessed way
+/// becomes the last one to evict. It does not touch the `state` register, so
+/// the caller clocks it in explicitly, e.g.
+/// `when(access) { stateReg := plruUpdate(stateReg, way, log2n) }`.
+/// `state` must be `2^log2n - 1` bits wide (node positions run from the root 0
+/// to the last parent `2^(log2n-1)-2`); `id` has its **own** width `iw` (a
+/// `UInt[log2n]` way index is the natural choice) and only its low `log2n` bits
+/// are read. `[bn]` is unused (no internal register is created any more) and
+/// kept for call-site symmetry.
+def plruUpdate[bn: BindingName][w: Nat][iw: Nat](state: UInt[w], id: UInt[iw], log2n: Nat): UInt[w] =
+    UInt.mk(None, binary(
+        binary(state.zz_expr, "&", unary("~", plruPathClrMask(id, literal(0), literal(0), log2n))),
+        "|", plruPathSetMask(id, literal(0), literal(0), log2n)))
+
+/// Tree PLRU victim selection: walks `log2n` levels from the root using the
+/// state bits (bit 1 = go to the right child) and returns the way index of the
+/// least-recently-used side, in the low `log2n` bits (result width is `w`, the
+/// state width, so the upper bits are 0). `state` must be `2^log2n - 1` bits
+/// wide; `log2n = 0` returns 0 (single way).
 def plruEvict[bn: BindingName][w: Nat](state: UInt[w], log2n: Nat): UInt[w] =
-    UInt.mk(None, binary(binary(state.zz_expr, ">>", literal(0)), "&", literal((metaPow2 log2n) - 1)))
+    plruEvictGo[w](state, literal(0), UInt.mk(None, literal(0)), log2n)
 
 // ============================================================
 //  Watchdog —— 喂狗超时（SpinalHDL misc/Watchdog）
 // ============================================================
 
-// watchdog(limit)：未喂狗则 timeout 置位；feed 复位
+/// Free-running watchdog with feed priority: the counter (`<bn>_cnt`, init 0)
+/// advances while `!feed && count != limit` and saturates at `limit`; reaching
+/// `limit` sets the sticky `timeout` register (`<bn>_timeout`, init 0) and
+/// restarts the count. `feed` clears both the timeout and the count, and its
+/// `when` block is emitted after the overflow block, so feeding on the same
+/// cycle as the overflow wins (`timeout` stays 0). Returns the timeout
+/// register; `limit = 0` sets the timeout on every unfed cycle.
 def watchdog[bn: BindingName][w: Nat](feed: Bool, limit: UInt[w]): Bool =
     let c = newUIntRegInitNatNamed(bn.name + "_cnt", w, 0);
     let timeout = newBoolRegInitNatNamed(bn.name + "_timeout", 0);

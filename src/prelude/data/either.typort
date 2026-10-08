@@ -93,11 +93,24 @@ impl[A, B] Either[A, B] {
         }
 }
 
-/// `Some b` becomes `right b`; `None` becomes `left if_none`.
 // 补齐转换格：option_to_result / either_to_option / result_to_either /
 // either_to_result 已有，唯缺 Option -> Either。
+/// `Some b` becomes `right b`; `None` becomes `left if_none`.
 def option_to_either[A, B](o: Option[B], if_none: A): Either[A, B] =
     match o {
         case Some(b) => right b
         case None => left if_none
     }
+
+// 本轮补齐：转换格最后缺的一个方法形态方向（left_to_option 的镜像）。
+impl[A, B] Either[A, B] {
+    /// The right value as an `Option`, discarding a left value.
+    def right_to_option: Option[B] =
+        match this {
+            case left(_) => None
+            case right(b) => Some b
+        }
+}
+
+/// Free-function form of `Either.right_to_option`.
+def either_right_to_option[A, B](e: Either[A, B]): Option[B] = e.right_to_option

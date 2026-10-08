@@ -46,3 +46,21 @@ impl[T] NonEmpty[T] {
 
 /// A single-element non-empty list.
 def nonempty_singleton[T](x: T): NonEmpty[T] = new NonEmpty(x, lnil)
+
+// 本轮补齐：右折叠 / 查找 / 从普通 List 构造（本文件可引用 List，
+// List 在 nonempty 之前加载）。
+impl[T] NonEmpty[T] {
+    /// Right fold over every element: `f x1 (f x2 (... (f xn z)))`.
+    def foldr[U](f: T -> U -> U, z: U): U =
+        this.to_list.foldr f z
+    /// The first element satisfying `p`, if any.
+    def find(p: T -> Boolean): Option[T] =
+        this.to_list.find p
+}
+
+/// `Some` of the same elements when `l` is non-empty, else `None`.
+def nonempty_from_list[T](l: List[T]): Option[NonEmpty[T]] =
+    match l {
+        case lnil => None
+        case lcons(x, xs) => Some (new NonEmpty(x, xs))
+    }

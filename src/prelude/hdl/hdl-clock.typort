@@ -35,6 +35,18 @@
 // this.wordCount，故不在签名里做 log2Up 检查；生成 Verilog 时索引宽度由
 // 地址信号自身决定）。
 
+/// A memory handle: the value-level view of a `reg [dataWidth-1:0] name [0:wordCount-1]`
+/// array. The struct itself emits no hardware — the `memUInt` / `memBits` /
+/// `memSInt` / `memBool` factories call `createMem` (through
+/// `createSignalExpr`) and carry the node in `zz_expr`. Read/write ports are
+/// added by the `MemOps` impl for `T`: `write` records a `memWrite`, `readSync`
+/// records a register plus a clocked `memRead`. `name` is the let-binding
+/// name for the factories (or the explicit name for `newMemUIntNamed`);
+/// `wordCount`/`dataWidth` repeat the width pair passed to the factory;
+/// `clockDomain` records the module's default domain at declaration time —
+/// the write port and the synchronous read always land in the module's main
+/// clock, and a read register on another domain is requested explicitly with
+/// `readSyncCCD`.
 struct Mem[T] {
     name: Option[String]
     zz_expr: Expr
@@ -43,15 +55,47 @@ struct Mem[T] {
     clockDomain: ClockDomain
 }
 
+/// Per-element-type read/write port typeclass for `Mem`. `Self` is the
+/// `Mem[T]` handed over by the receiver (`myRam.write(...)`), and the result
+/// type `O` is an `outParam` because it is *not* the type parameter of
+/// `Self` — same `Self != type argument` shape as `Into[O] for MuxExpr[T]`.
+/// Each data type (UInt/Bits/SInt/Bool) gets exactly one impl, so every
+/// instance registers the four methods under the same `MemOps` name and no
+/// same-name method conflict arises. The address width stays a method-level
+/// `[a: Nat]` type parameter: a trait method signature cannot mention
+/// `this.wordCount`, so the log2 width relation is not checked here (the
+/// Verilog index width is decided by the address expression itself).
 trait MemOps[O: outParam(Type 0)] {
-    // 同步写端口
+    /// Synchronous write port: `if (enable) mem[address] <= data;` in the
+    /// module's main clock. Passing `Bool.mk(None, literal(1))` as `enable`
+    /// lets the Verilog generator drop the `if` guard (same semantics).
     def write[a: Nat](address: UInt[a], data: O, enable: Bool): Unit
-    // 组合读：返回 mem[address] 表达式包装的 O
+    /// Combinational read: returns `O` wrapping the bare `mem[address]`
+    /// expression — no register, no clocked block, so the value is only
+    /// meaningful while the address is stable.
     def readAsync[a: Nat](address: UInt[a]): O
-    // 同步读：生成一个寄存器信号并记录 mem[address] 的时钟赋值（寄存器按 bn 命名）
+    /// Synchronous read in the module's main clock: allocates a register of
+    /// the same width (`createRegWidth`, signed variant for SInt, 1 bit for
+    /// Bool), named after the caller's let binding (`bn`), and records
+    /// `reg <= mem[address]` as a clocked assignment.
     def readSync[a: Nat][bn: BindingName](address: UInt[a]): O
-    // 跨时钟域读（当前与 readSync 相同）
+    /// Cross-clock read, legacy signature: `crossClock` is a `Bool`
+    /// placeholder and the body is identical to `readSync` (identical
+    /// register + clocked `memRead`, no synchronizer). Kept so existing
+    /// call sites keep compiling; for a real domain-crossing read use
+    /// `readSyncCCD` (below) or the `bufferCC*` chains in hdl-crossclock.
     def readSyncCC[a: Nat][bn: BindingName](address: UInt[a], crossClock: Bool): O
+    /// True cross-clock read: the read register is *declared on* `outCd`
+    /// (`createRegWidthCd`, signed variant for SInt) and the sampled
+    /// `memRead` is recorded with `regAssignCd(..., outCd)`, so the
+    /// generator emits this read port in `outCd`'s own always block and adds
+    /// that domain's clk/reset ports. The write port is unaffected and stays
+    /// in the module's main clock, so the RAM itself is still single-clock
+    /// in the write direction. The register takes the caller's let-binding
+    /// name (`bn`); `outCd` must differ from the module's main domain for
+    /// the result to be an actual synchronizer-free domain crossing (the
+    /// two flops of bufferCC* are the metastability-safe alternative).
+    def readSyncCCD[a: Nat][bn: BindingName](address: UInt[a], outCd: ClockDomain): O
 }
 
 impl[w: Nat] MemOps[UInt[w]] for Mem[UInt[w]] {
@@ -69,6 +113,11 @@ impl[w: Nat] MemOps[UInt[w]] for Mem[UInt[w]] {
         let re = createSignalExpr(bn.name, createRegWidth(bn.name, w));
         let r = UInt.mk(Some(bn.name), re);
         let _ = createSignalExpr("", regAssign(r.zz_expr, memRead(this.zz_expr, address.zz_expr)));
+        r
+    def readSyncCCD[a: Nat][bn: BindingName](address: UInt[a], outCd: ClockDomain): UInt[w] =
+        let re = createSignalExpr(bn.name, createRegWidthCd(bn.name, w, outCd));
+        let r = UInt.mk(Some(bn.name), re);
+        let _ = createSignalExpr("", regAssignCd(r.zz_expr, memRead(this.zz_expr, address.zz_expr), outCd));
         r
 }
 
@@ -88,6 +137,11 @@ impl[w: Nat] MemOps[Bits[w]] for Mem[Bits[w]] {
         let r = Bits.mk(Some(bn.name), re);
         let _ = createSignalExpr("", regAssign(r.zz_expr, memRead(this.zz_expr, address.zz_expr)));
         r
+    def readSyncCCD[a: Nat][bn: BindingName](address: UInt[a], outCd: ClockDomain): Bits[w] =
+        let re = createSignalExpr(bn.name, createRegWidthCd(bn.name, w, outCd));
+        let r = Bits.mk(Some(bn.name), re);
+        let _ = createSignalExpr("", regAssignCd(r.zz_expr, memRead(this.zz_expr, address.zz_expr), outCd));
+        r
 }
 
 impl[w: Nat] MemOps[SInt[w]] for Mem[SInt[w]] {
@@ -105,6 +159,11 @@ impl[w: Nat] MemOps[SInt[w]] for Mem[SInt[w]] {
         let re = createSignalExpr(bn.name, createSIntRegWidth(bn.name, w));
         let r = SInt.mk(Some(bn.name), re);
         let _ = createSignalExpr("", regAssign(r.zz_expr, memRead(this.zz_expr, address.zz_expr)));
+        r
+    def readSyncCCD[a: Nat][bn: BindingName](address: UInt[a], outCd: ClockDomain): SInt[w] =
+        let re = createSignalExpr(bn.name, createSIntRegWidthCd(bn.name, w, outCd));
+        let r = SInt.mk(Some(bn.name), re);
+        let _ = createSignalExpr("", regAssignCd(r.zz_expr, memRead(this.zz_expr, address.zz_expr), outCd));
         r
 }
 
@@ -124,26 +183,53 @@ impl MemOps[Bool] for Mem[Bool] {
         let r = Bool.mk(Some(bn.name), re);
         let _ = createSignalExpr("", regAssign(r.zz_expr, memRead(this.zz_expr, address.zz_expr)));
         r
+    def readSyncCCD[a: Nat][bn: BindingName](address: UInt[a], outCd: ClockDomain): Bool =
+        let re = createSignalExpr(bn.name, createRegWidthCd(bn.name, 1, outCd));
+        let r = Bool.mk(Some(bn.name), re);
+        let _ = createSignalExpr("", regAssignCd(r.zz_expr, memRead(this.zz_expr, address.zz_expr), outCd));
+        r
 }
 
-// 内存工厂：自动命名（bn = 外层 let 绑定名）。宽度参数先、字数参数后，
-// 与 SpinalHDL `Mem(UInt(8 bits), 256)` 的参数顺序一致。
+/// Memory factory with automatic naming: `let myRam = memUInt(8, 256)`
+/// declares `reg [7:0] myRam [0:255]` — the implicit `BindingName` carries
+/// the let-binding name, and the record is `createMem(name, wordCount, w)`.
+/// Width comes first and word count second, matching SpinalHDL's
+/// `Mem(UInt(8 bits), 256)` argument order. The returned handle is a value;
+/// ports are added later through `MemOps` (`write` / `readAsync` /
+/// `readSync`). Note the deliberate asymmetry with `newMemUIntNamed`, whose
+/// parameter order is `(name, wordCount, w)`.
 def memUInt[bn: BindingName](w: Nat, wordCount: Nat): Mem[UInt[w]] =
     let e = createSignalExpr(bn.name, createMem(bn.name, wordCount, w));
     Mem.mk(Some(bn.name), e, wordCount, w, defaultClockDomain)
 
+/// Explicit-name variant of `memUInt` for call sites that have no let
+/// binding to take the name from (library internals, e.g. the FIFO buffer in
+/// hdl-crossclock): the signal is named `name` verbatim. Argument order is
+/// `(name, wordCount, w)` — word count *before* width, the opposite of
+/// `memUInt(w, wordCount)`; existing internal callers rely on this order.
 def newMemUIntNamed(name: String, wordCount: Nat, w: Nat): Mem[UInt[w]] =
     let e = createSignalExpr(name, createMem(name, wordCount, w));
     Mem.mk(Some(name), e, wordCount, w, defaultClockDomain)
 
+/// `Bits` memory factory: `memBits(4, 64)` is `reg [3:0] name [0:63]`, one
+/// `Mem[Bits[w]]` handle whose ports come from the `MemOps[Bits[w]]` impl.
+/// Same `(w, wordCount)` order and let-binding naming as `memUInt`.
 def memBits[bn: BindingName](w: Nat, wordCount: Nat): Mem[Bits[w]] =
     let e = createSignalExpr(bn.name, createMem(bn.name, wordCount, w));
     Mem.mk(Some(bn.name), e, wordCount, w, defaultClockDomain)
 
+/// Signed memory factory: identical to `memUInt` except the element type is
+/// `SInt[w]`, so reads go through the signed `MemOps[SInt[w]]` impl
+/// (`createSIntRegWidth` for the sync-read register; the stored bits are the
+/// same two's-complement vector).
 def memSInt[bn: BindingName](w: Nat, wordCount: Nat): Mem[SInt[w]] =
     let e = createSignalExpr(bn.name, createMem(bn.name, wordCount, w));
     Mem.mk(Some(bn.name), e, wordCount, w, defaultClockDomain)
 
+/// `Bool` memory factory — takes only the word count (each element is one
+/// bit, so `createMem(name, wordCount, 1)`): `memBool(16)` is
+/// `reg name [0:15]`, and reads use the 1-bit / `createReg` variants of
+/// `MemOps[Bool]`.
 def memBool[bn: BindingName](wordCount: Nat): Mem[Bool] =
     let e = createSignalExpr(bn.name, createMem(bn.name, wordCount, 1));
     Mem.mk(Some(bn.name), e, wordCount, 1, defaultClockDomain)

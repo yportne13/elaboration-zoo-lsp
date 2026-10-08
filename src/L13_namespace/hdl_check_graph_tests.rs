@@ -685,7 +685,7 @@ fn examples_21_crossclock_expected_warnings() {
         "exactly the two binary FIFO pointer chains warn HDL038, got:\n{}", output
     );
     assert!(
-        output.contains("multi-bit (2) signal crossed to clkB") && output.contains("multi-bit (2) signal crossed to clkA"),
+        output.contains("multi-bit (3) signal crossed to clkB") && output.contains("multi-bit (3) signal crossed to clkA"),
         "wrPtrSync1 (to clkB) and rdPtrSync1 (to clkA) chains expected, got:\n{}", output
     );
     assert!(!output.contains("HDL036"), "no mixed-domain comb signal in 21-crossclock, got:\n{}", output);
