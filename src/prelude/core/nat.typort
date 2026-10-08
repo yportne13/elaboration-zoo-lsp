@@ -123,9 +123,10 @@ def mul_succ_left(n: Nat, m: Nat): Eq ((succ n) * m) ((n * m) + m) =
             trans p1 (trans p2 p3)
     }
 
+// `mul_comm` 的递归调用 `mul_comm k n` 在第二个参数的前驱 `k` 上递减（非结构
+// 递归）：引擎的终止检查对本定义放行（Level A allowlist），运行时按
+// (a, b) → (b-1, a) 递减，必终止。
 /// Multiplication is commutative: `n * m = m * n`.
-// 递归调用 `mul_comm k n` 不是结构递归（引擎不做终止检查；运行时按
-// (a, b) → (b-1, a) 递减，必终止）。
 def mul_comm(n: Nat, m: Nat): Eq (n * m) (m * n) =
     match m {
         case zero => symm (mul_zero_left n)
@@ -258,3 +259,96 @@ def nat_min(a: Nat, b: Nat): Nat =
                 case succ(bs) => succ (nat_min as bs)
             }
     }
+
+// ---------- 1 / succ 单位元引理 ----------
+
+/// `a + 1 = succ a`, definitionally (`nat_add` recurses on its second argument).
+def add_one_right(a: Nat): Eq (a + 1) (succ a) =
+    rfl
+
+/// `1 + a = succ a`, by induction on `a`.
+def add_one_left(a: Nat): Eq (1 + a) (succ a) =
+    match a {
+        case zero => rfl
+        case succ(k) => cong_succ (add_one_left k)
+    }
+
+/// `a * 1 = a`, definitionally.
+def mul_one_right(a: Nat): Eq (a * 1) a =
+    rfl
+
+/// `1 * a = a`, by induction on `a`.
+def mul_one_left(a: Nat): Eq (1 * a) a =
+    match a {
+        case zero => rfl
+        case succ(k) => trans (cong (nat_add 1) (mul_one_left k)) (add_one_left k)
+    }
+
+/// `mul_by c x` is `x * c`: a named right-section of `*`.  Needed where the
+/// literal-lambda form of `cong` does not reduce (see `pow_add`).
+def mul_by(c: Nat, x: Nat): Nat = x * c
+
+// ---------- nat_pow 引理 ----------
+
+/// `n ^ 0 = 1`, definitionally.
+def pow_zero(n: Nat): Eq (nat_pow n 0) 1 =
+    rfl
+
+/// `n ^ (succ k) = n * n ^ k`, definitionally.
+def pow_succ(n: Nat, k: Nat): Eq (nat_pow n (succ k)) (n * (nat_pow n k)) =
+    rfl
+
+/// `n ^ 1 = n`.
+def pow_one(n: Nat): Eq (nat_pow n 1) n =
+    trans (pow_succ n 0) (mul_one_right n)
+
+// `nat_add` 按第二参数递归：succ 分支里 `a + succ k` 定义性展开为
+// `succ (a + k)`，归纳假设才接得上。第三、四步把 `n * (P a * P k)` 重整为
+// `P a * (n * P k)`：`cong2 nat_mul e rfl` 交换 `*` 的第一个因子，
+// `mul_assoc` 结合。此处**不能**用字面 lambda 形式 `cong (z => z * P k) e`
+// ——实测该形状在本目标下发散（30s 超时，见 task-1 审计报告）。
+/// `n ^ (a + b) = n ^ a * n ^ b`, by induction on `b`.
+def pow_add(n: Nat, a: Nat, b: Nat): Eq (nat_pow n (a + b)) ((nat_pow n a) * (nat_pow n b)) =
+    match b {
+        case zero => symm (mul_one_right (nat_pow n a))
+        case succ(k) =>
+            let p1 = cong (nat_mul n) (pow_add n a k);
+            let p2 = symm (mul_assoc (n) (nat_pow n a) (nat_pow n k));
+            let p3 = cong (mul_by (nat_pow n k)) (mul_comm n (nat_pow n a));
+            let p4 = mul_assoc (nat_pow n a) n (nat_pow n k);
+            trans p1 (trans p2 (trans p3 p4))
+    }
+
+// ---------- max / min ----------
+
+/// `nat_max a a = a`.
+def max_self(a: Nat): Eq (nat_max a a) a =
+    match a {
+        case zero => rfl
+        case succ(k) => cong_succ (max_self k)
+    }
+
+/// `nat_min a a = a`.
+def min_self(a: Nat): Eq (nat_min a a) a =
+    match a {
+        case zero => rfl
+        case succ(k) => cong_succ (min_self k)
+    }
+
+// ---------- factorial ----------
+
+/// Factorial, by structural recursion on `n`: `0! = 1`,
+/// `(n + 1)! = (n + 1) * n!`.
+def nat_factorial(n: Nat): Nat =
+    match n {
+        case zero => 1
+        case succ(k) => (succ k) * (nat_factorial k)
+    }
+
+/// `0! = 1`, definitionally.
+def factorial_zero: Eq (nat_factorial 0) 1 =
+    rfl
+
+/// `(n + 1)! = (n + 1) * n!`, definitionally.
+def factorial_succ(n: Nat): Eq (nat_factorial (succ n)) ((succ n) * (nat_factorial n)) =
+    rfl

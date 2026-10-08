@@ -76,3 +76,28 @@ def cong_ap[A, B, f: A -> B, g: A -> B, x: A, y: A](e1: Eq f g, e2: Eq x y): Eq 
                 case refl(a) => refl (h a)
             }
     }
+
+/// Three-step transitivity: `x = y`, `y = z` and `z = w` imply `x = w`.
+def trans3[A, x: A, y: A, z: A, w: A](e1: Eq[A] x y, e2: Eq[A] y z, e3: Eq[A] z w): Eq[A] x w =
+    trans (trans e1 e2) e3
+
+/// Three-argument congruence: equal arguments give equal results under any
+/// three-argument function.  Built from three `cong` steps; the triple nested
+/// `match` formulation (cong2-style) does not scale here.
+def cong3[A, B, C, D, x: A, y: A, u: B, v: B, p: C, q: C](f: A -> B -> C -> D, e1: Eq x y, e2: Eq u v, e3: Eq p q): Eq (f x u p) (f y v q) =
+    trans (trans (cong (z => f z u p) e1) (cong (z => f y z p) e2)) (cong (f y v) e3)
+
+/// Two-argument substitution: `P x u` transports to `P y v` along `x = y` and
+/// `u = v`.
+///
+/// `P` is the first implicit argument and the solver cannot invert it from a
+/// bare call, so instantiate the implicit telescope explicitly whenever `P` is
+/// not already determined by the expected type:
+/// `subst2[Nat, Nat, eqfam, x, y, u, v] e1 e2 p`.
+def subst2[A, B, P: A -> B -> Type 0, x: A, y: A, u: B, v: B](e1: Eq[A] x y, e2: Eq[B] u v, p: P x u): P y v =
+    match e1 {
+        case refl(a) =>
+            match e2 {
+                case refl(b) => p
+            }
+    }

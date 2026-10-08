@@ -129,6 +129,9 @@ def flip[A, B, C](f: A -> B -> C, x: B, y: A): C = f y x
 /// Function composition: `compose f g x = f (g x)`.
 def compose[A, B, C](f: B -> C, g: A -> B, x: A): C = f (g x)
 
+/// Three-fold composition: `compose3 f g h x = f (g (h x))`.
+def compose3[A, B, C, D](f: C -> D, g: B -> C, h: A -> B, x: A): D = f (g (h x))
+
 /// Boolean / bitwise negation: unary `!this`.
 trait Not {
     /// Negate `this`.
@@ -148,6 +151,8 @@ impl[A, B] Product[A, B] {
     def map_first[C](f: A -> C): Product[C, B] = new Product(f this.fst, this.snd)
     /// Apply `f` to the second component.
     def map_second[C](f: B -> C): Product[A, C] = new Product(this.fst, f this.snd)
+    /// Apply `f` to the first component and `g` to the second.
+    def bimap[C, D](f: A -> C, g: B -> D): Product[C, D] = new Product(f this.fst, g this.snd)
 }
 
 /// Curry a function over a `Product` into a two-argument function.

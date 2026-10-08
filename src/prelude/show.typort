@@ -17,6 +17,7 @@ trait Show {
 }
 
 impl Nat {
+    /// Render a `Nat` in decimal.
     def show: String = nat_to_dec this
 }
 
@@ -341,4 +342,137 @@ def show_result_nat_bool(r: Result[Nat, Boolean]): String =
 /// Render a `Result[Nat, Boolean]` as `ok 7` / `err false`.
 impl Show for Result[Nat, Boolean] {
     def show: String = show_result_nat_bool this
+}
+
+// === 本轮补齐：String 与嵌套容器 ===
+// 泛型条件实例（`impl[T] Show for List[T] where T: Show`）elaborator 不支持，
+// 只能逐元素类型具象化；以下实例内部复用上面已有的具名 helper，
+// 因此新增的只是「哪些类型现在可 show」而不是新的渲染约定。
+
+/// Render a `Product[String, String]` as `(a, b)` (elements raw, no quotes).
+def show_product_string_string(p: Product[String, String]): String =
+    "(" + p.fst + ", " + p.snd + ")"
+
+/// Render a `Product[String, String]` as `(a, b)`.
+impl Show for Product[String, String] {
+    def show: String = show_product_string_string this
+}
+
+/// Render a `Tuple2[String, String]` as `(a, b)` (elements raw, no quotes).
+def show_tuple2_string_string(t: Tuple2[String, String]): String =
+    "(" + t._1 + ", " + t._2 + ")"
+
+/// Render a `Tuple2[String, String]` as `(a, b)`.
+impl Show for Tuple2[String, String] {
+    def show: String = show_tuple2_string_string this
+}
+
+/// Render a `Product[Boolean, Nat]` as `(true, 3)`.
+def show_product_bool_nat(p: Product[Boolean, Nat]): String =
+    "(" + (show_bool p.fst) + ", " + (nat_to_dec p.snd) + ")"
+
+/// Render a `Product[Boolean, Nat]` as `(true, 3)`.
+impl Show for Product[Boolean, Nat] {
+    def show: String = show_product_bool_nat this
+}
+
+/// Render a `Tuple2[Nat, Boolean]` as `(3, true)`.
+def show_tuple2_nat_bool(t: Tuple2[Nat, Boolean]): String =
+    "(" + (nat_to_dec t._1) + ", " + (show_bool t._2) + ")"
+
+/// Render a `Tuple2[Nat, Boolean]` as `(3, true)`.
+impl Show for Tuple2[Nat, Boolean] {
+    def show: String = show_tuple2_nat_bool this
+}
+
+/// Render an `Either[Nat, String]` as `left 1` / `right s`.
+def show_either_nat_string(e: Either[Nat, String]): String =
+    match e {
+        case left(a) => "left " + (nat_to_dec a)
+        case right(b) => "right " + b
+    }
+
+/// Render an `Either[Nat, String]` as `left 1` / `right s`.
+impl Show for Either[Nat, String] {
+    def show: String = show_either_nat_string this
+}
+
+/// Render an `Either[String, Boolean]` as `left s` / `right true`.
+def show_either_string_bool(e: Either[String, Boolean]): String =
+    match e {
+        case left(a) => "left " + a
+        case right(b) => "right " + (show_bool b)
+    }
+
+/// Render an `Either[String, Boolean]` as `left s` / `right true`.
+impl Show for Either[String, Boolean] {
+    def show: String = show_either_string_bool this
+}
+
+/// Render a `Result[String, Boolean]` as `ok s` / `err false`.
+def show_result_string_bool(r: Result[String, Boolean]): String =
+    match r {
+        case ok(v) => "ok " + v
+        case err(e) => "err " + (show_bool e)
+    }
+
+/// Render a `Result[String, Boolean]` as `ok s` / `err false`.
+impl Show for Result[String, Boolean] {
+    def show: String = show_result_string_bool this
+}
+
+/// Render the body of a `List[List[Nat]]` without brackets.
+def show_list_list_nat_aux(l: List[List[Nat]]): String =
+    match l {
+        case lnil => ""
+        case lcons(x, lnil) => x.show
+        case lcons(x, xs) => (x.show) + ", " + (show_list_list_nat_aux xs)
+    }
+
+/// Render a `List[List[Nat]]` as `[[1, 2], []]`.
+impl Show for List[List[Nat]] {
+    def show: String = "[" + (show_list_list_nat_aux this) + "]"
+}
+
+/// Render an `Option[List[Nat]]` as `some [3]` / `none`.
+def show_option_list_nat(o: Option[List[Nat]]): String =
+    match o {
+        case Some(t) => "some " + (t.show)
+        case None => "none"
+    }
+
+/// Render an `Option[List[Nat]]` as `some [3]` / `none`.
+impl Show for Option[List[Nat]] {
+    def show: String = show_option_list_nat this
+}
+
+/// Render the body of a `List[Product[Nat, Nat]]` without brackets.
+def show_list_product_nat_nat_aux(l: List[Product[Nat, Nat]]): String =
+    match l {
+        case lnil => ""
+        case lcons(x, lnil) => show_product_nat_nat x
+        case lcons(x, xs) => (show_product_nat_nat x) + ", " + (show_list_product_nat_nat_aux xs)
+    }
+
+/// Render a `List[Product[Nat, Nat]]` as `[(1, 2), (3, 4)]`.
+impl Show for List[Product[Nat, Nat]] {
+    def show: String = "[" + (show_list_product_nat_nat_aux this) + "]"
+}
+
+/// Render a `NonEmpty[Nat]` like the `List[Nat]` it stands for.
+impl Show for NonEmpty[Nat] {
+    def show: String = this.to_list.show
+}
+
+/// Render the body of a `Vec[Nat]` without brackets.
+def show_vec_nat_aux[len: Nat](v: Vec[Nat] len): String =
+    match v {
+        case nil => ""
+        case cons(x, nil) => nat_to_dec x
+        case cons(x, xs) => (nat_to_dec x) + ", " + (show_vec_nat_aux xs)
+    }
+
+/// Render a `Vec[Nat]` as `[1, 2, 3]` (any length index).
+impl[len: Nat] Show for Vec[Nat] len {
+    def show: String = "[" + (show_vec_nat_aux this) + "]"
 }

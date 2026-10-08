@@ -274,8 +274,8 @@ impl[T] List[T] {
         new Product(this.take n, this.drop n)
     /// Map `f` over every element and concatenate the resulting lists.
     def flat_map[U](f: T -> List[U]): List[U] = list_flatten (this.map f)
+    // 插入位置：相等（eq）时 x 落在已有相等元素**之前**（新元素在前）。
     /// Insert `x` into `this`, which must already be sorted by `p`.
-    // 稳定插入：相等（eq）时 x 落在已有元素之后。
     def insert(x: T, p: T -> T -> Ordering): List[T] =
         match this {
             case lnil => lcons x lnil
@@ -314,6 +314,18 @@ impl[T, B] List[Product[T, B]] {
                 let tail_unzip = rest.unzip;
                 new Product(lcons(p.fst, tail_unzip.fst), lcons(p.snd, tail_unzip.snd))
         }
+    /// The first components of a list of pairs, in order.
+    def keys: List[T] =
+        match this {
+            case lnil => lnil
+            case lcons(p, rest) => lcons(p.fst, rest.keys)
+        }
+    /// The second components of a list of pairs, in order.
+    def values: List[B] =
+        match this {
+            case lnil => lnil
+            case lcons(p, rest) => lcons(p.snd, rest.values)
+        }
 }
 
 impl List[Nat] {
@@ -349,3 +361,74 @@ def list_replicate[T](n: Nat, x: T): List[T] =
         case zero => lnil
         case succ(m) => lcons(x, list_replicate m x)
     }
+
+// === 本轮补齐：尾部追加 / 索引查找 / 间隔插入 / 去重 / 分组 ===
+
+impl[T] List[T] {
+    /// Append a single element at the end: `[1, 2].snoc 3` is `[1, 2, 3]`.
+    def snoc(x: T): List[T] =
+        match this {
+            case lnil => lcons x lnil
+            case lcons(y, ys) => lcons(y, ys.snoc x)
+        }
+    /// The element at index `n` (0-based), or `None` when out of range.
+    def nth(n: Nat): Option[T] =
+        match n {
+            case zero => this.head_option
+            case succ(m) =>
+                match this {
+                    case lnil => None
+                    case lcons(_, xs) => xs.nth m
+                }
+        }
+    /// The index of the first element satisfying `p`, if any.
+    def find_index(p: T -> Boolean): Option[Nat] =
+        match this {
+            case lnil => None
+            case lcons(x, xs) =>
+                let b = p x;
+                match b {
+                    case true => Some 0
+                    case false =>
+                        match xs.find_index p {
+                            case Some(k) => Some (succ k)
+                            case None => None
+                        }
+                }
+        }
+    /// `this` with `x` inserted between adjacent elements (no-op for length
+    /// 0 or 1): `[1, 2, 3].intersperse 9` is `[1, 9, 2, 9, 3]`.
+    def intersperse(x: T): List[T] =
+        match this {
+            case lnil => lnil
+            case lcons(y, lnil) => lcons(y, lnil)
+            case lcons(y, ys) => lcons(y, lcons(x, ys.intersperse x))
+        }
+    /// `this` without duplicates under `eq`; of equal elements the **last**
+    /// occurrence survives, and survivors keep their relative order
+    /// (`[1, 2, 1, 3, 2].nub nat_eq` is `[1, 3, 2]`).
+    def nub(eq: T -> T -> Boolean): List[T] =
+        match this {
+            case lnil => lnil
+            case lcons(x, xs) =>
+                let rest = xs.nub eq;
+                let b = rest.elem x eq;
+                match b {
+                    case true => rest
+                    case false => lcons(x, rest)
+                }
+        }
+    /// Split into the elements satisfying `p` (`.fst`) and those that do not
+    /// (`.snd`); both keep their original relative order.
+    def partition(p: T -> Boolean): Product[List[T], List[T]] =
+        match this {
+            case lnil => new Product(lnil, lnil)
+            case lcons(x, xs) =>
+                let rest = xs.partition p;
+                let b = p x;
+                match b {
+                    case true => new Product(lcons(x, rest.fst), rest.snd)
+                    case false => new Product(rest.fst, lcons(x, rest.snd))
+                }
+        }
+}

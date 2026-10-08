@@ -28,4 +28,32 @@ impl[A] Dec[A] {
             case yes(a) => Some a
             case no(_) => None
         }
+    /// The proof when `yes`, else `default`.
+    def get_or_else(default: A): A =
+        match this {
+            case yes(a) => a
+            case no(_) => default
+        }
 }
+
+// 本轮补齐：`Dec` 的合取。实现用「具名 refute 辅助 + 内层 match」的写法：
+// 把内层 match 抽成辅助函数会让 twin 引擎在 bump_spine_iter/syntax.rs 的
+// lvl2ix 上 panic（悬空 elaboration 变量，见 data-p2b 探针）。
+/// Lift a refutation of `A` to one of `Product[A, B]` via the first component.
+def dec_refute_fst[A, B](na: A -> Void): Product[A, B] -> Void =
+    p => na p.fst
+
+/// Lift a refutation of `B` to one of `Product[A, B]` via the second component.
+def dec_refute_snd[A, B](nb: B -> Void): Product[A, B] -> Void =
+    p => nb p.snd
+
+/// Conjunction: `Dec[A]` and `Dec[B]` together decide `Product[A, B]`.
+def dec_and[A, B](da: Dec[A], db: Dec[B]): Dec[Product[A, B]] =
+    match da {
+        case yes(a) =>
+            match db {
+                case yes(b) => yes (new Product(a, b))
+                case no(nb) => no (dec_refute_snd nb)
+            }
+        case no(na) => no (dec_refute_fst na)
+    }

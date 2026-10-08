@@ -4,7 +4,9 @@
 //   let cnt = counter(8)         自增计数器：每周期 cnt := cnt + 1
 //   let cnt = counterInc(8, en)  使能计数：when(en) { cnt := cnt + 1 }
 //   cnt.value         计数值（reg [w-1:0]，按 let 绑定名自动命名）
-//   cnt.willOverflow  组合信号：value 全 1（(~value == 0)，下一周期回绕）
+//   cnt.willOverflow  组合信号：value 全 1（(~value == 0)，下一周期回绕）。
+//                     counterInc(8, en) 额外按 enable 门控：en && (~value == 0)，
+//                     即未使能的周期不会误报回绕（2026-10 一致性修复）。
 // ============================================================
 
 module counterFree {

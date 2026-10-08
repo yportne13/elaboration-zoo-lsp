@@ -412,6 +412,12 @@ impl[width: Nat] SInt[width] {
 //   →  let rhs_conv = (cond.mux(a, b)).into;
 //   →  result := rhs_conv
 //   where rhs_conv is a T with the mux Expr inside.
+/// Carrier for the conditional-operator form `cond.mux(a, b)`: it holds the
+/// selector expression and the two branch values. `Bool.mux[T]` returns it so
+/// that the assignment macro's implicit `.into` conversion resolves the concrete
+/// `Into[T]` instance, which is what actually builds the `Expr.mux(cond, a, b)`
+/// node. It is unrelated to `SwitchBuilder`, which drives the when/else chain
+/// directly.
 struct MuxExpr[T: Type 0] {
     condExpr: Expr
     trueVal: T
@@ -452,6 +458,10 @@ impl Bool {
 //  Cat (Bit Concatenation)
 // ============================================================
 
+/// Bit concatenation `this ## that`. The output type `O` is an associated output
+/// parameter: appending one bit to a `width`-bit vector yields a `width + 1`-bit
+/// vector, and the result is always a `Bits`/`UInt`/`SInt` of the summed width. The
+/// left operand occupies the high bits.
 trait Cat[T, O: outParam(Type 0)] {
     def ##(that: T): O
 }
@@ -644,6 +654,9 @@ impl[width: Nat] UInt[width] {
 //   let _sb = sel.switchOn.isValueExpr(v.expr, { body }).default({ body })
 // ============================================================
 
+/// Accumulator for a `switch` statement on a hardware expression: it collects the
+/// comparison arms and, once `default`/`otherwise` closes it, emits a single
+/// `when`/`else` chain whose conditions are `sel === armValue`.
 struct SwitchBuilder {
     selExpr: Expr
 }
@@ -666,6 +679,8 @@ impl SwitchBuilder {
         SwitchBuilder.mk(this.selExpr)
 }
 
+/// Starts a `switch` on the hardware expression `selExpr`; the returned builder
+/// collects arms and `default` emits the resulting conditional assignment chain.
 def switchOnExpr(selExpr: Expr): SwitchBuilder =
     SwitchBuilder.mk(selExpr)
 
@@ -678,6 +693,9 @@ def switchOnExpr(selExpr: Expr): SwitchBuilder =
 
 // 递归线性 mux 链：idx==0 → v[0]，否则递归。idx 宽度独立于递归 n
 // （刚性参数上的计算宽度 log2Up n 不可归约，见 docs §5 已知限制 5）。
+/// Recursive core of `vecAtUInt`: peels the vector one element at a time, emitting
+/// `if (idx === <depth>) result = v[depth]` and finally falling back to `dflt`. The
+/// `depth` parameter is the zero-based index reached in the current step.
 def vecAtUIntHelp[w: Nat][n: Nat][iw: Nat](v: Vec[UInt[w]] n, idx: UInt[iw], depth: Nat, dflt: UInt[w]): UInt[w] = match v {
     case nil => dflt
     case cons(x, xs) =>
@@ -687,5 +705,9 @@ def vecAtUIntHelp[w: Nat][n: Nat][iw: Nat](v: Vec[UInt[w]] n, idx: UInt[iw], dep
 }
 
 // 公开接口：vec.atUInt(idx, default)
+/// Hardware-indexed vector read: `v[idx]` as a chain of `Expr.mux`, falling back to
+/// `dflt` for every index the chain does not match. `idx` is `log2Up n` bits wide,
+/// which is exactly the right range only when n is a power of two: for n = 3,
+/// `log2Up 3 = 2` admits idx = 3, which is >= n and therefore selects `dflt`.
 def vecAtUInt[w: Nat][n: Nat][bn: BindingName](v: Vec[UInt[w]] n, idx: UInt[log2Up n], dflt: UInt[w]): UInt[w] =
     vecAtUIntHelp(v, idx, 0, dflt)

@@ -7,6 +7,12 @@
 // Boolean：归纳布尔类型（运行时真值）。
 // 与 HDL 的 `Bool`（hdl-types.typort 的硬件信号 struct {name, zz_expr}）不同。
 // 转换见 hdl-types.typort: `impl Into[Bool] for Boolean`（bool_to_nat）。
+/// The inductive boolean type: logical truth (`true`) and falsity (`false`).
+///
+/// It is the *runtime* truth type, distinct from the HDL hardware-signal `Bool`
+/// (a struct `{name, zz_expr}` in `hdl-types.typort`); `impl Into[Bool] for
+/// Boolean` there converts via `bool_to_nat`.  The intrinsic `&&` / `||`
+/// methods are registered after the `And` / `Or` instances below.
 enum Boolean {
     /// Logical truth.
     true
@@ -186,3 +192,91 @@ def implies(a: Boolean, b: Boolean): Boolean =
         case true => b
         case false => true
     }
+
+// ---------- 证明层引理 ----------
+// 把 Boolean 层的判定（`not`/`!`、`===`、`nat_eq`、`nat_lte`、`nat_lt`）与命题层
+// 的 `Eq` 钉在一起：结果形如 `Eq ... true` / `Eq ... false`，用
+// `match lem { case refl(a) => a }` 即可取出归一化后的值。
+
+// 注意：不在此处加 `not_not`（`b.not.not = b`）——`examples/theorem_proving.typort`
+// 已定义同名引理，prelude 是扁平命名空间，重名会让该 example 报 `redefine`。
+
+/// `!` is an involution: `!(!b) = b`.
+def not_not_neg(b: Boolean): Eq (!(!b)) b =
+    match b {
+        case true => rfl
+        case false => rfl
+    }
+
+/// `b === b` reduces to `true`: equality is reflexive at the proof level.
+def eq_self_true(b: Boolean): Eq (b === b) true =
+    match b {
+        case true => rfl
+        case false => rfl
+    }
+
+/// `nat_eq a a` is `true`, by induction on `a`.
+def nat_eq_refl(a: Nat): Eq (nat_eq a a) true =
+    match a {
+        case zero => rfl
+        case succ(k) => nat_eq_refl k
+    }
+
+/// `nat_lte a a` is `true`, by induction on `a`.
+def nat_lte_refl(a: Nat): Eq (nat_lte a a) true =
+    match a {
+        case zero => rfl
+        case succ(k) => nat_lte_refl k
+    }
+
+/// `nat_lt a a` is `false` (irreflexivity), by induction on `a`.
+def nat_lt_irrefl(a: Nat): Eq (nat_lt a a) false =
+    match a {
+        case zero => rfl
+        case succ(k) => nat_lt_irrefl k
+    }
+
+/// `nat_lte a (succ a)` is `true`: `succ` is an upper bound.
+def nat_lte_succ(a: Nat): Eq (nat_lte a (succ a)) true =
+    match a {
+        case zero => rfl
+        case succ(k) => nat_lte_succ k
+    }
+
+/// `nat_lt a (succ a)` is `true`: `succ` is strictly larger.
+def nat_lt_succ(a: Nat): Eq (nat_lt a (succ a)) true =
+    match a {
+        case zero => rfl
+        case succ(k) => nat_lt_succ k
+    }
+
+// ---------- Boolean ordering ----------
+
+/// `<` on `Boolean`: `false` is less than `true`.
+def bool_lt(a: Boolean, b: Boolean): Boolean =
+    match a {
+        case false => b
+        case true => false
+    }
+
+/// `<=` on `Boolean`.
+def bool_lte(a: Boolean, b: Boolean): Boolean =
+    match a {
+        case false => true
+        case true => b
+    }
+
+/// `>` on `Boolean`, by swapping the arguments of `bool_lt`.
+def bool_gt(a: Boolean, b: Boolean): Boolean = bool_lt b a
+
+/// `>=` on `Boolean`, by swapping the arguments of `bool_lte`.
+def bool_gte(a: Boolean, b: Boolean): Boolean = bool_lte b a
+
+// `Compare[Boolean, Boolean]`：与 `Compare[Nat, Boolean]` 同构（结果类型也是
+// Boolean）。放在上面四个自由函数之后，方法体才能在 elaborate 时解析到它们。
+impl Compare[Boolean, Boolean] for Boolean {
+    def <(that: Boolean): Boolean = bool_lt this that
+    def <=(that: Boolean): Boolean = bool_lte this that
+    def >(that: Boolean): Boolean = bool_gt this that
+    def >=(that: Boolean): Boolean = bool_gte this that
+}

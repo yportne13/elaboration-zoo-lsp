@@ -109,3 +109,19 @@ def guard[T](cond: Boolean, x: T): Option[T] =
         case true => Some x
         case false => None
     }
+
+// 本轮补齐：惰性默认值形式（与 unwrap_or / map_or 的立即求值形式互补）。
+impl[T] Option[T] {
+    /// The contained value, or `f unit` when `None`.
+    def unwrap_or_else(f: Unit -> T): T =
+        match this {
+            case Some(t) => t
+            case None => f unit
+        }
+    /// Map the contained value, or fall back to `default unit` when `None`.
+    def map_or_else[U](default: Unit -> U, f: T -> U): U =
+        match this {
+            case Some(t) => f t
+            case None => default unit
+        }
+}

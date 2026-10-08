@@ -60,3 +60,32 @@ impl Ordering {
             case gt => gt
         }
 }
+
+// 本轮补齐：由任意比较函数 `p: T -> T -> Ordering` 驱动的三值选择。
+// 刻意命名为 ordering_min / ordering_max：hdl-utils.typort 里已有自由函数
+// `min` / `max`，prelude 是扁平命名空间，不能占用这两个名字。
+/// `a` or `b`, whichever is smaller under `p` (equal keeps `a`).
+def ordering_min[T](a: T, b: T, p: T -> T -> Ordering): T =
+    match p a b {
+        case lt => a
+        case eq => a
+        case gt => b
+    }
+
+/// `a` or `b`, whichever is greater under `p` (equal keeps `a`).
+def ordering_max[T](a: T, b: T, p: T -> T -> Ordering): T =
+    match p a b {
+        case lt => b
+        case eq => a
+        case gt => a
+    }
+
+impl Ordering {
+    /// The branch matching `this`: `lt_val` / `eq_val` / `gt_val`.
+    def pick[T](lt_val: T, eq_val: T, gt_val: T): T =
+        match this {
+            case lt => lt_val
+            case eq => eq_val
+            case gt => gt_val
+        }
+}

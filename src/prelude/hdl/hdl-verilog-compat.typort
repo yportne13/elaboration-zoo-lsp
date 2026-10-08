@@ -12,29 +12,45 @@
 // uses (newUInt / newUIntReg / whenBegin / ...); elaboration, Verilog
 // codegen and LSP span mapping are fully reused.
 //
-// M1 mapping summary (full table in docs/verilog-compat.md):
-//   input clk / reset / rst_n (leading ports)   -> folded into the module
-//       ClockDomain (rst_n => ActiveLow), no separate port
+// Mapping summary — M1 (skeleton) + M2 (expressions / codegen) + M3 (reset &
+// clock hierarchy) are all implemented; the full table lives in
+// docs/verilog-compat.md §2 and the milestone tables in §4.
+//   input clk / reset / rst_n (leading AND trailing scalar ports)
+//                                               -> folded into the module
+//       ClockDomain by compatFoldPort (clk => clock name, reset =>
+//       ActiveHigh, rst_n => ActiveLow) AND emitted as a REAL Bool port, so
+//       the body can reference them (`if (!rst_n) q <= 0; else q <= d;`)
 //   wire/reg [msb:lsb] x;  (= init)             -> newUInt / newUIntReg(InitNat)
-//   assign y = e;                               -> y := e
-//   always @(posedge clk [or posedge/negedge rst]) begin ... end
-//                                               -> body verbatim + clock check
-//   always @(*) / @* begin ... end              -> combBegin/combEnd context
+//   assign y = e;  /  assign y[i] = e;  /  assign y[hi:lo] = e;
+//                                               -> y := e / y[i] / y.slice[hi,lo]
+//   always @(posedge clk [or posedge|negedge rst]) begin ... end
+//                                               -> body verbatim + HDV001
+//       clock/reset-name checks; the reset edge goes into the sensitivity list
+//   always @(*) / @* begin ... end              -> combBegin/combEnd context;
+//       a reg assigned there is driven COMBINATIONALLY (combBegin + HDV002,
+//       routed into the merged always @(*) block as blocking assignments)
 //   q <= d;  q = d;                             -> q := d (reg-ness decides
 //       clocked vs combinational; inside @(*) a reg is forced combinational)
 //   if (c) ... else ...                         -> when/otherwise chain
-//   child u1 (.a(x), .sum(s));                  -> u1 = child.create; vconn(...)
-//   8'h2A / 5'd10 / 4'b1010                     -> sizedLit (parser desugar)
-//   a == b / a != b                             -> === / =/=
+//   case (x) L: ... default: ... endcase        -> exclusive when/elsewhen
+//       chain comparing through CaseEq; `default` is an always-true label
+//   child u1 (.a(x), .sum(s));                  -> u1 = child.create; vconnT(...)
+//       (direction-aware: an input becomes `.a(x)`, an output `sig := u.a`)
+//   8'h2A / 5'd10 / 4'b1010                     -> sizedLit (parser desugar;
+//       the width rides in the Expr, so `{4'h3, nib}` keeps its 4 bits)
+//   a == b / a != b                             -> === / =/= through VEq
+//   a[3] / a[7:4] / {a,b} / &a / |a / ^a        -> bitsel / slice / ##-chain /
+//       andR / orR / xorR (parser desugar, M2)
 //
-// Constraints (M1): one clock per module, folded clock/reset ports must
-// come first in the port list and use the exact names clk / reset / rst_n;
-// plain `[w]` ports before `output reg [w]` ports before scalar ports
-// (the dominant Verilog declaration order); concatenation uses typort's
-// ## operator ({a,b} sugar is M2); every statement ends with `;` (or
-// begin/end). Unsupported: parameter headers, case/endcase, for, initial,
-// generate, delays, $display, explicit reset conditions inside always
-// (reset goes through `init` values — SpinalHDL semantics).
+// Constraints: one clock domain per module; the folded names are exactly clk /
+// reset / rst_n; port groups are matched as contiguous runs (leading scalar
+// inputs, `[hi:lo]` ports, `output reg [hi:lo]`, scalar `output reg`,
+// remaining scalars) and width ports must precede scalar outputs; every
+// statement ends with `;` (or begin/end). Still unsupported (M4): parameter
+// headers, generate, initial, delays (`#`), `$display`, the `wire` type
+// modifier on ports (`input wire [7:0] a` — matching has no lookahead, so
+// write the bare direction), empty `.port()` / positional connections and
+// multi-clock domains.
 
 // ---------- sized literals ----------
 // The parser rewrites `8'h2A` (Num "8", Op "'", Ident "h2A") to
@@ -44,6 +60,11 @@
 // a legal sized constant `8'd42` — IEEE 1364 forbids unsized constants inside
 // concatenations, and `{4'h3, nib}` must keep its 4-bit width.
 
+/// A sized Verilog literal `w'dv` as a `UInt[w]` — the parser's desugar target
+/// for `8'h2A` / `5'd10` / `4'b1010` (the Rust side computes the value and
+/// rejects overflow past the width).  The width lives in the TYPE and in the
+/// `sizedLiteral` Expr, so codegen emits a legal sized constant: IEEE 1364
+/// forbids unsized constants inside concatenations.
 def sizedLit(w: Nat, v: Nat): UInt[w] = UInt.mk(None, sizedLiteral(v, w))
 
 // ---------- Verilog comparison aliases ----------
@@ -53,6 +74,11 @@ def sizedLit(w: Nat, v: Nat): UInt[w] = UInt.mk(None, sizedLiteral(v, w))
 // trait with per-argument-type instances (UInt vs UInt, UInt vs Nat, ...),
 // exactly how === overloads in hdl-ops.
 
+/// `==` / `!=` for Verilog-style comparison: generated Verilog `==` / `!=`,
+/// built from typort's `===` / `=/=`.  A trait rather than an inherent impl
+/// because an inherent block allows only one method per name and its
+/// where-clause implicits are not inserted at call sites (the `Equal` pattern).
+/// Instances: UInt/UInt, UInt/Nat, SInt/SInt, Bool/Bool.
 trait VEq[A] {
     def ==(that: A): Bool
     def !=(that: A): Bool
@@ -89,12 +115,21 @@ impl VEq[Bool] for Bool {
 // NOTE: a trait (not an inherent impl) so the method is found at the call
 // site — same reason as VEq above.
 
+/// Marker type for the `case ... default:` label.  Lets `default` be captured
+/// as an ordinary identifier by the VExpr `case` arm, so no dedicated macro
+/// arm is needed for it.
 enum CaseDefault {
     caseDefault
 }
 
+/// The always-true `case` label.  The `CaseEq[CaseDefault]` instances return
+/// literal `1`, so a `default:` branch matches every selector value; in the
+/// emitted when/elsewhen chain it contributes an unconstrained condition.
 def default: CaseDefault = caseDefault
 
+/// Label comparison for `case` (`caseEq(that)`): `this === that` for
+/// UInt/SInt-vs-signal and UInt/SInt-vs-Nat labels, always true for
+/// `CaseDefault` (`default:`).  A trait for the same call-site reason as `VEq`.
 trait CaseEq[B] {
     def caseEq(that: B): Bool
 }
@@ -130,12 +165,21 @@ impl[width: Nat] CaseEq[CaseDefault] for SInt[width] {
 // recorded. The struct wrapper exists because a mutable global's name
 // must be an existing type name (see hdl-core's CombCtx note).
 
+/// Folded clock-domain state (the "CompatCD" mutable global), filled by
+/// `compatSetClk` / `compatSetRst` while the module arm walks its scalar input
+/// ports and read back by `compatCD` when the `ModuleDef` is recorded.  The
+/// struct wrapper exists because a mutable global's name must be an existing
+/// type name (same pattern as hdl-core's `CombCtx`).
 struct CompatCD {
     clk: String
     rst: String
     rstHigh: Boolean
 }
 
+/// Fold `input clk` into the module's clock domain: set the clock name; a
+/// folded clock with no explicit reset keeps the canonical reset name
+/// `reset` (so `compatCD` needs no empty-reset special case).  Does not touch
+/// an already-folded reset name.
 def compatSetClk(n: String): Unit =
     // A folded clock with no explicit reset keeps the canonical reset name
     // (compatCD then needs no empty-reset special case).
@@ -145,6 +189,8 @@ def compatSetClk(n: String): Unit =
     });
     unit
 
+/// Fold `input reset` / `input rst_n` into the module's clock domain: set the
+/// reset name and polarity (`activeHigh` true for `reset`, false for `rst_n`).
 def compatSetRst(n: String, activeHigh: Boolean): Unit =
     let _ = change_mutable("CompatCD", x => CompatCD.mk(x.clk, n, activeHigh));
     unit
@@ -155,6 +201,12 @@ def compatSetRst(n: String, activeHigh: Boolean): Unit =
 // rst_n touch the clock-domain fold; any other scalar input is a plain port.
 // Deliberately one `str_eq` per `match` (matching compatCD's note: nested
 // str_eq scrutinees made declaration-time elaboration loop).
+/// Dispatch one declared scalar input port by name at run time (the module
+/// macro cannot branch on a literal keyword in its pattern, so it captures
+/// EVERY leading and trailing scalar input and calls this for each).  Only
+/// `clk` / `reset` / `rst_n` touch the clock-domain fold; any other scalar
+/// input is a plain Bool port.  Deliberately one `str_eq` per `match`: nested
+/// `str_eq` scrutinees made declaration-time elaboration loop.
 def compatFoldPort(n: String): Unit =
     let _a = match str_eq(n, "clk") {
         case true => compatSetClk(n)
@@ -172,6 +224,13 @@ def compatFoldPort(n: String): Unit =
 
 // NOTE: keep this match NESTING SHALLOW (one str_eq level) — a three-level
 // nested str_eq match here made declaration-time elaboration loop.
+/// Read the folded clock domain for the module being recorded: a
+/// `ClockDomain` with the folded clock/reset names, `Async` + `RisingEdge`,
+/// and `ActiveHigh` / `ActiveLow` from the fold; `defaultClockDomain` when no
+/// `clk` was folded.  `mname` is unused (report attribution comes from the
+/// fold state).  NOTE: keep the match nesting shallow (one `str_eq` level) — a
+/// three-level nested `str_eq` match here made declaration-time elaboration
+/// loop.
 def compatCD(mname: String): ClockDomain =
     let _ = change_mutable_default("CompatCD", x => x, CompatCD.mk("", "", true));
     let cd = get_global("CompatCD");
@@ -190,6 +249,12 @@ def compatCD(mname: String): ClockDomain =
 // names); at module-run time a folded clock exists and mismatches report
 // for real.
 
+/// HDV001 check for `always @(posedge <clk>)`: the written clock name must
+/// equal the module's folded `input clk`.  Report attribution comes from the
+/// FOLD state (`cd.clk`), never from the checked def's parameters — at
+/// class-declaration check time the fold is still empty, so `report_check_issue`
+/// skips the line (empty module name) and at module-run time a mismatch reports
+/// for real.
 def compatCheckClk(clkArg: String): Unit =
     let _ = change_mutable_default("CompatCD", x => x, CompatCD.mk("", "", true));
     let cd = get_global("CompatCD");
@@ -200,6 +265,10 @@ def compatCheckClk(clkArg: String): Unit =
             unit
     }
 
+/// HDV001 check for `always @(posedge clk or posedge|negedge <rst>)`: the
+/// written reset name must equal the module's folded `input reset` /
+/// `input rst_n`.  Same empty-module skip at declaration-check time as
+/// `compatCheckClk`.
 def compatCheckRst(rstArg: String): Unit =
     let _ = change_mutable_default("CompatCD", x => x, CompatCD.mk("", "", true));
     let cd = get_global("CompatCD");
@@ -215,6 +284,11 @@ def compatCheckRst(rstArg: String): Unit =
 // NOTE: like compatCD above — keep str_eq OUT of nested scrutinee positions
 // (let-bind the comparisons first); three nested str_eq scrutinees made
 // declaration-time elaboration loop.
+/// Validate a port direction keyword and return it unchanged (`input` /
+/// `inout` / `output`).  Anything else reports HDV003 and falls back to
+/// `"input"`.  The three `str_eq` calls are let-bound instead of nested in
+/// scrutinee position — nested `str_eq` scrutinees made declaration-time
+/// elaboration loop.
 def compatDir(d: String): String =
     let isInput = str_eq(d, "input");
     let isInout = str_eq(d, "inout");
@@ -240,6 +314,8 @@ def compatDir(d: String): String =
 // with the subSignal on the correct side — the Verilog generator already
 // renders assign-to/from-subSignal as port connections.
 
+/// Is `e` an input-port declaration expression named `pname`?  Only the
+/// `createIn*` variants count (output / inout declarations are false).
 def isInputPortExpr(e: Expr, pname: String): Boolean = match e {
     case createIn(n) => str_eq(n, pname)
     case createInWidth(n, _) => str_eq(n, pname)
@@ -247,6 +323,8 @@ def isInputPortExpr(e: Expr, pname: String): Boolean = match e {
     case _ => false
 }
 
+/// Does a declared expr list contain an input port named `pname`?  Lets the
+/// port-connection dispatch choose the direction side of `.p(x)`.
 def anyInputPort[n: Nat](exprs: Vec[Expr] n, pname: String): Boolean = match exprs {
     case nil => false
     case cons(e, rest) => match isInputPortExpr(e, pname) {
@@ -255,6 +333,10 @@ def anyInputPort[n: Nat](exprs: Vec[Expr] n, pname: String): Boolean = match exp
     }
 }
 
+/// Find the module name of instance `iname` in a def's expr list (the
+/// `instance(n, mdl)` records), `None` if the instance is not there.  PURE
+/// navigation: binder arms only, no global ops — the shape the elaborator
+/// needs at declaration time.
 def instModuleOf[n: Nat](exprs: Vec[Expr] n, iname: String): Option[String] = match exprs {
     case nil => None
     case cons(e, rest) => match e {
@@ -266,6 +348,7 @@ def instModuleOf[n: Nat](exprs: Vec[Expr] n, iname: String): Option[String] = ma
     }
 }
 
+/// Find a `ModuleDef` by name in a Vec (first match); `None` when absent.
 def findModuleDef[n: Nat](defs: Vec[ModuleDef] n, name: String): Option[ModuleDef] = match defs {
     case nil => None
     case cons(md, rest) => match str_eq(md.name, name) {
@@ -292,6 +375,14 @@ def findModuleDef[n: Nat](defs: Vec[ModuleDef] n, name: String): Option[ModuleDe
 //     registry. All-typort versions of this dispatch looped declaration-
 //     time elaboration on infinite Sum normalization (Expr-typed ctor
 //     payloads + global reads under binder-pattern arms).
+/// Emit the assign node for a Verilog-compat named-port connection `.p(x)`,
+/// on the correct side for the child port's direction: an input port becomes
+/// `port := sig` (emitted `.p(x)`), an output port becomes `sig := port`
+/// (reading the child output).  Deliberately shaped as Boolean-match arms plus
+/// `createSignalExpr` (the `pickAssign` class); the `vconn` BUILTIN in
+/// `src/L13_namespace/cxt.rs` glues the `instModuleOf`-style lookup to this —
+/// all-typort versions of the dispatch loop declaration-time elaboration on
+/// infinite Sum normalization.
 def vconnEmit(isIn: Boolean, port: Expr, sig: Expr): Unit =
     match isIn {
         case true =>
@@ -315,6 +406,42 @@ def vconnEmit(isIn: Boolean, port: Expr, sig: Expr): Unit =
 // the closing `end` / `endmodule` tokens are never swallowed as
 // expression statements.
 
+/// The Verilog STATEMENT table, dispatched ONLY from the Verilog arm of the
+/// `module` macro through `$( $body: VExpr )*` fragments (nested statement
+/// bodies below also use `$x: VExpr`).  Kept strictly separate from typort's
+/// `Expr` table so the two syntaxes never pollute each other.  Every arm
+/// transcribes to the same factories typort HDL uses (`newUInt` /
+/// `newUIntReg` / `whenBegin` / ...), so elaboration, Verilog codegen and LSP
+/// span mapping are fully reused.  What each arm generates:
+///   `wire [hi:lo] w [= v];` / `wire w [= v];`
+///       -> `newUInt(hi-lo+1)` (plus `w := v` when initialised)
+///   `reg [hi:lo] q [= v];` / `reg q [= v];`
+///       -> `newUIntReg` / `newUIntRegInitNat` (init is a plain decimal Nat)
+///   `assign l = r;` / `assign l[i] = r;` / `assign l[hi:lo] = r;`
+///       -> `l := r` / `l[i] := r` / `l.slice[hi,lo] := r`
+///   `always @(posedge clk [or posedge|negedge rst]) begin ... end`
+///       -> HDV001 clock/reset name checks, then the body verbatim; the folded
+///          clock domain makes `q <= d` a clocked regAssign and the reset edge
+///          lands in the sensitivity list
+///   `always @(*) begin ... end` / `always @ * ...`
+///       -> `combBegin()` / `combEnd()` (a reg assigned here is driven
+///          combinationally; HDV002 lint)
+///   `if (c) ... [else ...]` (begin-forms tried before single-statement forms)
+///       -> `whenBegin` / `whenOtherwiseBegin` / `whenEnd`
+///   `begin ... end` (bare grouping) -> the statements spliced flat
+///   `child u1 (.a(x), ...);` -> `u1 = child.create` + `vconnT` per named port
+///          (direction-aware: input -> `u.p := x`, output -> `x := u.p`)
+///   `l <= r;` / `l[i] <= r;` / `l[hi:lo] <= r;` (and the `=` forms)
+///       -> procedural assignment, same desugar as `assign`
+///   `case (e) L1: s1; ... default: sd; endcase`
+///       -> flat when/elsewhen chain comparing labels through `CaseEq` (no
+///          trailing `;`, so only this arm can match it)
+///   `$x: raw ;` -> expression statement; the `;` is required so the closing
+///          `end` / `endmodule` tokens are never swallowed
+/// Arms are ordered most-specific-first (rule order is the only
+/// backtracking).  `raw` fragments are greedy and non-backtracking, so they
+/// appear only at end-of-statement (bounded by the literal `;`) or inside
+/// bracket/paren delimiters.
 #[macro_export]
 macro_rules VExpr {
     // ---- wire declarations (width = msb - lsb + 1, written `1 + hi - lo`

@@ -8,41 +8,61 @@
 //  io/TriState —— 三态（read/write/writeEnable）
 // ============================================================
 
+/// Bidirectional (tri-state) buffer bundle, one `writeEnable` for the whole
+/// word: `read` is the value sampled from the pad, `write` is the value to
+/// drive, and `writeEnable` high means the bundle drives `write` onto the pad
+/// while low leaves the pad floating for an external driver (the Verilog side
+/// is an `inout` port; this struct only groups the three signals).
 struct TriStateBits[w: Nat] {
     read: Bits[w]
     write: Bits[w]
     writeEnable: Bool
 }
 
-// master 视角：out(write, writeEnable)；in(read)
+/// Master view of `TriStateBits[w]`: the master drives `write` and
+/// `writeEnable` (outputs) and samples `read` (input).
 def triStateAsMasterBits[bn: BindingName][w: Nat](t: TriStateBits[w]): TriStateBits[w] =
     TriStateBits.mk(in_b(t.read), out_b(t.write), out_bool(t.writeEnable))
 
+/// Slave view of `TriStateBits[w]`: direction flip of
+/// `triStateAsMasterBits` — samples `write`/`writeEnable`, drives `read`.
 def triStateAsSlaveBits[bn: BindingName][w: Nat](t: TriStateBits[w]): TriStateBits[w] =
     TriStateBits.mk(out_b(t.read), in_b(t.write), in_bool(t.writeEnable))
 
-// TriStateArray —— w 位三态总线（read/write/writeEnable 各 w 位）
+/// Per-bit tri-state array: each of the `w` lanes has its own
+/// `writeEnable` bit, so a subset of the bus can float while the rest is
+/// driven. `read`/`write`/`writeEnable` are all `w` bits wide.
 struct TriStateArray[w: Nat] {
     read: Bits[w]
     write: Bits[w]
     writeEnable: Bits[w]
 }
 
+/// Master view of `TriStateArray[w]`: drives `write`/`writeEnable` bit-wise,
+/// samples `read`.
 def triStateArrayAsMaster[bn: BindingName][w: Nat](t: TriStateArray[w]): TriStateArray[w] =
     TriStateArray.mk(in_b(t.read), out_b(t.write), out_b(t.writeEnable))
 
+/// Slave view of `TriStateArray[w]`: direction flip of
+/// `triStateArrayAsMaster`.
 def triStateArrayAsSlave[bn: BindingName][w: Nat](t: TriStateArray[w]): TriStateArray[w] =
     TriStateArray.mk(out_b(t.read), in_b(t.write), in_b(t.writeEnable))
 
-// ReadableOpenDrain —— 开漏（read + write，无 enable）
+/// Open-drain line with a read-back: `write` is the value the module pulls
+/// down (drain), `read` is the pad level. There is deliberately no
+/// `writeEnable` — an open-drain pad is either driven low or released, which
+/// the surrounding `inout` port modelling decides.
 struct ReadableOpenDrain {
     read: Bool
     write: Bool
 }
 
+/// Master view of `ReadableOpenDrain`: samples `read`, drives `write`.
 def rodAsMaster[bn: BindingName](t: ReadableOpenDrain): ReadableOpenDrain =
     ReadableOpenDrain.mk(in_bool(t.read), out_bool(t.write))
 
+/// Slave view of `ReadableOpenDrain`: direction flip of `rodAsMaster` —
+/// drives `read`, samples `write`.
 def rodAsSlave[bn: BindingName](t: ReadableOpenDrain): ReadableOpenDrain =
     ReadableOpenDrain.mk(out_bool(t.read), in_bool(t.write))
 
@@ -50,6 +70,13 @@ def rodAsSlave[bn: BindingName](t: ReadableOpenDrain): ReadableOpenDrain =
 //  io/Gpio —— 简单 GPIO（输入采样 + 输出驱动 + 中断挂起）
 // ============================================================
 
+/// GPIO bundle: the physical pad group plus the internal registers the core
+/// logic uses. `pin_read` is the sampled pad input, `pin_write` /
+/// `pin_writeEnable` drive the pad, `input` receives the registered sample,
+/// `output` / `outputEnable` are the caller's output registers the core reads,
+/// and `interrupts` receives the pending-interrupt bits. Only `pin_read`,
+/// `output` and `outputEnable` are inputs to `gpioCtrl`; everything else is
+/// driven by it.
 struct GpioIO[w: Nat] {
     pin_read: Bits[w]
     pin_write: Bits[w]
@@ -60,14 +87,31 @@ struct GpioIO[w: Nat] {
     interrupts: Bits[w]     // 中断挂起
 }
 
-// gpioCtrl：GPIO 核心逻辑（读采样、输出、中断）
+/// GPIO core logic, one bit per pin. Per clock: (1) `pin_read` is sampled into
+/// an internal register (`<bn>_input`, init 0) which drives `io.input` — so
+/// `io.input` lags the pad by one cycle, matching the field's "sampled input"
+/// contract; (2) `io.pin_write := io.output` and
+/// `io.pin_writeEnable := io.outputEnable` pass the caller's registers to the
+/// pad (the pad itself floats when the enable is low); (3) `interrupts` is a
+/// **sticky pending** register (`<bn>_pend`) set on a rising edge of
+/// `pin_read` (edge against the previous sample) and cleared per-bit by
+/// `clearInterrupt`, so a pulse shorter than the sampling period is still
+/// captured. Note the first cycle after reset already counts as a rising edge
+/// if `pin_read` is high then. `clearInterrupt` has precedence over the set.
 def gpioCtrl[bn: BindingName][w: Nat](io: GpioIO[w], clearInterrupt: Bits[w]): Unit =
-    let _ = io.input := io.pin_read;
+    // 采样寄存器：每个时钟沿把 pad 采进 input
+    let sampled = newBitsRegInitNatNamed(bn.name + "_input", w, 0);
+    let _ = createSignalExpr("", regAssign(sampled.zz_expr, io.pin_read.zz_expr));
+    let _ = io.input := sampled;
     // 输出使能时驱动引脚写，否则高阻（inout 语义由上层决定）
     let _ = io.pin_write := io.output;
     let _ = io.pin_writeEnable := io.outputEnable;
-    // 中断挂起 = 输入边沿检测（简化：输入为 1 且未清除）
-    let _ = io.interrupts := Bits.mk(None, binary(io.pin_read.zz_expr, "&", unary("~", clearInterrupt.zz_expr)));
+    // 中断挂起：上升沿（pin_read 高、上一拍采样低）置位；clearInterrupt 清零
+    let pend = newBitsRegInitNatNamed(bn.name + "_pend", w, 0);
+    let rise = binary(io.pin_read.zz_expr, "&", unary("~", sampled.zz_expr));
+    let _ = createSignalExpr("", regAssign(pend.zz_expr,
+        binary(binary(pend.zz_expr, "|", rise), "&", unary("~", clearInterrupt.zz_expr))));
+    let _ = io.interrupts := pend;
     unit
 
 // ============================================================
@@ -75,12 +119,21 @@ def gpioCtrl[bn: BindingName][w: Nat](io: GpioIO[w], clearInterrupt: Bits[w]): U
 //  BCD 加法：和 > 9 时 +6 修正
 // ============================================================
 
+/// Result of a single-digit BCD addition: `sum` is the corrected low BCD digit
+/// (4 bits) and `carry` is the decimal carry out (1 when the raw digit sum
+/// exceeded 9). Both are combinationally derived by `bcdAddDigit`.
 struct BcdAddResult {
     sum: UInt[4]
     carry: Bool
 }
 
-// bcdAddDigit(a, b, carryIn)：单 BCD 位加法
+/// One-digit BCD adder: computes `a + b + carryIn` in 5 bits (`a +^ b` keeps
+/// the carry-out bit), adds the `+6` correction when the sum is greater than
+/// 9, and reports `carry = (sum > 9)`. `sum` is the corrected digit (the
+/// Verilog assignment truncates the 5-bit corrected value to the low nibble,
+/// which is exactly `raw - 10` for the >9 cases); `carry` must be fed into the
+/// next digit's `carryIn`. Matches the `vBcdAdd` reference in
+/// tools/spinalhdl-verify/verify.py (all 512 input combinations).
 def bcdAddDigit(a: UInt[4], b: UInt[4], carryIn: Bool): BcdAddResult =
     let s = a +^ b;
     let sWithCarry = UInt.mk[5](None, binary(s.zz_expr, "+", Expr.mux(carryIn.zz_expr, literal(1), literal(0))));
@@ -89,17 +142,27 @@ def bcdAddDigit(a: UInt[4], b: UInt[4], carryIn: Bool): BcdAddResult =
     let corrected = UInt.mk[5](None, binary(sWithCarry.zz_expr, "+", Expr.mux(over9, literal(6), literal(0))));
     BcdAddResult.mk(UInt.mk(None, corrected.zz_expr), Bool.mk(None, over9))
 
-// Bcd：digitCount 个 4 位 digit 拼接
+/// A `d`-digit BCD value: `d` four-bit digits packed into one `Bits[d * 4]`
+/// vector, digit 0 in the low nibble (the layout `bcdAddDigit` cascades over).
+/// Pure value — it emits no hardware; `bcdIsZero` and `bcdAddDigit` do the
+/// checking/arithmetic.
 struct Bcd[d: Nat] {
     digits: Bits[d * 4]
 }
 
-// 检查是否全 0
+/// All-zero test on the whole packed digit vector (`digits == 0`), i.e. every
+/// BCD digit is zero. Works for any digit count without unpacking.
 def bcdIsZero[d: Nat](b: Bcd[d]): Bool =
     Bool.mk(None, binary(b.digits.zz_expr, "==", literal(0)))
 
-// BCD 加法（两数位宽相同）—— 逐 digit 的 +6 修正加法见 bcdAddDigit；
-// 整宽版本暂返回 a（多 digit 级联加法按 bcdAddDigit 逐位展开）
+/// **Stub — not a multi-digit adder**: returns `a` unchanged, ignoring `b`.
+/// Only the single-digit `bcdAddDigit` (above) is a working BCD adder; a
+/// generic `d`-digit ripple cannot be written here because a helper whose
+/// result width grows with the digit index (`Bits[i * 4]`) needs reducible
+/// type-level arithmetic on a rigid `Nat` parameter, which the elaborator does
+/// not support (docs/spinalhdl-lib-replication.md §3 known limitation 5).
+/// Callers needing multi-digit BCD addition must cascade `bcdAddDigit` per
+/// digit themselves and propagate `carry`.
 def bcdAdd[d: Nat](a: Bcd[d], b: Bcd[d]): Bcd[d] = a
 
 // ============================================================
@@ -107,6 +170,12 @@ def bcdAdd[d: Nat](a: Bcd[d], b: Bcd[d]): Bcd[d] = a
 //  状态机：cmd.valid → 计算 → rsp.valid
 // ============================================================
 
+/// Divider command port: `valid` starts an operation when the core is idle,
+/// `numerator`/`denominator` carry the operands. `ready` is part of the
+/// interface for symmetry with SpinalHDL's `Flow`-style handshake but the
+/// core never drives it — the actual command-accept signal is
+/// `DividerFSM.cmdReady` (== `!busy`), so a caller must read `cmdReady`
+/// instead of `cmd.ready`.
 struct DividerCmd[w: Nat] {
     valid: Bool
     numerator: UInt[w]
@@ -114,14 +183,19 @@ struct DividerCmd[w: Nat] {
     ready: Bool
 }
 
+/// Divider response port: `valid` pulses for one cycle when
+/// `quotient`/`remainder` are final; both values stay stable during that
+/// cycle and the core ignores new commands while `valid` is not asserted.
 struct DividerRsp[w: Nat] {
     valid: Bool
     quotient: UInt[w]
     remainder: UInt[w]
 }
 
-// 恢复除法：每次移一位，共 w 拍。简化实现：
-//  状态寄存器 + 余数/商移位寄存器。
+/// Combinational status outputs of `dividerCore`: `busy` (operation running),
+/// `cmdReady` (`!busy`, accept a new `cmd.valid` next cycle), `rspValid`
+/// (one-cycle response strobe) plus the quotient/remainder of the last
+/// completed operation.
 struct DividerFSM[w: Nat] {
     busy: Bool
     cmdReady: Bool
@@ -130,7 +204,15 @@ struct DividerFSM[w: Nat] {
     remainder: UInt[w]
 }
 
-// divider 核心：串行恢复除法（每周期一位，w 周期完成）
+/// Serial restoring divider, one quotient bit per clock: on
+/// `cmd.valid && !busy` it loads `rem = {1'b0, numerator}` and clears the
+/// quotient; each busy cycle shifts `rem` left, subtracts the (zero-extended)
+/// denominator when `rem >= {1'b0, denominator}` and shifts a 1 into the
+/// quotient's LSB; after exactly `w` steps (`cnt == w - 1`) `busy` drops and
+/// `rsp.valid` pulses for that cycle. **No divide-by-zero handling**: with
+/// `denominator == 0` the comparison is always true and the result is
+/// meaningless. `w` must be the operand width; the step counter is
+/// `maxNat(1, log2Up(w + 1))` bits wide, the remainder register `w + 1`.
 def dividerCore[bn: BindingName][w: Nat](cmd: DividerCmd[w], rsp: DividerRsp[w]): DividerFSM[w] =
     // 计数器
     let cnt = newUIntRegInitNatNamed(bn.name + "_cnt", maxNat(1, log2Up(w + 1)), 0);
@@ -173,11 +255,18 @@ def dividerCore[bn: BindingName][w: Nat](cmd: DividerCmd[w], rsp: DividerRsp[w])
 //  输入 onehot 位串，输出对应索引（无效输入 → 0）
 // ============================================================
 
-// decoderOhToUInt：onehot 转索引（等价 ohToUInt，别名）
+/// One-hot to index decoder: the returned index has width
+/// `maxNat(1, log2Up width)` and is computed as the bitwise OR of the indices
+/// of all set input lines. Its result is therefore only an "index" for a legal
+/// one-hot (or all-zero → 0) input; a multi-hot input yields the OR of the set
+/// positions rather than 0, so normalize with `ohLegal` / `ohFirst` (hdl-utils)
+/// first if the input can be multi-hot. Thin alias of `ohToUInt`.
 def decoderOhToUInt[width: Nat](oh: Bits[width]): UInt[maxNat(1, log2Up width)] =
     ohToUInt(oh)
 
-// 解码为 UInt 值向量：值 k 分配给第 k 根线
+/// Priority-select decode: returns the value bound to the **lowest** set line
+/// of `oh` (first hit wins, `priorityMux` semantics), or `dflt` when no line is
+/// set. `values` must be exactly `w` entries and `vw` is their value width.
 def decoderValueUInt[w: Nat, vw: Nat](oh: Bits[w], values: Vec[UInt[vw]] w, dflt: UInt[vw]): UInt[vw] =
     priorityMux(oh, values, dflt).into
 
@@ -186,16 +275,28 @@ def decoderValueUInt[w: Nat, vw: Nat](oh: Bits[w], values: Vec[UInt[vw]] w, dflt
 //  Masked(value, care)：与硬件值的掩码相等比较
 // ============================================================
 
+/// Elaboration-time mask pattern: `value` holds the expected pattern and
+/// `care` the bits that matter (1 = compare this bit). Both are plain `Nat`s,
+/// so a `Masked` value is used as a constant in hardware comparisons
+/// (`maskedEq`) and as a pure predicate (`maskedCovers`).
 struct Masked {
     value: Nat
     care: Nat
 }
 
-// 硬件比较：maskedEq(hard, m) = (hard & care) == (value & care)
+/// Hardware masked equality: emits `(hard & care) == value`. Note the
+/// right-hand side is the **raw** `m.value` — it is *not* re-masked with
+/// `care` — so callers must guarantee that `value` has no bits outside `care`
+/// (the `Masked.mk(2, 6)` pattern in the verification corpus satisfies this:
+/// 2 & 6 == 2). With stray bits set the comparison can never be true.
 def maskedEq[width: Nat](hard: Bits[width], m: Masked): Bool =
     Bool.mk(None, binary(binary(hard.zz_expr, "&", literal(m.care)), "==", literal(m.value)))
 
-// 是否被覆盖（纯函数）：care 位集包含
+/// Pure (elaboration-time) coverage predicate: with saturating `nat_sub` it is
+/// `m.value <= x.value` — it compares only the two `value` fields and ignores
+/// `care` entirely (`nat_sub a 0 == a` by construction). Intended for
+/// checking that pattern `x` covers pattern `m` when care == value (full
+/// masks); with partial care the numeric comparison is not a bit-set test.
 def maskedCovers(m: Masked, x: Masked): Boolean =
     nat_eq (nat_sub (nat_sub m.value x.value) 0) 0
 
@@ -204,22 +305,34 @@ def maskedCovers(m: Masked, x: Masked): Boolean =
 //  state 寄存器 + 转移表（when/switch 驱动）
 // ============================================================
 
-// stateMachine：通用单寄存器状态机
-// stateCount 个状态，每个状态位宽 log2Up(stateCount)
+/// Single-register state machine handle: `state` is the state register
+/// itself; drive transitions with `stateGoto` (usually inside a `when`) and
+/// test the current state with `stateIs`.
 struct StateMachine[w: Nat] {
     state: UInt[w]
 }
 
-// 状态机：状态寄存器 + 转移函数
+/// Creates the state register (`<bn>` as the let-binding name, async-reset
+/// init 0) and wraps it. `w` is the register width and is **independent of**
+/// `stateCount`: the argument is documentation only — the register width is
+/// whatever `w` the caller passes, so write the width as `maxNat(1,
+/// log2Up stateCount)` yourself (the example `20-misc.typort` instantiates
+/// `stateMachine` with width 2 for 4 states). No width check is performed; `w`
+/// smaller than `log2Up stateCount` silently truncates states.
 def stateMachine[w: Nat][bn: BindingName](stateCount: Nat): StateMachine[w] =
     let st = newUIntRegInitNatNamed(bn.name, w, 0);
     StateMachine.mk(st)
 
-// 状态转移：when 条件时跳转到目标状态
+/// Transition to `target` (a literal state ordinal): records the clocked
+/// assignment `state <= target`. It is **unconditional**, so wrap the call in
+/// a `when`/`else` chain to make the transition conditional; two unconditional
+/// calls in one scope would be multiple drivers (HDL010). `[bn]` is unused and
+/// kept for symmetry with the other hardware factories.
 def stateGoto[bn: BindingName][w: Nat](sm: StateMachine[w], target: Nat): Unit =
     let _ = createSignalExpr("", regAssign(sm.state.zz_expr, literal(target)));
     unit
 
-// 状态 = 检查当前状态（elaboration 期使用；返回比较 Bool）
+/// Combinational test `state == s`, for use in module logic (elaboration time).
+/// `[bn]` is unused, kept for symmetry.
 def stateIs[bn: BindingName][w: Nat](sm: StateMachine[w], s: Nat): Bool =
     Bool.mk(None, binary(sm.state.zz_expr, "==", literal(s)))

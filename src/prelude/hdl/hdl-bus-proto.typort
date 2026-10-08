@@ -14,6 +14,13 @@
 //  APB3 —— AMBA 3 APB（SpinalHDL bus/amba3/apb/APB3.scala）
 // ============================================================
 
+/// AMBA 3 APB (APB3) bundle, fixed widths: 32-bit address, 32-bit write/read
+/// data, 1-bit select and the three handshake flags `PENABLE`/`PREADY`/
+/// `PSLVERROR`. The struct is direction-free; use `apb3AsMaster` /
+/// `apb3AsSlave` (or `input`/`output` port declarations) to give it
+/// direction. An APB transfer is: setup cycle (`PSEL && !PENABLE`) then access
+/// cycle (`PSEL && PENABLE`), with `PREADY` extending the access phase — the
+/// register bank below writes on the access phase and reads during both.
 struct Apb3 {
     PADDR: UInt[32]
     PSEL: Bits[1]
@@ -25,12 +32,19 @@ struct Apb3 {
     PSLVERROR: Bool
 }
 
-// master 视角方向：out(PADDR,PSEL,PENABLE,PWRITE,PWDATA)；in(PREADY,PRDATA,PSLVERROR)
+/// Rebuilds `bus` from the **master's** point of view: drives `PADDR`, `PSEL`,
+/// `PENABLE`, `PWRITE`, `PWDATA` (outputs), samples `PREADY`, `PRDATA`,
+/// `PSLVERROR` (inputs). The ports keep the source signals' names (the
+/// direction helpers `out_u`/`out_b`/`out_bool` reuse `bus.X`'s name), and the
+/// unused `[bn]` implicit is kept for symmetry with the other As* builders.
 def apb3AsMaster[bn: BindingName](bus: Apb3): Apb3 =
     Apb3.mk(out_u(bus.PADDR), out_b(bus.PSEL), out_bool(bus.PENABLE), in_bool(bus.PREADY),
             out_bool(bus.PWRITE), out_b(bus.PWDATA), in_b(bus.PRDATA), in_bool(bus.PSLVERROR))
 
-// slave 视角方向：翻转
+/// Exact direction flip of `apb3AsMaster` (the **slave's** view): samples
+/// `PADDR`/`PSEL`/`PENABLE`/`PWRITE`/`PWDATA`, drives `PREADY`/`PRDATA`/
+/// `PSLVERROR`. Feed this to `Apb3RegBank.mk` so the bank reads the incoming
+/// command and drives the response ports.
 def apb3AsSlave[bn: BindingName](bus: Apb3): Apb3 =
     Apb3.mk(in_u(bus.PADDR), in_b(bus.PSEL), in_bool(bus.PENABLE), out_bool(bus.PREADY),
             in_bool(bus.PWRITE), in_b(bus.PWDATA), out_b(bus.PRDATA), out_bool(bus.PSLVERROR))
@@ -41,25 +55,47 @@ def apb3AsSlave[bn: BindingName](bus: Apb3): Apb3 =
 //  通道为 Stream 字段（见 hdl-stream.typort）；方向在模块内手工接线。
 // ============================================================
 
+/// AXI4-Lite write/read address channel payload: 32-bit `addr` plus the
+/// 3-bit `prot` protection attribute. The AXI `valid`/`ready` handshake lives
+/// in the enclosing `Stream` (both `aw` and `ar` use this same payload type,
+/// so they are distinguished by channel, not by type).
 struct AxiLite4Ax {
     addr: UInt[32]
     prot: Bits[3]
 }
 
+/// AXI4-Lite write-data channel payload: 32-bit `data` and the 4-bit byte
+/// strobe `strb` (one bit per byte lane). Handshake comes from the enclosing
+/// `Stream` (`w.valid` / `w.ready`).
 struct AxiLite4W {
     data: Bits[32]
     strb: Bits[4]
 }
 
+/// AXI4-Lite write-response channel payload: the 2-bit `resp` code
+/// (`axiRespOkay` / `axiRespSlvErr` / `axiRespDecErr`). Direction is opposite
+/// to the address/data channels: the slave asserts `b.valid`, the master
+/// drives `b.ready`.
 struct AxiLite4B {
     resp: Bits[2]
 }
 
+/// AXI4-Lite read-data channel payload: 32-bit `data` and the 2-bit `resp`
+/// code. Like `b`, this channel is driven by the slave (`r.valid`), the
+/// master only drives `r.ready`.
 struct AxiLite4R {
     data: Bits[32]
     resp: Bits[2]
 }
 
+/// AXI4-Lite bundle: the five independent ready/valid channels as `Stream`s —
+/// `aw` (write address) and `w` (write data) into the slave, `b` (write
+/// response) out of it, `ar` (read address) in and `r` (read data) out. All
+/// widths are fixed (32-bit address/data) and every channel handshakes
+/// independently, so write address and write data may arrive in any order.
+/// The struct carries no direction; use `axiLite4AsMaster` / `axiLite4AsSlave`
+/// (below), or declare `input`/`output` ports and wire the channels by hand as
+/// example 20-misc.typort does.
 struct AxiLite4 {
     aw: Stream[AxiLite4Ax]
     w: Stream[AxiLite4W]
@@ -68,25 +104,105 @@ struct AxiLite4 {
     r: Stream[AxiLite4R]
 }
 
-// AXI 响应码常量
+/// AXI4-Lite `OKAY` response code (2'b00) — `Bits[2]`, so assign it to a
+/// `resp` field of `b`/`r`.
 def axiRespOkay: Bits[2] = Bits.mk(None, literal(0))
+/// AXI4-Lite `SLVERR` response code (2'b10, decimal 2): the slave understood
+/// the command but failed to execute it.
 def axiRespSlvErr: Bits[2] = Bits.mk(None, literal(2))
+/// AXI4-Lite `DECERR` response code (2'b11, decimal 3): no slave decoded the
+/// address. Note AXI4-Lite has no `EXOKAY` constant here (2'b01 is unused).
 def axiRespDecErr: Bits[2] = Bits.mk(None, literal(3))
+
+// ---- AXI4-Lite direction helpers (same shape as apb3AsMaster/AsSlave) ----
+// Every other protocol bundle in this file has AsMaster/AsSlave builders;
+// AxiLite4 previously had none, so users had to rebuild all five channels by
+// hand. Direction follows AXI4-Lite: the master drives the address/data
+// payloads of aw/w/ar and the ready of b/r; the slave drives the payloads of
+// b/r and the ready of aw/w/ar. The per-channel helpers below have no
+// `[bn: BindingName]` because the direction helpers reuse each source
+// signal's own name (`out_u` / `in_b` …), so they are also callable from
+// inside `axiLite4AsMaster`'s `def` body where no let binding exists.
+
+/// `aw`/`ar` payload from the master's side: `addr` and `prot` become outputs.
+def axiLite4AxAsMaster(c: AxiLite4Ax): AxiLite4Ax =
+    AxiLite4Ax.mk(out_u(c.addr), out_b(c.prot))
+/// `aw`/`ar` payload from the slave's side: `addr` and `prot` become inputs.
+def axiLite4AxAsSlave(c: AxiLite4Ax): AxiLite4Ax =
+    AxiLite4Ax.mk(in_u(c.addr), in_b(c.prot))
+/// Write-data payload from the master's side: `data` and `strb` are outputs.
+def axiLite4WAsMaster(c: AxiLite4W): AxiLite4W =
+    AxiLite4W.mk(out_b(c.data), out_b(c.strb))
+/// Write-data payload from the slave's side: `data` and `strb` are inputs.
+def axiLite4WAsSlave(c: AxiLite4W): AxiLite4W =
+    AxiLite4W.mk(in_b(c.data), in_b(c.strb))
+/// Write-response payload from the master's side: `resp` is produced by the
+/// slave, hence an input here.
+def axiLite4BAsMaster(c: AxiLite4B): AxiLite4B =
+    AxiLite4B.mk(in_b(c.resp))
+/// Write-response payload from the slave's side: `resp` is an output.
+def axiLite4BAsSlave(c: AxiLite4B): AxiLite4B =
+    AxiLite4B.mk(out_b(c.resp))
+/// Read-data payload from the master's side: `data`/`resp` come from the slave
+/// (inputs).
+def axiLite4RAsMaster(c: AxiLite4R): AxiLite4R =
+    AxiLite4R.mk(in_b(c.data), in_b(c.resp))
+/// Read-data payload from the slave's side: `data`/`resp` are outputs.
+def axiLite4RAsSlave(c: AxiLite4R): AxiLite4R =
+    AxiLite4R.mk(out_b(c.data), out_b(c.resp))
+
+/// Rebuilds an `AxiLite4` from the **master's** point of view. Per channel:
+/// `aw`/`ar` — master drives `valid` + payload (`addr`/`prot`), samples
+/// `ready`; `w` — master drives `valid` + `data`/`strb`, samples `ready`;
+/// `b`/`r` — master samples `valid` + payload and *drives* `ready`. Use it for
+/// `let m = axiLite4AsMaster(bus)` inside a module body (the unused `[bn]`
+/// implicit is kept for symmetry with the other As* builders and is not needed
+/// by the direction helpers).
+def axiLite4AsMaster[bn: BindingName](bus: AxiLite4): AxiLite4 =
+    AxiLite4.mk(
+        Stream.mk(out_bool(bus.aw.valid), in_bool(bus.aw.ready), axiLite4AxAsMaster(bus.aw.payload)),
+        Stream.mk(out_bool(bus.w.valid), in_bool(bus.w.ready), axiLite4WAsMaster(bus.w.payload)),
+        Stream.mk(in_bool(bus.b.valid), out_bool(bus.b.ready), axiLite4BAsMaster(bus.b.payload)),
+        Stream.mk(out_bool(bus.ar.valid), in_bool(bus.ar.ready), axiLite4AxAsMaster(bus.ar.payload)),
+        Stream.mk(in_bool(bus.r.valid), out_bool(bus.r.ready), axiLite4RAsMaster(bus.r.payload)))
+
+/// Exact direction flip of `axiLite4AsMaster` (the **slave's** view): samples
+/// `aw`/`w`/`ar` `valid` and payloads, drives their `ready`; drives `b`/`r`
+/// `valid` and payloads, samples their `ready`. Feed a bank/regfile with this
+/// view so the incoming command channels are inputs and the response channels
+/// are outputs.
+def axiLite4AsSlave[bn: BindingName](bus: AxiLite4): AxiLite4 =
+    AxiLite4.mk(
+        Stream.mk(in_bool(bus.aw.valid), out_bool(bus.aw.ready), axiLite4AxAsSlave(bus.aw.payload)),
+        Stream.mk(in_bool(bus.w.valid), out_bool(bus.w.ready), axiLite4WAsSlave(bus.w.payload)),
+        Stream.mk(out_bool(bus.b.valid), in_bool(bus.b.ready), axiLite4BAsSlave(bus.b.payload)),
+        Stream.mk(in_bool(bus.ar.valid), out_bool(bus.ar.ready), axiLite4AxAsSlave(bus.ar.payload)),
+        Stream.mk(out_bool(bus.r.valid), in_bool(bus.r.ready), axiLite4RAsSlave(bus.r.payload)))
 
 // ============================================================
 //  Axi4Stream —— AMBA AXI4-Stream（bus/amba4/axis/Axi4Stream.scala）
 //  典型数据宽度 8 位（dataWidth=1 字节），可加 strb/keep/last/dest/user
 // ============================================================
 
+/// AMBA AXI4-Stream bundle, **1-byte data path only**: 8-bit `data`, 1-bit
+/// `strb` and the `last` packet-boundary flag. Unlike SpinalHDL's
+/// `Axi4Stream` there are no `id` / `keep` / `dest` / `user` fields and the
+/// data width is not parameterized, so a wider stream needs a different
+/// bundle. `valid`/`ready` are absent as well — the byte stream carries no
+/// handshake here; use the master/slave builders below together with an
+/// enclosing `Stream` if a ready/valid handshake is required.
 struct Axi4Stream {
     data: Bits[8]
     strb: Bits[1]
     last: Bool
 }
 
+/// Master view of `Axi4Stream`: `data`, `strb` and `last` become outputs.
 def axi4StreamAsMaster[bn: BindingName](b: Axi4Stream): Axi4Stream =
     Axi4Stream.mk(out_b(b.data), out_b(b.strb), out_bool(b.last))
 
+/// Slave view of `Axi4Stream`: the exact direction flip of
+/// `axi4StreamAsMaster` (`data`/`strb`/`last` become inputs).
 def axi4StreamAsSlave[bn: BindingName](b: Axi4Stream): Axi4Stream =
     Axi4Stream.mk(in_b(b.data), in_b(b.strb), in_bool(b.last))
 
@@ -94,6 +210,11 @@ def axi4StreamAsSlave[bn: BindingName](b: Axi4Stream): Axi4Stream =
 //  Wishbone —— classic（bus/wishbone/Wishbone.scala）
 // ============================================================
 
+/// Classic Wishbone bundle: `CYC` (bus cycle) and `STB` (strobe) select the
+/// slave, `WE` selects write, 32-bit `ADR` addresses, `DAT_MOSI` / `DAT_MISO`
+/// are the two data directions and `SEL` is the 4-bit byte select. `ACK`
+/// terminates the cycle: a transfer is one cycle with `CYC && STB` held until
+/// the slave answers `ACK`. All widths are fixed (no parameters).
 struct Wishbone {
     CYC: Bool
     STB: Bool
@@ -105,10 +226,14 @@ struct Wishbone {
     SEL: Bits[4]
 }
 
+/// Master view of `Wishbone`: drives `CYC`, `STB`, `WE`, `ADR`, `DAT_MOSI`,
+/// `SEL`; samples `ACK` and `DAT_MISO`.
 def wishboneAsMaster[bn: BindingName](b: Wishbone): Wishbone =
     Wishbone.mk(out_bool(b.CYC), out_bool(b.STB), in_bool(b.ACK), out_bool(b.WE),
                 out_u(b.ADR), in_b(b.DAT_MISO), out_b(b.DAT_MOSI), out_b(b.SEL))
 
+/// Slave view of `Wishbone`: the direction flip of `wishboneAsMaster` —
+/// samples `CYC`/`STB`/`WE`/`ADR`/`DAT_MOSI`/`SEL`, drives `ACK`/`DAT_MISO`.
 def wishboneAsSlave[bn: BindingName](b: Wishbone): Wishbone =
     Wishbone.mk(in_bool(b.CYC), in_bool(b.STB), out_bool(b.ACK), in_bool(b.WE),
                 in_u(b.ADR), out_b(b.DAT_MISO), in_b(b.DAT_MOSI), in_b(b.SEL))
@@ -117,6 +242,11 @@ def wishboneAsSlave[bn: BindingName](b: Wishbone): Wishbone =
 //  AvalonST —— Avalon Streaming（bus/avalon/Avalon.scala）
 // ============================================================
 
+/// Avalon Streaming bundle: 8-bit `data` with `valid`/`ready` backpressure
+/// (a beat transfers when `valid && ready`), plus the 1-bit `empty`, the
+/// packet delimiters `startOfPacket` / `endOfPacket`. `empty` marks invalid
+/// data beats at the end of a packet (`valid && empty` carries no data), so
+/// consumers must check it before using `data`. Widths are fixed.
 struct AvalonST {
     data: Bits[8]
     valid: Bool
@@ -126,10 +256,15 @@ struct AvalonST {
     endOfPacket: Bool
 }
 
+/// Master (source) view of `AvalonST`: drives `data`, `valid`, `empty`,
+/// `startOfPacket`, `endOfPacket`; samples `ready`.
 def avalonSTAsMaster[bn: BindingName](b: AvalonST): AvalonST =
     AvalonST.mk(out_b(b.data), out_bool(b.valid), in_bool(b.ready), out_b(b.empty),
                 out_bool(b.startOfPacket), out_bool(b.endOfPacket))
 
+/// Slave (sink) view of `AvalonST`: direction flip of `avalonSTAsMaster` —
+/// samples `data`/`valid`/`empty`/`startOfPacket`/`endOfPacket`, drives
+/// `ready`.
 def avalonSTAsSlave[bn: BindingName](b: AvalonST): AvalonST =
     AvalonST.mk(in_b(b.data), in_bool(b.valid), out_bool(b.ready), in_b(b.empty),
                 in_bool(b.startOfPacket), in_bool(b.endOfPacket))
@@ -140,12 +275,34 @@ def avalonSTAsSlave[bn: BindingName](b: AvalonST): AvalonST =
 //        bank.regReadWrite(0, r0); bank.regReadOnly(4, status) ...
 // ============================================================
 
+/// Lite register bank bound to one APB3 bus (the `Apb3SlaveFactory`
+/// counterpart). Construct it with `Apb3RegBank.mk(bus)` where `bus` is an
+/// **`apb3AsSlave`-directed** bundle, then register fields with
+/// `regReadWrite` / `regReadOnly` / `regWriteOnly` and finish with
+/// `readDefault()`. Address comparison is on the full 32-bit `PADDR`
+/// (`PADDR == literal(addr)`), so `addr` must fit the address width used at
+/// the call site. Registers narrower than the 32-bit `PWDATA`/`PRDATA` are
+/// assigned low-aligned (the extra high bits are ignored on write and zero on
+/// read), and reads land on `PRDATA` combinationally, so read data is valid in
+/// the same cycle as `PSEL && !PWRITE`. The bank does not check for two
+/// methods claiming the same address — the `when` blocks are emitted in call
+/// order, so later calls win in the generated `always @(*)` block. Known
+/// limitation: `PRDATA` is an `output reg` driven only under read conditions
+/// (write cycles leave it holding), so the self-check reports **HDL032**
+/// (inferred latch) unless the caller adds an unconditional default — benign
+/// for APB, which only samples `PRDATA` during reads, but it is a real latch
+/// in the generated Verilog.
 struct Apb3RegBank {
     bus: Apb3
 }
 
 impl Apb3RegBank {
-    // 读写寄存器：bus 写时 reg := wdata；bus 读时 PRDATA := reg
+    /// Read/write field at `addr`: on the APB access phase
+    /// (`PENABLE && PSEL[0] && PWRITE && PADDR == addr`) the clocked
+    /// assignment `reg <= PWDATA` is emitted, so writes take effect on the
+    /// next clock edge; on any read of the address
+    /// (`PSEL[0] && !PWRITE && PADDR == addr`) `PRDATA = reg` is driven
+    /// combinationally. `reg` must be a `UInt` register; `aw` is its width.
     def regReadWrite[aw: Nat](addr: Nat, reg: UInt[aw]): Unit =
         let wr = binary(binary(this.bus.PENABLE.zz_expr, "&&", binary(bitsel(this.bus.PSEL.zz_expr, literal(0)), "&&", this.bus.PWRITE.zz_expr)),
                         "&&", binary(this.bus.PADDR.zz_expr, "==", literal(addr)));
@@ -159,7 +316,10 @@ impl Apb3RegBank {
         let _ = whenEnd(unit);
         unit
 
-    // 只读寄存器（读时 PRDATA := sig）
+    /// Read-only field at `addr`: a read (`PSEL[0] && !PWRITE &&
+    /// PADDR == addr`) drives `PRDATA = sig` combinationally. `sig` may be a
+    /// wire or a register (it is only read), and the address is *not* gated by
+    /// `PENABLE`, so the value is already visible in the APB setup phase.
     def regReadOnly[aw: Nat](addr: Nat, sig: UInt[aw]): Unit =
         let rd = binary(binary(bitsel(this.bus.PSEL.zz_expr, literal(0)), "&&", unary("!", this.bus.PWRITE.zz_expr)),
                         "&&", binary(this.bus.PADDR.zz_expr, "==", literal(addr)));
@@ -168,7 +328,10 @@ impl Apb3RegBank {
         let _ = whenEnd(unit);
         unit
 
-    // 只写寄存器
+    /// Write-only field at `addr`: like `regReadWrite`'s write half
+    /// (`PENABLE && PSEL[0] && PWRITE && PADDR == addr` → `reg <= PWDATA`),
+    /// but no read path is created, so reading the address returns whatever
+    /// `readDefault` (or another field) drives. `reg` must be a `UInt`.
     def regWriteOnly[aw: Nat](addr: Nat, reg: UInt[aw]): Unit =
         let wr = binary(binary(this.bus.PENABLE.zz_expr, "&&", binary(bitsel(this.bus.PSEL.zz_expr, literal(0)), "&&", this.bus.PWRITE.zz_expr)),
                         "&&", binary(this.bus.PADDR.zz_expr, "==", literal(addr)));
@@ -177,7 +340,11 @@ impl Apb3RegBank {
         let _ = whenEnd(unit);
         unit
 
-    // 未命中任何寄存器时读回 0
+    /// Default read response: drives `PRDATA = 0` for **every** read
+    /// (`PSEL[0] && !PWRITE`), with no address comparison. Call it last so its
+    /// `when` block is emitted after the per-field read blocks — in an
+    /// `always @(*)` block the later assignment wins, which is what makes
+    /// un-mapped addresses read back 0 instead of holding the previous value.
     def readDefault(): Unit =
         let rd = binary(bitsel(this.bus.PSEL.zz_expr, literal(0)), "&&", unary("!", this.bus.PWRITE.zz_expr));
         let _ = whenBegin(rd);

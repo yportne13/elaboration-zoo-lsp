@@ -55,6 +55,13 @@
 // is kept per the task-A decision (an explicit `width: Nat` field is also
 // the documented workaround for the impl-Nat-parameter freezing bug,
 // docs/l13-typeclass-instance-nat-param-bug.md).
+/// Handle returned by `fsmNew`: the state register and next-state wire as raw
+/// Exprs, plus the check-only `stateCount` Nat, the encoding `width` (the
+/// `sizedLiteral` source for gotos) and the loop `name`.
+/// Deliberately NON-parameterized (BOMB NOTE in the file header): a
+/// `struct Fsm[w: Nat]` whose `UInt[w]` fields instantiate another parameterized
+/// struct with its own Nat parameter diverged the elaborator at prelude LOAD
+/// time.  Do not re-parameterize these structs over UInt fields.
 struct Fsm {
     stateReg: Expr
     stateNext: Expr
@@ -63,6 +70,10 @@ struct Fsm {
     name: String
 }
 
+/// A declared FSM state handle: the owning `Fsm` plus the state index, produced
+/// by `Fsm.state(idx)` and carrying the `whenIsActive` / `goto` / `onEntry` /
+/// `onExit` surface.  Non-parameterized together with `Fsm` (see the BOMB
+/// NOTE).
 struct FsmSt {
     sm: Fsm
     idx: Nat
@@ -102,11 +113,22 @@ impl[width: Nat] Into[UInt[width]] for Expr {
 //  (reading the ambient ModuleTree at drain time would see the NEXT
 //  module's frame, or an empty tree at top level).
 
+/// One recorded FSM transition, `from -> to` (both state indices).  Edges feed
+/// HDL061 (target universe) and HDL062 (exit sources).
 struct FsmEdge {
     from: Nat
     to: Nat
 }
 
+/// The per-FSM record of the "FsmCtx" global: report attribution (`module`),
+/// `name`, `stateCount`, `edges`, `declared` (HDL061 universe), `visited`
+/// (HDL062 universe), `noExit` (HDL062 exemptions) and the two HDL064 channels
+/// (`ooc` flag, cleared by the next state-context push; `oocTargets`, an
+/// accumulating deduped list never cleared by a push).
+/// Every record helper matches by NAME alone and never compares `module`; that is
+/// safe only because `fsmCtxModuleReset` wipes the WHOLE FsmCtx (records AND
+/// stack) at each module-macro prologue — if records persisted across modules the
+/// first same-named record would win every lookup.
 struct FsmRec {
     // The module name exists for REPORT ATTRIBUTION (rec.module at drain
     // time) and the fsmRecordComplete gate — every record helper below
@@ -138,16 +160,24 @@ struct FsmRec {
     oocTargets: List[Nat]
 }
 
+/// The state-context stack of the "FsmCtx" global: empty, or a cons of
+/// (Fsm name, state index, rest).  Pushed by `whenIsActive`, popped at its
+/// end.
 enum FsmCtxStack {
     fsmStackEmpty
     fsmStackCons(fsm: String, idx: Nat, rest: FsmCtxStack)
 }
 
+/// The "FsmCtx" mutable-global payload: all FSM records plus the current state
+/// context stack.  A wrapper struct is required because a mutable global's name
+/// must be an existing TYPE name (same pattern as hdl-core's `CombCtx`).
 struct FsmCtx {
     fsms: List[FsmRec]
     stack: FsmCtxStack
 }
 
+/// The empty `FsmCtx` (no records, empty stack) — the seed passed to every
+/// `change_mutable_default` / `get_global_default` on "FsmCtx".
 def fsmCtxEmpty: FsmCtx = FsmCtx.mk(lnil, fsmStackEmpty)
 
 // The module name to attribute reports to: the head def of the ambient
@@ -165,10 +195,20 @@ def fsmCtxEmpty: FsmCtx = FsmCtx.mk(lnil, fsmStackEmpty)
 // module-less while the goto/tree emission itself stayed correct (probe:
 // inline lookup reports "probeA", the def call reports ""). Taking a Unit
 // parameter forces application-time re-evaluation; the argument is unused.
+/// The module name reports are attributed to: the head def of the ambient
+/// module tree, "" outside any module (`report_check_issue` drops empty module
+/// names, so out-of-module use degrades without panicking).
+/// DUMMY PARAMETER (2026-09-27): the engine caches a parameterless def's
+/// declaration-time WHNF and replays it only when the body references a
+/// REPLAY_GLOBAL_OPS builtin; this body reads only `get_global_default`, so a
+/// zero-arg version returned the load-time "" forever and every HDL060/061/062/064
+/// report was dropped.  The Unit argument forces application-time re-evaluation;
+/// it is unused.
 def fsmReportModule(dummy: Unit): String =
     let _ = dummy;
     headModuleDef((get_global_default("ModuleTree", ModuleTree.mk(0, nil))).data).name
 
+/// `Nat` membership in a `List[Nat]` (structural, via `nat_eq`).
 def fsmNatInList(xs: List[Nat], x: Nat): Boolean = match xs {
     case lnil => false
     case lcons(h, t) => match nat_eq(h, x) {
@@ -184,6 +224,11 @@ def fsmNatInList(xs: List[Nat], x: Nat): Boolean = match xs {
 // a single call). The FLAG half is cleared by the next state-context push
 // (fsmRecClearOoc); the TARGET half is never cleared and is judged at drain
 // time by edge coverage (fsmOocUncoveredReport).
+/// HDL064 bookkeeping: set the out-of-context goto FLAG for the record named
+/// `key` and append `target` to its accumulating `oocTargets` list in ONE record
+/// rebuild (deduped).  The flag half is cleared by the next state-context push
+/// (`fsmRecClearOoc`); the target half is never cleared and is judged at drain
+/// time by edge coverage (`fsmOocUncoveredReport`).
 def fsmRecSetOoc(recs: List[FsmRec], key: String, target: Nat): List[FsmRec] = match recs {
     case lnil => lnil
     case lcons(r, rest) => match str_eq(r.name, key) {
@@ -195,6 +240,9 @@ def fsmRecSetOoc(recs: List[FsmRec], key: String, target: Nat): List[FsmRec] = m
     }
 }
 
+/// Clear only the HDL064 FLAG of the record named `key` (called by the next
+/// state-context push, which is what erases the engine's check-pass pre-eval
+/// artifact).  `oocTargets` deliberately survives.
 def fsmRecClearOoc(recs: List[FsmRec], key: String): List[FsmRec] = match recs {
     case lnil => lnil
     case lcons(r, rest) => match str_eq(r.name, key) {
@@ -220,6 +268,9 @@ def fsmRecClearOoc(recs: List[FsmRec], key: String): List[FsmRec] = match recs {
 // ModuleTree / HdlLoopIdx per run. nat_is_ground is false exactly for those
 // stuck Nats, so every write below is gated on its Nat arguments being
 // ground (at real call sites they are concrete literals).
+/// Insert `rec` into the record list unless a record with the same name is
+/// already there (FIRST-WINS dedup: one module body is evaluated several times
+/// between two prologue resets, so `fsmNew` re-runs and must not duplicate).
 def fsmRecEnsure(recs: List[FsmRec], rec: FsmRec): List[FsmRec] = match recs {
     case lnil => lcons rec lnil
     case lcons(r, rest) => match str_eq(r.name, rec.name) {
@@ -228,6 +279,11 @@ def fsmRecEnsure(recs: List[FsmRec], rec: FsmRec): List[FsmRec] = match recs {
     }
 }
 
+/// `fsmNew`'s registration of {module, name, stateCount}, first-wins.  LOAD
+/// GUARD: gated on `nat_is_ground(stateCount)`, because the prelude-load
+/// declaration checks evaluate this body with STUCK arguments and a write then
+/// would leave a stale "FsmCtx" entry in the cached mutable map, contaminating
+/// every later run.
 def fsmCtxRegister(name: String, stateCount: Nat): Unit =
     match nat_is_ground(stateCount) {
         case false => unit
@@ -244,6 +300,9 @@ def fsmCtxRegister(name: String, stateCount: Nat): Unit =
 // state(idx): record the declared state handle — the HDL061 universe is the
 // DECLARED handles (not 0..stateCount: a 2-bit encoding routinely has slack
 // encodings beyond the states the design means to use).
+/// Record a declared state handle in the HDL061 universe (deduped).  The
+/// universe is the DECLARED handles, not 0..stateCount: a 2-bit encoding
+/// routinely has slack encodings beyond the states the design means to use.
 def fsmRecSetDeclared(recs: List[FsmRec], key: String, idx: Nat): List[FsmRec] = match recs {
     case lnil => lnil
     case lcons(r, rest) => match str_eq(r.name, key) {
@@ -255,6 +314,8 @@ def fsmRecSetDeclared(recs: List[FsmRec], key: String, idx: Nat): List[FsmRec] =
     }
 }
 
+/// `Fsm.state(idx)`: add `idx` to the record's declared set.  Gated on
+/// `nat_is_ground(idx)` (load-guard discipline, see `fsmCtxRegister`).
 def fsmCtxDeclare(name: String, idx: Nat): Unit =
     match nat_is_ground(idx) {
         case false => unit
@@ -270,6 +331,9 @@ def fsmCtxDeclare(name: String, idx: Nat): Unit =
 // record's out-of-context FLAG — see the CHECK-PASS note on fsmGotoLog for
 // why that clearing erases only the check-pass artifact, and why the
 // accumulating oocTargets channel deliberately survives it.
+/// `whenIsActive` entry: push the (name, idx) state context and clear that
+/// record's HDL064 flag (the clearing erases only the check-pass artifact — see
+/// `fsmGotoLog`).  Gated on `nat_is_ground(idx)`.
 def fsmCtxPush(name: String, idx: Nat): Unit =
     match nat_is_ground(idx) {
         case false => unit
@@ -284,6 +348,10 @@ def fsmCtxPush(name: String, idx: Nat): Unit =
 // whenIsActive exit: pop the context and record the visit (HDL062 is
 // decided at drain time so a noExitCheck() written anywhere in the module
 // body — before or after the state body — exempts the state).
+/// Record a state whose `whenIsActive` body actually ran (deduped) — the HDL062
+/// universe.  HDL062 is decided at drain time, so a `noExitCheck()` written
+/// anywhere in the module body, before or after the state body, still
+/// exempts.
 def fsmRecSetVisited(recs: List[FsmRec], key: String, idx: Nat): List[FsmRec] = match recs {
     case lnil => lnil
     case lcons(r, rest) => match str_eq(r.name, key) {
@@ -299,11 +367,18 @@ def fsmRecSetVisited(recs: List[FsmRec], key: String, idx: Nat): List[FsmRec] = 
 // match only on PLAIN arguments in small defs — a match whose scrutinee comes
 // straight from get_global_default (dependent-typed) makes the twin's priming
 // universe check reject the fresh-binder meta ("Pi(...) is not a universe").
+/// Pop one stack frame and record its state as visited.  Match on PLAIN
+/// arguments in small defs (twin-priming discipline): a match whose scrutinee
+/// comes straight from `get_global_default` makes the twin engine's priming
+/// universe check reject the fresh-binder meta.
 def fsmCtxPopVisitHelp(fsms: List[FsmRec], stack: FsmCtxStack): FsmCtx = match stack {
     case fsmStackEmpty => fsmCtxEmpty
     case fsmStackCons(topKey, topIdx, rest) => FsmCtx.mk(fsmRecSetVisited(fsms, topKey, topIdx), rest)
 }
 
+/// Apply the pop+visit for an already-read context.  An EMPTY stack means
+/// nothing to pop, and skipping the write keeps the "FsmCtx" key out of the
+/// cached map (the load-guard discipline).
 def fsmCtxPopApply(ctx: FsmCtx): Unit = match ctx.stack {
     // LOAD GUARD: an empty stack means nothing to pop — and skipping the
     // write keeps the "FsmCtx" key out of the cached map (see the guard
@@ -316,11 +391,13 @@ def fsmCtxPopApply(ctx: FsmCtx): Unit = match ctx.stack {
         unit
 }
 
+/// `whenIsActive` exit: read "FsmCtx" and pop/record the top state context.
 def fsmCtxPopRecordVisit(): Unit =
     let ctx = get_global_default("FsmCtx", fsmCtxEmpty);
     fsmCtxPopApply(ctx)
 
 // noExitCheck(): exempt a state from HDL062 (terminal states, §7.4).
+/// Record a `noExitCheck()` exemption from HDL062 (terminal states), deduped.
 def fsmRecSetNoExit(recs: List[FsmRec], key: String, idx: Nat): List[FsmRec] = match recs {
     case lnil => lnil
     case lcons(r, rest) => match str_eq(r.name, key) {
@@ -332,6 +409,8 @@ def fsmRecSetNoExit(recs: List[FsmRec], key: String, idx: Nat): List[FsmRec] = m
     }
 }
 
+/// `FsmSt.noExitCheck()`: exempt this state from HDL062.  Gated on
+/// `nat_is_ground(idx)`.
 def fsmCtxNoExitMark(name: String, idx: Nat): Unit =
     match nat_is_ground(idx) {
         case false => unit
@@ -347,11 +426,14 @@ def fsmCtxNoExitMark(name: String, idx: Nat): Unit =
 // (exit sources). The context stack is rebuilt empty when the key is
 // missing (out-of-module fallback: no panic, no record). Edges dedup:
 // the engine replays a module body several times (see fsmGotoLog).
+/// Structural equality of two transitions (from and to).
 def fsmEdgeEq(a: FsmEdge, b: FsmEdge): Boolean = match nat_eq(a.from, b.from) {
     case true => nat_eq(a.to, b.to)
     case false => false
 }
 
+/// Is this transition already recorded?  (Edges dedup because the engine
+/// replays a module body several times.)
 def fsmRecHasEdge(es: List[FsmEdge], edge: FsmEdge): Boolean = match es {
     case lnil => false
     case lcons(e, rest) => match fsmEdgeEq(e, edge) {
@@ -360,6 +442,8 @@ def fsmRecHasEdge(es: List[FsmEdge], edge: FsmEdge): Boolean = match es {
     }
 }
 
+/// Append a transition to the record named `key` (deduped).  The edge list feeds
+/// HDL061 (targets) and HDL062 (exit sources).
 def fsmRecAddEdge(recs: List[FsmRec], key: String, edge: FsmEdge): List[FsmRec] = match recs {
     case lnil => lnil
     case lcons(r, rest) => match str_eq(r.name, key) {
@@ -380,6 +464,11 @@ def fsmRecAddEdge(recs: List[FsmRec], key: String, edge: FsmEdge): List[FsmRec] 
 // The bookkeeping half of fsmGotoLog, split out so every match arm is a
 // single call (a nested match whose arm holds a let-chain diverges the
 // load — same family as docs/l13-struct-decl-dependent-field-divergence.md).
+/// The bookkeeping half of `fsmGotoLog`: with a NON-empty state stack, record the
+/// edge (current state -> target); with an EMPTY stack, record the out-of-context
+/// goto evidence instead (no edge is added, and the drain reports HDL064).  Split
+/// out so every match arm is a single call — a nested match whose arm holds a
+/// let-chain diverges the load.
 def fsmGotoRecord(key: String, stack: FsmCtxStack, target: Nat): Unit = match stack {
     case fsmStackEmpty =>
         let _ = change_mutable_default("FsmCtx",
@@ -418,6 +507,12 @@ def fsmGotoRecord(key: String, stack: FsmCtxStack, target: Nat): Unit = match st
 // mutations) and is suppressed. Mitigation: put bare gotos at the END of
 // the module body (after the last whenIsActive), where the flag channel
 // reports regardless of target.
+/// `goto`: HDL060 range check (target < stateCount), the bookkeeping call
+/// (`fsmGotoRecord`), then the tree node `stateNext := sizedLiteral(target, w)`
+/// under the current when context.  HDL064 is NOT reported at the call site —
+/// the engine evaluates a deferred lambda body once before the enclosing
+/// `whenIsActive` runs, so a call-site report would warn on every FSM module;
+/// evidence is recorded and judged at drain time.
 def fsmGotoLog(name: String, stateCount: Nat, w: Nat, nextExpr: Expr, target: Nat): Unit =
     let mname = fsmReportModule(unit);
     let _ = match nat_gte(target, stateCount) {
@@ -443,11 +538,13 @@ def fsmGotoLog(name: String, stateCount: Nat, w: Nat, nextExpr: Expr, target: Na
 //  lifecycle note at the FsmCtx header.
 // ============================================================
 
+/// All `to` indices of an edge list (accumulated in reverse).
 def fsmTargetList(edges: List[FsmEdge], acc: List[Nat]): List[Nat] = match edges {
     case lnil => acc
     case lcons(e, rest) => fsmTargetList(rest, lcons (e.to) acc)
 }
 
+/// All `from` indices of an edge list (accumulated in reverse).
 def fsmFromList(edges: List[FsmEdge], acc: List[Nat]): List[Nat] = match edges {
     case lnil => acc
     case lcons(e, rest) => fsmFromList(rest, lcons (e.from) acc)
@@ -456,6 +553,8 @@ def fsmFromList(edges: List[FsmEdge], acc: List[Nat]): List[Nat] = match edges {
 // HDL061: every declared state idx != 0 that no goto targets is unreachable
 // (the entry state 0 is reachable by reset). Universe = the declared handles
 // (fsmCtxDeclare) — see the note there for why it is not 0..stateCount.
+/// HDL061: every DECLARED state index != 0 that no goto targets is unreachable
+/// (the entry state 0 is reachable by reset).
 def fsmUnreachableReport(rec: FsmRec, targets: List[Nat], declared: List[Nat]): Unit = match declared {
     case lnil => unit
     case lcons(idx, rest) =>
@@ -476,11 +575,14 @@ def fsmUnreachableReport(rec: FsmRec, targets: List[Nat], declared: List[Nat]): 
 // Local boolean helpers (hdl-check.typort defines chkBand/chkBnot but its
 // defs are off-limits for phase 1; local one-liners mirror the chkCdEq
 // precedent without touching that file).
+/// Boolean AND as a match (local mirror of hdl-check's `chkBand`; hdl-check's
+/// defs are off-limits for this file's phase).
 def fsmBand(a: Boolean, b: Boolean): Boolean = match a {
     case true => b
     case false => false
 }
 
+/// Boolean NOT as a match (local mirror of hdl-check's `chkBnot`).
 def fsmNot(a: Boolean): Boolean = match a {
     case true => false
     case false => true
@@ -495,6 +597,11 @@ def fsmNot(a: Boolean): Boolean = match a {
 // Deliberate: a body that never ran is not known to lack an exit, and the
 // never-goto-targeted half of the declared universe is already HDL061's
 // job (fsmUnreachableReport).
+/// HDL062: a state whose body ran but which has no outgoing goto may get stuck;
+/// `noExitCheck()` exempts it.  The universe is `visited` (states whose body
+/// actually ran), NOT `declared` — a reachable-but-bodyless state is not reported
+/// here, since a body that never ran is not known to lack an exit (the
+/// never-targeted half is HDL061's job).
 def fsmNoExitReport(rec: FsmRec, visited: List[Nat]): Unit = match visited {
     case lnil => unit
     case lcons(idx, rest) =>
@@ -527,11 +634,19 @@ def fsmNoExitReport(rec: FsmRec, visited: List[Nat]): Unit = match visited {
 // name means that record came from an aborted prefix -> skip it. A report
 // from a completed round is complete by construction (the round reached
 // checkModuleTree). Repeats are idempotent: CheckIssues line dedup.
+/// The head module name of the ambient module tree (dummy Unit parameter for
+/// the same replay reason as `fsmReportModule`).
 def fsmTreeHeadName(dummy: Unit): String =
     let _ = dummy;
     let tree = get_global_default("ModuleTree", ModuleTree.mk(0, nil));
     headModuleDef(tree.data).name
 
+/// DRAIN COMPLETENESS GATE: is this record from a COMPLETED elaboration round?
+/// The engine replays a module body in ~100 rounds, most of them growing PREFIXES
+/// of the body; at drain time the ModuleTree global still holds the previous
+/// round's tree (the prologue keeps it, the module def is installed only after
+/// this hook), so "head module name still equal to the record's module" marks an
+/// aborted prefix that must be skipped.
 def fsmRecordComplete(rec: FsmRec): Boolean = match str_eq(fsmTreeHeadName(unit), rec.module) {
     case true => false
     case false => true
@@ -540,6 +655,8 @@ def fsmRecordComplete(rec: FsmRec): Boolean = match str_eq(fsmTreeHeadName(unit)
 // HDL064 at drain time, channel 1 (recorded by fsmGotoRecord; see
 // fsmGotoLog's CHECK-PASS note): the flag form, which survives only a bare
 // goto AFTER the last whenIsActive.
+/// HDL064 at drain time, channel 1: the FLAG form, which survives only a bare
+/// goto AFTER the last `whenIsActive` (a following push clears it).
 def fsmOocReport(rec: FsmRec): Unit = match rec.ooc {
     case false => unit
     case true =>
@@ -555,6 +672,12 @@ def fsmOocReport(rec: FsmRec): Unit = match rec.ooc {
 // artifact is suppressed because the same goto records a covering edge in
 // the real pass. Same message as channel 1 so duplicate lines collapse in
 // the CheckIssues dedup.
+/// HDL064 at drain time, channel 2: each accumulated `oocTarget` that NO
+/// recorded edge covers — it closes the before/between-`whenIsActive` ordering
+/// blind spot the flag cannot see (a bare goto never records an edge, while the
+/// check-pass artifact of a legit in-context goto is covered by the edge the same
+/// goto records in the real pass).  Same message as channel 1, so duplicate lines
+/// collapse in the CheckIssues dedup.
 def fsmOocUncoveredReport(rec: FsmRec, targets: List[Nat], oocTs: List[Nat]): Unit = match oocTs {
     case lnil => unit
     case lcons(t, rest) =>
@@ -570,6 +693,9 @@ def fsmOocUncoveredReport(rec: FsmRec, targets: List[Nat], oocTs: List[Nat]): Un
 
 // One reportable record's checks. Split from fsmCtxDrainAll so every match
 // arm stays a single call / plain statement (divergence discipline).
+/// Run every reportable check of one record: HDL061 (unreachable), HDL062 (no
+/// exit), HDL064 channel 1 (flag) and channel 2 (uncovered targets).  Split from
+/// `fsmCtxDrainAll` so each match arm stays a single call.
 def fsmReportRecord(rec: FsmRec): Unit =
     let targets = fsmTargetList(rec.edges, lnil);
     let _ = fsmUnreachableReport(rec, targets, rec.declared);
@@ -578,11 +704,14 @@ def fsmReportRecord(rec: FsmRec): Unit =
     let _ = fsmOocUncoveredReport(rec, targets, rec.oocTargets);
     unit
 
+/// `fsmReportRecord` only for a record whose round COMPLETED (see
+/// `fsmRecordComplete`).
 def fsmReportRecordGated(rec: FsmRec): Unit = match fsmRecordComplete(rec) {
     case false => unit
     case true => fsmReportRecord(rec)
 }
 
+/// Report every record in the list, in order.
 def fsmCtxDrainAll(recs: List[FsmRec]): Unit = match recs {
     case lnil => unit
     case lcons(r, rest) =>
@@ -619,6 +748,17 @@ def fsmCtxDrainAll(recs: List[FsmRec]): Unit = match recs {
 // 3. LOAD GUARD note (see fsmCtxRegister): this body is only CHECKED at
 //    prelude load, never executed there, so the key is not created during
 //    the load itself.
+/// The module-macro prologue hook: report the PREVIOUS round's records, then
+/// reset the WHOLE "FsmCtx" (records AND context stack) to `fsmCtxEmpty`.  The
+/// full wipe is safety-critical: every record helper matches by name alone, so a
+/// persisted record would let the next module's same-named FSM reuse or pollute
+/// it; it also keeps each round's drain reporting exactly that round's records and
+/// guarantees no stale stack frame hides a genuinely out-of-context goto.
+/// SHAPE CONSTRAINTS (watchdog-bisected, see
+/// docs/l13-struct-decl-dependent-field-divergence.md): the reset MUST go through
+/// `change_mutable_default` (a `create_global` here diverged the prelude load),
+/// and the body must NOT match on `ctx.fsms` (a List-projection match diverges) —
+/// `ctx.fsms` may only be passed as an argument.
 def fsmCtxModuleReset(): Unit =
     let ctx = get_global_default("FsmCtx", fsmCtxEmpty);
     let _ = fsmCtxDrainAll(ctx.fsms);
@@ -628,16 +768,24 @@ def fsmCtxModuleReset(): Unit =
 // State-equality condition at the encoding funnel (§7.6): the ONLY place
 // that builds `stateReg === idx` — the future Enum migration swaps this
 // binary for a craft comparison.
+/// The encoding funnel for `stateReg === idx` — the ONLY place that builds the
+/// state equality, so a future hardware-Enum migration swaps just this binary.
 def fsmStateEqExpr(regExpr: Expr, idx: Nat): Expr =
     binary(regExpr, "==", literal(idx))
 
+/// The encoding funnel for `stateReg !== idx` (companion of
+/// `fsmStateEqExpr`).
 def fsmStateNeExpr(regExpr: Expr, idx: Nat): Expr =
     binary(regExpr, "!=", literal(idx))
 
 // Hook conditions (onEntry / onExit) at the same funnel.
+/// The `onEntry` hook condition: the cycle `stateNext` lands on `idx`
+/// (`stateNext === idx && stateReg =/= idx`).
 def fsmOnEntryExpr(nextExpr: Expr, regExpr: Expr, idx: Nat): Expr =
     binary(fsmStateEqExpr(nextExpr, idx), "&&", fsmStateNeExpr(regExpr, idx))
 
+/// The `onExit` hook condition: the last cycle in `idx`
+/// (`stateNext =/= idx && stateReg === idx`).
 def fsmOnExitExpr(nextExpr: Expr, regExpr: Expr, idx: Nat): Expr =
     binary(fsmStateNeExpr(nextExpr, idx), "&&", fsmStateEqExpr(regExpr, idx))
 
@@ -652,6 +800,15 @@ def fsmOnExitExpr(nextExpr: Expr, regExpr: Expr, idx: Nat): Expr =
 //                           HDL011-clean; codegen folds it into the same
 //                           always @(*) as an if (1) blocking default)
 //   stateReg <= stateNext  (clock edge)
+/// Create an FSM: `stateReg` = `createRegWidthInit(name_stateReg, w, 0)`
+/// (entry state = reset state), `stateNext` = `createWidth(name_stateNext, w)`,
+/// `stateNext = stateReg` as a DEFAULT-FIRST drive wrapped in
+/// `whenBegin(literal(1))` (so the default counts as a conditional comb drive and
+/// FSM modules stay HDL011-clean; codegen folds it into the merged `always @(*)`
+/// as an `if (1)` blocking default), and `stateReg <= stateNext` on the clock
+/// edge.  Registers the FSM record and returns the `Fsm` handle.  The `width`
+/// Nat is carried as a RUNTIME struct field (an impl's Nat parameter freezes as a
+/// dangling elaboration variable when used at runtime).
 def fsmNew[w: Nat][bn: BindingName](stateCount: Nat): Fsm =
     let base = loopName(bn.name);
     let regName = base + "_stateReg";
@@ -736,26 +893,48 @@ impl FsmSt {
 //   ==  sIdle.whenIsActive(u => when start { sRun.goto() }; unit)
 // Being single expressions, they also work at raw positions (def bodies).
 
+/// Braced-body sugar for `st.whenIsActive(body: Unit -> Unit)`:
+/// `whenIsActive(sIdle) { ... }` expands to
+/// `(sIdle).whenIsActive(u => <stmts> unit)` — one call expression, so it works
+/// in a module body and at raw positions.  The `Unit -> Unit` parameter defers
+/// the statements into the `when(stateReg === idx)` context, pushes/pops the
+/// state context (HDL064 tracking + HDL062 visit) and emits the state body.
 #[macro_export]
 macro_rules whenIsActive {
     ($st:raw {$( $b: Expr )*}) => { ($st).whenIsActive(u => $($b)* unit) };
 }
 
+/// Braced-body sugar for `st.whenIsInactive(body)`:
+/// `whenIsInactive(sIdle) { ... }` expands to
+/// `(sIdle).whenIsInactive(u => <stmts> unit)` — the body runs under
+/// `when(stateReg =/= idx)`.
 #[macro_export]
 macro_rules whenIsInactive {
     ($st:raw {$( $b: Expr )*}) => { ($st).whenIsInactive(u => $($b)* unit) };
 }
 
+/// Braced-body sugar for `st.whenIsNext(body)`:
+/// `whenIsNext(sIdle) { ... }` expands to
+/// `(sIdle).whenIsNext(u => <stmts> unit)` — the body runs under
+/// `when(stateNext === idx)`, the NEXT-state view.
 #[macro_export]
 macro_rules whenIsNext {
     ($st:raw {$( $b: Expr )*}) => { ($st).whenIsNext(u => $($b)* unit) };
 }
 
+/// Braced-body sugar for `st.onEntry(body)`:
+/// `onEntry(sIdle) { ... }` expands to
+/// `(sIdle).onEntry(u => <stmts> unit)` — the body runs on the cycle
+/// `stateNext` lands on `idx`.
 #[macro_export]
 macro_rules onEntry {
     ($st:raw {$( $b: Expr )*}) => { ($st).onEntry(u => $($b)* unit) };
 }
 
+/// Braced-body sugar for `st.onExit(body)`:
+/// `onExit(sIdle) { ... }` expands to
+/// `(sIdle).onExit(u => <stmts> unit)` — the body runs on the last cycle in
+/// `idx`.
 #[macro_export]
 macro_rules onExit {
     ($st:raw {$( $b: Expr )*}) => { ($st).onExit(u => $($b)* unit) };

@@ -28,8 +28,18 @@
 // The functions are identities, so they can never change a value at runtime;
 // the parser (src/L13_namespace/parser/derive.rs) reads the asMaster body
 // syntactically to generate the asMaster / asSlave direction methods.
+/// Master-side direction marker: identity function (`in(t) == t`), so it can
+/// never change a value at runtime. It exists only so the `#[derive(Bundle)]`
+/// expansion of an `IMasterSlave.asMaster` body can read the call
+/// syntactically (`src/L13_namespace/parser/derive.rs`) and mark `t`'s field
+/// as an output port of the master.
 def in[T](t: T): T = t
+/// Master-side output port marker — sibling of `in`; identity at runtime, read
+/// syntactically by the Bundle derive.
 def out[T](t: T): T = t
+/// Bidirectional port marker — identity at runtime; the Bundle derive keeps it
+/// InOut on both `asMaster` and `asSlave` (only In ↔ Out are flipped), and an
+/// InOut field is never driven by `:=` / `<>`.
 def inout[T](t: T): T = t
 
 // IMasterSlave — SpinalHDL-style master/slave directionality.
@@ -54,6 +64,20 @@ def inout[T](t: T): T = t
 // "master_addr", …. The plain wires left behind by the child's factory are
 // dropped by the Verilog generator (ports take precedence over same-named
 // wires).
+/// SpinalHDL-style master/slave directionality for a Bundle. A bundle that
+/// implements this trait gets `asMaster` / `asSlave`, which rebuild the bundle
+/// with directed ports, and can be chained onto the derived factory:
+/// `let master = AxiLite.create.asMaster`. The user only writes the `asMaster`
+/// direction spec (`out(this.x)` / `in(this.x)` / `inout(this.x)`); the derive
+/// fills both methods, with `asSlave` flipping every In ↔ Out and keeping InOut.
+/// `[bn: BindingName]` is the implicit parameter that carries the caller's let
+/// binding, so the directed ports keep the `master_x` prefix. Nested bundles are
+/// supported when the child also implements `IMasterSlave` (the child is rebuilt
+/// through its own factory and the binding-name prefix flows down); `inout` is
+/// only valid for primitive fields. `.asMaster` / `.asSlave` must be called
+/// inside a module body or class field (a `def` body has no let binding to
+/// name the ports) and must not be chained twice on an already-directed bundle
+/// (a second pass would declare duplicate ports).
 trait IMasterSlave {
     def asMaster[bn: BindingName]: Self
     def asSlave[bn: BindingName]: Self
@@ -147,6 +171,15 @@ trait IMasterSlave {
 // `#[derive(Bundle)]` 的实现在 src/L13_namespace/parser/derive.rs，
 // 此处注释仅为使用文档；修改派生逻辑时请同步两处。
 
+/// The Bundle trait — SpinalHDL's `Bundle` counterpart, for structs that group
+/// signals. `#[derive(Bundle)]` generates the impl: field-by-field `:=`
+/// (assignments whose LHS is an input port are skipped, see `isInputPort`), an
+/// identity `Into[TypeName]` so the `:=` macro accepts bundles, and the
+/// `TypeName.create[bn]` wire factory that names every field `bn + "_" + field`.
+/// Two methods are abstract rather than defaulted: a default body cannot
+/// dispatch sibling methods through `this` (filled-trait-default limitation), so
+/// a manual `impl Bundle` must provide `<>` explicitly — a missing one is a
+/// loud impl-time error instead of a silent no-op.
 trait Bundle {
     def :=(that: Self): Unit
     // `<>` — SpinalHDL-style bidirectional connection. The derive generates
@@ -166,24 +199,44 @@ trait Bundle {
 //  Stream / Flow Buses
 // ============================================================
 
+/// Ready/valid handshake channel: a transfer happens on the clock edge where
+/// `valid && ready` (SpinalHDL's `fire`). Responsibility split: the **master**
+/// drives `valid` and `payload` and consumes `ready`; the **slave** drives
+/// `ready` and consumes `valid`/`payload`. `payload` may only be sampled when
+/// `valid` is high, and a valid transfer must not be retracted before `ready`
+/// (the hdl-stream pipe/fifo primitives implement the buffering that keeps
+/// that invariant). The struct carries no direction of its own — ports are
+/// made with `input`/`output` declarations or the direction helpers.
 struct Stream[T] {
     valid: Bool
     ready: Bool
     payload: T
 }
 
+/// Payload-plus-valid channel without backpressure (`ready` does not exist):
+/// the producer must hold `payload` stable while `valid` is high, and the
+/// consumer either samples every cycle or adds a `Stream` stage. Handshake
+/// helpers live in hdl-stream (`flowToStream` gives `ready = True`).
 struct Flow[T] {
     payload: T
     valid: Bool
 }
 
 impl[T] Stream[T] {
-    // SpinalHDL 语义：fire = valid && ready（一次传输成功握手）
+    /// One successful transfer this cycle: `valid && ready` (SpinalHDL
+    /// `Stream.fire`). Use it to gate state updates that must happen exactly
+    /// once per accepted beat.
     def fire: Bool = this.valid && this.ready
+    /// Placeholder: returns `this` and emits no register. SpinalHDL's
+    /// `Stream.stage` is a `m2sPipe` (one-stage skid buffer); that pipeline is
+    /// provided by hdl-stream instead, so this method must not be used as a
+    /// timing cut (it is an exact identity, not a delay).
     def stage: Stream[T] = this
 }
 
 impl[T] Flow[T] {
+    /// Same placeholder as `Stream.stage`: identity, no register — the
+    /// registered flow pipe lives in hdl-stream (`flowM2sPipe`).
     def stage: Flow[T] = this
 }
 
@@ -191,13 +244,23 @@ impl[T] Flow[T] {
 //  BlackBox (external module)
 // ============================================================
 
+/// Vestigial BlackBox placeholder: an unused struct that only stores a `name`.
+/// The working blackbox path is the `blackbox` macro in hdl-macros.typort
+/// (registry in hdl-core.typort, emission in hdl-verilog.typort); nothing in
+/// the prelude, examples or test corpus constructs this struct (verified by
+/// grep). Kept only as a syntactic placeholder — its methods are no-ops.
 struct BlackBox {
     name: String
 }
 
 impl BlackBox {
-    // TODO(stub): 占位实现 —— 不存储任何信息，仅作语法占位。
+    /// No-op stub: does not record the generic, returns `this`. Generic
+    /// parameters are today emitted only through the `blackbox` macro's
+    /// `generic K = v` statements (hdl-macros.typort).
     def addGeneric(name: String, value: String): BlackBox = this
+    /// No-op stub: returns `this` without changing any definition name
+    /// (docs/hdl-blackbox-sim-design.md lists real `setDefinitionName` as
+    /// future work).
     def setDefinitionName(name: String): BlackBox = this
 }
 
@@ -205,18 +268,33 @@ impl BlackBox {
 //  FSM (Finite State Machine)
 // ============================================================
 
+/// Vestigial FSM-DSL tag: which lifecycle accessor a recorded state action
+/// belongs to (`boot` = reset/entry-time action, `entry` = state-entry action,
+/// `exit` = state-exit action). Unused — the FSM framework that consumed it is
+/// now hdl-fsm.typort (`fsmNew` / `fsmStateEq` / `ctrl.state(idx)` handles, with
+/// the HDL060-064 rule set). Declared here only; no prelude, example or test code
+/// matches on it.
 enum StateAccess {
     boot
     entry
     exit
 }
 
+/// Vestigial FSM state handle: a state name plus optional entry/exit action
+/// values. Unused by the current FSM framework — hdl-fsm.typort identifies a
+/// state by its ordinal (`ctrl.state(0)`) and keeps the transition table in the
+/// recorded `FsmCtx` global, so nothing constructs `State[T]` in the prelude,
+/// examples or verification corpus.
 struct State[T] {
     name: String
     stateEntry: Option[T]
     stateExit: Option[T]
 }
 
+/// Vestigial single-constructor tag for "this action runs on FSM entry".
+/// Unused — superseded by the `whenIsActive` / `whenIsNext` forms of
+/// hdl-fsm.typort; kept because removing it would change the exported API
+/// surface.
 enum FSMEntryPoint {
     entryPoint
 }
@@ -225,6 +303,10 @@ enum FSMEntryPoint {
 //  Switch Statement DSL
 // ============================================================
 
+/// Vestigial marker for the default arm of the switch DSL. Unused — the checked
+/// switch form states exhaustiveness explicitly through `switchFinalEnum` and
+/// the `scCons`/`shEnum` case chain of hdl-enum.typort (HDL040). Kept as the
+/// placeholder name for a future dedicated default arm.
 enum SwitchKey {
     default
 }

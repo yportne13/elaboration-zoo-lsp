@@ -6,23 +6,34 @@
 
 // ---------- utility types ----------
 
-// Special struct recognized by the compiler. When a function has an implicit
-// parameter of type BindingName, the compiler automatically fills it with the
-// name of the enclosing `let` binding (SpinalHDL-style auto-naming).
+/// Special struct recognized by the compiler. When a function has an implicit
+/// parameter of type BindingName, the compiler automatically fills it with the
+/// name of the enclosing `let` binding (SpinalHDL-style auto-naming).
 struct BindingName {
     name: String
 }
 
+/// Proof that `n <= m`, in Peano style: `le_refl` proves `n <= n`, and `le_step` extends
+/// any proof by one on the RIGHT bound (`Le n m` -> `Le n (succ m)`). Only `le_step`
+/// carries a recursive argument (`h`), so induction on a proof of `n <= m` is a chain of
+/// `m - n` steps and always ends in `le_refl`.
 enum Le(n: Nat, m: Nat) {
     le_refl[n: Nat] -> Le n n
     le_step[n: Nat, m: Nat](h: Le n m) -> Le (n, succ m)
 }
 
+/// Bounded natural: `Fin (succ n)` is the type of the `n + 1` values `0 .. n`. `fzero` is
+/// 0 and `fsucc(i)` is `i + 1` for `i : Fin n`; matching on a `Fin` recurses on the VALUE,
+/// never on the bound, so an `fsucc` chain terminates at `fzero`. Consumed by `sub` below.
 enum Fin(len: Nat) {
     fzero[n: Nat] -> Fin (succ n)
     fsucc[n: Nat](i: Fin n) -> Fin (succ n)
 }
 
+/// `x - n` where `n` is the value of the `Fin (x + 1)` argument `y`: `fzero` returns `x`,
+/// and each `fsucc` strips one `succ` from `x` as well (`sub t yy`), so the recursion is
+/// driven by BOTH arguments in lockstep and runs n steps. The `zero`/`match yy {}` arm is
+/// unreachable: `y : Fin (x + 1)` bounds its value by `x`, so `x` cannot hit zero first.
 def sub(x: Nat, y: Fin (x + 1)): Nat = match y {
     case fzero => x
     case fsucc(yy) => match x {
@@ -31,17 +42,28 @@ def sub(x: Nat, y: Fin (x + 1)): Nat = match y {
     }
 }
 
+/// Dependent pair (Sigma): a `witness : A` together with a `proof : P witness`, where `P`
+/// is a type family over `A`. Both fields are explicit, so a consumer projects `.witness`
+/// and `.proof` and gets the proof's type refined by the witness value.
 struct Exists[A: Type 0, P: A -> Type 0] {
     witness: A
     proof: P witness
 }
 
+/// Ceiling halving: `ceil(x / 2)`. `zero` -> 0 and `succ zero` -> 1 are the base cases;
+/// the recursive arm strips TWO successors (`succ(succ(t)) -> div2Up t + 1`), so recursion
+/// is driven by `x` and takes `x / 2` steps. Called by `log2Up` below and by hdl-utils'
+/// divide-and-conquer width splits (`countOnesExpr`, the majority threshold).
 def div2Up(x: Nat): Nat = match x {
     case zero => 0
     case succ(zero) => 1
     case succ(succ(t)) => (div2Up t) + 1
 }
 
+/// Number of bits needed to index `x` values: `ceil(log2 x)`, with 0 for both 0 and 1.
+/// `zero`/`succ zero` are the base cases and the recursive arm is driven by `x`, halving it
+/// through `div2Up (tail + 2)` (== `div2Up x`), so it runs in O(log x). Consumers include
+/// hdl-utils' counter/`countOne` widths, hdl-stream FIFO pointers and hdl-misc-io.
 def log2Up(x: Nat): Nat = match x {
     case zero => 0
     case succ(zero) => 0
@@ -50,6 +72,10 @@ def log2Up(x: Nat): Nat = match x {
 
 // ---------- width utilities ----------
 
+/// Maximum of two unary Nats. The recursion is driven by BOTH operands in lockstep: the
+/// outer match is on `a` (`zero => b`), the inner on `b` (`zero => a`), and `maxNat t u`
+/// strips one `succ` from each, so it runs `min(a, b)` steps. hdl-check-graph uses it to
+/// normalize a part-select's bounds.
 def maxNat(a: Nat, b: Nat): Nat = match a {
     case zero => b
     case succ(t) => match b {
@@ -58,6 +84,9 @@ def maxNat(a: Nat, b: Nat): Nat = match a {
     }
 }
 
+/// Minimum of two unary Nats: `zero` on either side short-circuits to 0, otherwise the
+/// recursion `minNat t u` strips one `succ` from BOTH operands (`min(a, b)` steps). Its
+/// one caller is hdl-check-graph's part-select normalization, which pairs it with `maxNat`.
 def minNat(a: Nat, b: Nat): Nat = match a {
     case zero => zero
     case succ(t) => match b {
@@ -68,24 +97,34 @@ def minNat(a: Nat, b: Nat): Nat = match a {
 
 // ---------- Module system (shared helpers) ----------
 
+/// Which clock edge samples a register. hdl-verilog renders it as `posedge` / `negedge`
+/// in `clockEdgeStr` and in every `always @(...)` header; the Verilog-compat path
+/// hardcodes `RisingEdge` when it folds a `clk` port.
 enum ClockEdge {
     RisingEdge
     FallingEdge
 }
 
+/// Whether the reset is asserted high or low. Codegen uses it twice: `resetEdgeStr` for
+/// the async sensitivity list (`posedge` / `negedge`) and `resetCondStr` for the reset
+/// condition (`reset` vs `!reset`); `cdPolJson` renders it as the manifest's `resetActive`.
 enum ResetPolarity {
     ActiveHigh
     ActiveLow
 }
 
+/// Synchronous vs asynchronous reset. With `Async` the reset edge joins the `always`
+/// sensitivity list (`or negedge <reset>`), with `Sync` it does not (the reset branch
+/// still exists, but is evaluated on the clock edge); `cdKindJson` renders it for the
+/// manifest as `sync` / `async`.
 enum ClockDomainConfig {
     Sync
     Async
 }
 
-// Severity of a simulation assertion (SpinalHDL assert/assertInfo/assertWarning/
-// assertFatal). Rendered into the `TYPORT_ASSERT_<SEV>` marker line; AssertFatal
-// additionally emits `$finish;` (docs/hdl-blackbox-sim-design.md §3.3).
+/// Severity of a simulation assertion (SpinalHDL assert/assertInfo/assertWarning/
+/// assertFatal). Rendered into the `TYPORT_ASSERT_<SEV>` marker line; AssertFatal
+/// additionally emits `$finish;` (docs/hdl-blackbox-sim-design.md §3.3).
 enum AssertSeverity {
     AssertInfo
     AssertWarning
@@ -93,6 +132,10 @@ enum AssertSeverity {
     AssertFatal
 }
 
+/// A named clock/reset pair plus its kind, edge and reset polarity — the value baked into
+/// `ModuleDef.cd` and into the per-register `create*Cd` variants. `clockName`/`resetName`
+/// become the emitted port names, and the checkers compare domains by exactly that pair
+/// (hdl-check's `chkCdEq`), so two values with the same names are the same domain.
 struct ClockDomain {
     clockName: String
     resetName: String
@@ -101,8 +144,30 @@ struct ClockDomain {
     resetPolarity: ResetPolarity
 }
 
+/// The fallback domain: clk/reset, `Async`, `RisingEdge`, `ActiveHigh`. Used when a module
+/// is created without an explicit domain (addExprToModuleHelper's `nil` arm), by the
+/// module/blackbox macro scaffolding, by hdl-clock's Mem factories, by the Verilog-compat
+/// fold when no `clk` port was seen, and as hdl-verilog's empty-tree ModuleDef.
 def defaultClockDomain: ClockDomain = ClockDomain.mk "clk" "reset" Async RisingEdge ActiveHigh
 
+/// The HDL IR node type: every signal declaration, statement and expression that
+/// elaboration records into a ModuleDef is an `Expr`. Node families:
+///   - declarations: `create`/`createWidth` (wire), `createIn*`/`createOut*`/
+///     `createInOut*` (ports), `createSInt*` (signed), `createReg*`/`createOutReg*`/
+///     `createSInt*Reg*` (registers: the `*Init` variants carry a reset value, the `*Cd`
+///     variants an explicit clock domain), and `createMem`;
+///   - pure expressions: `literal`, `sizedLiteral` (carries its Verilog width so codegen
+///     can emit a legal sized constant), `unary`, `binary`, `mux`, `bitsel`, `partsel`,
+///     `memRead`;
+///   - statements: `assign`, `regAssign`, `regAssignCd`, `when` (single-statement body
+///     plus optional else), `switch`, `block`, `nop`, `memWrite`;
+///   - hierarchy: `instance`, `instanceWithPorts` (opaque port string), `subSignal`
+///     (cross-level signal reference);
+///   - simulation: `assertExpr` / `assertExprCd` (severity-tagged `$display`, fatal also
+///     emits `$finish;`);
+///   - blackbox: `bbMarkerExpr`, the parameter-marker emission channel (`isInst=false`
+///     SELF, `true` INSTANCE) — a dedicated variant so it can never alias a user
+///     constant-Bool assertion the way the old `assertExpr` carrier did.
 enum Expr {
     create(name: String)
     createIn(name: String)
@@ -190,10 +255,10 @@ enum Expr {
     bbMarkerExpr(isInst: Boolean, params: String)
 }
 
-// Check if an Expr is a register signal (createReg/createRegWidth/createRegWidthInit etc.)
-// output-reg ports (createOutReg/createOutRegWidth/... ) count too: `x := v` on
-// them must produce a clocked regAssign, and the Verilog port line declares
-// them `output reg` (see hdl-verilog.typort).
+/// Check if an Expr is a register signal (createReg/createRegWidth/createRegWidthInit etc.)
+/// output-reg ports (createOutReg/createOutRegWidth/... ) count too: `x := v` on
+/// them must produce a clocked regAssign, and the Verilog port line declares
+/// them `output reg` (see hdl-verilog.typort).
 def isRegExpr(e: Expr): Boolean = match e {
     case createReg(_) => true
     case createRegWidth(_, _) => true
@@ -216,11 +281,15 @@ def isRegExpr(e: Expr): Boolean = match e {
     case _ => false
 }
 
-// Is the Expr a declared signal (factory-created wire/port/reg/mem, or a
-// sub-module instance)? Binding such a value with a let is plain aliasing —
-// no extra wire. Everything else an operator/mux/bitsel/memRead chain can
-// produce is a bare expression; the LetNamed instances (hdl-types.typort)
-// turn a let of those into a named wire instead.
+/// Is the Expr a factory-created signal — a wire (`create`/`createWidth`), a
+/// port (`createIn*`/`createOut*`/`createInOut*`/`createSInt*`), a register
+/// (`createReg*`/`createOutReg*`) or a memory (`createMem`)? Binding such a
+/// value with a let is plain aliasing — no extra wire.
+///
+/// NOT declared signals: `instance`/`instanceWithPorts` (this match has no arm
+/// for them, so they fall through to `false`), `subSignal`, and everything an
+/// operator/mux/bitsel/partsel/memRead chain can produce. The LetNamed
+/// instances (hdl-types.typort) turn a let of those into a named wire instead.
 def isDeclaredSignal(e: Expr): Boolean = match e {
     case create(_) => true
     case createIn(_) => true
@@ -256,6 +325,10 @@ def isDeclaredSignal(e: Expr): Boolean = match e {
 // Defined here so ModuleDef can bake the clock domain at record time.
 // hdl-clock.typort keeps the SpinalHDL-style Mem type built on top.
 
+/// One module: its name, the clock domain all of its expressions share, and the recorded
+/// `expr` vector (its length `expr_num` is the GADT index). `addExprToModuleHelper`
+/// PREPENDS to `expr`, so the vector is newest-first; consumers such as hdl-verilog's
+/// `collectInitLinesCd` callers wrap their result in `list_reverse` to recover source order.
 struct ModuleDef {
     name: String
     cd: ClockDomain
@@ -263,14 +336,27 @@ struct ModuleDef {
     expr: Vec[Expr] expr_num
 }
 
+/// The module tree being built: `data`'s HEAD is the module currently being
+/// built, `num` is its `Vec` length. `addExprToModuleHelper` rewrites only that
+/// head def and `headModuleDef` reads it back.
+///
+/// The TAIL does NOT hold the enclosing modules: each module-macro arm pushes a
+/// singleton `ModuleTree.mk(1, ModuleDef.mk(...) :: nil)` that discards the
+/// previous tree, and afterwards restores the parent tree from the saved `_prev`
+/// local (a bare `create_global("ModuleTree", _prev)`) — the macro's constant
+/// push is a deliberate red line for perf reasons. A tree with more than one def
+/// only exists when it is built by hand, e.g. `ModuleTree.mk(2, mdTop :: mdAdder
+/// :: nil)` in examples/hdl/09-hierarchy.typort.
+///
+/// `insert` prepends a def in O(1) using `succ(this.num)`, not `this.num + 1`.
 struct ModuleTree {
     num: Nat
     data: Vec[ModuleDef] num
 }
 
-// Trait implemented by every `module`-generated struct. The `tree` method is
-// provided by the module macro (it returns the `_res` struct field — the
-// module tree captured at create time, after checkModuleTree validated it).
+/// Trait implemented by every `module`-generated struct. The `tree` method is
+/// provided by the module macro (it returns the `_res` struct field — the
+/// module tree captured at create time, after checkModuleTreeAll validated it).
 trait Module {
     def tree: ModuleTree
 }
@@ -284,13 +370,13 @@ impl ModuleTree {
     def insert(m: ModuleDef): ModuleTree = ModuleTree.mk(succ(this.num), m :: this.data)
 }
 
-// Generic helper: add an expression to the first module (or create one if none exists)
-// All expressions of a module share the module's clock domain (head.cd).
-// The counters use `succ(...)` — the Vec length indices are only bookkeeping
-// (no consumer forces them), and `expr_num + 1` walked the whole unary chain
-// on EVERY signal registration: O(n) per signal, O(n^2) per module.  See
-// docs/l13-perf-review-4.md §10; the macro-side `0 + 1` constants are already
-// folded and stay as they are.
+/// Generic helper: add an expression to the first module (or create one if none exists)
+/// All expressions of a module share the module's clock domain (head.cd).
+/// The counters use `succ(...)` — the Vec length indices are only bookkeeping
+/// (no consumer forces them), and `expr_num + 1` walked the whole unary chain
+/// on EVERY signal registration: O(n) per signal, O(n^2) per module.  See
+/// docs/l13-perf-review-4.md §10; the macro-side `0 + 1` constants are already
+/// folded and stay as they are.
 def addExprToModuleHelper(num: Nat, data: Vec[ModuleDef] num, name: String, e: Expr): ModuleTree = match data {
     case nil => ModuleTree.mk(succ(zero), ModuleDef.mk(name, defaultClockDomain, succ(zero), e :: nil) :: nil)
     case cons(head, tail) =>
@@ -317,18 +403,25 @@ def addExprToModuleHelper(num: Nat, data: Vec[ModuleDef] num, name: String, e: E
 // Per level, `notPrev` is the accumulated negation of all earlier branches
 // of the chain at that level (identity literal(1) when there are none).
 
+/// One active when-scope level. `whenActive(cond, notPrev)` holds the branch condition
+/// plus the accumulated negation of the chain's earlier branches (`literal(1)` when there
+/// are none); `whenOtherwise(notAll)` holds the negation of ALL branches of the chain.
+/// `levelCond` turns either into the level's effective enable.
 enum WhenState {
     whenActive(cond: Expr, notPrev: Expr)
     whenOtherwise(notAll: Expr)
 }
 
+/// The when-scope stack as a cons list: `whenStackPush(top, rest)` keeps the INNERMOST
+/// level at the head (whenBegin pushes, whenEnd pops). `wrapLevels` folds the whole stack
+/// into one enable condition, so a nested assignment carries its complete condition.
 enum WhenStack {
     whenStackEmpty
     whenStackPush(top: WhenState, rest: WhenStack)
 }
 
-// Simplify `cond && extra` — literal 1 is the boolean identity, so a bare
-// first branch keeps a clean condition instead of `(c && 1)`.
+/// Simplify `cond && extra` — literal 1 is the boolean identity, so a bare
+/// first branch keeps a clean condition instead of `(c && 1)`.
 def andCond(cond: Expr, extra: Expr): Expr = match extra {
     case literal(v) => match v {
         case succ(zero) => cond
@@ -337,8 +430,8 @@ def andCond(cond: Expr, extra: Expr): Expr = match extra {
     case _ => binary(cond, "&&", extra)
 }
 
-// `notPrev && !prev` — the accumulated negation of branches (literal-1
-// identity kept out of the emitted condition).
+/// `notPrev && !prev` — the accumulated negation of branches (literal-1
+/// identity kept out of the emitted condition).
 def negatePrev(prev: Expr, notPrev: Expr): Expr = match notPrev {
     case literal(v) => match v {
         case succ(zero) => unary("!", prev)
@@ -347,15 +440,25 @@ def negatePrev(prev: Expr, notPrev: Expr): Expr = match notPrev {
     case _ => binary(notPrev, "&&", unary("!", prev))
 }
 
+/// Creates the `WhenStack` mutable global seeded with `whenStackEmpty`, so a later
+/// `get_global` cannot panic. DEAD CODE: nothing in src/, examples/ or tests/ calls it —
+/// the module/blackbox macro prologues do their own `create_global("WhenStack", ...)`.
 def initWhenStack(): Unit =
     let dummy = create_global("WhenStack", whenStackEmpty);
     unit
 
+/// Enters a `when` branch: pushes `whenActive(cond, literal(1))`, where `literal(1)` means
+/// "no earlier branch negated yet" and is the identity that `andCond`/`negatePrev` drop.
+/// Paired with `whenEnd`; called by the `when`/`switch` macro arms and by the `when*`
+/// helpers throughout the HDL prelude.
 def whenBegin(cond: Expr): Unit =
     let state = whenActive(cond, literal(1));
     let dummy = change_mutable_default("WhenStack", x => whenStackPush(state, x), whenStackPush(state, whenStackEmpty));
     unit
 
+/// Pops the innermost level, or leaves an empty stack alone — one pop per when-chain,
+/// after the last branch. `dummy` is unused: the argument exists only to sequence the call
+/// inside the generated let chain.
 def whenEnd(dummy: Unit): Unit =
     let d = dummy;
     let d2 = change_mutable("WhenStack", x => match x {
@@ -364,6 +467,10 @@ def whenEnd(dummy: Unit): Unit =
     });
     unit
 
+/// Enters an `elsewhen` branch: replaces the level's top with `whenActive(cond,
+/// negatePrev(prev, notPrev))`, folding the previous branch's condition into `notPrev`, so
+/// the effective enable becomes `cond && !prev && !prev2 ...`. On an empty stack it pushes
+/// a fresh level; on top of a `whenOtherwise` level it restarts `notPrev` at `literal(1)`.
 def whenElseBegin(cond: Expr): Unit =
     let d2 = change_mutable("WhenStack", x => match x {
         case whenStackEmpty => whenStackPush(whenActive(cond, literal(1)), whenStackEmpty)
@@ -376,6 +483,10 @@ def whenElseBegin(cond: Expr): Unit =
     });
     unit
 
+/// Enters an `otherwise` branch: replaces the level's top with
+/// `whenOtherwise(negatePrev(prev, notPrev))`, i.e. the negation of every earlier branch.
+/// On an empty stack it pushes `whenOtherwise(literal(1))` (an unconditional else), and if
+/// the top already is `whenOtherwise` the stack is left untouched. `dummy` is unused.
 def whenOtherwiseBegin(dummy: Unit): Unit =
     let d = dummy;
     let d2 = change_mutable("WhenStack", x => match x {
@@ -389,12 +500,19 @@ def whenOtherwiseBegin(dummy: Unit): Unit =
     unit
 
 // The effective enable condition of one stack level.
+/// Effective enable of one stack level: `andCond(cond, notPrev)` for a `whenActive` level
+/// (folds in the accumulated branch negation, dropping the literal-1 identity) and `notAll`
+/// verbatim for a `whenOtherwise` level.
 def levelCond(state: WhenState): Expr = match state {
     case whenActive(cond, notPrev) => andCond(cond, notPrev)
     case whenOtherwise(notAll) => notAll
 }
 
 // AND together the effective conditions of ALL active levels (outer→inner).
+/// Folds `levelCond` over every active level into one `Option[Expr]`, starting from `acc`
+/// (callers pass `None`) and ANDing each level with `andCond`. The stack head is the
+/// INNERMOST level, so the fold visits innermost first and the emitted conjunction reads
+/// `inner && ... && outer`; it returns `None` only for an empty stack.
 def wrapLevels(stack: WhenStack, acc: Option[Expr]): Option[Expr] = match stack {
     case whenStackEmpty => acc
     case whenStackPush(state, rest) =>
@@ -406,6 +524,9 @@ def wrapLevels(stack: WhenStack, acc: Option[Expr]): Option[Expr] = match stack 
         wrapLevels(rest, newAcc)
 }
 
+/// Wraps `e` in `when(cond, e, None)` with the single folded condition from `wrapLevels`
+/// when the stack is non-empty; an empty stack (or a `None` fold) returns `e` unchanged.
+/// Each wrapped body is exactly one statement, so codegen never reconstructs else-if chains.
 def wrapWithWhenContext(stack: WhenStack, e: Expr): Expr = match stack {
     case whenStackEmpty => e
     case whenStackPush(_, _) => match wrapLevels(stack, None) {
@@ -414,6 +535,9 @@ def wrapWithWhenContext(stack: WhenStack, e: Expr): Expr = match stack {
     }
 }
 
+/// Reads the `WhenStack` global after an ensure-exists `change_mutable_default` (`get_global`
+/// panics on a missing key) and wraps `e` with the current when context. Used by
+/// `createSignalExpr`'s default arm and by `addSignalAssignment`.
 def addWhenContext(e: Expr): Expr =
     let ws_init = change_mutable_default("WhenStack", x => x, whenStackEmpty);
     let ws = get_global("WhenStack");
@@ -422,6 +546,16 @@ def addWhenContext(e: Expr): Expr =
 // Helper used by signal creation and assignment to insert expr into module.
 // Signal declarations (create/createIn/createOut) are added directly without when context.
 // Only assignments (assign) are conditionally wrapped via addWhenContext.
+/// The funnel through which elaboration records an `Expr` in the `ModuleTree`; `name` is
+/// the signal name (normally `loopName(bn.name)`). The declaration arms (`create*`,
+/// `create*Width`, the SInt and `createReg*`/`createOutReg*` families, `createMem`) append
+/// the node directly with no when context; `instance`/`instanceWithPorts` append it under
+/// the name `""`; `literal`, `sizedLiteral`, `mux`, `bitsel`, `partsel`, `subSignal` and
+/// `memRead` are pure expressions and are NOT recorded at all.
+/// Every remaining node — assignments, `when`/`switch`/`block`/`nop`, `memWrite`,
+/// `assertExpr(Cd)`, `bbMarkerExpr` and the four `*Cd` register-declaration variants, which
+/// have no explicit arm — falls into the default arm and is wrapped by `addWhenContext`
+/// before being appended.
 def createSignalExpr(name: String, e: Expr): Expr =
     match e {
         case create(_) =>
@@ -520,6 +654,11 @@ def createSignalExpr(name: String, e: Expr): Expr =
     }
 
 // Check if an Expr tree contains any regAssign (for proper when/clocked codegen)
+/// True when a statement has to go into a clocked `always` block: `regAssign`/`regAssignCd`
+/// and `memWrite` are true, `when` recurses into body then else-body, and `block` into head
+/// then tail. The walk is deliberately shallow — `mux`, `bitsel`, `partsel`, `createMem` and
+/// `memRead` return false without recursing and every other constructor falls through to
+/// false. hdl-verilog uses it to route a statement to the clocked always vs a plain assign.
 def hasRegAssign(e: Expr): Boolean = match e {
     case regAssign(_, _) => true
     case regAssignCd(_, _, _) => true
@@ -554,6 +693,11 @@ def hasRegAssign(e: Expr): Boolean = match e {
 // createSIntRegWidthInit). This avoids global state pattern-matching issues.
 // The following functions query a module's expressions for regs-with-reset:
 
+/// True iff the module's `expr` vector holds any register declaration carrying a reset
+/// value (`createRegWidthInit`, `createRegWidthInitCd`, `createSIntRegWidthInit`,
+/// `createOutRegWidthInit`, `createSIntOutRegWidthInit`); recursion consumes the Vec tail.
+/// DEAD CODE: no caller in src/ — hdl-verilog uses `collectInitLinesCd` instead. It also
+/// omits `createSIntRegWidthInitCd`, which `collectInitLines` below does handle.
 def hasInitRegs[ne: Nat](es: Vec[Expr] ne): Boolean = match es {
     case nil => false
     case cons(e, tail) => match e {
@@ -566,14 +710,19 @@ def hasInitRegs[ne: Nat](es: Vec[Expr] ne): Boolean = match es {
     }
 }
 
-// Convert reset init value to Verilog literal string.
-// Only literal(Nat) is supported; all other values default to "0".
-// Uses the Rust builtin nat_to_dec directly (the natToDec wrapper is in hdl-verilog.typort)
+/// Convert reset init value to Verilog literal string.
+/// Only literal(Nat) is supported; all other values default to "0".
+/// Uses the Rust builtin nat_to_dec directly (the natToDec wrapper is in hdl-verilog.typort)
 def verilogLiteral(e: Expr): String = match e {
     case literal(v) => nat_to_dec(v)
     case _ => "0"
 }
 
+/// Reset-branch body lines for the module's registers that carry a reset value, in Vec
+/// order: `    <name> <= <verilogLiteral(initVal)>;` for each of the six `*Init` variants
+/// (including `createSIntRegWidthInitCd`); non-init nodes are skipped and the recursion
+/// consumes the Vec tail. DEAD CODE: no caller in src/ — hdl-verilog's `collectInitLinesCd`
+/// supersedes it.
 def collectInitLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
     case nil => lnil
     case cons(e, tail) => match e {
@@ -593,16 +742,16 @@ def collectInitLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
     }
 }
 
-// Add a signal assignment to the module.
-// Creates assign(lhs, rhs) and appends to the module global via addWhenContext.
+/// Add a signal assignment to the module.
+/// Creates assign(lhs, rhs) and appends to the module global via addWhenContext.
 def addSignalAssignment(lhs: Expr, rhs: Expr): Unit =
     let assignment = assign(lhs, rhs);
     let wrapped = addWhenContext(assignment);
     let d = change_mutable("ModuleTree", x => addExprToModuleHelper(x.num, x.data, "", wrapped));
     unit
 
-// Create a sub-module instance in the current module.
-// Called at the call-site of a sub-module mk() function.
+/// Create a sub-module instance in the current module.
+/// Called at the call-site of a sub-module mk() function.
 def mkInstance(instName: String, moduleName: String): Unit =
     let dummy = createSignalExpr("", instance(instName, moduleName));
     unit
@@ -629,27 +778,34 @@ def mkInstance(instName: String, moduleName: String): Unit =
 // field access forces the growing stuck chain: O(n²) (measured 2s → 187s
 // on 02-arithmetic; see docs/module-redesign-analysis.md §perf).
 
-// Record a sub-module instance in the PARENT module, but only when one
-// exists (the tree after the module body's restore holds the parent's
-// ModuleDefs). Top-level creates (no parent) drop the instance — a bare
-// `M.create` at top level must not leave a phantom instance line in the
-// global tree.
+/// Record a sub-module instance in the PARENT module, but only when one
+/// exists (the tree after the module body's restore holds the parent's
+/// ModuleDefs). Top-level creates (no parent) drop the instance — a bare
+/// `M.create` at top level must not leave a phantom instance line in the
+/// global tree.
 def addInstanceIfParent[num: Nat](data: Vec[ModuleDef] num, instName: String, moduleName: String): ModuleTree = match data {
     case nil => ModuleTree.mk(num, nil)
     case cons(_, _) => addExprToModuleHelper(num, data, "", instance(instName, moduleName))
 }
 
+/// Records the instance in the PARENT module by reading the current `ModuleTree` global
+/// (`x.data`) inside `change_mutable`, so it must run after the child module restored the
+/// parent tree; at top level that vector is empty and `addInstanceIfParent` drops the
+/// instance. Called by the module/blackbox macros at the end of a nested `create`.
 def mkInstanceIfParent(instName: String, moduleName: String): Unit =
     let d = change_mutable("ModuleTree", x => addInstanceIfParent(x.data, instName, moduleName));
     unit
 
-// Create a sub-module instance with explicit port connections.
-// ports format: ".portA(signalA), .portB(signalB)"
+/// Create a sub-module instance with explicit port connections.
+/// ports format: ".portA(signalA), .portB(signalB)"
 def mkInstancePorts(instName: String, moduleName: String, ports: String): Unit =
     let dummy = createSignalExpr("", instanceWithPorts(instName, moduleName, ports));
     unit
 
 // Extract the first ModuleDef from a module struct
+/// The head (current) ModuleDef of a tree's def vector; for an empty vector it returns the
+/// sentinel `ModuleDef.mk("", defaultClockDomain, 0, nil)`, whose empty name is what
+/// `registerModuleTree` and hdl-check use to skip empty trees.
 def headModuleDef[v: Nat](data: Vec[ModuleDef] v): ModuleDef = match data {
     case nil => ModuleDef.mk("", defaultClockDomain, 0, nil)
     case cons(first, _) => first
@@ -657,8 +813,9 @@ def headModuleDef[v: Nat](data: Vec[ModuleDef] v): ModuleDef = match data {
 
 // ---------- Design-wide module registry ----------
 // Every completed module body registers its head ModuleDef here (hooked in
-// checkModuleTree at create-side pop), deduped by name — first registration
-// wins. A single ModuleTree does NOT carry submodule definitions (each
+// registerModuleTree, called by checkModuleTreeAll at create-side pop),
+// deduped by name — first registration wins. A single ModuleTree does NOT
+// carry submodule definitions (each
 // module builds its own tree under the stack-style global; the manual
 // multi-module workaround is buildMultiTree in examples/hdl/09-hierarchy.typort),
 // so tools walk this registry to emit a self-contained design: designVL in
@@ -667,11 +824,17 @@ def headModuleDef[v: Nat](data: Vec[ModuleDef] v): ModuleDef = match data {
 // parametric module with different arguments (myAdder[8] / myAdder[16])
 // collide on the module name; the first registration is kept.
 
+/// The design-wide module table: completed module defs deduped by name with FIRST-WINS
+/// (`registerModuleTree`). A single ModuleTree does not carry submodule defs, so consumers
+/// such as hdl-verilog's `designVL` walk this registry to emit a self-contained design.
 struct ModuleRegistry {
     num: Nat
     defs: Vec[ModuleDef] num
 }
 
+/// Linear membership test over the registry's def list, comparing `md.name` with `str_eq`;
+/// recursion consumes the list tail and returns false at `nil`. Used by `registerModuleTree`
+/// to keep first-wins dedup.
 def registryContains[n: Nat](defs: Vec[ModuleDef] n, name: String): Boolean = match defs {
     case nil => false
     case cons(md, rest) => match str_eq(md.name, name) {
@@ -681,6 +844,10 @@ def registryContains[n: Nat](defs: Vec[ModuleDef] n, name: String): Boolean = ma
 }
 
 // Register a completed module tree's head def (no-op for empty trees).
+/// Registers a completed tree's head def in the `ModuleRegistry` global: a no-op when the
+/// head name is `""` (empty tree) or when the name is already present (first registration
+/// wins), otherwise it prepends with `succ(x.num)`. Called by `checkModuleTreeAll` after the
+/// module check, so only checked defs enter the registry.
 def registerModuleTree(t: ModuleTree): Unit =
     let md = headModuleDef(t.data);
     match str_eq(md.name, "") {
@@ -707,7 +874,7 @@ def registerModuleTree(t: ModuleTree): Unit =
 // blackbox-only side effects:
 //   1. each `generic K = v` line appends (K, v) to the mutable global
 //      "BlackBoxCtx" (CompatCD pattern: prologue reset, record-time read);
-//   2. before checkModuleTree runs, bbRegisterLast upserts (name -> generics)
+//   2. before checkModuleTreeAll runs, bbRegisterLast upserts (name -> generics)
 //      into the mutable global "BlackBoxRegistry" (design-record use only —
 //      see the DEVIATION below; the actual blackbox dispatches read the
 //      DEDICATED bbMarkerExpr parameter markers, hdl-verilog/hdl-check):
@@ -747,35 +914,51 @@ def registerModuleTree(t: ModuleTree): Unit =
 // check-evaluation context — it once silently skipped the five body rules for
 // ALL modules; docs/l13-typeclass-instance-nat-param-bug.md).
 
+/// A blackbox `generic K = v` value: `bbGenNat` for a Nat expression (the only form the
+/// macro exposes) or `bbGenStr` for a String literal, which has no macro syntax yet and is
+/// reachable only by calling `bbGenericAddStr` from a def directly.
 enum BbGenVal {
     bbGenNat(v: Nat)
     bbGenStr(s: String)
 }
 
+/// One recorded blackbox generic: the parameter key plus its `BbGenVal`. The key is what
+/// `bbGenKeyIn` dedups on, so a repeated `generic K` line keeps the first recorded value.
 struct BbGeneric {
     key: String
     val: BbGenVal
 }
 
+/// The generics of one blackbox declaration as a `List[BbGeneric]`. Built by the macro from
+/// `bbCtxTakeGround` and stored via `bbRegisterLast` — design-record use only, since codegen
+/// and the checker read the `bbMarkerExpr` nodes instead.
 struct BlackBoxInfo {
     generics: List[BbGeneric]
 }
 
+/// A `BlackBoxRegistry` row: the blackbox name paired with its `BlackBoxInfo`.
 struct BlackBoxEntry {
     name: String
     info: BlackBoxInfo
 }
 
+/// The design-wide blackbox table, written by hdl-macros' `bbRegisterLast` with LAST-WINS
+/// semantics (the same name is dropped then re-prepended), so the final create-time
+/// evaluation with ground parameters overwrites the neutral check-round values. No prelude
+/// reader remains (see the HISTORY note above); the name lives on for tools/tests.
 struct BlackBoxRegistry {
     entries: List[BlackBoxEntry]
 }
 
-// Per-create scratch cell for the generic statements of one blackbox body
-// (the macro resets it in its prologue, CompatCD-style).
+/// Per-create scratch cell for the generic statements of one blackbox body
+/// (the macro resets it in its prologue, CompatCD-style).
 struct BlackBoxCtx {
     gens: List[BbGeneric]
 }
 
+/// Membership test of a generic key in the per-create list, compared with `str_eq`; the
+/// recursion consumes the list and returns false at `lnil`. Used by `bbCtxAdd` to keep the
+/// first value of a repeated key.
 def bbGenKeyIn(gs: List[BbGeneric], key: String): Boolean = match gs {
     case lnil => false
     case lcons(g, t) => match str_eq(g.key, key) {
@@ -784,6 +967,9 @@ def bbGenKeyIn(gs: List[BbGeneric], key: String): Boolean = match gs {
     }
 }
 
+/// Records one generic in the `BlackBoxCtx` global after an ensure-exists seed, but only
+/// when the key is not already present (`bbGenKeyIn`), so the first `generic K = ...` wins;
+/// the new entry is prepended to `gens`. The blackbox macro resets the cell in its prologue.
 def bbCtxAdd(key: String, v: BbGenVal): Unit =
     let _ = change_mutable_default("BlackBoxCtx", x => x, BlackBoxCtx.mk(lnil));
     let _ = change_mutable("BlackBoxCtx", x => match bbGenKeyIn(x.gens, key) {
@@ -792,8 +978,13 @@ def bbCtxAdd(key: String, v: BbGenVal): Unit =
     });
     unit
 
+/// The macro-facing entry point for `generic K = <Nat expr>`; delegates to `bbCtxAdd` with
+/// `bbGenNat v`. Emitted once per generic line by the `blackbox` macro expansion.
 def bbGenericAddNat(key: String, v: Nat): Unit = bbCtxAdd(key, bbGenNat(v))
 
+/// String-generic counterpart of `bbGenericAddNat`. DEAD CODE today: the blackbox macro
+/// only emits `bbGenericAddNat` (String generics have no macro syntax yet), so nothing in
+/// src/, examples/ or tests/ calls this.
 def bbGenericAddStr(key: String, s: String): Unit = bbCtxAdd(key, bbGenStr(s))
 
 // (blackboxCtxTake — read-and-clear the per-create generic list — was removed
@@ -814,18 +1005,29 @@ def bbGenericAddStr(key: String, s: String): Unit = bbCtxAdd(key, bbGenStr(s))
 // Lives in hdl-core (the first HDL prelude file) because hdl-types' `:=`
 // implementations call pickAssign.
 
+/// The `always @(*)` nesting depth counter. It is a struct because a mutable global's name
+/// must be an existing type name; zero means "not inside always @(*)" and `pickAssign`
+/// reads it through `combDepth`.
 struct CombCtx {
     depth: Nat
 }
 
+/// Current `always @(*)` nesting depth, read after an ensure-exists so a missing global
+/// reads as zero instead of panicking (`get_global` panics on a missing key). `pickAssign`
+/// treats a nonzero depth as "drive the reg combinationally".
 def combDepth(): Nat =
     let _ = change_mutable_default("CombCtx", x => x, CombCtx.mk(zero));
     (get_global("CombCtx")).depth
 
+/// Increments the `always @(*)` depth. The Verilog-compat macro calls it around the body of
+/// `always @(*)` / `always @*`; while the depth is nonzero a reg `:=` becomes a plain assign
+/// plus an HDV002 check issue.
 def combBegin(): Unit =
     let _ = change_mutable("CombCtx", x => CombCtx.mk(succ(x.depth)));
     unit
 
+/// Decrements the `always @(*)` depth, saturating at zero (`zero` stays `zero`), so an
+/// unbalanced extra call cannot underflow the Nat. Closes the region opened by `combBegin`.
 def combEnd(): Unit =
     let _ = change_mutable("CombCtx", x => match x.depth {
         case zero => CombCtx.mk(zero)
@@ -833,10 +1035,10 @@ def combEnd(): Unit =
     });
     unit
 
-// `:=` dispatch shared by every Data implementation: a reg LHS becomes a
-// clocked regAssign — EXCEPT inside an always @(*) context (Verilog compat),
-// where the reg is driven combinationally and an HDV002 check issue is
-// reported. Non-reg LHS is always a plain assign.
+/// `:=` dispatch shared by every Data implementation: a reg LHS becomes a
+/// clocked regAssign — EXCEPT inside an always @(*) context (Verilog compat),
+/// where the reg is driven combinationally and an HDV002 check issue is
+/// reported. Non-reg LHS is always a plain assign.
 def pickAssign(lhs: Expr, rhs: Expr): Expr = match isRegExpr(lhs) {
     case true => match combDepth() {
         case zero => regAssign(lhs, rhs)
@@ -860,6 +1062,10 @@ def pickAssign(lhs: Expr, rhs: Expr): Expr = match isRegExpr(lhs) {
 //  模块内用于组织代码（信号声明/赋值），不影响 Verilog 结构。
 // ============================================================
 
+/// Runs `body` immediately with `unit` and returns its result: a pure grouping construct
+/// that adds no hierarchy, mirroring SpinalHDL's `Area`. Because it is a plain function,
+/// everything the body elaborates lands in the enclosing module — the L13 legacy test
+/// `test_hdl_area` asserts the assign appears and no `module Area` is emitted.
 def Area[T: Type 0](body: Unit -> T): T = body(unit)
 
 // ============================================================
@@ -869,12 +1075,15 @@ def Area[T: Type 0](body: Unit -> T): T = body(unit)
 //  可驱动位宽参数化（UInt[i + 1]）与静态索引。
 // ============================================================
 
-// `0 until 4` 的产物：半开区间 [lo, hi)。
+/// `0 until 4` 的产物：半开区间 [lo, hi)。
 struct Range {
     lo: Nat
     hi: Nat
 }
 
+/// `lo until hi` sugar: the `impl ... for Nat` builds `Range.mk(this, hi)`, a half-open
+/// interval. Its consumer is the `for i in a until b { ... }` macro arm, which expands to
+/// `rangeFor(a until b, i => ...)` (also used directly in examples/hdl/08-control-flow).
 trait RangeSyntax {
     def until(hi: Nat): Range
 }
@@ -889,21 +1098,32 @@ impl RangeSyntax for Nat {
 // （string_to_global_type），所以必须是一个真实类型（enum/struct）。
 // 注：这里用 create_global 兜底初始化 —— get_global 缺键会 panic。
 
+/// The loop-index stack behind the global `HdlLoopIdx`, a cons list with the INNERMOST loop
+/// index at the head: `genFrom` pushes its index per iteration and pops it at the iteration
+/// tail, so nested loops accumulate one frame per level.
 enum HdlLoopIdx {
     hdlLoopIdxEmpty
     hdlLoopIdxCons(idx: Nat, rest: HdlLoopIdx)
 }
 
+/// Drops the head frame, returning `hdlLoopIdxEmpty` for an empty stack; `genFrom` calls it
+/// to pop the index it pushed for the current iteration.
 def loopStackTail(xs: HdlLoopIdx): HdlLoopIdx = match xs {
     case hdlLoopIdxEmpty => hdlLoopIdxEmpty
     case hdlLoopIdxCons(_, t) => t
 }
 
+/// Tail-recursive reverse of the index stack, driven by `xs` (the list) with the reversed
+/// prefix accumulated in `acc`. `loopName` calls it so the emitted suffix is outermost-first
+/// (`x_i_j`) even though the stack head is the innermost index.
 def loopStackReverse(xs: HdlLoopIdx, acc: HdlLoopIdx): HdlLoopIdx = match xs {
     case hdlLoopIdxEmpty => acc
     case hdlLoopIdxCons(n, rest) => loopStackReverse(rest, hdlLoopIdxCons(n, acc))
 }
 
+/// Renders a stack head-first: `nat_to_dec(n)` for a single frame, else `n_<rest>` with the
+/// indices joined by `_`. On the raw stack that is innermost-first; `loopName` reverses
+/// first to get the outer-first suffix.
 def loopStackName(xs: HdlLoopIdx): String = match xs {
     case hdlLoopIdxEmpty => ""
     case hdlLoopIdxCons(n, hdlLoopIdxEmpty) => nat_to_dec(n)
@@ -913,8 +1133,16 @@ def loopStackName(xs: HdlLoopIdx): String = match xs {
 // 循环索引全局键的加载期建立（hdl-core 早于 hdl-signals/hdl-check 加载，
 // 而 def 检查会求值应用 → 本 def 在 prelude 加载时即完成 create_global
 // 副作用）。loopName 因此可以纯读，不必兜底写全局（见其注释）。
+/// A load-time side effect rather than a callable function: the def's body calls
+/// `create_global("HdlLoopIdx", hdlLoopIdxEmpty)`, and since def bodies are evaluated at
+/// declaration, the key exists as soon as hdl-core is loaded. lib.rs clears the mutable map
+/// afterwards, which is why `loopName` still carries its own ensure-exists fallback.
 def hdlLoopIdxGlobalInit = create_global("HdlLoopIdx", hdlLoopIdxEmpty)
 
+/// Names a loop-suffixed signal: returns `name` unchanged when the index stack is empty,
+/// otherwise `name_<outer>_<inner>` by reversing the stack and calling `loopStackName`.
+/// Starts with an ensure-exists fallback (`change_mutable_default`) because lib.rs clears
+/// the mutable map after the prelude load and `get_global` would panic on the missing key.
 def loopName(name: String): String =
     // 纯读为主：键由 hdlLoopIdxGlobalInit 在加载期建立，module 宏 prologue
     // 也会重置。但 lib.rs 在 prelude 加载后清空 mutable_map，普通 def 的
@@ -931,6 +1159,10 @@ def loopName(name: String): String =
     }
 
 // 从 cur 起迭代 k 次（升序：f cur, f (cur+1), ..., f (cur+k-1)）。
+/// Iterates `k` times ascending from `cur` — `f cur`, `f (cur+1)`, ..., `f (cur+k-1)` — and
+/// is driven by `k`: each step matches `succ(m)` and recurses with `m` and
+/// `nat_add(cur, 1)`, so `zero` runs no iteration. Around each call it pushes `cur` on the
+/// `HdlLoopIdx` stack and pops it after, so `loopName` sees the full nesting.
 def genFrom(cur: Nat, k: Nat, f: Nat -> Unit): Unit = match k {
     case zero => unit
     case succ(m) =>
@@ -940,8 +1172,12 @@ def genFrom(cur: Nat, k: Nat, f: Nat -> Unit): Unit = match k {
         genFrom(nat_add(cur, 1), m, f)
 }
 
+/// `for i in lo until hi`: runs `genFrom(lo, nat_sub(hi, lo), f)`, so `hi` is exclusive and
+/// an empty or reversed interval runs zero iterations (`nat_sub` saturates at zero).
 def rangeFor2(lo: Nat, hi: Nat, f: Nat -> Unit): Unit =
     genFrom(lo, nat_sub(hi, lo), f)
 
+/// `rangeFor` on a `Range` value: forwards `r.lo` and `nat_sub(r.hi, r.lo)` to `genFrom` —
+/// the form the `for ... until ...` macro arm expands to, with `hi` exclusive.
 def rangeFor(r: Range, f: Nat -> Unit): Unit =
     genFrom(r.lo, nat_sub(r.hi, r.lo), f)
