@@ -577,8 +577,41 @@ class RefPulseCC:
         return {"pulseOut": (self.s1 ^ self.s2) & 1}
 
 class RefFifoCC:
+    """INDEPENDENT reference model for `streamFifoCC` (rewritten by verifier, task-7).
+
+    Why rewritten: the previous version used the *same* conditions as the RTL it
+    was checking (`full = wr == rs2` / `empty = rd == ws2`), i.e. circular
+    verification -- and those conditions are exactly the bug (at reset both are
+    true, so the FIFO never moves).  It also collapsed the 2FF synchronizers to
+    one register (`rs2 = rs1` after `rs1 = rd`, blocking semantics).
+
+    Independent formulation used here:
+      * pointers carry a WRAP BIT (ptrBits + 1 bits); the RAM is indexed with the
+        low `ptrBits` bits only;
+      * flags come from **modular occupancy differences**, not from the RTL's
+        `{~msb, lsb}` pointer-equality form:
+            writer view  occ_w = (wr - rs2) mod 2^PW
+            reader view  occ_r = (ws2 - rd) mod 2^PW
+            full  <=> occ_w >= depth        empty <=> occ_r == 0
+        At reset occ_w == 0 != depth, so full and empty can no longer both hold.
+      * synchronizers use true non-blocking order: `s2 <= s1_old`, `s1 <= src`.
+
+    EVIDENCE LEVEL: this machine has **no verilator**, so the dual-clock runner
+    cannot execute and this model is a *written* independent spec + the
+    emitted-Verilog structural pins in `target/prelude_scratch/verify/emit21_ccFifo.v`
+    (`reg [2:0]` pointers, `{~rdPtrSync2[2], rdPtrSync2[1:0]}` full form,
+    `_d_mem[..[1:0]]` addressing).  It is NOT simulation-backed evidence.
+
+    The vFifoCC case uses depth = 4 => PW = 3, IDX = 3.
+    """
+
+    DEPTH = 4
+    PW = 3
+    ALL = (1 << PW) - 1
+    IDX = (1 << (PW - 1)) - 1
+
     def reset_state(self):
-        self.mem = [0] * 4
+        self.mem = [0] * self.DEPTH
         self.wr = 0
         self.rd = 0
         self.ws1 = 0
@@ -586,34 +619,38 @@ class RefFifoCC:
         self.rs1 = 0
         self.rs2 = 0
         self.popreg = 0
+
+    def _occ_w(self):
+        """Items the writer believes are stored: wr - rs2, mod 2^PW."""
+        return (self.wr - self.rs2) & self.ALL
+
+    def _occ_r(self):
+        """Items the reader believes are available: ws2 - rd, mod 2^PW."""
+        return (self.ws2 - self.rd) & self.ALL
+
     def step(self, rst, inputs):
         if rst:
-            self.mem = [0] * 4
-            self.wr = 0
-            self.rd = 0
-            self.ws1 = 0
-            self.ws2 = 0
-            self.rs1 = 0
-            self.rs2 = 0
-            self.popreg = 0
+            self.reset_state()
         else:
             pv, pd = inputs["pushValid"], inputs["pushData"]
-            full = self.wr == self.rs2
-            empty = self.rd == self.ws2
-            # clkA domain (main): sync rdPtr, push
+            full = self._occ_w() >= self.DEPTH
+            empty = self._occ_r() == 0
+            # --- inCd (main) domain: 2FF sample of rdPtr, then push ---
+            old_rs1 = self.rs1
             self.rs1 = self.rd
-            self.rs2 = self.rs1
+            self.rs2 = old_rs1          # non-blocking: s2 <= s1_old
             if pv and not full:
-                self.mem[self.wr] = pd
-                self.wr = (self.wr + 1) & 3
-            # clkB domain: sync wrPtr, pop
+                self.mem[self.wr & self.IDX] = pd
+                self.wr = (self.wr + 1) & self.ALL
+            # --- outCd domain: 2FF sample of wrPtr, then free-running pop ---
+            old_ws1 = self.ws1
             self.ws1 = self.wr
-            self.ws2 = self.ws1
-            self.popreg = self.mem[self.rd]
+            self.ws2 = old_ws1          # non-blocking: s2 <= s1_old
+            self.popreg = self.mem[self.rd & self.IDX]
             if not empty:
-                self.rd = (self.rd + 1) & 3
-        full = self.wr == self.rs2
-        empty = self.rd == self.ws2
+                self.rd = (self.rd + 1) & self.ALL
+        full = self._occ_w() >= self.DEPTH
+        empty = self._occ_r() == 0
         return {"pushReady": 0 if full else 1, "popValid": 0 if empty else 1, "popData": self.popreg}
 
 DUAL_CLOCK_CASES = {

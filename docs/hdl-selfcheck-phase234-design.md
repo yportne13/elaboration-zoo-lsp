@@ -460,10 +460,17 @@ HDL012/013（comb/clk 混用、多域）不受区间影响，不抑制。
 
 ### 4.5 死条件与重复条件（HDL034 / HDL035）
 
-- **HDL034（条件永假，死驱动）**：某驱动自身叶子集同时含 `p` 与 `!p`
-  （或 `eq:s:v1` 与 `eq:s:v2` 同 s 异 v）→ 该赋值不可达。
-  `HDL034|<module>|<target>|driver condition is always false (contains both 'p' and '!p')`。
-  这同时是互斥机制的退化自检：生成器照发这条 if，综合器剪掉。
+- **HDL034（条件永假，死驱动）**：某驱动自身的 **eq 叶子**把同一选择器钉到两个不同
+  ground 值（`eq:s:v1` 与 `eq:s:v2` 同 s 异 v），且该选择器不出现在其它驱动的条件中
+  → 该赋值不可达。报文固定为
+  `HDL034|<module>|<target>|driver condition is always false`。
+  > **2026-10 更正（verifier 对码）**：本节原写「叶子集同时含 `p` 与 `!p`」并称报文含
+  > `(contains both 'p' and '!p')`——那是实现前的草案口径。实现**只做 eq 形态**（裸 `p`/`!p`
+  > 与跨分支 WhenStack 残留 `!en && en` 在叶层不可区分），见本文件 §11.5 / §11.12。
+  > 对码位置：`src/prelude/hdl/hdl-check-graph.typort:1375`（注释）与 `:1393`
+  > （`chkReport("HDL034", …, "driver condition is always false")`）。
+  > 行为对照（hdl-a 本轮落地）：`when c && !c` → 仅 HDL032；`when (sel==0) && (sel==1)`
+  > → HDL032 + HDL034。
 - **HDL035（同条件重复，早者被遮蔽）**：同信号两驱动的 `enableKey` 相同
   （exprKey 比对）→ always 块源序下后者恒胜，前者死。
   `HDL035|<module>|<target>|conditional driver shadowed by a later driver with the same condition`。
@@ -588,7 +595,7 @@ depth=2 时**先建 `_sync2`（第一级）后建 `_sync1`（第二级，返回�
 | HDL031 | 跨层次组合环 | 环含 ≥1 条子模块穿透边（cross ≠ ""） | warning | 漏报：子摘要缺失（raw 实例 / 未注册模块）时不产边 |
 | HDL032 | 推断锁存器 | kWire/kOut ∧ condComb ≥1 ∧ uncondComb =0 ∧ 非 T2/T3 完备 | warning | 误报：完备但语法不可证（两个独立 when 联合完备、同条件异写法） |
 | HDL033 | 位区间重叠多驱动 | 同根两静态区间相交 ∧ 条件不互斥 | warning | 漏报：动态索引对不判定；Rigid 轮已门控不误报 |
-| HDL034 | 条件永假（死驱动） | 驱动自身叶子含 p 与 !p，或 eq:s:v1 / eq:s:v2 同 s 异 v | warning | 无已知误报；等价但非字面相反的永假式漏报 |
+| HDL034 | 条件永假（死驱动） | eq 形态：同选择器异值，且该选择器不出现在其它驱动条件中（裸 p/!p 形态不报，见 §11.5） | warning | 漏报：裸 p/!p 与跨分支残留不可区分（§11.5）；等价但非字面相反的永假式漏报 |
 | HDL035 | 同条件重复遮蔽 | 同信号两驱动 enableKey 相同（早者被遮蔽） | warning | 故意 last-wins 风格会报（文档明示） |
 | HDL036 | 组合信号多域汇聚 | 传播后 dom(x) ≥ 2 域 | warning | 漏报：跨模块域不传播；memRead 域中立 |
 | HDL037 | 跨域寄存采样无同步器 | 时钟驱动读域 ≠ 目标域 ∧ 目标不在已识别链 | warning | 误报：派生/同源时钟域无法从名字识别；漏报：端口源域未知 |

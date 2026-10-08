@@ -619,7 +619,7 @@ println(moduleTreeVL(foo.create[myCd].tree))
 | HDL031 | 跨模块组合环（环内含 ≥1 条跨模块边） |
 | HDL032 | 推断 latch：条件驱动不能覆盖全部情形（无无条件 default） |
 | HDL033 | 同根多个组合驱动的静态位区间相交 |
-| HDL034 | 驱动条件恒假（叶子集同时含 `p` 与 `!p`，死驱动） |
+| HDL034 | 驱动条件恒假（同选择器异值的 eq 形态；裸 `p`/`!p` 不报，见 hdl-selfcheck-phase234-design.md §11.5） |
 | HDL035 | 同条件重复驱动，早者被后来者遮蔽 |
 | HDL036 | 组合信号（非寄存器）汇聚 ≥2 个时钟域 |
 | HDL037 | 跨域寄存采样无同步器链（CDC 边直达） |

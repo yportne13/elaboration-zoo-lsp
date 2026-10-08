@@ -112,9 +112,12 @@ Verilog 生成器靠"端口优先于同名 wire"去重。检查器必须做同�
 | HDL037 | 跨域寄存采样无同步器 | 时钟驱动读单域异源信号且目标不在已识别同步链（链长 1 在 message 注明） |
 | HDL038 | 多 bit 过 2FF 同步器 | 已识别 2FF 链首宽度 > 1（streamFifoCC 二进制指针为预期告警） |
 | HDL039 | 同步链中段被读取 | 中间级读者 ∉ {下一级, 相邻级 XOR 边沿检测} |
+| HDL040 | 枚举 switch 穷尽性缺支 | `switchFinalEnum` 显式点名缺失元素（`hdl-enum.typort`；有 default 则跳过） |
+| HDL041 | 常量位选/片选索引越界 | 常量索引 `succ(idx) ≤ w` 不成立即报（信号索引与 mem 地址；part-select 两端都查）（`hdl-check-graph.typort`） |
+| HDL042 | 同名模块二次注册签名不同 | ground 轮记录 (时钟域, 端口 ground 键集)，后续 ground 轮签名不同即报；首个注册者胜（`hdl-check-graph.typort`） |
 
 实现细节与设计偏差见 `docs/hdl-selfcheck-phase234-design.md`（§2 总体架构、§11 实现偏差
-清单）。HDL041+ 留作 switch 相关后续规则。
+清单）。HDL040-042 已落地（见上表）；HDL060-064 为 FSM 族规则（见 `docs/hdl-language-spec.md`）。
 
 后续阶段：
 
