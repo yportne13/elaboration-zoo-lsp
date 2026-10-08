@@ -224,6 +224,29 @@ thread_local! {
     /// 挡在它后面。轮界 `force_memo_clear()` 清空。
     pub(super) static FORCE_PRIM_MEMO: RefCell<FxHashMap<(u8, Vec<u64>), V>> =
         RefCell::new(FxHashMap::default());
+    /// **纯 prim「零进展(stuck)」标记表**（窗口 15 Step T2；键与
+    /// `FORCE_PRIM_MEMO` 同款 = `(prim, 已 force 实参打包字列)`，值 =
+    /// 插入时的 `(PRIM_VERSION, FORCE_TAINT)` 快照，**不含任何 `V`**）。
+    ///
+    /// 为什么不缓存「卡住链本身」（窗口 14 Step T 的实测教训）：卡住链是
+    /// spine 句柄（`tag 2`），把它存进表再在后续命中里返回，等于让同一条链
+    /// 被多处共享/改写，实测在 `twin_information_diagnostics_match_reference_on_proof_examples`
+    /// 触发 `memory allocation of 30064771072 bytes failed`（28 GiB ⇒ abort）。
+    /// 本表只记「这个应用在 (version, taint) 下**已确认零进展**」，命中时返回
+    /// **调用方自己的当前链 `v`**——与 `prim_exec → None` 那次的返回逐位相同
+    /// ——因此不持有任何 arena 句柄，从根本上消除共享/复用风险，也不需要
+    /// keepalive。注意 `None` 路径本来就要把 `v` 返回给调用方（这条返回路径
+    /// 是既有语义），本表没有引入任何新的值共享。
+    ///
+    /// 健全性：只在 prim 返回 `None`（零进展）且 `taint`/`PRIM_VERSION` 未变时
+    /// 插入；纯 prim 在「相同的已 force 实参 + 相同版本 + 相同 taint」下结果
+    /// 确定 ⇒ 命中时跳过 `prim_exec` 与再跑一遍等价（与 `Some` 结果缓存同款
+    /// 论证，只是负载从值换成标记）。轮界 `force_memo_clear()` 清空。
+    /// **不得**用它缓存 `Some` 结果（那条路径仍只走 `FORCE_PRIM_MEMO`）。
+    static PRIM_STUCK: RefCell<FxHashMap<(u8, Vec<u64>), (u64, u64)>> =
+        RefCell::new(FxHashMap::default());
+    /// Step T2 验证用开关（`TYPORT_STUCK_PROBE=1`；默认关 ⇒ 零输出）。
+    static PRIM_STUCK_PROBE: bool = std::env::var_os("TYPORT_STUCK_PROBE").is_some();
     pub(super) static PRIM_VERSION: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     /// meta 就地写的撤销日志（perf-debt 评审轮）：栈非空时所有
     /// `metas[idx] = …` 写点先记 (下标, 旧值) 到栈顶；探测回滚 = 弹栈顶
@@ -407,11 +430,24 @@ pub fn twin_mem_stats() -> serde_json::Value {
 /// `QUOTE_NAT_TM` 的条目是当轮 bump 句柄、`STUCK_DECL_INTERN` 的值同理——
 /// 本函数是每个 `bump.reset()` 轮入口的唯一汇聚点（bench / run / prelude /
 /// kick 各入口均配对调用），挂这里即继承其完整失效纪律。
+/// Step T2 验证计数（只在 `TYPORT_STUCK_PROBE=1` 时于轮界打印；默认零输出）。
+pub(super) static PRIM_STUCK_INS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub(super) static PRIM_STUCK_HIT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 pub(super) fn force_memo_clear() {
     let snap = FORCE_MEMO.with(|m| m.borrow_mut().reclaim(CACHE_SHRINK_MIN_ENTRIES));
     twin_stat_record(&TWIN_STAT_FORCE, snap);
     TWIN_DECLB_CACHE.with(|c| c.borrow_mut().clear());
     FORCE_PRIM_MEMO.with(|c| c.borrow_mut().clear());
+    if PRIM_STUCK_PROBE.with(|b| *b) {
+        eprintln!(
+            "[T2] stuck_ins={} stuck_hit={} stuck_tbl={}",
+            PRIM_STUCK_INS.load(std::sync::atomic::Ordering::Relaxed),
+            PRIM_STUCK_HIT.load(std::sync::atomic::Ordering::Relaxed),
+            PRIM_STUCK.with(|c| c.borrow().len()),
+        );
+    }
+    PRIM_STUCK.with(|c| c.borrow_mut().clear());
     QUOTE_NAT_TM.with(|c| *c.borrow_mut() = None);
     STUCK_DECL_INTERN.with(|c| c.borrow_mut().clear());
 }
@@ -717,9 +753,28 @@ pub(super) fn force_inner<'a>(
                                     if let Some(r) = FORCE_PRIM_MEMO.with(|m| m.borrow().get(k).copied()) {
                                         return r;
                                     }
+                                    // 零进展标记命中 ⇒ 原样返回**当前**链（与
+                                    // `prim_exec → None` 那次的返回一致），
+                                    // 不碰 arena、不共享任何句柄。
+                                    let ver_now = PRIM_VERSION.with(|p| p.get());
+                                    let taint_now = FORCE_TAINT.with(|t| t.get());
+                                    let stuck = PRIM_STUCK.with(|m| {
+                                        m.borrow()
+                                            .get(k)
+                                            .is_some_and(|&(v0, t0)| v0 == ver_now && t0 == taint_now)
+                                    });
+                                    if stuck {
+                                        if PRIM_STUCK_PROBE.with(|b| *b) {
+                                            PRIM_STUCK_HIT
+                                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                        }
+                                        return v;
+                                    }
                                 }
                                 // 复用本函数主栈（arm 入口处已排空，vapp1 臂
                                 // :同款）——旧实现每次 prim 执行三个新 Vec
+                                let ver0 = PRIM_VERSION.with(|p| p.get());
+                                let taint0 = FORCE_TAINT.with(|t| t.get());
                                 match prim_exec(
                                     bump, spine, &mut work, &mut vals, &mut icits, defs, metas,
                                     decl, mutable, pid, &args,
@@ -742,7 +797,31 @@ pub(super) fn force_inner<'a>(
                                         }
                                         return r;
                                     }
-                                    None => return v,
+                                    None => {
+                                        // 零进展结局：只记标记（见 `PRIM_STUCK`
+                                        // 声明处），**不缓存任何句柄**。门与参考版
+                                        // 同款：`taint`/`PRIM_VERSION` 未变才记。
+                                        if let Some(k) = memo_key {
+                                            if FORCE_TAINT.with(|t| t.get()) == taint0
+                                                && PRIM_VERSION.with(|p| p.get()) == ver0
+                                            {
+                                                PRIM_STUCK.with(|m| {
+                                                    let mut m = m.borrow_mut();
+                                                    if m.len() >= FORCE_MEMO_CAP {
+                                                        m.reclaim(CACHE_SHRINK_MIN_ENTRIES);
+                                                    }
+                                                    m.insert(k, (ver0, taint0));
+                                                });
+                                                if PRIM_STUCK_PROBE.with(|b| *b) {
+                                                    PRIM_STUCK_INS.fetch_add(
+                                                        1,
+                                                        std::sync::atomic::Ordering::Relaxed,
+                                                    );
+                                                }
+                                            }
+                                        }
+                                        return v;
+                                    }
                                 }
                             }
                             None => return v,
