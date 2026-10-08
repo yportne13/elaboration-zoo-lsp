@@ -164,6 +164,27 @@ thread_local! {
         std::cell::RefCell::new(rustc_hash::FxHashMap::default());
     static FORCE_MEMO_EPOCH: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static FORCE_TAINT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// **纯 prim 应用的「零进展（卡住）」缓存**（task-14 窗口 8，S1）。
+    ///
+    /// 窗口 4/7 实测把机理钉死：三项算术链的 inference 不收敛是**一次 decl
+    /// elaboration 内部 ~415 层 `force ↔ nat_add` 原生深递归**（栈底是单次
+    /// `infer_in_place`，`elaboration.rs:1361`），键集很小（117 个键、单键被
+    /// force 678 万次），而这些键上 prim 的结局是 **stuck（返回 `None`）**。
+    /// `FORCE_MEMO` 只缓存 `SumCase|Call|Obj` 的结果（含未变/卡住态），
+    /// **`Val::Decl` 被刻意排除**（"下次 force 可再推一步"），于是同一卡住的
+    /// 纯 prim 应用被指数式重复下钻。
+    ///
+    /// 本表只缓存**零进展**的结局：prim 返回 `None` ⇒ `force_inner` 原样返回
+    /// 输入，故命中时返回**同一个 `Rc`** 与"卡住时 force 的结果"**逐位相同**。
+    /// 健全性：只在 `taint` 未变（推导期间没 consult 未解 meta / 副作用 prim）
+    /// 且 `PRIM_VERSION` 未变时入表——卡在 rigid 上的纯应用其卡住态是稳定的；
+    /// 一旦涉及未解 meta，该次推导会 taint，条目不插入。键 =（prim 名, **原样**
+    /// 实参指针）：窗口 4 实测该键集稳定（117 个）；改用"已 force 实参指针"会
+    /// 每次重建形状而系统性 miss（窗口 4 S2 的实测结论）。轮界由
+    /// `force_memo_clear()` 一并清空。
+    static FORCE_PRIM_MEMO: std::cell::RefCell<
+        rustc_hash::FxHashMap<(SmolStr, Vec<usize>), (Rc<Val>, Vec<Rc<Val>>, u64, u64)>
+    > = std::cell::RefCell::new(rustc_hash::FxHashMap::default());
 }
 
 static PRIM_VERSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -193,6 +214,15 @@ pub fn force_memo_clear() {
     // `clear()` 只清条目、不还桶数组，故容量到过阈值时顺带归还（见
     // `CACHE_SHRINK_MIN_ENTRIES`）；入口/出口/每文件各一次，重建成本可忽略。
     let _ = FORCE_MEMO.try_with(|m| {
+        let mut m = m.borrow_mut();
+        let big = m.capacity() >= CACHE_SHRINK_MIN_ENTRIES;
+        m.clear();
+        if big {
+            m.shrink_to_fit();
+        }
+    });
+    // 纯 prim「零进展」缓存同纪律清空（窗口 8）；keepalive 一并释放。
+    let _ = FORCE_PRIM_MEMO.try_with(|m| {
         let mut m = m.borrow_mut();
         let big = m.capacity() >= CACHE_SHRINK_MIN_ENTRIES;
         m.clear();
@@ -2799,7 +2829,8 @@ impl Infer {
                     // memo-tainting: skipping their re-execution on a cache
                     // hit would be observable.  The prim-ness lookup itself
                     // is covered by the entry's PRIM_VERSION tag.
-                    if !prim_is_pure(&x.data) {
+                    let pure = prim_is_pure(&x.data);
+                    if !pure {
                         force_taint_bump();
                     }
                     let args: Vec<Rc<Val>> = {
@@ -2807,8 +2838,48 @@ impl Infer {
                         v.reverse();
                         v
                     };
+                    // ── 纯 prim「零进展（卡住）」缓存（窗口 8 S1；见声明处）──
+                    let ver = PRIM_VERSION.load(std::sync::atomic::Ordering::Relaxed);
+                    let epoch = FORCE_MEMO_EPOCH.with(|e| e.get());
+                    let memo_key: Option<(SmolStr, Vec<usize>)> = if pure {
+                        Some((
+                            x.data.clone(),
+                            args.iter().map(|a| Rc::as_ptr(a) as usize).collect::<Vec<_>>(),
+                        ))
+                    } else {
+                        None
+                    };
+                    if let Some(k) = &memo_key {
+                        let hit = FORCE_PRIM_MEMO.with(|m| {
+                            m.borrow()
+                                .get(k)
+                                .filter(|(_, _, v, e)| *v == ver && *e == epoch)
+                                .map(|(r, _, _, _)| r.clone())
+                        });
+                        if let Some(r) = hit {
+                            return r;
+                        }
+                    }
+                    let taint0 = FORCE_TAINT.with(|t| t.get());
                     if let Some(result) = prim_fn.0(self, decl, &args) {
                         return self.force(decl, &result);
+                    }
+                    // prim 返回 None ⇒ 零进展（`force_inner` 原样返回输入）：
+                    // 仅在 taint 未变 + 版本未变时入表（卡在 rigid 上的纯应用
+                    // 其卡住态稳定；涉及未解 meta 的推导会 taint，不入表）。
+                    if let Some(k) = memo_key {
+                        if FORCE_TAINT.with(|t| t.get()) == taint0
+                            && PRIM_VERSION.load(std::sync::atomic::Ordering::Relaxed) == ver
+                        {
+                            FORCE_PRIM_MEMO.with(|m| {
+                                let mut m = m.borrow_mut();
+                                if m.len() >= FORCE_MEMO_CAP {
+                                    m.clear();
+                                    m.shrink_to_fit();
+                                }
+                                m.insert(k, (t.clone(), args.clone(), ver, epoch));
+                            });
+                        }
                     }
                 }
                 t.clone()
@@ -4362,7 +4433,27 @@ pub fn clone_prelude_state(
     // Each run re-seeds these through the preludes' own
     // `change_mutable_default` calls, so the empty state is the correct
     // baseline.
-    for k in ["WhenStack", "ModuleTree", "HdlLoopIdx", "CombCtx", "ModulePortTable"] {
+    // 2026-10-08 (round-2 incident): "CheckIssues"/"CheckIssuesSeen" belong in
+    // this list too.  The cached copy can already contain lines written by
+    // DECLARATION-TIME check evaluation of prelude def bodies: a prelude def
+    // whose body calls `report_check_issue` with a *literal* module slot (e.g.
+    // a diagnostic helper hard-coded to "module", or a debug probe hard-coded
+    // to a scratch name) records an issue during the prelude load, and the deep
+    // copy below then replays it into EVERY program.  Observed twice as
+    // `[hdl][warning] HDV004 [module]` and `[hdl][warning] HDL039 [T9SPLIT]`
+    // leaking into every output-asserting test (67-69 failures) — and, in the
+    // LSP, into every user file's diagnostics.  Resetting both maps makes a
+    // fresh run see only the issues its own decls produced; the loader's own
+    // `take_fresh_check_issues` drain already reported the load-time ones once.
+    for k in [
+        "WhenStack",
+        "ModuleTree",
+        "HdlLoopIdx",
+        "CombCtx",
+        "ModulePortTable",
+        "CheckIssues",
+        "CheckIssuesSeen",
+    ] {
         mutable.remove(k);
     }
     infer.mutable_map = Rc::new(std::sync::RwLock::new(mutable));
