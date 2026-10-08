@@ -781,12 +781,18 @@ def scanStmtEx(e: Expr, ectx: EnableCtx, acc: GraphAcc): GraphAcc = match e {
     case instance(inm, mnm) => accAddInst(acc, InstInfo.mk(inm, mnm, false))
     case instanceWithPorts(inm, mnm, _) => accAddInst(acc, InstInfo.mk(inm, mnm, true))
     case memWrite(mem, addr, data, en) =>
+        // A memWrite produces no DriveSrc, so its reads must NOT stay in
+        // `pending`: they would be attached to the NEXT drive's `srcs` and
+        // corrupt `driveSrcHas`/`headDriveSrcCount` (task-16: a pure shift stage
+        // `s2 <= s1` appeared to read the write data/address/mem, which rejected
+        // a legitimate chain stage). Record the reads, then clear.
         let a1 = scanExprEx(mem, ectx.leaves, ectx.eqs, acc);
         let a2 = scanExprEx(addr, ectx.leaves, ectx.eqs, a1);
         let a3 = scanExprEx(data, ectx.leaves, ectx.eqs, a2);
-        scanExprEx(en, ectx.leaves, ectx.eqs, a3)
-    case assertExpr(c, _, _) => scanExprEx(c, ectx.leaves, ectx.eqs, acc)
-    case assertExprCd(c, _, _, _) => scanExprEx(c, ectx.leaves, ectx.eqs, acc)
+        accClearPending(scanExprEx(en, ectx.leaves, ectx.eqs, a3))
+    // Same invariant for the assertion statements: they drive nothing either.
+    case assertExpr(c, _, _) => accClearPending(scanExprEx(c, ectx.leaves, ectx.eqs, acc))
+    case assertExprCd(c, _, _, _) => accClearPending(scanExprEx(c, ectx.leaves, ectx.eqs, acc))
     case bbMarkerExpr(_, _) => acc
     case _ =>
         let d = gDeclOf(e);
@@ -1954,8 +1960,69 @@ def readerDriveCd(drives: List[DriveSrc], x: String, r: String): Option[ClockDom
 // exactly binary(Ri, "^", R(i+1)) — the pulseCCByToggle/toggle-sync form.
 // The reference exprKeys are the DECL nodes (references are the same create*
 // nodes the decls carry).
-/// Chain extension test for `r` in domain `D`: `r` must have exactly ONE clocked unconditional reader `x` (and `x != r`), `x` must itself be single-uncond-clocked and registered, and `x`'s resolved domain - with the reader drive's own cd taking priority - must equal `D`. Anything else returns `None` and ends the chain.
-/// The XOR edge-detect exemption is NOT applied here; that lives in `midStageScan`.
+//
+// PURE-SHIFT STAGE RULE (task-16 fix): a synchronizer stage only ever shifts the
+// previous stage, so the drive that reads `r` and targets `x` must read nothing
+// but `r`. A mux/arithmetic consumer (`x <= cond ? r : x`, `x <= r & en`) reads
+// at least one further signal (the condition or a second operand) and is
+// therefore a COMBINATIONAL CONSUMER of `r`, not a stage. Before this rule such
+// a consumer extended the chain: the real last FF was upgraded to a "mid stage"
+// and `midStageScan` then flagged its OTHER legitimate readers (e.g. a plain
+// `q := lastFF` output) as HDL039 — although reading the last FF of a 2FF chain
+// is exactly correct usage.
+//
+// The enable acceptance deliberately MIRRORS `clockedReaderTargets`
+// (`!leafResidue(d.enable) && d.enableKey == ""`), NOT `d.enable == lnil`:
+// registers built with an init value carry a non-empty enable list whose key is
+// still empty, and requiring an empty list rejects legitimate init-valued 2FF
+// chain stages (the `rdPtrSync1/2` shape of examples/hdl/21-crossclock).
+//
+// Why the positive case (`hdl_check_graph_tests::hdl039_mid_stage_read`,
+// "mid stage read by a plain combinational consumer") must STILL report HDL039:
+// there the chain is [s1, s2] built from two pure shifts (`s2 <= s1`,
+// `s1 <= src`), so `s1` is a genuine mid stage and the comb drive `q := s1` is a
+// reader of it that is neither the next stage nor an XOR edge detect. This rule
+// only decides whether a *candidate* register qualifies as a stage; it does not
+// weaken the mid-stage reader scan. In the false-positive case the chain becomes
+// [s1, s2] as well, and the scan then only runs for the pair (s1, s2) — whose
+// sole reader is the next stage — so no HDL039 is emitted.
+/// Every read of the drive is `r`, or the drive's own target name (which the LHS
+/// index scan can contribute), and at least one read is `r`. Rejects drives that
+/// also read a condition/operand (the consumer shapes).
+def srcsPureShift(srcs: List[CondSrc], r: String, selfName: String, sawR: Boolean): Boolean = match srcs {
+    case lnil => sawR
+    case lcons(s, rest) => match str_eq(s.src, r) {
+        case true => srcsPureShift(rest, r, selfName, true)
+        case false => match str_eq(s.src, selfName) {
+            case true => srcsPureShift(rest, r, selfName, sawR)
+            case false => false
+        }
+    }
+}
+
+/// The unique clocked drive that reads `r` and targets `x` is a pure shift of
+/// `r` (`x <= r`): its enable acceptance mirrors `clockedReaderTargets` and it
+/// reads nothing but `r`. A consumer that reads a condition or a second operand
+/// is not a chain stage. A drive that fails the shape test does NOT end the
+/// scan — another qualifying drive for the same (x, r) may follow (the drive
+/// list can hold several statements per target).
+def pureShiftReaderOf(drives: List[DriveSrc], x: String, r: String): Boolean = match drives {
+    case lnil => false
+    case lcons(d, t) =>
+        match chkBand(d.clocked, chkBand(str_eq(d.target, x), driveSrcHas(d, r))) {
+            case true => match chkBand(chkBnot(leafResidue(d.enable)), str_eq(d.enableKey, "")) {
+                case true => match srcsPureShift(d.srcs, r, x, false) {
+                    case true => true
+                    case false => pureShiftReaderOf(t, x, r)
+                }
+                case false => pureShiftReaderOf(t, x, r)
+            }
+            case false => pureShiftReaderOf(t, x, r)
+        }
+}
+
+/// Chain extension test for `r` in domain `D`: `r` must have exactly ONE clocked unconditional reader `x` (and `x != r`), the drive to `x` must be a PURE SHIFT of `r` (`pureShiftReaderOf` — a mux/arithmetic consumer ends the chain), `x` must itself be single-uncond-clocked and registered, and `x`'s resolved domain - with the reader drive's own cd taking priority - must equal `D`. Anything else returns `None` and ends the chain.
+/// The XOR edge-detect exemption is NOT applied here; that lives in `midStageScan`. The two acceptance conditions are separate matches so a rejection is attributable to exactly one of them.
 def chainNextOf(drives: List[DriveSrc], decls: List[GDecl], mdcd: ClockDomain, r: String, D: ClockDomain): Option[String] =
     match clockedReaderTargets(drives, r, cdcStrEmpty) {
         case lcons(x, lnil) =>
@@ -1964,18 +2031,21 @@ def chainNextOf(drives: List[DriveSrc], decls: List[GDecl], mdcd: ClockDomain, r
                 case false =>
                     match singleUncondClockedDrive(drives, x) {
                         case false => None
-                        case true =>
-                            let regd = match gdeclKindOf(decls, x) {
-                                case None => hasClockedDrive(drives, x)
-                                case Some(k) => isRegKind(k)
-                            };
-                            match regd {
-                                case false => None
-                                case true => match chkCdEq(resolveCd(x, readerDriveCd(drives, x, r), decls, mdcd), D) {
-                                    case true => Some(x)
+                        case true => match pureShiftReaderOf(drives, x, r) {
+                            case false => None
+                            case true =>
+                                let regd = match gdeclKindOf(decls, x) {
+                                    case None => hasClockedDrive(drives, x)
+                                    case Some(k) => isRegKind(k)
+                                };
+                                match regd {
                                     case false => None
+                                    case true => match chkCdEq(resolveCd(x, readerDriveCd(drives, x, r), decls, mdcd), D) {
+                                        case true => Some(x)
+                                        case false => None
+                                    }
                                 }
-                            }
+                        }
                     }
             }
         case _ => None
