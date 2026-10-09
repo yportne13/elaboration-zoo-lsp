@@ -145,6 +145,14 @@ total per-port mismatches (model-level) = 56      observed in the real Verilator
 ⇒ 分歧源自两引擎**既有的 `nat_mul` 归约形态差异**，此前被双方 TIMEOUT 掩盖（**哪一侧是期望范式尚无裁决**）。
 ⇒ 准确表述 = **目标形状已修 + 两条残留**；`e07` 与 `e18/e19` 分别进入第 3 轮候选（§10-①/②）。
 
+> **【第 3 轮更正 · 2026-10-09】** 上面「源自既有的 `nat_mul` 归约形态差异」这句**归因已被第 3 轮独立复算证伪**（完整证据链：`docs/prelude-round-3-2026-10-09.md` §2）。
+> **正确机理** = **孪生 `quote` 不 force「卡住 prim 应用里 prim 从未检查的那个实参」**：`nat_add` 的归约性只看第 2 实参，当第 2 实参是**裸 rigid 变量**时 prim 直接返回 `None`（卡住），
+> 第 1 实参**永不 force** ⇒ 它里面的 redex 原样留在孪生范式里；参考版 `quote_inner` 对每个访问到的值先 `force`，故把它归约掉。
+> **与 mul 无关的对照形状同样分歧**：`(a + 0) + x`（DIVERGE 7/12）、`(a * 0) + x`（8/12）、`(a * 1) + x`（7/14）；且**同一输入的用户可见报错文本不同**
+> （`can't unify` 的 `expected:`：孪生 `{a * 1} + x` vs 参考版 `a + x`；`s07`/`s08` 各复测 2 次逐字节一致）。
+> **裁决：参考版（basic）是期望范式，孪生偏离** —— 范式里出现 redex 按定义就不是范式；Lead 已采纳**方案 A**（修孪生 `quote`，task-29）。
+> **本文件全部实测数字（`413/222`、`613/27` 字符、4.2s、两种孪生实现 `fast=222` 逐位相同等）不变、仍然有效**；被替换的**只是归因**（以及「两种实现一致」的**解释**：两条实现都不 force 未检查实参）。
+
 #### ④ 我的独立复算（verifier，2026-10-08 23:0x–23:3x，**两个入口**）
 
 **DUT（全部冻结副本，hash 已核）**：pre = `verify2/bin/l13bench_r2.exe`（**13:56:33**，干净 HEAD）+ `verify2/bin/typort_r2_w5.exe`/`lead_w12_typort.exe`；
@@ -651,7 +659,7 @@ unification.rs:992   eprintln!("[r2probe] unify n={n}");
 | **(G2-rfl) `rfl[Nat] 3` 误导文案** | owner/Lead | — | **未落地（正确否决）**：两版尝试均**不触发**；我的读数为 `can't unify` + `expected: (x: ?52502) → ?52503 x`、可用写法 4 种全 PASS ⇒ 失败点在 **`insert_t` 对新鲜 Π 元变量的合一**（head 类型是 `Eq[Nat] ?a ?a`，非 `Val::Pi(_,Impl,..)`）；「按 decl 类型判」会给 `Some 3` 这类**合法自动插隐式**发误导提示 ⇒ 正确否决（§10-④） |
 | **(E-参考版) `mod.rs` 零进展(stuck)结局 memo（Step R，**+93/−2**，含 Lead 的 21 行 `CheckIssues`） | engine-quirks | 中（改 force 的 Decl 臂缓存面） | **owner 门禁（`eq_w14`：lib 609/0、parity 15/0、hdl042 2/0）+ Lead 门禁 `lead_w16`（fail=0）+ 我的独立复算**：`r2_zf` pre TIMEOUT → post **3.5s `nf=449` ×2**；`e15` **2.9s `nf=216`**；矩阵 **16 档 nf 一致**、新转「终止且一致」**9 档**（§4.1 ④） |
 | **(E-孪生) `bump_spine_iter/force.rs` `PRIM_STUCK` 标记 memo（Step T2，**+80/−1**） | engine-quirks | 中（同上，但只存标记） | **owner 门禁（`eq_w15`）+ Lead 门禁 `lead_w16`（twin 27/0、parity 15/0）+ 我的独立复算**：`TYPORT_STUCK_PROBE=1` 实得 `123/25002/119`（每轮，hits/ins ≈ 203×）、env 关时 stderr **0 字节**；窗口 14 Step T（存句柄）**28 GiB abort 已回滚**，Step T2 无 abort/OOM（§4.1 ① 表 10/11） |
-| (E) 3 项算术链不收敛 | engine-quirks | — | **目标形状端到端已修 + 两条残留**（**措辞纪律：不得写成「整项已修」**）：`r2_zf` pre TIMEOUT → post PASS（两引擎 `nf=449` 一致）；矩阵 16 档 nf 一致；**残留 ①`e07_bigcoef` 两引擎仍 TIMEOUT**（typort 入口两版都**栈溢出崩溃**）、**残留 ②`e18/e19` 终止但 `NF-DIVERGE basic=413 fast=222`**（与 memo 无关：两种结构不同的孪生实现给出逐位相同的 `fast=222`）。9 条假设证伪 + 窗口 14 否决/回滚 + 窗口 15 落盘见 §4.1 ①；我纠正的基线错误见 §4.1 ⑤ |
+| (E) 3 项算术链不收敛 | engine-quirks | — | **目标形状端到端已修 + 两条残留**（**措辞纪律：不得写成「整项已修」**）：`r2_zf` pre TIMEOUT → post PASS（两引擎 `nf=449` 一致）；矩阵 16 档 nf 一致；**残留 ①`e07_bigcoef` 两引擎仍 TIMEOUT**（typort 入口两版都**栈溢出崩溃**）、**残留 ②`e18/e19` 终止但 `NF-DIVERGE basic=413 fast=222`**（与 memo 无关：两种结构不同的孪生实现给出逐位相同的 `fast=222`；**归因已于第 3 轮更正为「孪生 quote 不 force 卡住应用的未检查实参」，裁决「参考版是期望范式」，见 §4.1 ③ 的更正块与 `docs/prelude-round-3-2026-10-09.md` §2**）。9 条假设证伪 + 窗口 14 否决/回滚 + 窗口 15 落盘见 §4.1 ①；我纠正的基线错误见 §4.1 ⑤ |
 
 ---
 
@@ -773,10 +781,12 @@ TYPORT_STUCK_PROBE = 默认关（`bump_spine_iter/force.rs:248-249` env 判定 +
    `typort` 侧两版都在 ~60–68s 后 **`thread 'main' has overflowed its stack`（栈溢出崩溃）** ⇒ **不是「慢」而是爆栈**。
    **第一步（精确）**：先判「键是否逐次变化」——在有 memo 的构建上打印**同一 prim 名**下 `distinct_keys / max_repeat` 的时间序列，
    区分「键稳定但每轮结局翻转」与「**卡住链逐次增长 ⇒ 键不稳定**」（后者需要链身份/`NAT_CHAIN_LIMIT` 语义对齐，而不是任何结局缓存）。
-6. **② (E) 残留二：`e18`/`e19` 的 `NF-DIVERGE basic=413 fast=222` 归因与「期望范式」裁决**：两版都终止（4.2s），但两引擎范式不同
+6. **② (E) 残留二：`e18`/`e19` 的 `NF-DIVERGE` —— ✅ 第 3 轮已完成裁决（2026-10-09）**：两版都终止（4.2s），但两引擎范式不同
    （basic：613 字符的 `{a + {a + …}}` 展开；fast：27 字符 `a => x => {a * 100} + x + 5`）。
-   **与 memo 无关的强证据**：窗口 14（缓存链）与窗口 15（只存标记）两种结构不同的孪生实现给出**逐位相同的 `fast=222`**
-   ⇒ 源自两引擎**既有的 `nat_mul` 归约形态差异**，此前被双方 TIMEOUT 掩盖。**第 3 轮需要 verifier 先判「哪一侧是期望范式」**（对照 `docs/hdl-stream-fsm-design.md` 一类的契约与 `nf_parity` 的既有 deviation 家族登记），再决定是否对齐。
+   **裁决结论（第 3 轮独立复算，`docs/prelude-round-3-2026-10-09.md` §2）**：**参考版（basic）是期望范式；孪生（fast）偏离** ——
+   真实机理是**孪生 `quote` 不 force「卡住 prim 应用里 prim 从未检查的那个实参」**（`nat_add` 只看第 2 实参；第 2 实参是裸 rigid 变量时 prim 直接卡住，第 1 实参永不 force）⇒ 孪生范式里留下 redex；
+   `(a + 0) + x` / `(a * 0) + x` / `(a * 1) + x` 等**与 mul 无关**的形状同样分歧，且同一输入的用户可见 `expected:` 报错文本两版不同。
+   ⇒ **第 2 轮把该分歧归因为「`nat_mul` 归约形态差异」已被证伪**；Lead 已采纳**方案 A（修孪生 quote = task-29）**，判据（含性能护栏与 parity 回归钉 twin 27→28）见第 3 轮文档 §2.8。
 7. **③ (E) 孪生 `PRIM_STUCK` 的键 / 保活「长期稳定性」**：Step T2 已证明**轮内**键稳定（`hits/inserts ≈ 203×`、`tbl` 收敛 119、无 OOM，§4.1 ① 表 11），
    但**跨轮**只依赖「轮界 `force_memo_clear()` + `spine.stack.reclaim(...)` 成对」这一纪律；窗口 14 的 28 GiB abort **确切机理仍未钉死**（§4.1 ① 表 10）。
    ⇒ 下一轮应给「标记表」加**轮界不变量断言**（或 env 门控的跨轮命中计数），确认「跨轮永不复用」在**所有** `clear_round` 站点（`entry.rs` 907/908…1800）都成立。
