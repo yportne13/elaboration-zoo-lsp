@@ -79,7 +79,9 @@ def inout[T](t: T): T = t
 /// name the ports) and must not be chained twice on an already-directed bundle
 /// (a second pass would declare duplicate ports).
 trait IMasterSlave {
+    /// View the bundle from the master side (drives the request channels).
     def asMaster[bn: BindingName]: Self
+    /// View the bundle from the slave side (drives the response channels).
     def asSlave[bn: BindingName]: Self
 }
 
@@ -181,6 +183,7 @@ trait IMasterSlave {
 /// a manual `impl Bundle` must provide `<>` explicitly — a missing one is a
 /// loud impl-time error instead of a silent no-op.
 trait Bundle {
+    /// Connect this bundle to another one, driving every field.
     def :=(that: Self): Unit
     // `<>` — SpinalHDL-style bidirectional connection. The derive generates
     // it with a two-way body (drive both sides, each through its own `:=`
@@ -192,6 +195,7 @@ trait Bundle {
     // provide `<>` explicitly — a missing one is a loud impl-time error
     // instead of a silent no-op. Inout fields are never driven (a module
     // does not drive its own bidirectional pins).
+    /// Bidirectional connect (alias used for differential/stream bundles).
     def <>(that: Self): Unit
 }
 
@@ -209,6 +213,7 @@ trait Bundle {
 /// made with `input`/`output` declarations or the direction helpers.
 struct Stream[T] {
     valid: Bool
+    /// Consumer-side handshake: the payload is accepted this cycle.
     ready: Bool
     payload: T
 }
@@ -218,7 +223,9 @@ struct Stream[T] {
 /// consumer either samples every cycle or adds a `Stream` stage. Handshake
 /// helpers live in hdl-stream (`flowToStream` gives `ready = True`).
 struct Flow[T] {
+    /// The payload (Flow has no back-pressure, only `valid`).
     payload: T
+    /// The payload is present; a Flow is consumed every cycle.
     valid: Bool
 }
 
@@ -275,8 +282,11 @@ impl BlackBox {
 /// the HDL060-064 rule set). Declared here only; no prelude, example or test code
 /// matches on it.
 enum StateAccess {
+    /// Access made during the boot / reset phase.
     boot
+    /// Access made on entering this state.
     entry
+    /// Access made on leaving this state.
     exit
 }
 
@@ -286,8 +296,11 @@ enum StateAccess {
 /// recorded `FsmCtx` global, so nothing constructs `State[T]` in the prelude,
 /// examples or verification corpus.
 struct State[T] {
+    /// State name as written in the source.
     name: String
+    /// Value loaded on entry, when the state carries one.
     stateEntry: Option[T]
+    /// Value produced on exit, when the state carries one.
     stateExit: Option[T]
 }
 
@@ -296,6 +309,7 @@ struct State[T] {
 /// hdl-fsm.typort; kept because removing it would change the exported API
 /// surface.
 enum FSMEntryPoint {
+    /// Default entry point used when no explicit one is given.
     entryPoint
 }
 
@@ -308,5 +322,6 @@ enum FSMEntryPoint {
 /// the `scCons`/`shEnum` case chain of hdl-enum.typort (HDL040). Kept as the
 /// placeholder name for a future dedicated default arm.
 enum SwitchKey {
+    /// Fallback entry point (the first declared state).
     default
 }
