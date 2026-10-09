@@ -80,7 +80,9 @@ def sizedLit(w: Nat, v: Nat): UInt[w] = UInt.mk(None, sizedLiteral(v, w))
 /// where-clause implicits are not inserted at call sites (the `Equal` pattern).
 /// Instances: UInt/UInt, UInt/Nat, SInt/SInt, Bool/Bool.
 trait VEq[A] {
+    /// Verilog-compat equality (rendered as == in the compatibility layer).
     def ==(that: A): Bool
+    /// Verilog-compat inequality (rendered as != in the compatibility layer).
     def !=(that: A): Bool
 }
 
@@ -119,6 +121,7 @@ impl VEq[Bool] for Bool {
 /// as an ordinary identifier by the VExpr `case` arm, so no dedicated macro
 /// arm is needed for it.
 enum CaseDefault {
+    /// The default branch of a Verilog-compat case statement.
     caseDefault
 }
 
@@ -131,6 +134,7 @@ def default: CaseDefault = caseDefault
 /// UInt/SInt-vs-signal and UInt/SInt-vs-Nat labels, always true for
 /// `CaseDefault` (`default:`).  A trait for the same call-site reason as `VEq`.
 trait CaseEq[B] {
+    /// Structural case-equality used by the Verilog-compat `case` statements.
     def caseEq(that: B): Bool
 }
 
@@ -171,8 +175,11 @@ impl[width: Nat] CaseEq[CaseDefault] for SInt[width] {
 /// struct wrapper exists because a mutable global's name must be an existing
 /// type name (same pattern as hdl-core's `CombCtx`).
 struct CompatCD {
+    /// Name of the clock port used by the Verilog-compat fold.
     clk: String
+    /// Name of the reset port used by the Verilog-compat fold.
     rst: String
+    /// True when the reset is active high in the compatibility fold.
     rstHigh: Boolean
 }
 
