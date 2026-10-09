@@ -303,14 +303,23 @@ def streamTakeWhenBits[w: Nat](input: Stream[Bits[w]], cond: Bool): Stream[Bits[
 /// The StreamFifo I/O bundle: push-side valid/ready/payload, pop-side
 /// valid/ready/payload, plus `occupancy` (width `ow`), `full` and `empty`.
 struct StreamFifoIO[w: Nat, ow: Nat] {
+    /// Push-side valid: the producer presents a word this cycle.
     push_valid: Bool
+    /// Push-side ready: the FIFO can accept a word this cycle.
     push_ready: Bool
+    /// The word being pushed.
     push_payload: UInt[w]
+    /// Pop-side valid: the FIFO presents a word this cycle.
     pop_valid: Bool
+    /// Pop-side ready: the consumer accepts the word this cycle.
     pop_ready: Bool
+    /// The word being popped.
     pop_payload: UInt[w]
+    /// Number of words currently held in the FIFO.
     occupancy: UInt[ow]
+    /// 1 when the FIFO can accept no more words (push_ready is then 0).
     full: Bool
+    /// 1 when the FIFO holds no words (pop_valid is then 0).
     empty: Bool
 }
 
@@ -565,9 +574,13 @@ struct Fragment[T] {
 
 /// The stream form of a `Fragment`: valid/ready plus the payload and `last`.
 struct StreamFragment[T] {
+    /// Producer-side handshake: the fragment is present.
     valid: Bool
+    /// Consumer-side handshake: the fragment is accepted this cycle.
     ready: Bool
+    /// The fragment payload.
     fragment: T
+    /// 1 on the final fragment of the burst.
     last: Bool
 }
 
