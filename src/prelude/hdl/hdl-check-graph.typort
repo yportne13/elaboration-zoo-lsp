@@ -57,6 +57,7 @@
 /// One literal of a branch condition, stored as `(neg, key)`: `key` is the exprKey of the atom (or the `eq:` / `b:==` encoding) and `neg` says whether that atom appears negated.
 /// Keys are compared polarity-BLIND (`keyInLeaves`, `leafResidue`), so `x` and `!x` share one `key` and differ only in `neg`.
 struct NegLeaf {
+    /// True when the leaf appears negated in the condition.
     neg: Boolean
     key: String
 }
@@ -219,7 +220,9 @@ def joinLeaves(ls: List[NegLeaf], acc: String): String = match ls {
 /// STRUCTURALLY (nat_sub on ground values); the string channel keeps its
 /// own parse in the builtin.
 struct EqTerm {
+    /// Left-hand side of the equality (a signal name).
     sel: String
+    /// Right-hand side constant of the equality.
     v: Nat
 }
 
@@ -1069,6 +1072,7 @@ def crossEdges(c1s: List[ConnEx], conns: List[ConnEx], insts: List[InstInfo], en
 
 /// One root's comb drives with their ranges/conditions.
 struct RootDrv {
+    /// Bit range of the LHS this statement drives.
     rng: DrvRange
     leaves: List[NegLeaf]
     eqs: List[EqTerm]
@@ -1811,10 +1815,15 @@ def ruleDomMix(mname: String, decls: List[GDecl], entries: List[DomEntry]): Unit
 
 /// One clock-domain crossing: the source signal and its domain, the clocked target and its domain, and whether the source is registered. Edges exist only for sources with exactly one known domain that differs from the target's.
 struct CdcEdge {
+    /// Source signal of the crossing.
     src: String
+    /// Target signal of the crossing.
     dst: String
+    /// Clock domain of the source signal.
     srcDom: ClockDomain
+    /// Clock domain of the target signal.
     dstDom: ClockDomain
+    /// True when the source is a register (so the crossing is one stage).
     srcReg: Boolean
 }
 
@@ -2402,7 +2411,9 @@ def keysEqual(a: List[DeclKey], b: List[DeclKey]): Boolean =
 
 /// The HDL042 record of one module name: its clock domain plus the ground port signature recorded in the first ground round.
 struct ModuleSigRec {
+    /// Signal name in this module.
     name: String
+    /// Clock domain of the signal.
     cd: ClockDomain
     keys: List[DeclKey]
 }
@@ -2410,6 +2421,7 @@ struct ModuleSigRec {
 /// Mutable-global names must equal their type name (ModuleRegistry et al.):
 /// the wrapper struct carries the record list under the global "ModuleSigs".
 struct ModuleSigs {
+    /// Per-signal records collected for this module.
     recs: List[ModuleSigRec]
 }
 
