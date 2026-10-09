@@ -14,8 +14,11 @@
 /// while low leaves the pad floating for an external driver (the Verilog side
 /// is an `inout` port; this struct only groups the three signals).
 struct TriStateBits[w: Nat] {
+    /// Values driven back from the pad into the fabric.
     read: Bits[w]
+    /// Values driven out from the fabric to the pad.
     write: Bits[w]
+    /// 1 drives `write`, 0 leaves the pad to be read.
     writeEnable: Bool
 }
 
@@ -33,8 +36,11 @@ def triStateAsSlaveBits[bn: BindingName][w: Nat](t: TriStateBits[w]): TriStateBi
 /// `writeEnable` bit, so a subset of the bus can float while the rest is
 /// driven. `read`/`write`/`writeEnable` are all `w` bits wide.
 struct TriStateArray[w: Nat] {
+    /// Per-bit values read back from the pads.
     read: Bits[w]
+    /// Per-bit values driven to the pads.
     write: Bits[w]
+    /// Per-bit drive enable (one bit per pad).
     writeEnable: Bits[w]
 }
 
@@ -53,7 +59,9 @@ def triStateArrayAsSlave[bn: BindingName][w: Nat](t: TriStateArray[w]): TriState
 /// `writeEnable` — an open-drain pad is either driven low or released, which
 /// the surrounding `inout` port modelling decides.
 struct ReadableOpenDrain {
+    /// Sampled line state (1 means the line is released/pulled high).
     read: Bool
+    /// 1 pulls the line low.
     write: Bool
 }
 
@@ -78,8 +86,11 @@ def rodAsSlave[bn: BindingName](t: ReadableOpenDrain): ReadableOpenDrain =
 /// `output` and `outputEnable` are inputs to `gpioCtrl`; everything else is
 /// driven by it.
 struct GpioIO[w: Nat] {
+    /// Input pin sample register (synchronised).
     pin_read: Bits[w]
+    /// Output pin drive register.
     pin_write: Bits[w]
+    /// Per-pin direction register (1 = drive, 0 = input).
     pin_writeEnable: Bits[w]
     input: Bits[w]          // 采样后的输入（寄存器）
     output: Bits[w]         // 输出寄存器
@@ -123,7 +134,9 @@ def gpioCtrl[bn: BindingName][w: Nat](io: GpioIO[w], clearInterrupt: Bits[w]): U
 /// (4 bits) and `carry` is the decimal carry out (1 when the raw digit sum
 /// exceeded 9). Both are combinationally derived by `bcdAddDigit`.
 struct BcdAddResult {
+    /// BCD digit of the sum for the current digit position.
     sum: UInt[4]
+    /// Carry out of this BCD digit position.
     carry: Bool
 }
 
@@ -147,6 +160,7 @@ def bcdAddDigit(a: UInt[4], b: UInt[4], carryIn: Bool): BcdAddResult =
 /// Pure value — it emits no hardware; `bcdIsZero` and `bcdAddDigit` do the
 /// checking/arithmetic.
 struct Bcd[d: Nat] {
+    /// Packed decimal digits, 4 bits each, LSB digit first.
     digits: Bits[d * 4]
 }
 
@@ -178,7 +192,9 @@ def bcdAdd[d: Nat](a: Bcd[d], b: Bcd[d]): Bcd[d] = a
 /// instead of `cmd.ready`.
 struct DividerCmd[w: Nat] {
     valid: Bool
+    /// Dividend of the requested division.
     numerator: UInt[w]
+    /// Divisor of the requested division.
     denominator: UInt[w]
     ready: Bool
 }
@@ -187,6 +203,7 @@ struct DividerCmd[w: Nat] {
 /// `quotient`/`remainder` are final; both values stay stable during that
 /// cycle and the core ignores new commands while `valid` is not asserted.
 struct DividerRsp[w: Nat] {
+    /// 1 when `quotient` / `remainder` hold a finished result.
     valid: Bool
     quotient: UInt[w]
     remainder: UInt[w]
@@ -197,8 +214,11 @@ struct DividerRsp[w: Nat] {
 /// (one-cycle response strobe) plus the quotient/remainder of the last
 /// completed operation.
 struct DividerFSM[w: Nat] {
+    /// 1 while a division is in progress.
     busy: Bool
+    /// 1 when the FSM can accept a new command.
     cmdReady: Bool
+    /// 1 when the response ports hold a valid result.
     rspValid: Bool
     quotient: UInt[w]
     remainder: UInt[w]
@@ -280,6 +300,7 @@ def decoderValueUInt[w: Nat, vw: Nat](oh: Bits[w], values: Vec[UInt[vw]] w, dflt
 /// so a `Masked` value is used as a constant in hardware comparisons
 /// (`maskedEq`) and as a pure predicate (`maskedCovers`).
 struct Masked {
+    /// The value whose low bits are masked.
     value: Nat
     care: Nat
 }
@@ -309,6 +330,7 @@ def maskedCovers(m: Masked, x: Masked): Boolean =
 /// itself; drive transitions with `stateGoto` (usually inside a `when`) and
 /// test the current state with `stateIs`.
 struct StateMachine[w: Nat] {
+    /// Current FSM state register.
     state: UInt[w]
 }
 
