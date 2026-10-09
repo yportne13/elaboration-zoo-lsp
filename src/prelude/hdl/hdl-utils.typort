@@ -219,6 +219,7 @@ def propagateOnesToMsbExpr(w: Nat, e: Expr): Expr =
 struct PropagateOnesExpr[T: Type 0, width: Nat] {
     /// The operand whose trailing ones are propagated to the MSB side.
     value: T
+    /// True propagates towards the MSB, false towards the LSB.
     toMsb: Boolean
 }
 
@@ -859,6 +860,7 @@ def setFromFirstOneExpr(w: Nat, e: Expr): Expr =
 /// Deferred SetFromFirstOne wrapper; its `Into[UInt]` / `Into[Bits]` instances build
 /// `setFromFirstOneExpr`.
 struct SetFromFirstOneExpr[T: Type 0, width: Nat] {
+    /// The operand whose leading one is expanded.
     value: T
 }
 
@@ -1047,6 +1049,7 @@ def delayEvent[bn: BindingName](event: Bool, cycle: Nat): Bool =
 /// `cnt` counter and the `limit`; `clear()` resets both registers and
 /// `clearWhen(cond)` resets them under a when context.
 struct TimeoutHandle[bn_name: String, cw: Nat] {
+    /// True while the timeout is armed and counting down.
     state: Bool
     /// Down-counter value, decremented while the timeout is armed.
     cnt: UInt[cw]
@@ -1197,6 +1200,7 @@ struct CounterUpDown[w: Nat] {
     willUnderflowIfDec: Bool
     /// True on the cycle the counter wrapped past its maximum.
     willOverflow: Bool
+    /// True on the cycle the counter wrapped below zero.
     willUnderflow: Bool
 }
 
@@ -1271,7 +1275,9 @@ def downCounterInc[bn: BindingName](stateCount: Nat, dec: Bool): CounterMod[maxN
 /// Handle of `oneHotCounter`: the one-hot `value` (`Bits[w]`) and `willOverflow`
 /// (true at the top bit); `clear()` reloads the one-hot value 1.
 struct OneHotCounter[w: Nat] {
+    /// One-hot encoded counter state (exactly one bit set).
     value: Bits[w]
+    /// True when the one-hot value would move past the last bit.
     willOverflow: Bool
 }
 
@@ -1314,7 +1320,9 @@ def oneHotCounterInc[bn: BindingName](stateCount: Nat, inc: Bool): OneHotCounter
 /// `willOverflow` (true in the terminal `10..0` state); `clear()` resets it to
 /// 0.
 struct JohnsonCounter[w: Nat] {
+    /// Ring-shifted counter state (one zero bit travelling the ring).
     value: Bits[w]
+    /// True when the ring state completes a full revolution.
     willOverflow: Bool
 }
 

@@ -246,6 +246,7 @@ impl[width: Nat] Data for SInt[width] {
 /// Already-declared signals (ports, regs, factory products) are returned unchanged:
 /// for those the `let` stays a plain alias.
 trait LetNamed[T] {
+    /// Create a value under an explicit name.
     def mkNamed(name: String): T
 }
 

@@ -36,6 +36,7 @@ enum Encoding {
     encBinary
     /// Sequential (Gray-like) encoding of the enum elements.
     encSequential
+    /// Encoding that reuses the platform native representation.
     encNative
     /// One-hot encoding: exactly one bit set per state.
     encOneHot

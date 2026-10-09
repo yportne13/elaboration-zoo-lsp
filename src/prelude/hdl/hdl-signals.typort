@@ -777,7 +777,9 @@ def regNextWhen[bn: BindingName, T][r: RegNext[T]](value: T, cond: Bool): T = r.
 
 /// Free-running / enable-counted counter handle: `value` is the `UInt[w]` register (init 0, named after the let binding) and `willOverflow` is a combinational flag for the cycle in which the counter reaches its maximum and the next increment wraps to 0.
 struct Counter[w: Nat] {
+    /// Current counter value.
     value: UInt[w]
+    /// True when the next increment would wrap.
     willOverflow: Bool
 }
 

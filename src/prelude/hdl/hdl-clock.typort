@@ -48,7 +48,9 @@
 /// clock, and a read register on another domain is requested explicitly with
 /// `readSyncCCD`.
 struct Mem[T] {
+    /// Name the memory was created with, when it has one.
     name: Option[String]
+    /// The IR this memory value refers to.
     zz_expr: Expr
     /// Number of words the memory holds.
     wordCount: Nat

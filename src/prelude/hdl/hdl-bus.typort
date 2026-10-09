@@ -260,6 +260,7 @@ impl[T] Flow[T] {
 /// the prelude, examples or test corpus constructs this struct (verified by
 /// grep). Kept only as a syntactic placeholder — its methods are no-ops.
 struct BlackBox {
+    /// Blackbox module name.
     name: String
 }
 

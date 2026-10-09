@@ -59,6 +59,7 @@
 struct NegLeaf {
     /// True when the leaf appears negated in the condition.
     neg: Boolean
+    /// Canonical key of the leaf (dedup marker).
     key: String
 }
 
@@ -353,6 +354,7 @@ struct CondSrc {
     src: String
     /// Condition leaves this read flows under, mux branches already applied.
     leaves: List[NegLeaf]
+    /// Equality atoms true on this path.
     eqs: List[EqTerm]
 }
 
@@ -430,6 +432,7 @@ struct EnableCtx {
     leaves: List[NegLeaf]
     /// Accumulated equality atoms of the when nesting.
     eqs: List[EqTerm]
+    /// Canonical key of the accumulated when nesting.
     key: String
 }
 
@@ -452,6 +455,7 @@ struct GraphAcc {
     /// Statement keys already scanned (dedup of macro replay).
     seen: List[String]
     /// Accumulated statement keys, used as the module fingerprint.
+    /// Statement key that produced this drive (back pointer).
     key: String
     /// Reads waiting to be attached to the next driving statement.
     pending: List[CondSrc]
@@ -915,12 +919,14 @@ def joinEdges(es: List[CombEdge], acc: String): String = match es {
 /// One input-to-output passthrough of a module: `from` an input port, `to` an output port.
 struct CombPath {
     from: String
+    /// Target signal of the combinational path.
     to: String
 }
 
 /// One module's passthrough table, keyed by the module name.
 struct CombSumEntry {
     mdl: String
+    /// Combinational paths aggregated for this signal.
     paths: List[CombPath]
 }
 
@@ -1074,7 +1080,9 @@ def crossEdges(c1s: List[ConnEx], conns: List[ConnEx], insts: List[InstInfo], en
 struct RootDrv {
     /// Bit range of the LHS this statement drives.
     rng: DrvRange
+    /// Condition leaves under which the drive is live.
     leaves: List[NegLeaf]
+    /// Equality atoms true when the drive is live.
     eqs: List[EqTerm]
 }
 
@@ -1480,7 +1488,9 @@ def ruleShadow(mname: String, drives: List[DriveSrc]): Unit = match drives {
 
 /// One signal's propagated clock-domain set; it is a list rather than a set because `chkCdInList` dedups on insert.
 struct DomEntry {
+    /// Signal name this domain entry describes.
     name: String
+    /// Distinct domains driving this signal.
     doms: List[ClockDomain]
 }
 
@@ -2332,7 +2342,9 @@ def ruleCdc(mname: String, decls: List[GDecl], drives: List[DriveSrc], entries: 
 
 /// One port's HDL042 signature: the port name plus its ground width.
 struct DeclKey {
+    /// Signal name of the declaration key.
     name: String
+    /// Declared bit width.
     width: Nat
 }
 
@@ -2415,6 +2427,7 @@ struct ModuleSigRec {
     name: String
     /// Clock domain of the signal.
     cd: ClockDomain
+    /// Declaration keys collected for this module.
     keys: List[DeclKey]
 }
 
