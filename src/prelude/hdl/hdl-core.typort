@@ -384,7 +384,9 @@ def isDeclaredSignal(e: Expr): Boolean = match e {
 struct ModuleDef {
     name: String
     cd: ClockDomain
+    /// Number of statements recorded so far (the GADT index of `expr`).
     expr_num: Nat
+    /// The module statements in source order.
     expr: Vec[Expr] expr_num
 }
 
@@ -402,6 +404,7 @@ struct ModuleDef {
 ///
 /// `insert` prepends a def in O(1) using `succ(this.num)`, not `this.num + 1`.
 struct ModuleTree {
+    /// Number of module bodies registered in this tree.
     num: Nat
     data: Vec[ModuleDef] num
 }
@@ -460,7 +463,9 @@ def addExprToModuleHelper(num: Nat, data: Vec[ModuleDef] num, name: String, e: E
 /// are none); `whenOtherwise(notAll)` holds the negation of ALL branches of the chain.
 /// `levelCond` turns either into the level's effective enable.
 enum WhenState {
+    /// One open when level: its condition plus the negation of all outer conditions.
     whenActive(cond: Expr, notPrev: Expr)
+    /// The trailing otherwise level: the negation of every when condition on the stack.
     whenOtherwise(notAll: Expr)
 }
 
@@ -468,7 +473,9 @@ enum WhenState {
 /// level at the head (whenBegin pushes, whenEnd pops). `wrapLevels` folds the whole stack
 /// into one enable condition, so a nested assignment carries its complete condition.
 enum WhenStack {
+    /// Base case: no when level is open.
     whenStackEmpty
+    /// Stack cons: one open level on top of the remaining stack.
     whenStackPush(top: WhenState, rest: WhenStack)
 }
 
@@ -977,7 +984,9 @@ enum BbGenVal {
 /// One recorded blackbox generic: the parameter key plus its `BbGenVal`. The key is what
 /// `bbGenKeyIn` dedups on, so a repeated `generic K` line keeps the first recorded value.
 struct BbGeneric {
+    /// Canonical key used to match a supplied generic against this one.
     key: String
+    /// The generic value (a Nat or a String), per bbGenNat / bbGenStr.
     val: BbGenVal
 }
 
@@ -985,12 +994,16 @@ struct BbGeneric {
 /// `bbCtxTakeGround` and stored via `bbRegisterLast` — design-record use only, since codegen
 /// and the checker read the `bbMarkerExpr` nodes instead.
 struct BlackBoxInfo {
+    /// Generics declared by the blackbox, in declaration order.
     generics: List[BbGeneric]
 }
 
 /// A `BlackBoxRegistry` row: the blackbox name paired with its `BlackBoxInfo`.
 struct BlackBoxEntry {
+    /// Generic parameter name as written in the blackbox header.
+    /// Blackbox module name.
     name: String
+    /// Nested info for a sub-blackbox, when the entry instantiates one.
     info: BlackBoxInfo
 }
 
@@ -999,12 +1012,14 @@ struct BlackBoxEntry {
 /// evaluation with ground parameters overwrites the neutral check-round values. No prelude
 /// reader remains (see the HISTORY note above); the name lives on for tools/tests.
 struct BlackBoxRegistry {
+    /// Instantiation entries recorded for this blackbox.
     entries: List[BlackBoxEntry]
 }
 
 /// Per-create scratch cell for the generic statements of one blackbox body
 /// (the macro resets it in its prologue, CompatCD-style).
 struct BlackBoxCtx {
+    /// Generic values actually supplied by the instantiating site.
     gens: List[BbGeneric]
 }
 
@@ -1129,7 +1144,9 @@ def Area[T: Type 0](body: Unit -> T): T = body(unit)
 
 /// `0 until 4` 的产物：半开区间 [lo, hi)。
 struct Range {
+    /// Inclusive lower bound of the range.
     lo: Nat
+    /// Exclusive upper bound of the range (`0 until 4` is lo=0, hi=4).
     hi: Nat
 }
 

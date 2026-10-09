@@ -93,19 +93,28 @@ def chkCdEq(a: ClockDomain, b: ClockDomain): Boolean = match str_eq(a.clockName,
 /// The seven declaration kinds the checker distinguishes: kWire, kIn, kOut, kInOut, kReg, kOutReg, kMem.
 /// Produced by declOf from the `create*` node variant and compared through kindEq; the kind decides which rules (HDL001/002/003/020/021/022/023) consider a name at all.
 enum SigKind {
+    /// An internal wire (no register, no port direction).
     kWire
+    /// An input port.
     kIn
+    /// An output port.
     kOut
+    /// An inout port.
     kInOut
+    /// A register (state element).
     kReg
+    /// An output register: driven inside, read outside.
     kOutReg
+    /// A memory (array) declaration.
     kMem
 }
 
 /// One declaration fact: the signal name plus its SigKind — no width, clock domain or source location (phase-1 name-level analysis).
 /// Built by declOf and accumulated into ModFacts.decls by mfAddDecl.
 struct SigDecl {
+    /// Declared signal name.
     name: String
+    /// Signal kind (wire / port / register / memory).
     kind: SigKind
 }
 
@@ -213,12 +222,19 @@ def declOf(e: Expr): Option[SigDecl] = match e {
 /// Per-signal driver tally: combinational counts uncondComb/condComb and clocked counts uncondClk/condClk (cond = the assignment sits under a `when`), plus defClk = clocked assignments with NO explicit clock domain, and cds = the distinct explicit domains seen.
 /// ruleDrivers turns these counters into HDL010 (uncondComb >= 2), HDL011 (uncondComb > 0 && condComb > 0), HDL012 (comb > 0 && clk > 0) and HDL013 (two distinct cds, or defClk > 0 with at least one explicit cd).
 struct DriveFacts {
+    /// Driven signal name.
     name: String
+    /// Unconditional combinational drives (multiple drivers are an HDL error).
     uncondComb: Nat
+    /// Unconditional clocked drives; 1 is the healthy shape for a register.
     uncondClk: Nat
+    /// Conditional combinational drives (guarded assigns).
     condComb: Nat
+    /// Conditional clocked drives (inside a when).
     condClk: Nat
+    /// Number of explicit clock-domain definitions seen on this signal.
     defClk: Nat
+    /// Distinct clock domains driving this signal; more than one is a CDC issue.
     cds: List[ClockDomain]
 }
 
@@ -363,26 +379,37 @@ def exprKey(e: Expr): String = match e {
 /// Consumed by ruleConnDir (HDL020/021/025) and by connCovers/ruleInstPorts (HDL022); scanExpr records the isLhs=false direction and scanLhsConn the isLhs=true one.
 struct ConnInfo {
     inst: String
+    /// Port name on the instance.
     port: String
+    /// True when the connection drives the instance port.
     isLhs: Boolean
 }
 
 /// One sub-module instance: instance name, child module name, and raw = true for `instanceWithPorts` (opaque port string) versus false for the typed `instance` form.
 /// ruleInsts emits HDL024 for every raw instance and runs HDL022 only for non-raw ones; instModule resolves a connection's child module from this list.
 struct InstInfo {
+    /// Instance name as declared.
     inst: String
+    /// Instantiated module name.
     mdl: String
+    /// True for an opaque string-port instantiation (no structured ports).
     raw: Boolean
 }
 
 /// Accumulator for the whole-def statement scan: decls (List[SigDecl]), reads (names read in expression position), conns, insts, facts (per-signal DriveFacts) and seen (the exprKey set used to collapse replays).
 /// Filled by scanAll -> scanStmt -> scanExpr and consumed by ruleDanglingRead/UnusedDecl/OutUndriven/Drivers/OwnInputDriven; runChecks rewrites decls with dropShadowedWires before those rules run.
 struct ModFacts {
+    /// Signal declarations collected by the phase-1 scan.
     decls: List[SigDecl]
+    /// Signals read in this module (for the undriven / unread checks).
     reads: List[String]
+    /// Hierarchical connections touching this module.
     conns: List[ConnInfo]
+    /// Sub-module instantiations inside this module.
     insts: List[InstInfo]
+    /// Per-signal drive facts (uncond/cond, comb/clk, domains).
     facts: List[DriveFacts]
+    /// Statement keys already scanned, so macro replay does not double count.
     seen: List[String]
 }
 
@@ -598,15 +625,20 @@ def scanAll[ne: Nat](es: Vec[Expr] ne, acc: ModFacts): ModFacts = match es {
 /// The port signature of one module as registered in the global port table: module name plus the kIn / (kOut ++ kOutReg) / kInOut name lists.
 /// Built by registerPortTable from the normalized decls; read back by ruleConnDir (HDL020/021/025) and by ruleInsts to derive the ports HDL022 requires.
 struct PortEntry {
+    /// Module name the port belongs to.
     mdl: String
+    /// Input port names.
     ins: List[String]
+    /// Output port names.
     outs: List[String]
+    /// Inout port names.
     inouts: List[String]
 }
 
 /// Wrapper for the design-wide List[PortEntry] stored under the mutable global "ModulePortTable" (a global holds one value, so the list needs a struct around it).
 /// portTableAdd overwrites by module name, which is what lets every registration round self-heal the table without cache gating.
 struct ModulePortTable {
+    /// Nested port entries for sub-blackbox instantiations.
     entries: List[PortEntry]
 }
 
