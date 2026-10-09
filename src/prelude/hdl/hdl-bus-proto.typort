@@ -22,13 +22,21 @@
 /// cycle (`PSEL && PENABLE`), with `PREADY` extending the access phase — the
 /// register bank below writes on the access phase and reads during both.
 struct Apb3 {
+    /// APB address bus, 32 bits.
     PADDR: UInt[32]
+    /// APB slave select: 1 selects this slave for the transfer.
     PSEL: Bits[1]
+    /// APB enable: 1 marks the ACCESS phase (after the setup cycle).
     PENABLE: Bool
+    /// Slave ready: 1 lets the transfer complete this cycle.
     PREADY: Bool
+    /// Transfer direction: 1 = write, 0 = read.
     PWRITE: Bool
+    /// Write data payload, 32 bits, valid while PWRITE is high.
     PWDATA: Bits[32]
+    /// Read data payload, driven by the slave while PREADY is high.
     PRDATA: Bits[32]
+    /// Slave error flag: 1 marks the transfer as failed.
     PSLVERROR: Bool
 }
 
@@ -60,7 +68,9 @@ def apb3AsSlave[bn: BindingName](bus: Apb3): Apb3 =
 /// in the enclosing `Stream` (both `aw` and `ar` use this same payload type,
 /// so they are distinguished by channel, not by type).
 struct AxiLite4Ax {
+    /// Channel start address, 32 bits (write `aw` or read `ar`).
     addr: UInt[32]
+    /// Protection attribute carried alongside the address.
     prot: Bits[3]
 }
 
@@ -68,7 +78,9 @@ struct AxiLite4Ax {
 /// strobe `strb` (one bit per byte lane). Handshake comes from the enclosing
 /// `Stream` (`w.valid` / `w.ready`).
 struct AxiLite4W {
+    /// Write data payload for one beat, 32 bits.
     data: Bits[32]
+    /// Byte-lane strobes, one bit per byte lane of `data`.
     strb: Bits[4]
 }
 
@@ -84,7 +96,9 @@ struct AxiLite4B {
 /// code. Like `b`, this channel is driven by the slave (`r.valid`), the
 /// master only drives `r.ready`.
 struct AxiLite4R {
+    /// Read data payload for one beat, 32 bits.
     data: Bits[32]
+    /// Read-response code returned alongside the read data on the r channel.
     resp: Bits[2]
 }
 
@@ -192,8 +206,11 @@ def axiLite4AsSlave[bn: BindingName](bus: AxiLite4): AxiLite4 =
 /// handshake here; use the master/slave builders below together with an
 /// enclosing `Stream` if a ready/valid handshake is required.
 struct Axi4Stream {
+    /// AXI4-Stream payload, 8 bits per beat.
     data: Bits[8]
+    /// Per-beat byte strobe for the stream data lane.
     strb: Bits[1]
+    /// Set on the final beat of a burst.
     last: Bool
 }
 
@@ -216,13 +233,21 @@ def axi4StreamAsSlave[bn: BindingName](b: Axi4Stream): Axi4Stream =
 /// terminates the cycle: a transfer is one cycle with `CYC && STB` held until
 /// the slave answers `ACK`. All widths are fixed (no parameters).
 struct Wishbone {
+    /// Wishbone bus cycle: 1 keeps the bus granted to the current master.
     CYC: Bool
+    /// Wishbone strobe: 1 requests a transfer on the current cycle.
     STB: Bool
+    /// Wishbone acknowledge: the slave signals the transfer completed.
     ACK: Bool
+    /// Wishbone write enable: 1 = write cycle, 0 = read cycle.
     WE: Bool
+    /// Wishbone address, 32 bits.
     ADR: UInt[32]
+    /// Wishbone data master-in / slave-out (read data).
     DAT_MISO: Bits[32]
+    /// Wishbone data master-out / slave-in (write data).
     DAT_MOSI: Bits[32]
+    /// Wishbone byte-lane select for the data payload.
     SEL: Bits[4]
 }
 
@@ -248,11 +273,17 @@ def wishboneAsSlave[bn: BindingName](b: Wishbone): Wishbone =
 /// data beats at the end of a packet (`valid && empty` carries no data), so
 /// consumers must check it before using `data`. Widths are fixed.
 struct AvalonST {
+    /// AvalonST payload, 8 bits per beat.
     data: Bits[8]
+    /// Payload valid (producer side of the handshake).
     valid: Bool
+    /// Payload accepted (consumer side of the handshake).
     ready: Bool
+    /// FIFO occupancy indicator (0 = not empty).
     empty: Bits[1]
+    /// Set on the first beat of a packet.
     startOfPacket: Bool
+    /// Set on the last beat of a packet.
     endOfPacket: Bool
 }
 
@@ -293,6 +324,7 @@ def avalonSTAsSlave[bn: BindingName](b: AvalonST): AvalonST =
 /// for APB, which only samples `PRDATA` during reads, but it is a real latch
 /// in the generated Verilog.
 struct Apb3RegBank {
+    /// The APB3 bundle driven/sampled by this register bank.
     bus: Apb3
 }
 

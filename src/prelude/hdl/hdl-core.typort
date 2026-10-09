@@ -10,6 +10,7 @@
 /// parameter of type BindingName, the compiler automatically fills it with the
 /// name of the enclosing `let` binding (SpinalHDL-style auto-naming).
 struct BindingName {
+    /// The binding name the compiler injects; user code only ever reads it.
     name: String
 }
 
@@ -18,7 +19,9 @@ struct BindingName {
 /// carries a recursive argument (`h`), so induction on a proof of `n <= m` is a chain of
 /// `m - n` steps and always ends in `le_refl`.
 enum Le(n: Nat, m: Nat) {
+    /// Reflexivity: `n <= n` for every `n`; the base case of every `Le` induction.
     le_refl[n: Nat] -> Le n n
+    /// Step: lifts a proof into the same `Le n` family with the RIGHT bound grown by one.
     le_step[n: Nat, m: Nat](h: Le n m) -> Le (n, succ m)
 }
 
@@ -26,7 +29,9 @@ enum Le(n: Nat, m: Nat) {
 /// 0 and `fsucc(i)` is `i + 1` for `i : Fin n`; matching on a `Fin` recurses on the VALUE,
 /// never on the bound, so an `fsucc` chain terminates at `fzero`. Consumed by `sub` below.
 enum Fin(len: Nat) {
+    /// Zero: the value 0 of `Fin (succ n)`.
     fzero[n: Nat] -> Fin (succ n)
+    /// Successor: `i + 1`, still inside `Fin (succ n)`.
     fsucc[n: Nat](i: Fin n) -> Fin (succ n)
 }
 
@@ -46,7 +51,9 @@ def sub(x: Nat, y: Fin (x + 1)): Nat = match y {
 /// is a type family over `A`. Both fields are explicit, so a consumer projects `.witness`
 /// and `.proof` and gets the proof's type refined by the witness value.
 struct Exists[A: Type 0, P: A -> Type 0] {
+    /// The witness value carried by the dependent pair.
     witness: A
+    /// A proof about the witness; its type is refined by the witness value.
     proof: P witness
 }
 
@@ -101,7 +108,9 @@ def minNat(a: Nat, b: Nat): Nat = match a {
 /// in `clockEdgeStr` and in every `always @(...)` header; the Verilog-compat path
 /// hardcodes `RisingEdge` when it folds a `clk` port.
 enum ClockEdge {
+    /// Sample on the clock rising edge (rendered as posedge).
     RisingEdge
+    /// Sample on the clock falling edge (rendered as negedge).
     FallingEdge
 }
 
@@ -109,7 +118,9 @@ enum ClockEdge {
 /// the async sensitivity list (`posedge` / `negedge`) and `resetCondStr` for the reset
 /// condition (`reset` vs `!reset`); `cdPolJson` renders it as the manifest's `resetActive`.
 enum ResetPolarity {
+    /// Reset asserted while the reset signal is high.
     ActiveHigh
+    /// Reset asserted while the reset signal is low.
     ActiveLow
 }
 
@@ -118,7 +129,9 @@ enum ResetPolarity {
 /// still exists, but is evaluated on the clock edge); `cdKindJson` renders it for the
 /// manifest as `sync` / `async`.
 enum ClockDomainConfig {
+    /// Synchronous reset: the reset branch is evaluated on the clock edge, so the reset edge is NOT in the sensitivity list.
     Sync
+    /// Asynchronous reset: the reset edge joins the always sensitivity list.
     Async
 }
 
@@ -126,9 +139,13 @@ enum ClockDomainConfig {
 /// assertFatal). Rendered into the `TYPORT_ASSERT_<SEV>` marker line; AssertFatal
 /// additionally emits `$finish;` (docs/hdl-blackbox-sim-design.md §3.3).
 enum AssertSeverity {
+    /// Informational assertion (display only, no failure).
     AssertInfo
+    /// Warning assertion: recorded but does not stop simulation.
     AssertWarning
+    /// Error assertion: recorded as a simulation failure.
     AssertError
+    /// Fatal assertion: additionally emits $finish.
     AssertFatal
 }
 
@@ -137,10 +154,15 @@ enum AssertSeverity {
 /// become the emitted port names, and the checkers compare domains by exactly that pair
 /// (hdl-check's `chkCdEq`), so two values with the same names are the same domain.
 struct ClockDomain {
+    /// Emitted clock port name; part of the domain identity compared by chkCdEq.
     clockName: String
+    /// Emitted reset port name; part of the domain identity compared by chkCdEq.
     resetName: String
+    /// Synchronous vs asynchronous reset; decides the sensitivity list.
     config: ClockDomainConfig
+    /// Which edge samples the register (posedge / negedge).
     clockEdge: ClockEdge
+    /// Whether the reset is asserted high or low.
     resetPolarity: ResetPolarity
 }
 
@@ -169,40 +191,70 @@ def defaultClockDomain: ClockDomain = ClockDomain.mk "clk" "reset" Async RisingE
 ///     SELF, `true` INSTANCE) — a dedicated variant so it can never alias a user
 ///     constant-Bool assertion the way the old `assertExpr` carrier did.
 enum Expr {
+    /// Declare a wire named `name` (no explicit width).
     create(name: String)
+    /// Declare an input port named `name`.
     createIn(name: String)
+    /// Declare an output port named `name`.
     createOut(name: String)
+    /// Declare an inout port named `name`.
     createInOut(name: String)
+    /// Declare a wire with an explicit bit width.
     createWidth(name: String, width: Nat)
+    /// Declare an input port with an explicit bit width.
     createInWidth(name: String, width: Nat)
+    /// Declare an output port with an explicit bit width.
     createOutWidth(name: String, width: Nat)
+    /// Declare an inout port with an explicit bit width.
     createInOutWidth(name: String, width: Nat)
+    /// Declare a 1-bit register without a reset value.
     createReg(name: String)
+    /// Declare a register without a reset value.
     createRegWidth(name: String, width: Nat)
+    /// Declare a register with an async reset value in the module default domain.
     createRegWidthInit(name: String, width: Nat, initVal: Expr)
+    /// Declare a register without a reset value in an explicit clock domain.
     createRegWidthCd(name: String, width: Nat, cd: ClockDomain)
+    /// Declare a register with a reset value in an explicit clock domain.
     createRegWidthInitCd(name: String, width: Nat, initVal: Expr, cd: ClockDomain)
+    /// Signed register without a reset value, in an explicit clock domain.
     createSIntRegWidthCd(name: String, width: Nat, cd: ClockDomain)
+    /// Signed register with a reset value, in an explicit clock domain.
     createSIntRegWidthInitCd(name: String, width: Nat, initVal: Expr, cd: ClockDomain)
+    /// Declare a 1-bit OUTPUT register (driven inside, read outside).
     createOutReg(name: String)
+    /// Declare an output register without a reset value.
     createOutRegWidth(name: String, width: Nat)
+    /// Declare an output register with a reset value.
     createOutRegWidthInit(name: String, width: Nat, initVal: Expr)
+    /// Signed wire with an explicit bit width.
     createSIntWidth(name: String, width: Nat)
+    /// Signed input port with an explicit bit width.
     createSIntInWidth(name: String, width: Nat)
+    /// Signed output port with an explicit bit width.
     createSIntOutWidth(name: String, width: Nat)
+    /// Signed inout port with an explicit bit width.
     createSIntInOutWidth(name: String, width: Nat)
+    /// Signed register without a reset value (module default domain).
     createSIntRegWidth(name: String, width: Nat)
+    /// Signed register with a reset value (module default domain).
     createSIntRegWidthInit(name: String, width: Nat, initVal: Expr)
+    /// Signed output register without a reset value.
     createSIntOutRegWidth(name: String, width: Nat)
+    /// Signed output register with a reset value.
     createSIntOutRegWidthInit(name: String, width: Nat, initVal: Expr)
+    /// The constant v as an unsized Verilog integer literal.
     literal(v: Nat)
     // A Verilog sized literal (`8'h2A` / `4'b1010`): the width is carried IN
     // the Expr so codegen can emit a legal sized constant (IEEE 1364 forbids
     // unsized constants inside concatenations, and a plain `literal` has no
     // width at the Expr level). Produced by the parser's sized-literal
     // desugar (hdl-verilog-compat.sizedLit).
+    /// The constant v rendered with an explicit width, e.g. 8'h2A.
     sizedLiteral(v: Nat, w: Nat)
+    /// Unary operator applied to one operand.
     unary(op: String, e: Expr)
+    /// Binary operator applied to two operands.
     binary(lhs: Expr, op: String, rhs: Expr)
     assign(lhs: Expr, rhs: Expr)
     regAssign(lhs: Expr, rhs: Expr)
