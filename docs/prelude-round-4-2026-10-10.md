@@ -150,16 +150,20 @@ trait 方法、枚举 case、结构体字段才是真正的文档缺口（`prelu
 | `hdl-macros.typort` | 100%（原已满） | — |
 | `hdl-verilog.typort` | 100%（原已满） | — |
 
-**总量**：成员级 **73.2% → 94.1%**（1249 → **1608/1708**，本轮 **+359** 项）；
-顶层仍 **1195/1195 = 100%**；`--min-coverage 60 --deny-warnings` **EXIT=0**、`warnings=0`。
-门禁：`lead_s1`…`lead_s13`、`lead_s15` 均 `fail=0`（lib **612/0**、parity 15、twin 28、hdl042 2）。
-提交 13 个（`f753ab67`、`449251d4`、`340a6af4`、`33bc77a1`、`4fe852ec`、`51cb8b5a`、
-`facaef09`、`58c38d40`、`272d5006`、`1920b27a`、`9fb21da6`、`2b156502`、`e82e3f06`），全部已推送。
+**总量**：成员级 **73.2% → 100.0%**（1249 → **1706/1706**，本轮 **+457** 项）——
+**20+ 个 prelude 文件全部写完，无一项遗漏**；顶层仍 **1195/1195 = 100%**；
+`--min-coverage 60 --deny-warnings` **EXIT=0**、`warnings=0`。
+门禁：`lead_s1`…`lead_s13`、`lead_s15`…`lead_s19` 全部 `fail=0`（lib **612/0**、parity 15、twin 28、hdl042 2）。
+提交 17 个，全部已推送：`f753ab67` `449251d4` `340a6af4` `33bc77a1` `4fe852ec` `51cb8b5a`
+`facaef09` `58c38d40` `272d5006` `1920b27a` `9fb21da6` `2b156502` `e82e3f06` `e5b0c939`
+`8078d95e` `2255a98b`。
 
-**剩余缺口（第 5 轮）**：100 项，主要是 hdl-core 剩余、hdl-check-graph 28、hdl-utils 14、
-hdl-misc-io 7、hdl-fsm 2、hdl-bus 3、以及每个文件里 1–3 个**重复字段名**的
-（`enable`/`eqs`/`cd`/`key`/`src`/`valid`/`ready` 在不同 struct 里各出现多次）
-——同一脚本方法可直接续做，只是要为重复名逐一确认归属。
+**最后几项的做法升级**：批量锚定对「同一字段名出现在多个 struct」无效，故对最后 8 项
+改成**逐条读源码 + 编辑工具手改**（Fsm.width/name、FsmRec 5 项、FsmCtxStack、
+CombPath.from、CombSumEntry.mdl、ModuleCombSummary.entries、GDecl.key、
+DividerFSM.quotient/remainder、Module.tree、Encoding.encNative、SwitchHead.shEnum）。
+**这条比脚本更可靠：当 JSON 的 line 落到注释区、或字段排在同 struct 多个已有文档字段之后时，
+脚本的窗口假设全错，只有读源码才对。**
 
 1. **两个子进程（engine-quirks 窗口 1 的 task-31、verifier 的 task-35）先后失败、未留任何落盘**。
    Lead 复核：`l13bench.rs` 未改、`verify4/` 不存在、工作树干净 ⇒ **无半成品风险**；
@@ -180,13 +184,17 @@ hdl-misc-io 7、hdl-fsm 2、hdl-bus 3、以及每个文件里 1–3 个**重复�
    6 个编译错误；用事先 `Copy-Item` 的备份恢复。**教训仍然只一条：CJK/源码一律走编辑工具，
    备份要用二进制复制而非文本管道。**
 5. **(S) 给 `FsmSt` 补文档时多加了两个真字段 → 16 个 lib 测试红，已回滚**（第 7 起同类）：
-   `FsmSt` 当时已有 `sm`/`idx`，我以为 `width`/`name` 缺失，直接往 struct 体里插了字段 ⇒
-   prelude 类型里 `Fsm` 多出两个投影，`fsmDemo` 等 16 个用例报
+   `Fsm` 当时已有 `stateReg/stateNext/stateCount`，我以为 `width`/`name` 缺失，直接往 struct
+   体里插了字段 ⇒ prelude 类型里 `Fsm` 多出两个投影，`fsmDemo` 等 16 个用例报
    `` `ctrl`: Fsm has no object `state` ``。**门禁 `lead_s14`：lib exit=101，596/612 passed / 16 failed。**
    60 秒内 `git checkout --` 回滚 `hdl-fsm.typort` + `hdl-misc-io.typort`，
    `lead_s15` 复跑回 **612/0 fail=0**。
    **教训**：写文档脚本只允许**插 `///` 行**，绝不允许插入/删除任何非 `///` 行；
    动手前先用 `Select-String` 核对 struct 现有字段表，别信「缺口清单」里的字段名。
+6. **(S) 的重复字段名 bulk 锚定全部打偏**（第 8 起同类，已无破坏性）：同一字段名在多个
+   struct 出现，脚本按「struct 头 + span」猜窗口 ⇒ 7 处 `SKIP`、3 处写错位置（好在只插
+   `///` 行，`git diff --numstat` 立刻看出异常）。**修法：最后 8 项改成逐条 `read` + `edit`
+   手改**，全部命中。**教训：bulk 脚本只适合「字段名唯一」的场合；一旦出现重复名，停下读源码。**
 
 ## 6. 未完成项（本轮已立项未做）
 
@@ -236,8 +244,7 @@ LSP 后端的诊断汇总顺序（影响所有报错），性价比不划算 ⇒
 1. **参考版 `quote_sp` 迭代化**（第 3 轮 §7-1）：e07 里 bench 侧已靠栈预算解决，但
    `typort check` 侧 47s 才跑完、且仍靠 1024 MiB ⇒ 迭代化才是根治（同时让「入口/栈预算是读数
    的一部分」这条纪律的压力下降）。
-2. **(S) 成员级文档续补**：本轮 73.2% → **94.1%**，剩 100 项（重复字段名的归属确认）。
-   **纪律升级：文档脚本只允许插 `///` 行**，绝不许插入/删除任何非 `///` 行。
+2. **(S) 成员级文档**：**已完成 100%（1706/1706）**，无剩余。
 3. **(O) 的三选一设计决策**（若判定值得做）。
 3. **`>100000` 或更深链仍会爆栈**：`NAT_LITERAL_ELAB_LIMIT` 是唯一深度护栏，
    而它是「抬高天花板」式的缓解 ⇒ 长输入族仍需 §1 的迭代化。
