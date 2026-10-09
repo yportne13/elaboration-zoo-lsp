@@ -1,0 +1,34 @@
+// Tree PLRU minimal L3 case (round-3 / task-28): PLRU had NO L3 coverage at all.
+//
+// Contract under test (read from the source docs in hdl-misc.typort:118-187,
+// NOT from the RTL body):
+//   way count = 2^log2n, state width = 2^log2n - 1
+//   node k's children are 2k+1 (left) / 2k+2 (right); state bit 1 = prefer right
+//   plruEvict: descend log2n levels from the root, appending each visited state
+//              bit to the way index (MSB first)
+//   plruUpdate(way): walk the same tree reading the way index MSB-first; SET the
+//              node when the way bit is 0, CLEAR it when the way bit is 1, so the
+//              accessed way becomes the last one to evict
+//
+// log2n = 3 => 8 ways, state width 7. Both functions are purely combinational,
+// so the harness can sweep all 1024 (state, way) combinations exhaustively.
+//
+// This file is NOT in DEFAULT_CASES: adding it there would move the 51/51
+// baseline every round. Run it explicitly instead:
+//   TYPORT=<typort.exe> python -X utf8 tools/spinalhdl-verify/verify.py \
+//       tools/spinalhdl-verify/cases/r3_plru.typort
+// The reference models are ref_plru_evict / ref_plru_update in verify.py and the
+// CASES entry is keyed "r3Plru".
+
+module r3Plru {
+    input state = UInt[7]
+    input way = UInt[3]
+    output victim = UInt[7]
+    output next = UInt[7]
+    let victimVal = plruEvict(state, 3)
+    let nextVal = plruUpdate(state, way, 3)
+    victim := victimVal
+    next := nextVal
+}
+
+println(moduleTreeVL(r3Plru.create.tree))

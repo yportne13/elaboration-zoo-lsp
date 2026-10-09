@@ -366,5 +366,16 @@ foreach ($r in $rows) {
     Write-Host ("   {0,-8} exit={1,-4} {2,7}s  {3}/{4} passed (min) / {5} failed{6}" -f `
         $r.Name, $r.Exit, $r.Secs, $r.Passed, $r.Min, $r.Failed, $flag)
 }
+
+# A fail=0 only certifies the suites that RAN. Without this line, `-SkipTwin` (or
+# a -Suites subset) reads as a full green gate. Name what was left out, so a
+# partial run can never be mistaken for full coverage.
+$ranNames = @($rows | ForEach-Object { $_.Name })
+$notRun = @($table | Where-Object { $ranNames -notcontains $_.Name } | ForEach-Object { $_.Name })
+if ($notRun.Count -gt 0) {
+    Write-Host ("   NOT RUN: {0}  (fail=0 covers only the suites above)" -f ($notRun -join ", "))
+} else {
+    Write-Host "   NOT RUN: none (all four suites ran)"
+}
 if ($fail -gt 0) { exit 1 }
 exit 0
