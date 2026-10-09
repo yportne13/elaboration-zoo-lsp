@@ -85,6 +85,35 @@ e17 216  e18 413  e19 413
 | 门禁参数绑定缺陷 | **受控复现**（干跑取证 + 误建目录 1.5 GB 实物） |
 | verifier 独立复算 | **未做**（本轮 verifier 子进程连续两次失败，见 §5） |
 
+## 4b. 追加落地：`nf_parity` 改比「内容」而非「尺寸」（round-4 追加，(R) 第 2/3 项）
+
+**动机**：`nf` 是 nf 的**节点数**，而第 3 轮的孪生 `quote` 缺陷（卡住应用的实参不 force ⇒
+未归约 redex 留在范式里）造出的正是**同尺寸、不同内容**的范式 ⇒ 旧的 `b == f && b != 0`
+判定**从原理上就看不见它**，这也是该缺陷能长期潜伏的原因之一。
+
+**改动**（`src/bin/l13bench.rs`，+35/−1）：
+- `nf_parity` 现在在尺寸一致之外，再用**两版都现成的** `bench_check_nf_pretty_bounded`
+  比一次**渲染后的内容**；`NF_PRETTY_RENDER_BUDGET = 200_000` 节点以下的形状才比内容
+  （超过后 pretty 串本身会很大，该轮退回只比尺寸；`nf=600002` 的 e07 走此分支，13.3s 不变）。
+- `b == 0 || f == 0`（某版失败）时直接判「不一致」，不再把失败冒充成一致。
+
+**反向对照（证明 oracle 不是「假门禁」）**：把比较临时改成 `x != y` 后，
+同一探针 `e16`（内容本来逐字符相同）立刻报 `NF-DIVERGE basic=22 fast=22`
+⇒ 内容分支是承重的；恢复 `x == y` 后回到 `nf=22`。**门禁套件不受影响**
+（`nf_parity` 只被 l13bench 自己调用，`twin_engine_tests` 走 LSP 后端）——
+因此必须用 l13bench 做反向对照，用 `cargo test --test twin_engine_tests` 做对照是无效的
+（本轮实测：twin 套件在翻转后的 oracle 下仍 28/0）。
+
+**顺带修掉标签假象**：两版都失败（`basic=0 fast=0`）时旧代码打 `NF-DIVERGE`，
+把 41 探针统计污染成「38 nf-ok + 3 DIVERGE」；现在打 **`BOTH-FAILED`**
+（实测三条例行样本：`s04_rfl_false` / `s07_fail_mul1` / `s08_fail_add0`）。
+
+**收官读数**（ hardened oracle 下）
+- `verify2/e_shape` 19 档：**AGREE 19 / DIVERGE 0 / TIMEOUT 0**（逐档 nf 未变）；
+- `verify3/nfdiv` 41 探针：**nf-ok 38 / DIVERGE 0 / BOTH-FAILED 3**（修前 38/3/0）；
+- 门禁 `lead_r6`：`fail=0`，lib **612/0**、parity **15/0**、twin **28/0**、hdl042 **2/0**；
+- 提交 `3a9b4b37`，已推送（remote = local）。
+
 ## 5. 流程事故（如实入档）
 
 1. **两个子进程（engine-quirks 窗口 1 的 task-31、verifier 的 task-35）先后失败、未留任何落盘**。
@@ -95,6 +124,16 @@ e17 216  e18 413  e19 413
    「空格分隔串」，第二个值静默变成 `-CargoTargetDir`。**教训**：脚本对数组参数要做
    「拍平后仍可选对」的归一化，并且**关掉位置绑定**——否则一个手误就在仓库里长出一个
    1.5 GB 的 target 目录，还会把日志目录搬走（下一个人更难发现）。
+3. **(R) guard 文案排序：试过硬失败，回滚**。把「超限字面量」从「push_error + 降级 Hole」
+   改成解析期 `Err` 硬失败，结果 **guard 原文彻底消失**，变成 `find unsolved meta` +
+   `name not in scope` + `expected expression` + `expected newline` 四条泛化错误
+   （`.or_far` 对 `Err` 回了退）⇒ 立刻 `git checkout --` 回滚并复跑确认恢复原状。
+   **结论**：保留可恢复路径，把「guard 排第 3 条」作为**已记录的低优先级诊断瑕疵**延后——
+   要把它提到第一条得改 LSP 后端的诊断汇总顺序（影响所有报错），性价比不划算。
+4. **Lead 又踩了一次 PS 文本命令改 CJK 源码**（第 6 起同类）：做 oracle 反向对照时用
+   `(Get-Content -Raw) -replace | Set-Content` 改 `src/bin/l13bench.rs`，编码被搞乱、
+   6 个编译错误；用事先 `Copy-Item` 的备份恢复。**教训仍然只一条：CJK/源码一律走编辑工具，
+   备份要用二进制复制而非文本管道。**
 
 ## 6. 未完成项（本轮已立项未做）
 
