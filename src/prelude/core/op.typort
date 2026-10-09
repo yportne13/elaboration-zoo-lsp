@@ -193,63 +193,98 @@ impl Default for Unit {
 
 /// A 2-tuple.  `(A, B)` is sugar for `Tuple2[A, B]`; fields are `._1`, `._2`.
 struct Tuple2[A, B] {
+    /// First component (`t._1`), of type `A`.
     _1: A
+    /// Second component (`t._2`), of type `B`.
     _2: B
 }
 
 /// A 3-tuple; fields `._1` .. `._3`.
 struct Tuple3[A, B, C] {
+    /// First component (`t._1`), of type `A`.
     _1: A
+    /// Second component (`t._2`), of type `B`.
     _2: B
+    /// Third component (`t._3`), of type `C`.
     _3: C
 }
 
 /// A 4-tuple; fields `._1` .. `._4`.
 struct Tuple4[A, B, C, D] {
+    /// First component (`t._1`), of type `A`.
     _1: A
+    /// Second component (`t._2`), of type `B`.
     _2: B
+    /// Third component (`t._3`), of type `C`.
     _3: C
+    /// Fourth component (`t._4`), of type `D`.
     _4: D
 }
 
 /// A 5-tuple; fields `._1` .. `._5`.
 struct Tuple5[A, B, C, D, E] {
+    /// First component (`t._1`), of type `A`.
     _1: A
+    /// Second component (`t._2`), of type `B`.
     _2: B
+    /// Third component (`t._3`), of type `C`.
     _3: C
+    /// Fourth component (`t._4`), of type `D`.
     _4: D
+    /// Fifth component (`t._5`), of type `E`.
     _5: E
 }
 
 /// A 6-tuple; fields `._1` .. `._6`.
 struct Tuple6[A, B, C, D, E, F] {
+    /// First component (`t._1`), of type `A`.
     _1: A
+    /// Second component (`t._2`), of type `B`.
     _2: B
+    /// Third component (`t._3`), of type `C`.
     _3: C
+    /// Fourth component (`t._4`), of type `D`.
     _4: D
+    /// Fifth component (`t._5`), of type `E`.
     _5: E
+    /// Sixth component (`t._6`), of type `F`.
     _6: F
 }
 
 /// A 7-tuple; fields `._1` .. `._7`.
 struct Tuple7[A, B, C, D, E, F, G] {
+    /// First component (`t._1`), of type `A`.
     _1: A
+    /// Second component (`t._2`), of type `B`.
     _2: B
+    /// Third component (`t._3`), of type `C`.
     _3: C
+    /// Fourth component (`t._4`), of type `D`.
     _4: D
+    /// Fifth component (`t._5`), of type `E`.
     _5: E
+    /// Sixth component (`t._6`), of type `F`.
     _6: F
+    /// Seventh component (`t._7`), of type `G`.
     _7: G
 }
 
 /// An 8-tuple; fields `._1` .. `._8`.
 struct Tuple8[A, B, C, D, E, F, G, H] {
+    /// First component (`t._1`), of type `A`.
     _1: A
+    /// Second component (`t._2`), of type `B`.
     _2: B
+    /// Third component (`t._3`), of type `C`.
     _3: C
+    /// Fourth component (`t._4`), of type `D`.
     _4: D
+    /// Fifth component (`t._5`), of type `E`.
     _5: E
+    /// Sixth component (`t._6`), of type `F`.
     _6: F
+    /// Seventh component (`t._7`), of type `G`.
     _7: G
+    /// Eighth component (`t._8`), of type `H`.
     _8: H
 }
