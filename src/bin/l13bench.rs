@@ -253,12 +253,40 @@ def c0 : Nat = zero
     s
 }
 
+/// Above this node count the pretty rendering itself becomes large, so content
+/// comparison is skipped for one round and only the (cheap) size is compared.
+const NF_PRETTY_RENDER_BUDGET: u64 = 200_000;
+
 /// 跑一个 decl 序列的两版口径，返回 (basic_nf, fast_nf, 两版是否一致)。
+///
+/// round-4 (R)：**尺寸一致 ≠ 范式一致**。"尺寸"是 nf 的节点数，而第 3 轮
+/// 的孪生 `quote` 缺陷（卡住应用的实参不 force ⇒ 未归约 redex 留在范式里）
+/// 造出的正是**同尺寸、不同内容**的范式——本 oracle 因此漏了它几个月。
+/// 现在在尺寸一致之外再比一次**渲染后的内容**（`bench_check_nf_pretty_bounded`，
+/// 两版都有现成 API），只对 `NF_PRETTY_RENDER_BUDGET` 以下的形状生效：超过
+/// 该预算后 pretty 串本身会很大，这一轮退回只比尺寸。
 fn nf_parity(decls: &[Decl], nat_after: &[usize]) -> (u64, u64, bool) {
     let b = L13_namespace::bench_check_nf_bounded(decls, nat_after);
     let mut t = fast::Tycker::new();
     let f = t.bench_check_nf_bounded(decls, nat_after);
-    (b, f, b == f && b != 0)
+    if b == 0 || f == 0 {
+        // 0 = 该版失败（与旧口径一致：无值可谈一致）。
+        return (b, f, false);
+    }
+    if b <= NF_PRETTY_RENDER_BUDGET && f <= NF_PRETTY_RENDER_BUDGET {
+        let bp = L13_namespace::bench_check_nf_pretty_bounded(decls, nat_after);
+        let fp = t.bench_check_nf_pretty_bounded(decls, nat_after);
+        return (
+            b,
+            f,
+            match (bp, fp) {
+                (Some(x), Some(y)) => x == y,
+                // 渲染失败（Err）时退回尺寸口径，不因此误判不一致。
+                _ => b == f,
+            },
+        );
+    }
+    (b, f, b == f)
 }
 
 /// 诊断：逐 decl 喂孪生，报首个失败的 decl 序号与错误（twin 早退时定位用）。
@@ -357,6 +385,12 @@ fn bench_one(label: &str, decls: &[Decl], nat_after: &[usize], cli: &Cli, want: 
     diagnose_basic(label, decls, nat_after);
     let verdict = if ok {
         format!("nf={b_nf}")
+    } else if b_nf == 0 && f_nf == 0 {
+        // round-4 (R): 0 = 该版 elaboration 失败。两版都失败时打 DIVERGE 是
+        // 标签假象——它们不是「范式不一致」，而是「都跑不出来」。校准样本
+        // （`s04_rfl_false` / `s07_fail_mul1` / `s08_fail_add0`）长期把 41 探针
+        // 的统计污染成「38 nf-ok + 3 DIVERGE」，而这 3 条其实是 both-failed。
+        format!("BOTH-FAILED (两版都未跑完，与范式一致无关)")
     } else {
         format!("NF-DIVERGE basic={b_nf} fast={f_nf}")
     };
