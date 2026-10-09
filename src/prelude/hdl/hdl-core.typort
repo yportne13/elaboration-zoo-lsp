@@ -436,6 +436,7 @@ struct ModuleTree {
 /// provided by the module macro (it returns the `_res` struct field — the
 /// module tree captured at create time, after checkModuleTreeAll validated it).
 trait Module {
+    /// The module tree captured at create time (the `_res` struct field).
     def tree: ModuleTree
 }
 

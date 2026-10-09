@@ -69,7 +69,9 @@ struct Fsm {
     stateNext: Expr
     /// Number of states declared for this FSM.
     stateCount: Nat
+    /// Register width used to encode the state index.
     width: Nat
+    /// FSM name as written in the source.
     name: String
 }
 
@@ -154,8 +156,11 @@ struct FsmRec {
     stateCount: Nat
     /// All recorded transitions.
     edges: List[FsmEdge]
+    /// State indices already declared for this FSM.
     declared: List[Nat]
+    /// States reached by the dead-state / reachability walk.
     visited: List[Nat]
+    /// States with no outgoing transition.
     noExit: List[Nat]
     // HDL064 out-of-context goto evidence (reported at drain time — see
     // fsmGotoLog's CHECK-PASS note). Two channels:
@@ -167,7 +172,9 @@ struct FsmRec {
     //     At drain, a target is reported only if NO recorded edge covers it
     //     — this catches bare gotos before/between whenIsActive blocks,
     //     whose flag evidence the following push would wipe.
+    /// True when the FSM mixes states from different owning modules.
     ooc: Boolean
+    /// States that belong to a different module than the current one.
     oocTargets: List[Nat]
 }
 
@@ -175,7 +182,9 @@ struct FsmRec {
 /// (Fsm name, state index, rest).  Pushed by `whenIsActive`, popped at its
 /// end.
 enum FsmCtxStack {
+    /// Base case: no FSM is being built.
     fsmStackEmpty
+    /// Stack cons: the FSM under construction on top of the rest.
     fsmStackCons(fsm: String, idx: Nat, rest: FsmCtxStack)
 }
 

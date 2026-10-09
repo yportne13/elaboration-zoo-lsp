@@ -417,6 +417,7 @@ struct GDecl {
     width: Option[Nat]
     /// Declared clock domain for the *Cd register variants.
     cd: Option[ClockDomain]
+    /// Canonical key of the declaration (dedup marker).
     key: String
 }
 
@@ -918,13 +919,15 @@ def joinEdges(es: List[CombEdge], acc: String): String = match es {
 
 /// One input-to-output passthrough of a module: `from` an input port, `to` an output port.
 struct CombPath {
+    /// Source signal the path starts from.
     from: String
-    /// Target signal of the combinational path.
+    /// Target signal the path ends at.
     to: String
 }
 
 /// One module's passthrough table, keyed by the module name.
 struct CombSumEntry {
+    /// Module name this passthrough table belongs to.
     mdl: String
     /// Combinational paths aggregated for this signal.
     paths: List[CombPath]
@@ -932,6 +935,7 @@ struct CombSumEntry {
 
 /// Wrapper struct for the `ModuleCombSummary` mutable global (a global's name must equal its type name), so child summaries persist across `checkModuleAll` calls.
 struct ModuleCombSummary {
+    /// One entry per module that has a passthrough table.
     entries: List[CombSumEntry]
 }
 

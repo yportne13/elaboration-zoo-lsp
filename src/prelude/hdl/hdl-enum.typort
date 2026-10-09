@@ -37,6 +37,7 @@ enum Encoding {
     /// Sequential (Gray-like) encoding of the enum elements.
     encSequential
     /// Encoding that reuses the platform native representation.
+    /// Encoding that reuses the platform native representation.
     encNative
     /// One-hot encoding: exactly one bit set per state.
     encOneHot
@@ -230,6 +231,8 @@ impl[E: Type 0, w: Nat, c: Nat] RegNext[EnumCraft[E, w, c]] for EnumCraft[E, w, 
 /// detect missing arms). The case value travels as a string pair rather than a
 /// typed craft because the check consumes the raw recorded chain.
 enum SwitchHead {
+    /// One recorded case: the enum name, the matched element, and that enum's
+    /// full element list (the universe used to detect missing arms).
     shEnum(enumName: String, elemName: String, elems: List[String])
 }
 
