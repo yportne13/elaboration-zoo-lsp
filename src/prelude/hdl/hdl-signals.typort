@@ -703,7 +703,9 @@ def out_bool(t: Bool): Bool =
 
 /// Delay-register typeclass: `mkReg` creates a register of the **same** type as the receiver and connects the receiver to it (one-cycle delay), `mkRegWhen` does the same under a `when(cond)` enable (the register holds when `cond` is low). Impls exist for UInt/Bits/SInt/Bool in this file and for EnumCraft in hdl-enum, so no per-type function names are needed. The register is named by the `name` argument (the `regNext` wrappers pass the caller's let binding).
 trait RegNext[T] {
+    /// Create a register carrying this data type, named `name`.
     def mkReg(name: String): T
+    /// Create a register that only loads while `cond` holds.
     def mkRegWhen(name: String, cond: Bool): T
 }
 

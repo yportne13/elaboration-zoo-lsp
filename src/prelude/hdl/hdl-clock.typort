@@ -50,8 +50,11 @@
 struct Mem[T] {
     name: Option[String]
     zz_expr: Expr
+    /// Number of words the memory holds.
     wordCount: Nat
+    /// Width of one memory word.
     dataWidth: Nat
+    /// Clock domain the memory ports belong to.
     clockDomain: ClockDomain
 }
 
