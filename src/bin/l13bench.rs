@@ -105,10 +105,16 @@ fn median(ts: &mut [u128]) -> u128 {
 
 fn main() {
     let cli = Cli::parse();
+    // Round-4 (N): this default MUST stay in sync with the CLI worker stack
+    // (src/bin/cli.rs, TYPORT_STACK_MB).  The two entry points used to disagree
+    // (bench 256 vs cli 1024) and that alone decided whether an input survived:
+    // measured on one binary, `a*99999 + x*99998 + 5` stack-overflowed at
+    // 256 MiB after 111.9s but completed at 1024 MiB in 13.3s (nf=600002).
+    // Override with L13_STACK_MB (0/invalid falls back to the default).
     let stack_mb: usize = std::env::var("L13_STACK_MB")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(256);
+        .unwrap_or(1024);
     std::thread::Builder::new()
         .stack_size(stack_mb << 20)
         .spawn(move || run(cli))
