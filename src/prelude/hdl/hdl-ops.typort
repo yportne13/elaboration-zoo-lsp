@@ -419,8 +419,11 @@ impl[width: Nat] SInt[width] {
 /// node. It is unrelated to `SwitchBuilder`, which drives the when/else chain
 /// directly.
 struct MuxExpr[T: Type 0] {
+    /// The mux condition expression.
     condExpr: Expr
+    /// Value selected when the condition holds.
     trueVal: T
+    /// Value selected when the condition does not hold.
     falseVal: T
 }
 
@@ -463,6 +466,7 @@ impl Bool {
 /// vector, and the result is always a `Bits`/`UInt`/`SInt` of the summed width. The
 /// left operand occupies the high bits.
 trait Cat[T, O: outParam(Type 0)] {
+    /// Concatenate two operands into a wider value.
     def ##(that: T): O
 }
 
@@ -658,6 +662,7 @@ impl[width: Nat] UInt[width] {
 /// comparison arms and, once `default`/`otherwise` closes it, emits a single
 /// `when`/`else` chain whose conditions are `sel === armValue`.
 struct SwitchBuilder {
+    /// The selector being switched on.
     selExpr: Expr
 }
 
