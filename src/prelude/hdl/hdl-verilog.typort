@@ -863,6 +863,56 @@ def hasRegAssignCd(e: Expr, cd: ClockDomain): Boolean = match e {
     case _ => false
 }
 
+// Does an Expr tree contain MAIN-clock-domain clocked content?  Main-domain
+// membership MIRRORS collectClockLinesCd's direct arm table exactly:
+//   regAssign   -> isMain only
+//   memWrite    -> isMain only
+//   regAssignCd -> matched by cdEq against the iterated cd
+// so the main-domain predicate must accept `regAssign` AND `memWrite`, and must
+// reject `regAssignCd`.
+//
+// WHY THIS EXISTS (round-3 (K) root fix): the `when` branch of
+// collectClockLinesCd gated its MAIN branch with the cd-agnostic `hasRegAssign`
+// (which accepts regAssign, regAssignCd and memWrite).  A `when` holding only
+// `regAssignCd(cd2)` was therefore collected into the MAIN clocked always block
+// *and* (via hasRegAssignCd) into cd2's block — the same assignment emitted
+// twice, i.e. a double drive (round 1 worked around it in streamFifoCC with a
+// named combinational wire instead of fixing the gate).
+//
+// MEASURED CATCH — do NOT drop `memWrite` from this predicate: a first version
+// that accepted `regAssign` only made examples/hdl/21-crossclock.typort lose its
+// `_d_mem[...] <= pushData;` line entirely (before 1 occurrence, after 0).  That
+// memory write sits inside a `when` and belongs to the MAIN domain, so a
+// regAssign-only predicate routed the whole when to no clocked block at all.
+//
+// The other four hasRegAssign call sites (:1063/:1109/:1265/:1298) keep the
+// cd-agnostic predicate on purpose — they ask "is this clocked?", not "is this
+// main-domain?".
+/// Does this expr tree contain MAIN-clock-domain clocked content (`regAssign` or
+/// `memWrite`)?  `regAssignCd` does not count — it belongs to its own extra clock
+/// domain; `when` recurses into body then else-body, `block` into head then tail.
+def hasMainClocked(e: Expr): Boolean = match e {
+    case regAssign(_, _) => true
+    case memWrite(_, _, _, _) => true
+    case regAssignCd(_, _, _) => false
+    case when(_, body, elseBody) =>
+        let b = hasMainClocked(body);
+        match b {
+            case true => true
+            case false => match elseBody {
+                case None => false
+                case Some(eb) => hasMainClocked(eb)
+            }
+        }
+    case block(head, tail) =>
+        let h = hasMainClocked(head);
+        match h {
+            case true => true
+            case false => hasMainClocked(tail)
+        }
+    case _ => false
+}
+
 // Does an Expr tree contain a MAIN-cd assertExpr? (assertExprCd belongs to
 // its own extra domain and does NOT count here — mirror hasRegAssign vs
 // hasRegAssignCd.)
@@ -1038,8 +1088,13 @@ def collectClockLinesCd[ne: Nat](es: Vec[Expr] ne, cd: ClockDomain, isMain: Bool
                 case false => collectClockLinesCd(tail, cd, isMain)
             }
         case when(_, _, _) =>
+            // MAIN branch uses the main-domain predicate (regAssign OR memWrite):
+            // a when holding only `regAssignCd(cd2)` belongs to cd2's block
+            // (isMain=false below) and with the cd-agnostic hasRegAssign it was
+            // ALSO collected here — the same assignment emitted twice (round-3
+            // (K) root fix).  memWrite must stay included, see hasMainClocked.
             let has_clk = match isMain {
-                case true => hasRegAssign(e)
+                case true => hasMainClocked(e)
                 case false => hasRegAssignCd(e, cd)
             };
             match has_clk {

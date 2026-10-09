@@ -440,6 +440,41 @@ macro_rules Expr {
         let _ = __port_type_must_be_the_literal_Bool__;
     };
 
+    // ---- any OTHER unsupported scalar port type: same treatment (J①) ----
+    // Placed AFTER the `= Boolean` arms so the one spelling whose text deserves
+    // the "defining type name" hint keeps its own wording; these catch every
+    // other type token (a typo such as `= MyTypo`, an omitted width such as
+    // `= UInt`, ...).
+    //
+    // SAFE HERE, UNLIKE THE MODULE MACRO (round-2 finding): the `Expr` table is
+    // matched ONE STATEMENT AT A TIME — the `$x: Expr` fragment parses a single
+    // port declaration — so a generic repetition captures only the offending
+    // port.  The `module` macro matches a WHOLE invocation, so its scalar group
+    // would capture every scalar port (including legitimate `= Bool` ones); that
+    // is why the module macro keeps its narrow `= Boolean`-only fallback and the
+    // mixed body-preceding port table stays undiagnosed (round 4 candidate).
+    //
+    // MEASURED (round-4 counter-example matrix): a single formB module with
+    // `= Bool` / `= UInt[w]` / `= Bits[w]` / `= SInt[w]` + `= MyTypo` produces
+    // EXACTLY ONE HDV004, naming `MyTypo` — the legal arms above win for their
+    // own statements.
+    // Neutral wording on purpose (it must not claim the user wrote `Boolean`);
+    // the offending type token rides in the check issue's MODULE slot and the
+    // port name in its SIGNAL slot (literal arguments only, and never an empty
+    // string literal — see the RED LINE note above).
+    (input $x:ident = $ty:ident) => {
+        let _ = report_check_issue("HDV004", stringify $ty, stringify $x, "this port type is not accepted - a scalar port must be the literal `Bool`; sized ports use the NAME = UInt[w] / Bits[w] / SInt[w] form");
+        let _ = __port_type_must_be_the_literal_Bool__;
+    };
+    (output $x:ident = $ty:ident) => {
+        let _ = report_check_issue("HDV004", stringify $ty, stringify $x, "this port type is not accepted - a scalar port must be the literal `Bool`; sized ports use the NAME = UInt[w] / Bits[w] / SInt[w] form");
+        let _ = __port_type_must_be_the_literal_Bool__;
+    };
+    (inout $x:ident = $ty:ident) => {
+        let _ = report_check_issue("HDV004", stringify $ty, stringify $x, "this port type is not accepted - a scalar port must be the literal `Bool`; sized ports use the NAME = UInt[w] / Bits[w] / SInt[w] form");
+        let _ = __port_type_must_be_the_literal_Bool__;
+    };
+
     // ---- register declarations ----
     // `reg x = T[w] init v` — register with reset value (async reset, verilog init)
     (reg $x:ident = Bits[$width:raw] init $init:raw) => {let $x: Bits[$width] = newBitsRegInitNat($width, $init);};
@@ -472,6 +507,12 @@ macro_rules Expr {
     // the note on the `input`/`output`/`inout` Boolean arms above).
     (output reg $x:ident = Boolean) => {
         let _ = report_check_issue("HDV004", "Boolean", stringify $x, "`Boolean` is `Bool`'s defining type name - write `Bool` for a scalar port; sized ports use the NAME = UInt[w] / Bits[w] / SInt[w] form");
+        let _ = __port_type_must_be_the_literal_Bool__;
+    };
+    // Same generic treatment as the input/output/inout arms above (J①): place AFTER
+    // the narrow `= Boolean` arm so that spelling keeps its specialized text.
+    (output reg $x:ident = $ty:ident) => {
+        let _ = report_check_issue("HDV004", stringify $ty, stringify $x, "this port type is not accepted - a scalar port must be the literal `Bool`; sized ports use the NAME = UInt[w] / Bits[w] / SInt[w] form");
         let _ = __port_type_must_be_the_literal_Bool__;
     };
 
