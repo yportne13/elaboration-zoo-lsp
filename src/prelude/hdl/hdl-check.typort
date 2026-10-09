@@ -378,6 +378,7 @@ def exprKey(e: Expr): String = match e {
 /// One hierarchical-port connection: the instance name, the port name, and isLhs = true when the port is on the LEFT of `:=` (parent drives child) versus false when it is read on the right (parent reads child).
 /// Consumed by ruleConnDir (HDL020/021/025) and by connCovers/ruleInstPorts (HDL022); scanExpr records the isLhs=false direction and scanLhsConn the isLhs=true one.
 struct ConnInfo {
+    /// Instance name on the connecting side.
     inst: String
     /// Port name on the instance.
     port: String
@@ -792,7 +793,9 @@ def widthProbe(e: Expr): Option[Tuple2[String, Boolean]] = match e {
 /// Running HDL004 tally over a def's top-level statements: groundCount = how many width-carrying declarations have a ground width, bad = the names whose width is not ground.
 /// ruleWidthGround only reports `bad` when groundCount is non-zero, because a Phase-A type-check tree has no ground widths at all.
 struct WidthScan {
+    /// How many widths were statically known (ground).
     groundCount: Nat
+    /// Names whose width could not be resolved statically.
     bad: List[String]
 }
 

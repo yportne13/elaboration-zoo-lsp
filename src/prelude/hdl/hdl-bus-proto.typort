@@ -89,6 +89,7 @@ struct AxiLite4W {
 /// to the address/data channels: the slave asserts `b.valid`, the master
 /// drives `b.ready`.
 struct AxiLite4B {
+    /// Write-response code returned on the b channel.
     resp: Bits[2]
 }
 

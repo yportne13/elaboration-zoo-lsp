@@ -195,11 +195,13 @@ def bcdAdd[d: Nat](a: Bcd[d], b: Bcd[d]): Bcd[d] = a
 /// `DividerFSM.cmdReady` (== `!busy`), so a caller must read `cmdReady`
 /// instead of `cmd.ready`.
 struct DividerCmd[w: Nat] {
+    /// 1 requests a division; the FSM starts next clock.
     valid: Bool
     /// Dividend of the requested division.
     numerator: UInt[w]
     /// Divisor of the requested division.
     denominator: UInt[w]
+    /// 1 when the FSM can accept a new command.
     ready: Bool
 }
 
@@ -209,7 +211,9 @@ struct DividerCmd[w: Nat] {
 struct DividerRsp[w: Nat] {
     /// 1 when `quotient` / `remainder` hold a finished result.
     valid: Bool
+    /// Quotient of the completed division.
     quotient: UInt[w]
+    /// Remainder of the completed division.
     remainder: UInt[w]
 }
 
@@ -306,6 +310,7 @@ def decoderValueUInt[w: Nat, vw: Nat](oh: Bits[w], values: Vec[UInt[vw]] w, dflt
 struct Masked {
     /// The value whose low bits are masked.
     value: Nat
+    /// Number of low bits the mask applies to.
     care: Nat
 }
 

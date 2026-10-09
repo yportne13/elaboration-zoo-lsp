@@ -568,7 +568,9 @@ def streamForkUInt[count: Nat, w: Nat][bn: BindingName](input: Stream[UInt[w]]):
 
 /// A payload plus its `last` flag (SpinalHDL Fragment).
 struct Fragment[T] {
+    /// The payload of this fragment.
     fragment: T
+    /// 1 on the final fragment of the burst.
     last: Bool
 }
 

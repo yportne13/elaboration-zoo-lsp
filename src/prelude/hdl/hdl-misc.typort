@@ -12,6 +12,7 @@
 /// internal counter register (init 0, width `w`), exposed so callers can read
 /// the current count or reset it early.
 struct Prescaler[w: Nat] {
+    /// True on the cycle the prescaler counter wraps.
     overflow: Bool
     /// Cycle counter the prescaler divides the input clock by.
     counter: UInt[w]
@@ -59,6 +60,7 @@ struct TimerIO[w: Nat] {
     clear: Bool
     /// Target value the timer counts up to.
     limit: UInt[w]
+    /// One-cycle strobe asserted when the limit is reached.
     full: Bool
     /// Current count value.
     value: UInt[w]
