@@ -427,3 +427,99 @@ println None.show
         &["[]", "[]", "none"],
     );
 }
+
+// ── (K) round-3：when 内只含 regAssignCd 时不得被主域与 Cd 域各发射一次 ──
+// 根因：collectClockLinesCd 的 when 分支在主域一侧曾用 cd-agnostic 的
+// hasRegAssign（同时接受 regAssign / regAssignCd / memWrite），于是「只含
+// regAssignCd(cd2)」的 when 既进主域 clocked 块、又（经 hasRegAssignCd）进 cd2
+// 块 ⇒ 同一赋值双发射 = 双驱动。
+//
+// 复现形状：`:=` 不会产生 regAssignCd（hdl-core 的 pickAssign 只建 regAssign，
+// 不看信号自身时钟域），所以必须在 `when` 体内显式调 createSignalExpr(regAssignCd(...))
+// ——与 hdl-crossclock.typort / hdl_check_graph_tests.rs 的构造方式一致。
+// 该形状下 BEFORE 会额外出现主域块 `always @(posedge clk) begin if (en) begin
+// r2 <= a; end end`，AFTER 只剩 cd2 块。
+//
+// NOTE（判据只钉这一点）：修后主域 `input wire clk` 端口**仍存在**——那是另一半
+// 主域/额外域混淆（`moduleDefVLPlain` 的 `has_seq` 用 main+extras 合并后的
+// `clocked` 字符串判空，见同文件 p1），属本轮未修的独立发现，故此处不断言端口。
+#[test]
+fn when_with_only_cd_assign_is_emitted_once() {
+    let out = run_ok(
+        r#"
+module whenCdRepro {
+    input en = Bool
+    input a = UInt[8]
+    output q = UInt[8]
+    let cd2 = ClockDomain.mk "clk2" "rst2" Async RisingEdge ActiveHigh
+    let r2 = newUIntRegInitCdNamed("r2", 8, 0, cd2)
+    when en {
+        let _ = createSignalExpr("r2", regAssignCd(r2.zz_expr, a.zz_expr, cd2))
+    }
+    q := r2
+}
+println(moduleTreeVL(whenCdRepro.create.tree))
+"#,
+    );
+    assert_eq!(
+        out.matches("r2 <= a;").count(),
+        1,
+        "the cd assignment must be emitted exactly once (twice = double drive):\n{out}"
+    );
+    assert_eq!(
+        out.matches("always @(").count(),
+        1,
+        "only the cd2 clocked block may exist; the main block must not collect a \
+         when holding only regAssignCd:\n{out}"
+    );
+    assert!(
+        out.contains("always @(posedge clk2 or posedge rst2)"),
+        "cd2 clocked block missing:\n{out}"
+    );
+}
+
+// ── (J①) round-4：formB 通用方向臂不得误报合法端口类型 ──
+// `Expr` 宏按**单条语句**匹配（$x: Expr 片段一次解析一条端口声明），所以通用
+// `= $ty:ident` 臂只捕获出问题的那一条；合法臂（= Bool / Bits[w] / UInt[w] /
+// SInt[w]）对各自语句仍然先命中。对比：`module` 宏按**整次调用**匹配，其标量组
+// 会捕获所有标量端口（含合法 `= Bool`），所以 formA 保持窄臂、混合端口表留待
+// 第 4 轮（见 hdl-macros 的注释）。
+//
+// 判据：CLI 侧 5 种类型混在同一 formB 模块里 ⇒ HDV004 恰好 1 条且点名 `MyTypo`
+// （探针 target/prelude_scratch/r3_hdlc/cx_mix.typort，实测 1 条）。lib 口径只能
+// 观察「合法端口不受影响」——本用例正是这一侧的守卫：若通用臂误命中合法形状，
+// 模块会失败 ⇒ run_ok panic。
+#[test]
+fn formb_generic_arm_does_not_break_legal_port_types() {
+    let out = run_ok(
+        r#"
+module cxLegal {
+    input b = Bool
+    input u = UInt[4]
+    input s = Bits[4]
+    input si = SInt[4]
+    output y = Bool
+    output uo = UInt[4]
+    output so = Bits[4]
+    output sio = SInt[4]
+    y := b
+    uo := u
+    so := s
+    sio := si
+}
+println(moduleTreeVL(cxLegal.create.tree))
+"#,
+    );
+    for needle in [
+        "input wire b,",
+        "input wire [3:0] u,",
+        "input wire [3:0] s,",
+        "input wire signed [3:0] si,",
+        "output wire y",
+        "output wire [3:0] uo",
+        "output wire [3:0] so",
+        "output wire signed [3:0] sio",
+    ] {
+        assert!(out.contains(needle), "missing {needle}:\n{out}");
+    }
+}
