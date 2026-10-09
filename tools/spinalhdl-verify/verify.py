@@ -263,6 +263,39 @@ def ref_countoneoneach(a, w=4):
     return [bin(a & ((1 << k) - 1)).count("1") for k in range(1, w + 1)]
 
 # ---------------------------------------------------------------------------
+# round-3 additions (task-28): PLRU had NO L3 coverage at all (grep over
+# cases/*.typort returned zero hits for "plru"). These two models are written
+# from the contract documented in hdl-misc.typort:118-187, NOT from the RTL body:
+#   * way count = 2^log2n, state width = 2^log2n - 1;
+#   * node k's children are 2k+1 (left) / 2k+2 (right); a state bit of 1 means
+#     "prefer the right child";
+#   * evict: descend log2n levels from the root, appending each visited state bit
+#     to the way index (MSB first);
+#   * update(way): walk the same tree reading the way index MSB-first, SET the
+#     node when the way bit is 0 and CLEAR it when the way bit is 1, so the
+#     accessed way becomes the last one to evict.
+# ---------------------------------------------------------------------------
+def ref_plru_evict(state, log2n):
+    node = 0
+    acc = 0
+    for _ in range(log2n):
+        b = (state >> node) & 1
+        acc = (acc << 1) | b
+        node = 2 * node + 1 + b
+    return acc
+
+def ref_plru_update(state, way, log2n):
+    node = 0
+    for m in range(log2n - 1, -1, -1):
+        waybit = (way >> m) & 1
+        if waybit == 0:
+            state |= (1 << node)
+        else:
+            state &= ~(1 << node)
+        node = 2 * node + 1 + waybit
+    return state
+
+# ---------------------------------------------------------------------------
 # 组合用例表
 # ---------------------------------------------------------------------------
 CASES = {
@@ -304,6 +337,13 @@ CASES = {
     "vScrap":         ([("a", 8), ("sh", 3)], [("s", 8)], lambda d: [ref_scrap(d["a"], d["sh"])], "full"),
     "vCountOneOnEach": ([("a", 4)], [("c1", 3), ("c2", 3), ("c3", 3), ("c4", 3)],
                       lambda d: ref_countoneoneach(d["a"]), "full"),
+    # round-3 (task-28): PLRU coverage. log2n = 3 -> 8 ways, state width 7;
+    # 7+3 = 10 input bits = 1024 combinations, swept exhaustively ("full").
+    # This entry only runs when a case file actually declares `r3Plru`, so the
+    # default five-file run keeps its 51 modules and 51/51 baseline.
+    "r3Plru":         ([("state", 7), ("way", 3)], [("victim", 7), ("next", 7)],
+                      lambda d: [ref_plru_evict(d["state"], 3),
+                                 ref_plru_update(d["state"], d["way"], 3)], "full"),
 }
 
 # ---------------------------------------------------------------------------

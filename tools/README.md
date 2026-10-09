@@ -95,6 +95,18 @@ Exit code: `0` when every suite passed, `1` when any suite failed. A non-zero
 cargo exit is a failure, but a *timed-out* suite is reported as `TIMEOUT` rather
 than being confused with a compile error.
 
+A `fail=0` only certifies the suites that actually ran, so the summary always
+ends with a `NOT RUN:` line:
+
+```
+   lib      exit=0    76.7s  609/500 passed (min) / 0 failed
+   parity   exit=0    37.2s  15/15 passed (min) / 0 failed
+   NOT RUN: twin  (fail=0 covers only the suites above)
+```
+
+Without it, `-SkipTwin` or a `-Suites` subset reads as a full green gate. It is
+the same class of hole as `NO-TESTS`: a silent omission that looks like success.
+
 The gate prints each suite's raw `test result:` line(s) on success, which is what
 to paste into a report:
 
@@ -217,6 +229,9 @@ reported denominator is the builtin prelude's own item count.
   and missed the real `members` key, so its `--nested` silently counted nothing;
   that is fixed here. Today the top-level number can be 100% while the nested
   number is much lower -- check both when you claim a file is fully documented.
+  Round-2 reading: top-level `1194/1194 = 100.0%` but nested
+  `1248/1705 = 73.2%`, i.e. trait methods / enum cases / record fields are the
+  real remaining documentation gap even when every top-level item is documented.
 * `--fail-under PCT` makes it usable as a gate (exit 1 below the threshold).
 
 ---
@@ -461,11 +476,104 @@ unavailable, but the generated testbench and `-Mdir` flow here are
 Verilator-shaped, so switching simulators is a code change rather than a flag.
 Treat iverilog as a rescue option for a single module, not a drop-in.
 
+### Large Nat literals and the stack budget (resolved by task-30)
+
+**Historically** (before task-30's entry alignment) `typort check` stack-overflowed
+on Nat literals in roughly `[10000, 100000]`. On the round-3 baseline DUT
+(`r3_base_typort.exe`, sha256 `F51E7A4B...`, HEAD `e0bc4fec`) the readings were:
+
+```
+8000 ok | 10000 crash (x2) | 100000 crash | 100001 diagnosed | 1e6 diagnosed
+def r3_lit_10000: Nat = 10000  ->  thread 'main' has overflowed its stack
+                                   exit -1073741571 (0xC00000FD)
+```
+
+The `NAT_LITERAL_ELAB_LIMIT` guard only fired above 100000, so that band crashed
+instead of being diagnosed.
+
+**task-30 fixed this by aligning the entry point, not by tightening the
+threshold.** The CLI now dispatches through a worker thread with a configurable
+stack (`TYPORT_STACK_MB`, default 1024 MiB; 256/512 MiB still crash, 768/1024
+pass). With the aligned entry: `10000` PASS, `100000` PASS (previously a crash),
+`100001` and `1e6` still diagnosable, `nat_mul 1000 1000` PASS -- the 100000
+threshold is unchanged and nothing became unusable.
+
+**The entry point and its stack budget are part of a reading.** The same probe can
+give opposite answers under different entries (a 64 MiB `typort check` versus a
+256 MiB `l13bench` worker), so always record which entry and which stack size
+produced any literal-limit result.
+
+Style suggestion, unchanged: prefer `nat_mul`/`nat_add` (e.g. `nat_mul 1000 1000`)
+for large constants -- they go through the native word-size primop and build no
+succ chain at all.
+
+The provisional CLI-pin reading below was taken with the **pre-task-30** binary
+(`F51E7A4B`); it is kept for comparison until the pin is re-taken on the final
+artifact.
+
 ### Results
 
 `DEFAULT_CASES` is the five files in `tools/spinalhdl-verify/cases/`. Full-set
 runs and their logs are kept under `target/prelude_scratch/<owner>_sim/` (with
 the frozen binary and a `run_meta.txt` recording HEAD and mtimes).
+
+Round 3 added `cases/r3_plru.typort` (tree-PLRU contract model, exhaustive over
+all 1024 `(state, way)` combinations). It is deliberately **not** in
+`DEFAULT_CASES`: adding it there would move the 51/51 baseline of every later
+round. Run it explicitly when you want that coverage:
+
+```powershell
+$env:TYPORT = "target/debug/typort.exe"
+python -X utf8 tools/spinalhdl-verify/verify.py tools/spinalhdl-verify/cases/r3_plru.typort
+```
+
+### CLI text-level pin for `examples/hdl/21-crossclock`
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/check_crossclock_cli.ps1
+powershell -ExecutionPolicy Bypass -File tools/check_crossclock_cli.ps1 `
+    -Exe target\prelude_scratch\r3_base_typort.exe `
+    -RequireSha256 F51E7A4B3735058BE9A3ADB303A86D856ADF3AB7C78D6FB8D632400252F947D9
+```
+
+`hdl_check_graph_tests::examples_21_crossclock_expected_warnings` asserts this
+warning set in-process; this script pins the same claim at the CLI text level,
+which is what a user and the L3 harness actually see. It is hardening, not a
+replacement for the cargo test (round 2 showed in-process and CLI agree on a
+clean HEAD, so the cargo test is not vacuous).
+
+It asserts `HDL038` exactly `-ExpectHdl038` times (default 2) and `HDL036` /
+`HDL037` / `HDL039` zero times, that the reported chains are `wrPtrSync1` and
+`rdPtrSync1`, and that no `error:` line appeared. It always prints the DUT's
+path, size, mtime and sha256, and `-RequireSha256` pins the exact artifact.
+
+Exit codes: `0` match, `3` mismatch, `2` usage/environment. Both directions are
+verified: a wrong `-ExpectHdl038` yields `MISMATCH ... HDL038 count 2, expected 3`
+and exit 3, and a wrong `-RequireSha256` exits 2 -- so the pin cannot silently
+pass.
+
+FINAL reading, taken on the round-3 spec DUT after every round-3 landing
+(`lead_r3_typort.exe`, size 20,040,704, mtime 2026-10-09 04:18:30, sha256
+`79B05E316F8473FC91318B011EC6BE8E03D08ABFABA9835D8096C01E593C5280`):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/check_crossclock_cli.ps1 `
+    -Exe target\prelude_scratch\lead_r3_typort.exe `
+    -RequireSha256 79B05E316F8473FC91318B011EC6BE8E03D08ABFABA9835D8096C01E593C5280
+```
+
+```
+== DUT  sha256 matches -RequireSha256
+== codes: HDL038=2 HDL036=0 HDL037=0 HDL039=0  errors=0  hdl-warning-lines=2
+   HDL038 [ccFifo] _d_wrPtrSync1: multi-bit (3) signal crossed to clkB ...
+   HDL038 [ccFifo] _d_rdPtrSync1: multi-bit (3) signal crossed to clkA ...
+== OK: warning set is HDL038 x2, no HDL036/HDL037/HDL039     (exit 0)
+```
+
+The earlier provisional reading (DUT `r3_base_typort.exe`, sha256 `F51E7A4B...`,
+taken before hdl-c's `hdl-verilog` landing) was identical -- same two `HDL038`
+warnings, same chain names, no `HDL036/037/039` -- and is kept only as the
+pre-landing comparison point.
 
 ---
 
