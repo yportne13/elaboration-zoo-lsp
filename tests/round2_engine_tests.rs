@@ -299,3 +299,54 @@ fn nat_literal_guard_boundary_is_diagnosable() {
     let (_d, errs) = parser("def z: Nat = nat_mul 1000 1000", 0).expect("parse");
     assert!(errs.is_empty(), "nat_mul decomposition must parse, got {errs:?}");
 }
+
+/// The two worker-thread stack defaults must agree, and must be big enough for
+/// the largest Nat literal the guardrail still allows.
+///
+/// This is a regression pin for a real bug (round 4 / (N)): `l13bench` defaulted
+/// to a 256 MiB worker while the CLI defaulted to 1024 MiB, and that alone
+/// decided whether an input survived.  On one binary `a*99999 + x*99998 + 5`
+/// stack-overflowed at 256 MiB after 111.9s but completed at 1024 MiB in 13.3s
+/// (`nf=600002`); `typort check` on the same probe was fine at 1024 MiB.
+/// The shallow shape matrix consequently sat at AGREE 18 / TIMEOUT 1.
+///
+/// The pin is a source-level consistency check rather than a stack stress
+/// test: a stress test would need a thread stack bigger than the harness
+/// thread and would be slow and flaky.
+#[test]
+fn bench_and_cli_worker_stack_defaults_agree_and_clear_the_literal_guardrail() {
+    fn default_stack_mb(path: &str, marker: &str) -> u32 {
+        let src = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("read {path}: {e}"));
+        let at = src
+            .find(marker)
+            .unwrap_or_else(|| panic!("{path}: marker {marker:?} not found"));
+        let tail = &src[at..];
+        let kw = tail
+            .find("unwrap_or(")
+            .unwrap_or_else(|| panic!("{path}: no unwrap_or after {marker:?}"));
+        let rest = &tail[kw + "unwrap_or(".len()..];
+        let end = rest
+            .find(')')
+            .unwrap_or_else(|| panic!("{path}: unterminated unwrap_or"));
+        rest[..end]
+            .trim()
+            .parse::<u32>()
+            .unwrap_or_else(|e| panic!("{path}: default stack not a u32: {e}"))
+    }
+
+    let bench = default_stack_mb("src/bin/l13bench.rs", "let stack_mb: usize");
+    let cli = default_stack_mb("src/bin/cli.rs", "let stack_mb: usize");
+
+    assert_eq!(
+        bench, cli,
+        "l13bench and CLI worker stack defaults must stay in sync \
+         (l13bench.rs vs cli.rs); they used to differ (256 vs 1024) and that \
+         alone decided whether a deep Nat literal survived"
+    );
+    assert!(
+        bench >= 1024,
+        "both entry points must keep at least the calibrated 1024 MiB worker \
+         stack (a*99999 + x*99998 + 5 overflows at 256), got {bench}"
+    );
+}

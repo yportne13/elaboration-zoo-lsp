@@ -92,7 +92,13 @@
 #   Each suite is therefore retried once when the log carries that signature.
 #   -KillStaleSec N additionally kills probe processes older than N seconds
 #   first; it defaults to 0 (never kill anything).
-[CmdletBinding()]
+# PositionalBinding is OFF on purpose. `powershell -File script.ps1 -Suites lib,twin`
+# re-serialises an array argument into the single string "lib,twin", so with default
+# positional binding the SECOND value lands on the next value-capable parameter:
+# `-Suites lib twin` used to bind "twin" to -CargoTargetDir, which silently built a
+# second cargo target directory (1.5 GB) inside the repo and moved the log dir with it.
+# With PositionalBinding off that is impossible: an unexpected token is an error.
+[CmdletBinding(PositionalBinding = $false)]
 param(
     [string]$Label = "gate",
     [string[]]$Suites = @("lib", "parity", "twin", "hdl042"),
@@ -183,6 +189,17 @@ if ($Full) {
     $skipArgs = @()
 }
 
+# Normalise -Suites: `-Suites lib,twin` and `-Suites "lib twin"` both work, so an
+# array flattened by `powershell -File` re-serialisation still selects what the
+# caller meant instead of silently selecting nothing.
+$suiteNames = @()
+foreach ($entry in @($Suites)) {
+    foreach ($part in ($entry -split '[,\s]+')) {
+        if ($part.Trim() -ne "") { $suiteNames += $part.Trim() }
+    }
+}
+if ($suiteNames.Count -eq 0) { $suiteNames = @("lib", "parity", "twin", "hdl042") }
+
 $table = @()
 $table += [pscustomobject]@{ Name = "lib";     Argv = @("test", "--lib", "L13_namespace::") + $CargoArgs }
 $table += [pscustomobject]@{ Name = "parity";  Argv = @("test", "--test", "l13_fast_parity") + $CargoArgs + $skipArgs }
@@ -191,7 +208,7 @@ $table += [pscustomobject]@{ Name = "hdl042";  Argv = @("test", "--test", "hdl04
 
 $selected = @()
 foreach ($s in $table) {
-    if ($Suites -contains $s.Name) { $selected += $s }
+    if ($suiteNames -contains $s.Name) { $selected += $s }
 }
 if ($SkipTwin -and ($selected | Where-Object { $_.Name -eq "twin" })) {
     Write-Host "== -SkipTwin: twin_engine_tests skipped (LSP wiring NOT covered this run)"
