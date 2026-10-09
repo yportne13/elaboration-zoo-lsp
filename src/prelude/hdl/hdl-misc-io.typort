@@ -228,7 +228,9 @@ struct DividerFSM[w: Nat] {
     cmdReady: Bool
     /// 1 when the response ports hold a valid result.
     rspValid: Bool
+    /// Quotient register being computed, one bit per busy cycle.
     quotient: UInt[w]
+    /// Remainder register being computed, shifted left each busy cycle.
     remainder: UInt[w]
 }
 
