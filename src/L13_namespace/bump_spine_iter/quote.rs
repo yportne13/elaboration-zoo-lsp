@@ -367,7 +367,19 @@ pub(super) fn quote_go<'a>(
                             let e = &spine.stack[h];
                             (e.a, e.len, e.base, e.icit)
                         };
-                        if len > 1 && base as usize + len as usize - 1 == h {
+                        // **Decl 头的连续右链不走快路径**（task-29）：快路径
+                        // 只对 base 槽实参下 `Q`（force+quote），`next..=end`
+                        // 各槽自身的实参不进 `Q`——卡住 prim 应用里「prim 从未
+                        // 检查的那个实参」中的 redex 就会原样留在范式里
+                        // （`(a + 0) + x`：`nat_add` 只看第 2 个实参，第 1 个
+                        // 永不被 force ⇒ 孪生渲染 `{a + 0} + x`，参考版渲染
+                        // `a + x`）。改走下面的通用臂：它对 `ea`（本槽实参）
+                        // 与 `fval`（函数部分）都下 `Q`，与参考版 `quote_sp`
+                        // 「每个 spine 项先 `quote_inner`（内含 force）」一致。
+                        if len > 1
+                            && base as usize + len as usize - 1 == h
+                            && spine.stack[h].hk != super::spine::HK_DECL
+                        {
                             // 连续右链：先引 base，再 ChainRun 自底向上扫
                             let f0 = spine.stack[base as usize].f;
                             let idx_node = match v_tag(f0) {
@@ -615,4 +627,53 @@ pub(super) fn quote_nat_chain<'a>(bump: &'a Bump, nat_tm: &'a Tm<'a>, k: u64) ->
         inner = bump.alloc(Tm::SumCase { typ: nat_tm, index: 1, datas, is_trait: false });
     }
     inner
+}
+
+#[cfg(test)]
+mod task29_unchecked_redex_parity {
+    //! task-29 回归钉：**卡住 prim 应用里「prim 从未检查的那个实参」中的 redex
+    //! 必须被 quote 归一化**。`nat_add`/`nat_mul` 只看第 2 个实参；当它是裸
+    //! rigid 变量时 prim 返回 `None`，第 1 个实参永不被 prim force ⇒ 参考版
+    //! `quote_sp` 对每个 spine 项都 `quote_inner`（内含 force）会把它归约掉，
+    //! 孪生侧若走「连续右链快路径」就会把 redex 原样留在范式里（曾致
+    //! `(a + 0) + x` 两版 7/12、`e18` 413/222 的 NF-DIVERGE）。
+    //!
+    //! 放在 lib 内（而非 `tests/`）：`bench_check_nf_bounded` 与 `PRELUDE_CORE`
+    //! 都是 `pub(crate)`，集成测试拿不到。
+    use crate::L13_namespace::{PRELUDE_CORE, bench_check_nf_bounded, parse_prelude_files};
+
+    fn nf_pair(src: &str) -> (u64, u64) {
+        let p = parse_prelude_files(PRELUDE_CORE);
+        let user = crate::L13_namespace::parser::parser_with_macros(
+            &crate::L13_namespace::preprocess(src),
+            PRELUDE_CORE.len() as u32,
+            &p.macros,
+        )
+        .expect("user file must parse")
+        .0;
+        let mut all = p.decls.clone();
+        all.extend(user);
+        let b = bench_check_nf_bounded(&all, &p.nat_after);
+        let mut t = super::super::Tycker::new();
+        let f = t.bench_check_nf_bounded(&all, &p.nat_after);
+        (b, f)
+    }
+
+    #[test]
+    fn unchecked_stuck_argument_redex_is_normalized() {
+        for src in [
+            // 四个「redex 落在 prim 从不检查的第 1 实参」形状
+            "def z_f(a: Nat, x: Nat): Nat = (a + 0) + x",
+            "def z_f(a: Nat, x: Nat): Nat = (a * 0) + x",
+            "def z_f(a: Nat, x: Nat): Nat = (a * 1) + x",
+            "def z_f(a: Nat, x: Nat): Nat = (a * 100) + x",
+            // 控制组：redex 落在**被检查**的第 2 实参（本就一致）
+            "def z_f(a: Nat, x: Nat): Nat = x + (a + 0)",
+            "def z_f(a: Nat, x: Nat): Nat = a + x + 5",
+        ] {
+            let (b, f) = nf_pair(src);
+            assert_eq!(b, f, "nf parity broken for {src:?} (basic={b} fast={f})");
+            assert!(b != 0, "both engines failed to check {src:?} (nf=0)");
+        }
+    }
 }

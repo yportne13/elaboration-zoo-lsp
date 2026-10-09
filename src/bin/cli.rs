@@ -392,11 +392,37 @@ enum Commands {
 }
 
 fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
-    #[cfg(feature = "mem-profile")]
-    let _profiler = dhat::Profiler::new_heap();
+    // 主线程栈由 `.cargo/config.toml` 的 linker flag 设定（Windows 64 MiB），
+    // 远小于 `l13bench` 的 worker（`l13bench.rs:106-118` 缺省 256 MiB）——同一个
+    // 大 `Nat` 字面量在 `typort check` 里会爆栈、在 bench 里能过（第 3 轮
+    // task-30 实测）。这里把整个 CLI 调度放进同规格的 worker，让两个入口的
+    // 栈预算对齐；`TYPORT_STACK_MB` 与 `L13_STACK_MB` 对齐（0/非法 ⇒ 缺省）。
+    // 缺省取 **1024**：实测 `100000` 字面量在 256/512 MiB 下爆栈、**768/1024 MiB
+    // 下 PASS**，取 1024 = 最大崩点（512）的 2× 余量。
+    // 诚实说明：这只是**抬高天花板**，不消除 O(n) 递归——深度护栏仍是
+    // `NAT_LITERAL_ELAB_LIMIT`（且 1024 MiB 是保留量，RSS 随实用增长）。
+    let stack_mb: usize = std::env::var("TYPORT_STACK_MB")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .filter(|m| *m > 0)
+        .unwrap_or(1024);
+    std::thread::Builder::new()
+        .stack_size(stack_mb << 20)
+        .spawn(move || -> Result<(), Box<dyn Error + Sync + Send>> {
+            #[cfg(feature = "mem-profile")]
+            let _profiler = dhat::Profiler::new_heap();
+            let cli = Cli::parse();
+            run(cli)
+        })
+        .map_err(|e| -> Box<dyn Error + Sync + Send> { Box::new(e) })?
+        .join()
+        .map_err(|_| -> Box<dyn Error + Sync + Send> {
+            "typort worker thread panicked".into()
+        })?
+}
 
-    let cli = Cli::parse();
-
+/// CLI 调度本体（运行在带大栈的 worker 线程里，见 [`main`]）。
+fn run(cli: Cli) -> Result<(), Box<dyn Error + Sync + Send>> {
     match cli.command {
         Commands::Lsp => {
             elaboration_zoo_lsp::run_lsp_server()?;

@@ -55,6 +55,40 @@ fn logs(b: &Arc<Backend<CapturingClient>>) -> Vec<String> {
     b.client.logs.lock().unwrap().clone()
 }
 
+/// task-29（第 3 轮）：**卡住 prim 应用里「prim 从不检查的那个实参」中的 redex
+/// 必须被 quote 归一化**——`nat_add`/`nat_mul` 只看第 2 个实参，第 1 个实参在
+/// 第 2 个是裸 rigid 变量时永不被 force，孪生侧若走「连续右链快路径」会把
+/// `(a + 0)`/`(a * 1)` 原样留在范式里（曾致 `NF-DIVERGE 7/12`、`413/222`，
+/// 以及失败证明里 `expected:` 两版渲染不同）。这里断言两版对这批源文件的
+/// **用户可见错误文本逐字节一致**（数值 nf parity 钉在 lib 内：
+/// `L13_namespace::bump_spine_iter::quote::task29_unchecked_redex_parity`）。
+#[test]
+fn twin_matches_reference_on_unchecked_stuck_argument_redex() {
+    let cases = [
+        // redex 落在 prim 从不检查的第 1 实参
+        "def z_f(a: Nat, x: Nat): Nat = (a + 0) + x",
+        "def z_f(a: Nat, x: Nat): Nat = (a * 1) + x",
+        "def z_f(a: Nat, x: Nat): Nat = (a * 100) + x",
+        // 失败证明：`expected:` 渲染里含该 redex（verifier s07/s08 形状）
+        "def z_eq(a: Nat, x: Nat): Eq (a * 1 + x) (a + a + x) = rfl",
+        "def z_eq(a: Nat, x: Nat): Eq (a + 0 + x) (a + a + x) = rfl",
+        // 控制组：redex 落在被检查的第 2 实参（本就一致）
+        "def z_f(a: Nat, x: Nat): Nat = x + (a + 0)",
+    ];
+    for (i, src) in cases.iter().enumerate() {
+        let uri = Url::parse(&format!("file:///twin_redex_{i}.typort")).unwrap();
+        let tb = backend(Engine::Twin);
+        tb.process_file(&uri, src, Some(1));
+        let rb = backend(Engine::Reference);
+        rb.process_file(&uri, src, Some(1));
+        assert_eq!(
+            errors(&tb, &uri),
+            errors(&rb, &uri),
+            "diagnostics diverged on {src:?}"
+        );
+    }
+}
+
 fn hover_text(b: &Arc<Backend<CapturingClient>>, uri: &Url, offset: usize) -> Option<String> {
     b.hover_at(uri, Position::new(0, offset as u32)).map(|h| match h.contents {
         lsp_types::HoverContents::Markup(m) => m.value,
