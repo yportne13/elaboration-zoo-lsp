@@ -13,6 +13,7 @@
 /// the current count or reset it early.
 struct Prescaler[w: Nat] {
     overflow: Bool
+    /// Cycle counter the prescaler divides the input clock by.
     counter: UInt[w]
 }
 
@@ -52,16 +53,22 @@ def prescaler[bn: BindingName][w: Nat](limit: UInt[w]): Prescaler[w] =
 /// `TimerResult` — so this struct documents the SpinalHDL `TimerIO` port
 /// names only. Kept to avoid changing the exported API surface.
 struct TimerIO[w: Nat] {
+    /// Clock enable: the count only advances while this is high.
     tick: Bool
+    /// Synchronous clear: resets the count and the inhibit flag.
     clear: Bool
+    /// Target value the timer counts up to.
     limit: UInt[w]
     full: Bool
+    /// Current count value.
     value: UInt[w]
 }
 
 /// Timer outputs: `full` is a one-cycle strobe, `value` the current count.
 struct TimerResult[w: Nat] {
+    /// One-cycle strobe asserted when the limit is reached.
     full: Bool
+    /// Current count value.
     value: UInt[w]
 }
 
@@ -96,9 +103,13 @@ def timer[bn: BindingName][w: Nat](tick: Bool, clear: Bool, limit: UInt[w]): Tim
 /// vectors directly and returns the masked pending vector; nothing constructs
 /// this struct. Kept to avoid changing the exported API surface.
 struct InterruptCtrlIO[w: Nat] {
+    /// Interrupt requests being sampled this cycle.
     inputs: Bits[w]
+    /// Write-1-to-clear mask for the pending bits.
     clears: Bits[w]
+    /// Interrupts that are allowed to reach the output.
     masks: Bits[w]
+    /// Raw pending bits before masking.
     pendings: Bits[w]
 }
 

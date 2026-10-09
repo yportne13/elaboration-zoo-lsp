@@ -58,7 +58,9 @@ def driveExpr(lhs: Expr, rhs: Expr): Unit =
 /// `isInputPort` reports as an input/inout, so a master/slave port pair can be
 /// connected either way. Both sides must have the same type.
 trait Data {
+    /// Assign a value convertible into Self to this signal.
     def :=[T](that: T): Unit where T: Into[Self]
+    /// The underlying IR expression for this data value.
     def expr: Expr
     // `<>` — SpinalHDL-style bidirectional connection for plain signals:
     // drives each side, skipping the side that is an input/inout port (the
@@ -69,6 +71,7 @@ trait Data {
     // NOTE: implemented via driveExpr (not `:=`) because a `:=` method-call
     // dispatch inside a trait default body leaves the where-clause's implicit
     // solver unsolved; driveExpr keeps the same assignment semantics.
+    /// Bidirectional connect used for differential/stream bundles.
     def <>(that: Self): Unit =
         let _ = match isInputPort(this.zz_expr) {
             case true => unit
@@ -89,7 +92,9 @@ trait Data {
 /// expression and `name` is `Some` only once a `LetNamed` instance has materialized
 /// the value as a named wire.
 struct Bool {
+    /// Name the signal was created with, when it has one.
     name: Option[String]
+    /// The IR this Bool value refers to.
     zz_expr: Expr
 }
 
@@ -118,7 +123,9 @@ impl Into[Bool] for Boolean {
 /// operations are provided (`Cat`, shifts, `|`, `&`, `^`); use `UInt`/`SInt` for
 /// numeric operators.
 struct Bits[width: Nat] {
+    /// Name the signal was created with, when it has one.
     name: Option[String]
+    /// The IR this Bits value refers to.
     zz_expr: Expr
 }
 
@@ -141,7 +148,9 @@ impl[width: Nat] Data for Bits[width] {
 /// `Nat` literal conversions are supplied by instances in `hdl-ops.typort`;
 /// `UInt` itself only carries the expression and an optional wire name.
 struct UInt[width: Nat] {
+    /// Name the signal was created with, when it has one.
     name: Option[String]
+    /// The IR this UInt value refers to.
     zz_expr: Expr
 }
 
@@ -179,7 +188,9 @@ impl[width: Nat] Data for UInt[width] {
 /// Two's-complement signed `width`-bit integer. `literal` seeds it and the operator
 /// instances in `hdl-ops.typort` use signed comparison, unlike `UInt`.
 struct SInt[width: Nat] {
+    /// Name the signal was created with, when it has one.
     name: Option[String]
+    /// The IR this SInt value refers to.
     zz_expr: Expr
 }
 
