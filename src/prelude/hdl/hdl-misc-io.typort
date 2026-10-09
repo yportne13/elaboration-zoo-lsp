@@ -92,9 +92,13 @@ struct GpioIO[w: Nat] {
     pin_write: Bits[w]
     /// Per-pin direction register (1 = drive, 0 = input).
     pin_writeEnable: Bits[w]
+    /// Sampled input pins, synchronised into a register.
     input: Bits[w]          // 采样后的输入（寄存器）
+    /// Output pin drive register.
     output: Bits[w]         // 输出寄存器
+    /// Per-pin direction register (1 = drive, 0 = input).
     outputEnable: Bits[w]   // 输出使能寄存器
+    /// Pending interrupt bits.
     interrupts: Bits[w]     // 中断挂起
 }
 

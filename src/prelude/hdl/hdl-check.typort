@@ -389,6 +389,7 @@ struct ConnInfo {
 /// ruleInsts emits HDL024 for every raw instance and runs HDL022 only for non-raw ones; instModule resolves a connection's child module from this list.
 struct InstInfo {
     /// Instance name as declared.
+    /// Instance name as declared.
     inst: String
     /// Instantiated module name.
     mdl: String

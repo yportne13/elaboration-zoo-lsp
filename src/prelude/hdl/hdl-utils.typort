@@ -439,6 +439,7 @@ def ohLastExpr(w: Nat, e: Expr): Expr =
 struct OHMaskingExpr[T: Type 0, width: Nat] {
     /// The operand whose one-hot mask is computed.
     value: T
+    /// True when this is the last (lowest) one-hot position to mask.
     isLast: Boolean
 }
 
@@ -507,6 +508,7 @@ struct PriorityMuxExpr[T: Type 0, width: Nat] {
     sel: Bits[width]
     /// The candidate values, in priority order (LSB first).
     vals: Vec[T] width
+    /// Value produced when no select bit is set.
     dflt: T
 }
 
@@ -1138,6 +1140,7 @@ def whenMasked[width: Nat, T: Type 0](things: Vec[T] width, conds: Bits[width], 
 struct CounterMod[w: Nat] {
     /// Current counter value.
     value: UInt[w]
+    /// True on the cycle the counter wraps past its maximum.
     willOverflow: Bool
 }
 
@@ -1188,8 +1191,11 @@ def counterIncMod[bn: BindingName](stateCount: Nat, enable: Bool): CounterMod[ma
 struct CounterUpDown[w: Nat] {
     /// Current counter value.
     value: UInt[w]
+    /// True when incrementing now would wrap past the maximum.
     willOverflowIfInc: Bool
+    /// True when decrementing now would wrap below zero.
     willUnderflowIfDec: Bool
+    /// True on the cycle the counter wrapped past its maximum.
     willOverflow: Bool
     willUnderflow: Bool
 }

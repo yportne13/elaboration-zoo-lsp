@@ -212,9 +212,11 @@ trait Bundle {
 /// that invariant). The struct carries no direction of its own — ports are
 /// made with `input`/`output` declarations or the direction helpers.
 struct Stream[T] {
+    /// Producer-side handshake: the payload is present.
     valid: Bool
     /// Consumer-side handshake: the payload is accepted this cycle.
     ready: Bool
+    /// The payload transferred when valid and ready are both high.
     payload: T
 }
 
@@ -223,6 +225,7 @@ struct Stream[T] {
 /// consumer either samples every cycle or adds a `Stream` stage. Handshake
 /// helpers live in hdl-stream (`flowToStream` gives `ready = True`).
 struct Flow[T] {
+    /// The payload (Flow has no back-pressure, only `valid`).
     /// The payload (Flow has no back-pressure, only `valid`).
     payload: T
     /// The payload is present; a Flow is consumed every cycle.
@@ -296,6 +299,7 @@ enum StateAccess {
 /// recorded `FsmCtx` global, so nothing constructs `State[T]` in the prelude,
 /// examples or verification corpus.
 struct State[T] {
+    /// State name as written in the source.
     /// State name as written in the source.
     name: String
     /// Value loaded on entry, when the state carries one.
