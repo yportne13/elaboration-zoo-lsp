@@ -256,26 +256,42 @@ enum Expr {
     unary(op: String, e: Expr)
     /// Binary operator applied to two operands.
     binary(lhs: Expr, op: String, rhs: Expr)
+    /// Combinational assignment: drives a wire (not a register).
     assign(lhs: Expr, rhs: Expr)
+    /// Clocked assignment in the module default domain (a register load).
     regAssign(lhs: Expr, rhs: Expr)
+    /// Clocked assignment in an explicit clock domain.
     regAssignCd(lhs: Expr, rhs: Expr, cd: ClockDomain)
+    /// Conditional execution of one statement, with an optional else part.
     when(cond: Expr, body: Expr, elseBody: Option[Expr])
+    /// Multi-way case statement on `value`.
     switch(value: Expr, cases: Expr)
+    /// Statement sequence: head then tail.
     block(head: Expr, tail: Expr)
+    /// No-op statement (used where a branch must be empty).
     nop
+    /// 2-to-1 multiplexer expression.
     mux(cond: Expr, whenTrue: Expr, whenFalse: Expr)
+    /// Single-bit select of `e` at `idx`.
     bitsel(e: Expr, idx: Expr)
+    /// Part-select of `e` over the inclusive range [hi, lo].
     partsel(e: Expr, hi: Expr, lo: Expr)
     // ---- hierarchy: sub-module instantiation & cross-level signal references ----
+    /// Sub-module instantiation by name (no structured port list).
     instance(instName: String, moduleName: String)   // sub-module instantiation
+    /// Sub-module instantiation with an explicit port connection string.
     instanceWithPorts(instName: String, moduleName: String, ports: String)  // with port connections
+    /// Reference to a signal inside a sub-module instance.
     subSignal(instName: String, signalName: String)   // cross-level signal reference
     // ---- memory: declaration / read / write ----
     // createMem declares an array `reg [w-1:0] name [0:wordCount-1]`.
     // memRead is a pure expression `name[address]`; memWrite is a clocked
     // statement `if (enable) name[address] <= data;` recorded in the module.
+    /// Memory declaration: wordCount words of `width` bits each.
     createMem(name: String, wordCount: Nat, width: Nat)
+    /// Combinational read of `mem` at `address`.
     memRead(mem: Expr, address: Expr)
+    /// Clocked write of `data` at `address` while `enable` holds.
     memWrite(mem: Expr, address: Expr, data: Expr, enable: Expr)
     // ---- simulation assertions (docs/hdl-blackbox-sim-design.md §3) ----
     // assertExpr is a clocked assertion statement: codegen emits it inside a
@@ -285,7 +301,9 @@ enum Expr {
     // via the merged collectClockCds walker). Flat in def.expr like memWrite;
     // `assert(...)` factories wrap in the current when context via
     // createSignalExpr's default arm.
+    /// Simulation assertion in the module default domain.
     assertExpr(cond: Expr, msg: String, sev: AssertSeverity)
+    /// Simulation assertion in an explicit clock domain.
     assertExprCd(cond: Expr, msg: String, sev: AssertSeverity, cd: ClockDomain)
     // ---- BlackBox parameter marker (docs/hdl-blackbox-sim-design.md §4.5-3) ----
     // The `blackbox` macro (hdl-macros.typort) renders the generic strings at
@@ -304,6 +322,7 @@ enum Expr {
     // (zero)) ≡ INSTANCE: collectInstHelp consumed the assert, polluting the
     // instance name with the msg). A dedicated variant ends the aliasing;
     // hdl-check keeps the zero-read/zero-drive discipline via its own arms.
+    /// Blackbox parameter-marker emission channel.
     bbMarkerExpr(isInst: Boolean, params: String)
 }
 
@@ -405,7 +424,9 @@ struct ModuleDef {
 /// `insert` prepends a def in O(1) using `succ(this.num)`, not `this.num + 1`.
 struct ModuleTree {
     /// Number of module bodies registered in this tree.
+    /// Number of module bodies registered in this tree.
     num: Nat
+    /// One body per instantiated module, parallel to the instance list.
     data: Vec[ModuleDef] num
 }
 
@@ -888,6 +909,7 @@ def headModuleDef[v: Nat](data: Vec[ModuleDef] v): ModuleDef = match data {
 /// such as hdl-verilog's `designVL` walk this registry to emit a self-contained design.
 struct ModuleRegistry {
     num: Nat
+    /// One body per instantiated module, parallel to the instance list.
     defs: Vec[ModuleDef] num
 }
 
@@ -977,7 +999,9 @@ def registerModuleTree(t: ModuleTree): Unit =
 /// macro exposes) or `bbGenStr` for a String literal, which has no macro syntax yet and is
 /// reachable only by calling `bbGenericAddStr` from a def directly.
 enum BbGenVal {
+    /// A generic parameter carrying a Nat value.
     bbGenNat(v: Nat)
+    /// A generic parameter carrying a String value.
     bbGenStr(s: String)
 }
 
@@ -1076,6 +1100,7 @@ def bbGenericAddStr(key: String, s: String): Unit = bbCtxAdd(key, bbGenStr(s))
 /// must be an existing type name; zero means "not inside always @(*)" and `pickAssign`
 /// reads it through `combDepth`.
 struct CombCtx {
+    /// Instantiation nesting depth, used to keep generated names unique.
     depth: Nat
 }
 
@@ -1154,6 +1179,7 @@ struct Range {
 /// interval. Its consumer is the `for i in a until b { ... }` macro arm, which expands to
 /// `rangeFor(a until b, i => ...)` (also used directly in examples/hdl/08-control-flow).
 trait RangeSyntax {
+    /// Build the half-open range [lo, hi) for an HDL for-loop.
     def until(hi: Nat): Range
 }
 
@@ -1171,7 +1197,9 @@ impl RangeSyntax for Nat {
 /// index at the head: `genFrom` pushes its index per iteration and pops it at the iteration
 /// tail, so nested loops accumulate one frame per level.
 enum HdlLoopIdx {
+    /// Base case: no loop index is being carried.
     hdlLoopIdxEmpty
+    /// Stack cons: the current loop index on top of the enclosing ones.
     hdlLoopIdxCons(idx: Nat, rest: HdlLoopIdx)
 }
 
