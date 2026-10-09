@@ -211,6 +211,54 @@ fn hdl_example_diagnostics_agree_between_reference_and_twin() {
     assert_eq!(messages(&rb, &uri), messages(&rt, &uri));
 }
 
+/// task-25 (J): `rfl[Nat] 3` -- the head's implicit binder is auto-filled by
+/// `insert_t`, so the explicit `3` has no parameter left.  The failure keeps its
+/// original `can't unify` and gains one directional note; all four workarounds
+/// and ordinary implicit insertion stay clean.
+const RFL_HINT: &str = "implicit argument was already filled in automatically";
+
+#[test]
+fn rfl_explicit_arg_gets_directional_note_and_keeps_cant_unify() {
+    let msgs = run("def e_bad: Eq[Nat] 3 3 = rfl[Nat] 3");
+    assert!(
+        msgs.iter().any(|m| m.contains("can't unify")),
+        "the original `can't unify` must be retained, got {msgs:?}"
+    );
+    assert!(
+        msgs.iter().any(|m| m.contains(RFL_HINT) && m.contains("rfl[Nat] [3]")),
+        "expected the bracketed-argument note, got {msgs:?}"
+    );
+    assert_eq!(
+        msgs.iter().filter(|m| m.contains(RFL_HINT)).count(),
+        1,
+        "the note must appear once, got {msgs:?}"
+    );
+}
+
+#[test]
+fn rfl_note_absent_on_workarounds_and_implicit_insertion() {
+    for src in [
+        // 四个绕法（必须仍 PASS，不得有 note）
+        "def e: Eq[Nat] 3 3 = rfl\ndef w: Nat = match e { case refl(a) => a }",
+        "def e: Eq[Nat] 3 3 = rfl[Nat] [3]\ndef w: Nat = match e { case refl(a) => a }",
+        "def e: Eq[Nat] 3 3 = rfl [Nat] [3]\ndef w: Nat = match e { case refl(a) => a }",
+        "def e: Eq[Nat] 3 3 = rfl[Nat]\ndef w: Nat = match e { case refl(a) => a }",
+        // 合法自动插隐式（不得误报）
+        "def s: Option[Nat] = Some 3",
+        "def f[A](a: A): A = a\ndef z: Nat = f 3",
+    ] {
+        let msgs = run(src);
+        assert!(
+            !msgs.iter().any(|m| m.contains(RFL_HINT)),
+            "unexpected rfl note for {src:?}: {msgs:?}"
+        );
+        assert!(
+            !msgs.iter().any(|m| m.contains("can't unify")),
+            "unexpected unification failure for {src:?}: {msgs:?}"
+        );
+    }
+}
+
 #[test]
 fn hint_severity_is_error() {
     let uri = Url::parse("file:///round2_sev.typort").unwrap();
@@ -225,4 +273,29 @@ fn hint_severity_is_error() {
         .cloned()
         .expect("hint diagnostic");
     assert_eq!(hint.severity, Some(DiagnosticSeverity::ERROR));
+}
+
+/// task-30（第 3 轮）：`NAT_LITERAL_ELAB_LIMIT` 的**解析期**边界必须是可诊断的，
+/// 且阈值本身（100000）与 `nat_mul` 分解式都保持可用。
+/// 注：这里只钉解析期决策——elaboration 的爆栈与否取决于**入口的栈预算**
+/// （`typort check` 64→1024 MiB worker、`l13bench` 256 MiB），由 `src/bin/cli.rs`
+/// 的入口对齐负责，不在本测试的栈上复现（测试线程栈小，跑大链会爆）。
+#[test]
+fn nat_literal_guard_boundary_is_diagnosable() {
+    use elaboration_zoo_lsp::L13_namespace::parser::parser;
+
+    let (decls, errs) = parser("def z: Nat = 100000", 0).expect("parse");
+    assert!(errs.is_empty(), "100000 must stay usable, got {errs:?}");
+    assert_eq!(decls.len(), 1);
+
+    let (_d, errs) = parser("def z: Nat = 100001", 0).expect("parse");
+    let msgs: Vec<String> = errs.iter().map(|e| format!("{:?}", e.msg.data)).collect();
+    assert!(
+        msgs.iter().any(|m| m.contains("exceeds the Nat literal elaboration limit 100000")),
+        "100001 must be a diagnosable error, got {msgs:?}"
+    );
+
+    // 绕法（同阈值处）保持可用。
+    let (_d, errs) = parser("def z: Nat = nat_mul 1000 1000", 0).expect("parse");
+    assert!(errs.is_empty(), "nat_mul decomposition must parse, got {errs:?}");
 }

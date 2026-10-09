@@ -243,8 +243,14 @@ thread_local! {
     /// 确定 ⇒ 命中时跳过 `prim_exec` 与再跑一遍等价（与 `Some` 结果缓存同款
     /// 论证，只是负载从值换成标记）。轮界 `force_memo_clear()` 清空。
     /// **不得**用它缓存 `Some` 结果（那条路径仍只走 `FORCE_PRIM_MEMO`）。
-    static PRIM_STUCK: RefCell<FxHashMap<(u8, Vec<u64>), (u64, u64)>> =
+    static PRIM_STUCK: RefCell<FxHashMap<(u8, Vec<u64>), (u64, u64, u64)>> =
         RefCell::new(FxHashMap::default());
+    /// 轮次代号（第 3 轮窗口 1 · 交付物 2）：`force_memo_clear()` 每清一次 +1；
+    /// `PRIM_STUCK` 的条目把插入时的代号一并存下，命中时代号不同即**跨轮命中**
+    /// （= 某个 arena/spine 身份变更点漏了清表）⇒ 计入 `PRIM_STUCK_STALE`。
+    /// 这就是「跨轮永不复用」的可检查形式：任一 `bump.reset()` / 压实 / 换 arena
+    /// 站点若漏调 `force_memo_clear()`，被回收复用的槽位下标就会命中旧条目。
+    static PRIM_STUCK_GEN: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     /// Step T2 验证用开关（`TYPORT_STUCK_PROBE=1`；默认关 ⇒ 零输出）。
     static PRIM_STUCK_PROBE: bool = std::env::var_os("TYPORT_STUCK_PROBE").is_some();
     pub(super) static PRIM_VERSION: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -433,6 +439,8 @@ pub fn twin_mem_stats() -> serde_json::Value {
 /// Step T2 验证计数（只在 `TYPORT_STUCK_PROBE=1` 时于轮界打印；默认零输出）。
 pub(super) static PRIM_STUCK_INS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub(super) static PRIM_STUCK_HIT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// 跨轮命中数（不变量被破坏的证据）：正常恒为 0。
+pub(super) static PRIM_STUCK_STALE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 pub(super) fn force_memo_clear() {
     let snap = FORCE_MEMO.with(|m| m.borrow_mut().reclaim(CACHE_SHRINK_MIN_ENTRIES));
@@ -441,13 +449,17 @@ pub(super) fn force_memo_clear() {
     FORCE_PRIM_MEMO.with(|c| c.borrow_mut().clear());
     if PRIM_STUCK_PROBE.with(|b| *b) {
         eprintln!(
-            "[T2] stuck_ins={} stuck_hit={} stuck_tbl={}",
+            "[T2] stuck_ins={} stuck_hit={} stuck_tbl={} stale={}",
             PRIM_STUCK_INS.load(std::sync::atomic::Ordering::Relaxed),
             PRIM_STUCK_HIT.load(std::sync::atomic::Ordering::Relaxed),
             PRIM_STUCK.with(|c| c.borrow().len()),
+            PRIM_STUCK_STALE.load(std::sync::atomic::Ordering::Relaxed),
         );
     }
     PRIM_STUCK.with(|c| c.borrow_mut().clear());
+    // 轮界：清表后换代号（此后插入的条目带新代号；旧代号条目若还能命中，
+    // 说明有身份变更站点漏清 —— 那正是本不变量要抓的）。
+    PRIM_STUCK_GEN.with(|g| g.set(g.get().wrapping_add(1)));
     QUOTE_NAT_TM.with(|c| *c.borrow_mut() = None);
     STUCK_DECL_INTERN.with(|c| c.borrow_mut().clear());
 }
@@ -758,10 +770,25 @@ pub(super) fn force_inner<'a>(
                                     // 不碰 arena、不共享任何句柄。
                                     let ver_now = PRIM_VERSION.with(|p| p.get());
                                     let taint_now = FORCE_TAINT.with(|t| t.get());
+                                    let gen_now = PRIM_STUCK_GEN.with(|g| g.get());
                                     let stuck = PRIM_STUCK.with(|m| {
                                         m.borrow()
                                             .get(k)
-                                            .is_some_and(|&(v0, t0)| v0 == ver_now && t0 == taint_now)
+                                            .map(|&(v0, t0, g0)| {
+                                                if v0 == ver_now && t0 == taint_now {
+                                                    if g0 != gen_now {
+                                                        // 跨轮命中：不变量被破坏。
+                                                        PRIM_STUCK_STALE.fetch_add(
+                                                            1,
+                                                            std::sync::atomic::Ordering::Relaxed,
+                                                        );
+                                                    }
+                                                    g0 == gen_now
+                                                } else {
+                                                    false
+                                                }
+                                            })
+                                            .unwrap_or(false)
                                     });
                                     if stuck {
                                         if PRIM_STUCK_PROBE.with(|b| *b) {
@@ -810,7 +837,10 @@ pub(super) fn force_inner<'a>(
                                                     if m.len() >= FORCE_MEMO_CAP {
                                                         m.reclaim(CACHE_SHRINK_MIN_ENTRIES);
                                                     }
-                                                    m.insert(k, (ver0, taint0));
+                                                    m.insert(
+                                                        k,
+                                                        (ver0, taint0, PRIM_STUCK_GEN.with(|g| g.get())),
+                                                    );
                                                 });
                                                 if PRIM_STUCK_PROBE.with(|b| *b) {
                                                     PRIM_STUCK_INS.fetch_add(

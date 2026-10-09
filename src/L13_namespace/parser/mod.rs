@@ -45,30 +45,43 @@ use super::{empty_span, Ix, Rc, Tm, Val};
 /// 为什么需要护栏：`Raw::Nat(n)` 在 elaboration 期被 `quote`/`quote_nat`
 /// 展开成 n 层 `succ`/`zero` 链，之后每个下游遍历（eval/force/unify/
 /// occurs/rename/pretty、孪生转换）都按 n 层递归——n 一大就吃光原生栈。
-/// 实测（HEAD 09:52:54 二进制，`l13bench --with-prelude core`，整进程墙钟）：
+///
+/// **双入口实测口径（第 3 轮 task-30，2026-10-09）**——两个入口的原生栈预算
+/// 不同，同一字面量结局因此不同，阈值必须按**较严者**叙述：
 /// ```text
-///  100000 (1e5) → PASS，输出表 nf=200002，整进程 0.75s
-/// 1000000 (1e6) → 109s 后 `thread '<unknown>' has overflowed its stack`
-///                 （进程崩在栈上，不是诊断；--only basic 144s / --only fast 95.5s）
+/// 入口                                栈预算            10000        100000
+/// typort check（修复前，主线程）       64 MiB（linker）  STACK OVERFLOW  STACK OVERFLOW
+/// typort check（task-30 后，worker）   1024 MiB（缺省）  PASS note:10000 PASS note:100000
+/// l13bench --with-prelude core         256 MiB（缺省）   PASS            STACK OVERFLOW
 /// ```
-/// 同值走 primop 则完全无碍（反证：`def viamul: Nat = nat_mul 256 256`
-/// = 65536，2.9s PASS，与 12 字面量探针同档）⇒ 病态在"字面量 → succ 链"
-/// 这条路上，不在求值/显示上。
+/// - 修复前 `typort check` 的 64 MiB 主线程栈（`.cargo/config.toml` 的
+///   `/STACK:67108864`）实测 8000 PASS / **10000 崩 ×2** / 100000 崩：即
+///   **约 [10000, 100000] 整段是崩溃区而非诊断区**（`--max-infer-ms 20000`
+///   也拦不住，崩在原生栈上）。`l13bench` 的 256 MiB worker 能把 100000
+///   撑到崩得更晚，但**并非安全**（本轮 3/3 复现 `lit_100000` 爆栈）。
+/// - **task-30 的修复 = 入口对齐**（`src/bin/cli.rs` 把调度放进
+///   `TYPORT_STACK_MB` 可调的 worker，缺省 1024 MiB；实测 100000 在
+///   256/512 MiB 崩、768/1024 MiB PASS）⇒ `typort check`/`lsp` 与 bench 同档，
+///   `[10000, 100000]` 不再是崩溃区，**阈值无需收紧**。
+/// - 注意这是**抬高天花板**、不是消除 O(n) 递归：栈再大也只是把崩溃点推远，
+///   深度护栏仍然必要。
 ///
 /// 阈值取 100000：仓库普查显示所有 `.typort` 无 ≥6 位字面量，`*.rs` 内联
 /// 源码里最大字面量正是 100000（`legacy_tests.rs` 的 bignat/nat_primop 回归钉、
 /// `eval_budget_tests.rs` 的 `nat_mul 100000 100000` 链护栏钉、
 /// `tests/bignum_display.rs` 的大数显示钉）⇒ 阈值 = 仓库已验证可用的最大
-/// 字面量，**不误伤任何现存输入**；100000 本身复测 0.6–0.9s PASS，保持可用。
-/// prelude 自身也无需回改（无 >100000 字面量），装载不受影响。
+/// 字面量，**不误伤任何现存输入**。
+/// 旧注释里「100000 本身 ~0.9s PASS」**只在 `l13bench`（256 MiB）口径成立**，
+/// 在修复前的 `typort check`（64 MiB）口径下它是**崩溃**——两入口必须分别读数。
 ///
 /// 需要写更大的常量请用 `nat_mul`/`nat_add` 分解式（原生 word-size primop，
 /// 求值直接得 `Val::Nat(k)`，不建链；`nat_mul 1000 1000` 即 10^6）。
 ///
-/// 读数纪律（本轮教训，2026-10-08）：共享工作树上，**单次 TIMEOUT 不构成
+/// 读数纪律（第 2 轮教训，2026-10-08）：共享工作树上，**单次 TIMEOUT 不构成
 /// 证据**——`run_probe.ps1` 的 TIMEOUT 曾在并发 `cargo build` 窗口内把
 /// 100000（实际 0.9s PASS）误判成"悬崖"。定性必须满足：① 与并发构建/他人
 /// 探针无重叠的窗口；② 「包装脚本 + 直接调用」两种方式复测互证。
+/// （第 3 轮补充：还要记 **读数是哪个入口/哪个栈预算**的产物，见上表。）
 pub const NAT_LITERAL_ELAB_LIMIT: u64 = 100_000;
 
 /// Skip input until a token of the given kind is found, returning the slice
@@ -838,8 +851,11 @@ fn p_atom1<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IR
                     // `quote`/`quote_nat` 把它展开成 n 层 `succ`/`zero` 链，
                     // 之后 eval/force/unify/occurs/rename/pretty 与孪生转换
                     // 全部按 n 层递归——n 一大就吃掉原生栈（进程崩，非诊断）。
-                    // 实测 1e6 → 109s 后栈溢出；100000 本身 ~0.9s PASS，保持
-                    // 可用（阈值取"仓库已验证可用的最大字面量"，见常量注释）。
+                    // 实测（双入口，见常量注释的表）：修复前 `typort check`
+                    // （64 MiB 主线程栈）下 **10000 就崩**、`l13bench`（256 MiB）
+                    // 下 100000 也崩；task-30 把 CLI 调度挪进 1024 MiB worker 后
+                    // 两个入口 100000 都 PASS、100001 起走本分支。阈值仍取
+                    // "仓库已验证可用的最大字面量"（100000），**未收紧**。
                     // 这里在**解析期**（双版共用）就拒绝，报可诊断错误并退化
                     // `Raw::Hole`（与 u64 溢出同路径，后续不再进入 elaboration）。
                     // 需要更大的常量请用 `nat_mul`/`nat_add` 分解式：走原生

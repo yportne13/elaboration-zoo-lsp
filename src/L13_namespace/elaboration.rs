@@ -16,6 +16,14 @@ use super::{
     typeclass::Assertion,
 };
 
+thread_local! {
+    /// task-25 (J)：当前 `insert_t`/`insert` 为**头**自动补隐式实参的计数。
+    /// `Raw::App` 的显式分支在调用前清零、返回后读取；若补过隐式且随后的
+    /// apply 回退合一失败，就给该 `can't unify` 附一条定向提示（`rfl[Nat] 3`）。
+    /// 默认零输出、不改变任何成功路径语义。
+    static IMPLICIT_INS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
 /// True when both values are the same sum type with identical (by pointer)
 /// parameters — used by the constructor-chain fast path to confirm a
 /// constructor's domain matches the type a term is checked against.
@@ -483,6 +491,8 @@ impl Infer {
         let va = self.force(&cxt.decl, &va);
         match va.as_ref() {
             Val::Pi(_, Icit::Impl, a, b) => {
+                // task-25 (J)：记录「本表达式位为**头**自动补了几个隐式实参」。
+                IMPLICIT_INS.with(|c| c.set(c.get() + 1));
                 // Special case: if the implicit parameter type is `BindingName`,
                 // synthesize the current let-binding name automatically.
                 if self.is_binding_name_type(&*cxt.decl, a) {
@@ -3182,20 +3192,26 @@ impl Infer {
                 let u_raw = u.as_ref().clone();
                 let u_span = u.to_span();
                 let is_expl = matches!(i, Either::Icit(Icit::Expl));
-                let (i, t, tty) = match i {
+                let (i, t, tty, n_impl) = match i {
                     Either::Name(name) => {
                         let infered = self.infer_expr(cxt, *t);
                         let (t, tty) = self.insert_until_name(cxt, name, infered)?;
-                        (Icit::Impl, t, tty)
+                        (Icit::Impl, t, tty, 0)
                     }
                     Either::Icit(Icit::Impl) => {
                         let (t, tty) = self.infer_expr(cxt, *t)?;
-                        (Icit::Impl, t, tty)
+                        (Icit::Impl, t, tty, 0)
                     }
                     Either::Icit(Icit::Expl) => {
                         let infered = self.infer_expr(cxt, *t);
+                        // task-25 (J)：`insert_t` 会**为头自动补隐式实参**（每个隐式
+                        // Π 位一个新鲜元变量）。若它把最后一位也补掉了，用户写出的
+                        // 显式实参就无处可放，最终落到下面的 apply 回退并报
+                        // `can't unify`。这里记下补了几个，供回退路径给定向提示。
+                        IMPLICIT_INS.with(|c| c.set(0));
                         let (t, tty) = self.insert_t(cxt, infered, t_span)?;
-                        (Icit::Expl, t, tty)
+                        let n_impl = IMPLICIT_INS.with(|c| c.get());
+                        (Icit::Expl, t, tty, n_impl)
                     }
                 };
                 //println!("{} {:?} -> {:?}", "infer___".red(), t, tty); //debug
@@ -3236,7 +3252,7 @@ impl Infer {
                                 t_span,
                             ),
                         );
-                        self.unify_catch(
+                        let unify_res = self.unify_catch(
                             cxt,
                             &Val::Pi(
                                 empty_span(SmolStr::new("x")),
@@ -3246,7 +3262,22 @@ impl Infer {
                             ).into(),
                             &tty,
                             t_span,
-                        )?;
+                        );
+                        if let Err(mut err) = unify_res {
+                            // task-25 (J)：这里失败且 `insert_t` 刚为**头**自动补过隐式
+                            // 实参 ⇒ 用户写的是**显式**实参，但那位参数已被自动隐式占用
+                            // （`rfl[Nat] 3`：`rfl[Nat]` 后 `a` 位被自动补掉，显式 `3`
+                            // 无处可放）。补一条定向提示，**保留**原有 `can't unify`。
+                            if i == Icit::Expl && n_impl > 0 {
+                                err.0.data.push_str(
+                                    "\nnote: the callee's implicit argument was already filled \
+                                     in automatically here, so this explicit argument has no \
+                                     parameter left; pass it bracketed (e.g. `rfl[Nat] [3]`) or \
+                                     drop it and rely on inference (e.g. `rfl`)",
+                                );
+                            }
+                            return Err(err);
+                        }
                         (a, b_closure)
                     }
                 };
