@@ -111,10 +111,15 @@ struct AxiLite4R {
 /// (below), or declare `input`/`output` ports and wire the channels by hand as
 /// example 20-misc.typort does.
 struct AxiLite4 {
+    /// Write-address channel (into the slave).
     aw: Stream[AxiLite4Ax]
+    /// Write-data channel (into the slave).
     w: Stream[AxiLite4W]
+    /// Write-response channel (out of the slave).
     b: Stream[AxiLite4B]
+    /// Read-address channel (into the slave).
     ar: Stream[AxiLite4Ax]
+    /// Read-data channel (out of the slave).
     r: Stream[AxiLite4R]
 }
 
