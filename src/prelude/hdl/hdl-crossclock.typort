@@ -202,7 +202,9 @@ def pulseCCByToggle[bn: BindingName](input: Bool, inCd: ClockDomain, outCd: Cloc
 /// (it holds the last latched value afterwards, so sample it only when
 /// `valid` is high).
 struct CcByToggleIO[w: Nat] {
+    /// Payload valid on the toggling side of the CDC.
     valid: Bool
+    /// Payload carried across the clock domains.
     payload: UInt[w]
 }
 
@@ -269,11 +271,17 @@ def readSyncCCUInt[w: Nat][depth: Nat][bn: BindingName](mem: Mem[UInt[w]], addre
 /// `pop*` signals to `outCd`. `occupancy` is a `UInt[log2Up (d + 1)]` count of
 /// elements currently in the FIFO, expressed on the write side.
 struct StreamFifoCCIO[w: Nat, d: Nat] {
+    /// Push-side valid (producer in the source domain).
     pushValid: Bool
+    /// Push-side ready (back-pressure into the source domain).
     pushReady: Bool
+    /// Word being pushed across the domain boundary.
     pushData: UInt[w]
+    /// Pop-side valid (consumer in the destination domain).
     popValid: Bool
+    /// Word being popped out of the cross-domain FIFO.
     popData: UInt[w]
+    /// Words currently held by the cross-clock FIFO.
     occupancy: UInt[log2Up (d + 1)]
 }
 

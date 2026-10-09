@@ -32,9 +32,12 @@
 /// value), `encSequential` (same values as binary but a distinct code, so the
 /// two never mix), `encNative` and `encOneHot` (one-hot value = 2^position).
 enum Encoding {
+    /// Plain binary encoding of the enum elements.
     encBinary
+    /// Sequential (Gray-like) encoding of the enum elements.
     encSequential
     encNative
+    /// One-hot encoding: exactly one bit set per state.
     encOneHot
 }
 
@@ -109,7 +112,9 @@ def encValueOf(e: Encoding, pos: Nat): Nat = match e {
 /// comparability. Downstream (Verilog generation, self-check) a craft is just a
 /// bit vector.
 struct EnumCraft[E: Type 0, w: Nat, c: Nat] {
+    /// Name the enum value was created with, when it has one.
     name: Option[String]
+    /// The IR this enum value refers to.
     zz_expr: Expr
 }
 
@@ -232,7 +237,9 @@ enum SwitchHead {
 /// `scCons (shEnum (...)) (scCons (shEnum (...)) scEmpty)`. The order is
 /// irrelevant; only the set of covered element names matters.
 enum SwitchCases {
+    /// Base case: no more matching case values.
     scEmpty
+    /// Stack cons: one case matcher on top of the remaining ones.
     scCons(head: SwitchHead, rest: SwitchCases)
 }
 
