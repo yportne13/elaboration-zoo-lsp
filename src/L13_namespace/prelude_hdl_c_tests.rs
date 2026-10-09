@@ -285,9 +285,15 @@ println(moduleTreeVL(afEx.create.tree))
 // 有任一端口不是 `Bool`，`= Bool` 臂整臂失败，通用臂的重复组会把**所有**标量端口
 // （含合法的 `x = Bool`）都捕获并逐条报警 ⇒ 会误报合法端口。因此：
 //   `input a = MyTypo` 保持**原有**的响亮失败（`expected def, found identifier`
-//   + `name not in scope: <模块名>`），**不带** HDV004，仍不可诊断（入册第 3 轮）。
-//   同理 formA 的**混合**端口表（`input sel = Boolean` + `output y = Bool`）不匹配
-//   `= Boolean` 兜底臂 ⇒ 回到原有错误（已入册的覆盖缺口）。
+//   + `name not in scope: <模块名>`），**不带** HDV004，仍不可诊断（第 3 轮入册；
+//   第 4 轮 (Q) 复测：formA 的 `MyTypo` 仍无 HDV004，见
+//   `formA_mixed_port_table_is_diagnosed` 的对照矩阵）。
+//   第 3 轮还登记过「formA 的混合端口表（`input sel = Boolean` + `output y = Bool`）
+//   不匹配兜底臂 ⇒ 回到原有错误」。**第 4 轮 (Q) 复测推翻该登记**：混合表**已被诊断**
+//   （CLI 口径 HDV004 精确指向出错行；lib 口径见下面的
+//   `formA_mixed_port_table_is_diagnosed`）。原因是兜底臂的 `= Boolean` 组只要求
+//   **Boolean 端口自身连续成 run**，其余标量端口由前面严格臂各取所需——臂选择
+//   按整次调用，但组内重复片段是按 run 匹配的，所以混合形状仍有臂可落。
 //
 // 观测口径（2026-10-08 实测）：class body 里那条未定义名错误会被引擎的
 // "declaration failed to elaborate" 路径**吞掉**（stdout 也为空），因此 CLI 上
@@ -475,6 +481,79 @@ println(moduleTreeVL(whenCdRepro.create.tree))
     assert!(
         out.contains("always @(posedge clk2 or posedge rst2)"),
         "cd2 clocked block missing:\n{out}"
+    );
+}
+
+// ── (Q) round-4：formA 混合端口表**已被诊断**（更正第 3 轮入册缺口） ──
+// 第 3 轮把「formA 混合端口表（`Boolean` 与 `Bool` 同一张表）不可诊断」登记为已入册
+// 缺口，理由是 `module` 宏按整次调用匹配、兜底臂要求所有标量端口都是 `Boolean`。
+// **第 4 轮复测（CLI 探针 target/prelude_scratch/r4_Q_matrix.typort，6 个形状）：
+// 全部报出 HDV004 且点名出错端口**——包括 Boolean 在前、Bool 在前、output 槽、
+// 紧贴 body 花括号、与 `output reg` 混合这 5 种混合形状。⇒ 该入册缺口已不存在。
+//
+// 本测试在 lib 口径钉住这三件事：
+//   ① 混合表仍然**响亮失败**（不静默变成 Bool 端口）——这是红线；
+//   ② `Boolean` 单独成 run 的形状（第 3 轮原覆盖）同样失败；
+//   ③ 顺序不影响结论（两种排列都钉）。
+// HDV004 的文本/槽位/span 走 CLI 口径取证（同 X1 的做法）。
+#[test]
+fn formA_mixed_port_table_is_diagnosed() {
+    // ① 混合表：Boolean 在前、Bool 在后（第 3 轮判定"不匹配"的那个形状）。
+    assert_port_type_error(
+        r#"
+module mixA {
+    input sel = Boolean
+    input en = Bool
+    output y = Bool
+    input d = UInt[4]
+    output q = UInt[4]
+    q := d
+}
+println(moduleTreeVL(mixA.create.tree))
+"#,
+        "formA mixed Boolean-first",
+    );
+    // ② 混合表：Bool 在前、Boolean 在后。
+    assert_port_type_error(
+        r#"
+module mixA2 {
+    input en = Bool
+    input sel = Boolean
+    output y = Bool
+    input d = UInt[4]
+    output q = UInt[4]
+    q := d
+}
+println(moduleTreeVL(mixA2.create.tree))
+"#,
+        "formA mixed Bool-first",
+    );
+    // ③ Boolean 紧贴 body 花括号（最后位置）。
+    assert_port_type_error(
+        r#"
+module mixA3 {
+    input en = Bool
+    input d = UInt[4]
+    output q = UInt[4]
+    output y = Boolean
+    q := d
+}
+println(moduleTreeVL(mixA3.create.tree))
+"#,
+        "formA mixed boolean-last",
+    );
+    // ④ 对照：纯 `Boolean` run（第 3 轮原覆盖的形状）仍失败，行为未变。
+    assert_port_type_error(
+        r#"
+module mixA4 {
+    input a = Boolean
+    input b = Boolean
+    {
+    }
+}
+println(moduleTreeVL(mixA4.create.tree))
+"#,
+        "formA all-Boolean",
     );
 }
 
