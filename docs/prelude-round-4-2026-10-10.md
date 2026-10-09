@@ -125,22 +125,41 @@ trait 方法、枚举 case、结构体字段才是真正的文档缺口（`prelu
 一律用**整行内容**匹配插文档，重复字段名（`enable`/`eqs`/`cd`/`key`/`src`）用
 **外层 struct 头**做锚点。
 
-**已补 4 个文件**（每步都重建 + `typort doc --deny-warnings` + 全套门禁）：
+**已补 12 轮、共 20 个文件**（每轮都重建 + `typort doc --deny-warnings` + 全套门禁）：
 
 | 文件 | 成员级 | 文档内容 |
 |---|---|---|
 | `op.typort` | 60.7% → **100%** | Tuple2..Tuple8 全部字段 |
-| `hdl-core.typort` | 43.4% → **73.1%** | Le/Fin case、Exists 字段、ClockEdge/ResetPolarity/ClockDomainConfig/AssertSeverity case、ClockDomain 字段、`create*`/literal/sizedLiteral/unary/binary 等 Expr case |
-| `hdl-bus-proto.typort` | 44.9% → **91.3%** | Apb3 / AxiLite4 Ax·W·B·R / Axi4Stream / Wishbone / AvalonST 字段 |
+| `hdl-core.typort` | 43.4% → **82.3%** | Le/Fin case、Exists 字段、ClockEdge/ResetPolarity/ClockDomainConfig/AssertSeverity case、ClockDomain 字段、`create*`/literal/sizedLiteral/unary/binary 等 Expr case、WhenState、ModuleDef/ModuleTree、BbGeneric、BlackBoxInfo、Range |
+| `hdl-bus-proto.typort` | 44.9% → **98.6%** | Apb3 / AxiLite4 Ax·W·B·R / Axi4Stream / Wishbone / AvalonST / AxiLite4 通道字段 |
 | `hdl-check-graph.typort` | 77.0% → **89.9%** | NegLeaf/DrvRange/CondSrc/DriveSrc/ConnEx/GDecl/EnableCtx/GraphAcc/CombEdge/CdcEdge 字段 |
+| `hdl-check.typort` | 65.3% → **97.0%** | SigKind case、SigDecl、DriveFacts、ConnInfo、InstInfo、ModFacts、PortEntry |
+| `hdl-utils.typort` | 76.7% → **90.7%** | 各 Expr 载体（Reverse/PropagateOnes/OHMasking/PriorityMux/MuxOH/OhMuxOr/MinMax/Clamp/AddCarry/TimeoutHandle/Counter*/Johnson）字段 |
+| `hdl-misc-io.typort` | 46.8% → **88.7%** | TriState*/ReadableOpenDrain/GpioIO/Bcd*/Divider*/Masked/StateMachine |
+| `hdl-fsm.typort` | 67.6% → **97.1%** | Fsm/FsmSt/FsmEdge/FsmRec/FsmCtxStack/FsmCtx |
+| `hdl-bus.typort` | 40.0% → **90.0%** | IMasterSlave、Bundle、Stream/Flow、StateAccess/State/FSMEntryPoint/SwitchKey |
+| `hdl-stream.typort` | 75.4% → **96.7%** | StreamFifoIO 握手/占用/标志、Fragment、StreamFragment |
+| `hdl-misc.typort` | 50.0% → **92.3%** | Prescaler/TimerIO/TimerResult/InterruptCtrlIO |
+| `hdl-types.typort` | 45.5% → **95.5%** | Data trait、Bool/Bits/UInt/SInt 的 name+zz_expr |
+| `hdl-enum.typort` | 71.0% → **93.5%** | EncodingKind case、EnumVal、SwitchCases |
+| `hdl-crossclock.typort` | 72.4% → **100%** | CcByToggleIO、StreamFifoCCIO |
+| `hdl-verilog-compat.typort` | 72.0% → **100%** | VEq/CaseEq/CaseDefault/CompatCD |
+| `hdl-ops.typort` | 54.5% → **~100%** | MuxExpr、Cat `##`、SwitchBuilder |
+| `hdl-clock.typort` | 70.6% → **~100%** | Mem 的 wordCount/dataWidth/clockDomain |
+| `hdl-signals.typort` | 97.1% → 更高 | Component 的 mkReg / mkRegWhen |
+| `hdl-macros.typort` | 100%（原已满） | — |
+| `hdl-verilog.typort` | 100%（原已满） | — |
 
-**总量**：成员级 **73.2% → 82.3%**（1249 → **1404/1706**，本轮 +155 项）；
-顶层仍 **1195/1195 = 100%**；`--min-coverage 60 --deny-warnings` **EXIT=0**；
-门禁 `lead_s1`/`lead_s2` 均 `fail=0`（lib **612/0**、parity 15、twin 28、hdl042 2）。
-提交：`f753ab67`、`449251d4`（已推送）。
+**总量**：成员级 **73.2% → 94.1%**（1249 → **1608/1708**，本轮 **+359** 项）；
+顶层仍 **1195/1195 = 100%**；`--min-coverage 60 --deny-warnings` **EXIT=0**、`warnings=0`。
+门禁：`lead_s1`…`lead_s13`、`lead_s15` 均 `fail=0`（lib **612/0**、parity 15、twin 28、hdl042 2）。
+提交 13 个（`f753ab67`、`449251d4`、`340a6af4`、`33bc77a1`、`4fe852ec`、`51cb8b5a`、
+`facaef09`、`58c38d40`、`272d5006`、`1920b27a`、`9fb21da6`、`2b156502`、`e82e3f06`），全部已推送。
 
-**剩余缺口（第 5 轮）**：302 项，主要是 hdl-core 47、hdl-check 35、hdl-utils 35、
-hdl-misc-io 33、hdl-fsm 22、hdl-bus 18、hdl-stream 15 等——同一脚本方法可直接续做。
+**剩余缺口（第 5 轮）**：100 项，主要是 hdl-core 剩余、hdl-check-graph 28、hdl-utils 14、
+hdl-misc-io 7、hdl-fsm 2、hdl-bus 3、以及每个文件里 1–3 个**重复字段名**的
+（`enable`/`eqs`/`cd`/`key`/`src`/`valid`/`ready` 在不同 struct 里各出现多次）
+——同一脚本方法可直接续做，只是要为重复名逐一确认归属。
 
 1. **两个子进程（engine-quirks 窗口 1 的 task-31、verifier 的 task-35）先后失败、未留任何落盘**。
    Lead 复核：`l13bench.rs` 未改、`verify4/` 不存在、工作树干净 ⇒ **无半成品风险**；
@@ -160,6 +179,14 @@ hdl-misc-io 33、hdl-fsm 22、hdl-bus 18、hdl-stream 15 等——同一脚本�
    `(Get-Content -Raw) -replace | Set-Content` 改 `src/bin/l13bench.rs`，编码被搞乱、
    6 个编译错误；用事先 `Copy-Item` 的备份恢复。**教训仍然只一条：CJK/源码一律走编辑工具，
    备份要用二进制复制而非文本管道。**
+5. **(S) 给 `FsmSt` 补文档时多加了两个真字段 → 16 个 lib 测试红，已回滚**（第 7 起同类）：
+   `FsmSt` 当时已有 `sm`/`idx`，我以为 `width`/`name` 缺失，直接往 struct 体里插了字段 ⇒
+   prelude 类型里 `Fsm` 多出两个投影，`fsmDemo` 等 16 个用例报
+   `` `ctrl`: Fsm has no object `state` ``。**门禁 `lead_s14`：lib exit=101，596/612 passed / 16 failed。**
+   60 秒内 `git checkout --` 回滚 `hdl-fsm.typort` + `hdl-misc-io.typort`，
+   `lead_s15` 复跑回 **612/0 fail=0**。
+   **教训**：写文档脚本只允许**插 `///` 行**，绝不允许插入/删除任何非 `///` 行；
+   动手前先用 `Select-String` 核对 struct 现有字段表，别信「缺口清单」里的字段名。
 
 ## 6. 未完成项（本轮已立项未做）
 
@@ -202,14 +229,16 @@ hdl-misc-io 33、hdl-fsm 22、hdl-bus 18、hdl-stream 15 等——同一脚本�
 LSP 后端的诊断汇总顺序（影响所有报错），性价比不划算 ⇒ 记为低优先级诊断瑕疵延后。
 
 ### 其余
-**(Q) formA 混合端口表诊断**、**(S) 成员级文档覆盖**（hdl 70.5%）均未开始。
+**(Q) formA 混合端口表诊断** 未开始。
 
 ## 7. 第 5 轮候选
 
 1. **参考版 `quote_sp` 迭代化**（第 3 轮 §7-1）：e07 里 bench 侧已靠栈预算解决，但
    `typort check` 侧 47s 才跑完、且仍靠 1024 MiB ⇒ 迭代化才是根治（同时让「入口/栈预算是读数
    的一部分」这条纪律的压力下降）。
-2. **(O) 的三选一设计决策**（若判定值得做）。
+2. **(S) 成员级文档续补**：本轮 73.2% → **94.1%**，剩 100 项（重复字段名的归属确认）。
+   **纪律升级：文档脚本只允许插 `///` 行**，绝不许插入/删除任何非 `///` 行。
+3. **(O) 的三选一设计决策**（若判定值得做）。
 3. **`>100000` 或更深链仍会爆栈**：`NAT_LITERAL_ELAB_LIMIT` 是唯一深度护栏，
    而它是「抬高天花板」式的缓解 ⇒ 长输入族仍需 §1 的迭代化。
 4. **(R)(Q)(P)** 本轮未开始或已收手项顺延：(R) guard 文案排序需改 LSP 诊断汇总顺序（低优先级）；
