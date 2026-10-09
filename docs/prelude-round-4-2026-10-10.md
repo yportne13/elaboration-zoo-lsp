@@ -114,7 +114,33 @@ e17 216  e18 413  e19 413
 - 门禁 `lead_r6`：`fail=0`，lib **612/0**、parity **15/0**、twin **28/0**、hdl042 **2/0**；
 - 提交 `3a9b4b37`，已推送（remote = local）。
 
-## 5. 流程事故（如实入档）
+## 4c. (S) 成员级文档补齐（round-4 追加）
+
+**动机**：第 3 轮收官时**顶层** 1195/1195 = 100%，但**成员级只有 73.2%**（1249/1706）——
+trait 方法、枚举 case、结构体字段才是真正的文档缺口（`prelude_doc_cov.py --nested` 才看得出）。
+
+**做法**：只加 `///`、不改任何签名/语义/实例；不新增顶层条目（避免动基线）；
+每条文档按**源码**逐条写（`typort doc` 的 JSON 会给出 snippet，按内容核对）。
+**踩到的坑**：JSON 的 `line` 字段**有偏移**（`AssertInfo` 报 L129、实际在 L132）⇒
+一律用**整行内容**匹配插文档，重复字段名（`enable`/`eqs`/`cd`/`key`/`src`）用
+**外层 struct 头**做锚点。
+
+**已补 4 个文件**（每步都重建 + `typort doc --deny-warnings` + 全套门禁）：
+
+| 文件 | 成员级 | 文档内容 |
+|---|---|---|
+| `op.typort` | 60.7% → **100%** | Tuple2..Tuple8 全部字段 |
+| `hdl-core.typort` | 43.4% → **73.1%** | Le/Fin case、Exists 字段、ClockEdge/ResetPolarity/ClockDomainConfig/AssertSeverity case、ClockDomain 字段、`create*`/literal/sizedLiteral/unary/binary 等 Expr case |
+| `hdl-bus-proto.typort` | 44.9% → **91.3%** | Apb3 / AxiLite4 Ax·W·B·R / Axi4Stream / Wishbone / AvalonST 字段 |
+| `hdl-check-graph.typort` | 77.0% → **89.9%** | NegLeaf/DrvRange/CondSrc/DriveSrc/ConnEx/GDecl/EnableCtx/GraphAcc/CombEdge/CdcEdge 字段 |
+
+**总量**：成员级 **73.2% → 82.3%**（1249 → **1404/1706**，本轮 +155 项）；
+顶层仍 **1195/1195 = 100%**；`--min-coverage 60 --deny-warnings` **EXIT=0**；
+门禁 `lead_s1`/`lead_s2` 均 `fail=0`（lib **612/0**、parity 15、twin 28、hdl042 2）。
+提交：`f753ab67`、`449251d4`（已推送）。
+
+**剩余缺口（第 5 轮）**：302 项，主要是 hdl-core 47、hdl-check 35、hdl-utils 35、
+hdl-misc-io 33、hdl-fsm 22、hdl-bus 18、hdl-stream 15 等——同一脚本方法可直接续做。
 
 1. **两个子进程（engine-quirks 窗口 1 的 task-31、verifier 的 task-35）先后失败、未留任何落盘**。
    Lead 复核：`l13bench.rs` 未改、`verify4/` 不存在、工作树干净 ⇒ **无半成品风险**；
@@ -186,4 +212,7 @@ LSP 后端的诊断汇总顺序（影响所有报错），性价比不划算 ⇒
 2. **(O) 的三选一设计决策**（若判定值得做）。
 3. **`>100000` 或更深链仍会爆栈**：`NAT_LITERAL_ELAB_LIMIT` 是唯一深度护栏，
    而它是「抬高天花板」式的缓解 ⇒ 长输入族仍需 §1 的迭代化。
-4. **(R)(S)(Q)(P)** 本轮未开始项顺延。
+4. **(R)(Q)(P)** 本轮未开始或已收手项顺延：(R) guard 文案排序需改 LSP 诊断汇总顺序（低优先级）；
+   (Q) formA 混合端口表需 parser/elaboration 侧；(P) 主域多余 `clk` 端口（用户可见，先盘点再动）。
+
+*（本文件由 Lead 在第 4 轮内持续追加；本轮全部改动已提交推送。）*
