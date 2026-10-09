@@ -1,0 +1,140 @@
+# prelude 第 4 轮（2026-10-10）——(N) 栈预算对齐收口 e07 + 门禁参数缺陷
+
+> 状态：**(N) 已完成并提交推送**（`bf5f34a9`）；(O)–(S) 待续（见 §6）。
+> 收官数字以 Lead 门禁 `lead_r4` 为准。
+
+## 0. DUT 指纹（「名字会骗人」：一律记 size + mtime + sha256）
+
+| 用途 | 产物 | size | mtime | sha256 |
+|---|---|---|---|---|
+| bench（(N) 后） | `target/prelude_scratch/lead_r4_l13bench.exe` | 9,293,824 | 2026-10-10 00:12:31 | `410312EDA0A21C6A…` |
+
+## 1. 本轮唯一的发现（Lead 受控实测）：**e07 不是不收敛，是栈预算**
+
+同一个二进制 `lead_r3_l13bench.exe`（`86FF1BCA…`，round-3 收官产物），探针
+`target/prelude_scratch/verify2/e_shape/e07_bigcoef.typort`
+（`def z_f(a: Nat, x: Nat): Nat = a * 99999 + x * 99998 + 5` + `z_f 1 2`）：
+
+| 入口 / 栈预算 | 结果 |
+|---|---|
+| `l13bench` 缺省（`L13_STACK_MB` 未设 = **256** MiB worker） | **111.9s 后 `thread '<unknown>' … has overflowed its stack`** |
+| `l13bench` `L13_STACK_MB=1024` | **13.3s 跑完，`nf=600002`（两版一致）** |
+| `typort check`（task-30 新默认 1024 MiB） | 不崩，`parser 0.0017 / infer 4.161846 / change 4.1715145` |
+
+⇒ 第 2/3 轮把它记成「TIMEOUT/不收敛」是**读数口径问题**：19 档矩阵里唯一 TIMEOUT 的那个
+`e07`，在两个入口下**都会死**，但死法不同（bench 爆栈 / CLI 已不崩）。
+「e07 的规模问题在 `string_concat`」这条 owner 诊断只解释了它**为什么慢**，没解释它**为什么死**；
+真正的原因是 **`l13bench` 的 worker 栈缺省 256 MiB，与 CLI 的 1024 MiB 不一致**。
+
+**这条同时更正第 3 轮的一条归因**：owner 观察到「同形状在 `cargo test` 产物下 1.9s PASS
+nf=600002」而 build 产物 TIMEOUT，当时记为「疑似栈帧/深度敏感」的旁证——现在原因明确：
+不同构建/入口的栈预算不同，**不是** codegen 差异。
+
+## 2. 落地内容
+
+### (N) `src/bin/l13bench.rs`：worker 栈缺省 256 → **1024**
+- 唯一语义改动：`unwrap_or(256)` → `unwrap_or(1024)`；`L13_STACK_MB` env 覆盖语义不变。
+- 注释写明「必须与 `src/bin/cli.rs` 的 `TYPORT_STACK_MB` 保持一致」+ 本次的 111.9s/13.3s 对照。
+- 新缺省下 `e07`：**13.6s**，`nf=600002`，无溢出。
+
+**19 档形状矩阵（新缺省，逐档 1.9–2.0s，仅 e07 13.3s）**
+```
+AGREE 19 / DIVERGE 0 / TIMEOUT 0        （此前：AGREE 18 / DIVERGE 0 / TIMEOUT 1）
+e01 252  e02 246  e03 250  e04 242  e05 12   e06 10   e07 600002  e08 252
+e09 252  e10 12   e11 10   e12 252  e13 108  e14 22   e15 216      e16 22
+e17 216  e18 413  e19 413
+```
+
+### 回归钉 `tests/round2_engine_tests.rs::bench_and_cli_worker_stack_defaults_agree_and_clear_the_literal_guardrail`
+源码级一致性钉：从 `src/bin/l13bench.rs` 与 `src/bin/cli.rs` 里抽出 `stack_mb` 缺省值，断言
+**两者相等且 ≥ 1024**。刻意不做压测钉（需要比 harness 线程更大的栈，又慢又抖）。
+`round2_engine_tests` **10 → 11**，全绿。
+
+### 顺带修：`tools/gate_l13.ps1` 的参数绑定缺陷（Lead 自己踩到的）
+- 现象：`powershell -File tools\gate_l13.ps1 -Label x -Suites @("lib","twin")` 时，
+  `powershell -File` 把数组重新序列化成 `-Suites lib twin`；**第二个值 `twin` 被位置绑定到
+  `-CargoTargetDir`** ⇒ 在仓库根建了一整个 **1.5 GB 的 cargo target 目录**，日志目录也跟着搬走。
+- 修法：`[CmdletBinding(PositionalBinding = $false)]` + `-Suites` 容忍逗号/空格分隔。
+- 干跑取证（零 cargo）：
+  - `-Suites nosuchsuite` → `!! no suite selected` + **exit 2**；
+  - `-Suites lib,twin` → 选中 `[lib, twin]`（AST 抽真逻辑验证三种输入 `@("lib","twin")` / `"lib,twin"` / `"lib twin"` 同结果）；
+  - 游离位置参数 `-Label pc lib` → `A positional parameter cannot be found…`（**硬错误**，不再是静默建目录）；
+  - 仓库根**无**新增杂散目录（误建的 `twin/` 已删，回收 1.5 GB）。
+
+## 3. 门禁（Lead 亲跑，`lead_r4`）
+
+```
+== disk: 18.7 GB free on F:\ (warn below 2 GB, hard stop below 0.5 GB)
+[lib ok: 77.2s]   612/500 passed (min) / 0 failed | test result: ok. 612 passed; 0 failed; 6 ignored; 361 filtered out
+[parity ok: 16.6s]  15/15 | ok. 15 passed; 0 failed; 618 filtered out
+[twin ok: 101.7s]   28/27 | ok. 28 passed; 0 failed; 0 filtered out
+[hdl042 ok: 16.8s]   2/2  | ok. 2 passed; 0 failed
+== gate_l13[lead_r4]: total 212.6s, fail=0   NOT RUN: none (all four suites ran)
+```
+额外：`round2_engine_tests` **11/0**。`typort doc` 与 L3 本轮未重跑（改动只碰 `src/bin/l13bench.rs`
+的 main 与 `tools/`，不触 prelude、不影响 check/emit 路径；`led_r3` 的 doc 1195/1195 与 L3 51/51
+仍代表当前源码态）。
+
+## 4. 证据等级
+
+| 项 | 等级 |
+|---|---|
+| e07 崩溃/通过对栈预算的依赖 | **受控实测**（同一二进制 + env 覆盖 + 两入口） |
+| 19 档矩阵全过 | Lead 亲跑（新缺省，逐档 nf 已列） |
+| 门禁 612/28/15/2 fail=0 | Lead 亲跑 |
+| 门禁参数绑定缺陷 | **受控复现**（干跑取证 + 误建目录 1.5 GB 实物） |
+| verifier 独立复算 | **未做**（本轮 verifier 子进程连续两次失败，见 §5） |
+
+## 5. 流程事故（如实入档）
+
+1. **两个子进程（engine-quirks 窗口 1 的 task-31、verifier 的 task-35）先后失败、未留任何落盘**。
+   Lead 复核：`l13bench.rs` 未改、`verify4/` 不存在、工作树干净 ⇒ **无半成品风险**；
+   (N) 由 Lead 自己落地并用受控实测补齐证据。**教训**：子进程失败后第一件事是**核对工作树**
+   （有没有半成品、有没有插桩），再决定是自己接手还是重派。
+2. **Lead 自己踩到上面的门禁参数缺陷**：`-Suites` 数组经 `powershell -File` 传参被拍平成
+   「空格分隔串」，第二个值静默变成 `-CargoTargetDir`。**教训**：脚本对数组参数要做
+   「拍平后仍可选对」的归一化，并且**关掉位置绑定**——否则一个手误就在仓库里长出一个
+   1.5 GB 的 target 目录，还会把日志目录搬走（下一个人更难发现）。
+
+## 6. 未完成项（本轮已立项未做）
+
+### (O) `when { cdReg := x }` 组合驱动 —— **设计评估完成，结论：本轮不做**
+
+**两条前置事实（Lead 本轮查清）**
+1. **结构性约束**：`pickAssign` 在 `hdl-core.typort`，而 hdl 的加载序里 `hdl-core` 是**第一个**
+   hdl 文件；能查 decl 时钟域的全在后头——`declOf`（`hdl-check.typort:180`，
+   `struct SigDecl { name, kind }`，**不带 cd**）、`gdeclCdOf`（`hdl-check-graph.typort:1793`）、
+   `resolveCd`（同文件）。⇒ **`hdl-core` 内前向引用不允许** ⇒ 最直觉的「在 `pickAssign` 里查
+   lhs 的 cd」这版**当前不可行**。
+2. **影响面 = 0**：全 `examples/hdl/*` 全 top 扫描 `always @(*)` 内含非阻塞 `<=` 的签名
+   （此缺口的唯一可观测签名）⇒ **0 处触发**。⇒ 纯用户面缺口，不是仓库内活跃 bug。
+
+**三个候选方向的评估**
+| 方向 | 做法 | 成本 | 风险 |
+|---|---|---|---|
+| A | cd 自查下沉到 `hdl-core` | 需自己维护一份 decl→cd 表，且 `pickAssign` 现有注释里那条「声明期求值会写 design-level global」的坑会直接踩到 | 高（prelude 装载期副作用） |
+| B | 选择逻辑移到各 Data impl 的 `:=`（`hdl-types`/`hdl-clock`/`hdl-signals`） | N 处分散改动，每处都要判 cd | 中（分散难一致） |
+| C | 发射器侧重归属：`collectClockLinesCd`（`hdl-verilog.typort:1071`）对 `regAssign` 也按目标 decl 的 cd 归属（与 (K) 的 `hasMainClocked` 对称） | 需把 decl 表透传进 `collectClockLinesCd`/`hasMainClocked`/`clockedBlockVL`（3 参数 → 4，两处调用点 `:1639`/`:1693`），并先用 `gdeclCdOf` 建表 | 中（**最高危文件**、且会改所有含额外域模块的 emit） |
+
+**结论：本轮不做，留作设计决策。** 理由：① 最直觉的 A 结构上不可行；② B 分散；③ C 是唯一
+正解但动最高危文件且**仓库内 0 触发**（投入产出比差），还需先确认「目标 decl cd == 主域时仍归主域」
+不会让现有 examples 的 emit 变化。**(K) 已修的顺序是 `regAssignCd`，即库/用户的正确写法；
+本项是给自然写法 `:=` 补的糖。**
+
+### (P) 主域多余 `input wire clk`
+`moduleDefVLPlain` 的 `has_seq` 用 main+extras **合并后**的 clocked 串判空 ⇒ 有任何额外 cd 块
+就补一个没人用的主域 `clk` 端口。影响面盘点未完成（hdl-c 子进程失败）。同样：先盘点再决定。
+
+### 其余
+**(Q) formA 混合端口表诊断**、**(R) 三小项**（guard 文案排序 / `nf_parity` 前置归一化 /
+`DIVERGE 0/0` 标签修正）、**(S) 成员级文档覆盖**（hdl 70.5%）均未开始。
+
+## 7. 第 5 轮候选
+
+1. **参考版 `quote_sp` 迭代化**（第 3 轮 §7-1）：e07 里 bench 侧已靠栈预算解决，但
+   `typort check` 侧 47s 才跑完、且仍靠 1024 MiB ⇒ 迭代化才是根治（同时让「入口/栈预算是读数
+   的一部分」这条纪律的压力下降）。
+2. **(O) 的三选一设计决策**（若判定值得做）。
+3. **`>100000` 或更深链仍会爆栈**：`NAT_LITERAL_ELAB_LIMIT` 是唯一深度护栏，
+   而它是「抬高天花板」式的缓解 ⇒ 长输入族仍需 §1 的迭代化。
+4. **(R)(S)(Q)(P)** 本轮未开始项顺延。
