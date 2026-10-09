@@ -63,8 +63,11 @@
 /// struct with its own Nat parameter diverged the elaborator at prelude LOAD
 /// time.  Do not re-parameterize these structs over UInt fields.
 struct Fsm {
+    /// Expression holding the current state register.
     stateReg: Expr
+    /// Expression computing the next state.
     stateNext: Expr
+    /// Number of states declared for this FSM.
     stateCount: Nat
     width: Nat
     name: String
@@ -75,7 +78,9 @@ struct Fsm {
 /// `onExit` surface.  Non-parameterized together with `Fsm` (see the BOMB
 /// NOTE).
 struct FsmSt {
+    /// The FSM this state belongs to.
     sm: Fsm
+    /// Numeric state index (its encoding in the state register).
     idx: Nat
 }
 
@@ -116,7 +121,9 @@ impl[width: Nat] Into[UInt[width]] for Expr {
 /// One recorded FSM transition, `from -> to` (both state indices).  Edges feed
 /// HDL061 (target universe) and HDL062 (exit sources).
 struct FsmEdge {
+    /// Source state index of the transition.
     from: Nat
+    /// Target state index of the transition.
     to: Nat
 }
 
@@ -139,9 +146,13 @@ struct FsmRec {
     // at every module-macro prologue: if records persisted across modules,
     // the first same-named record would win every lookup regardless of its
     // module and cross-wire the two Fsm's bookkeeping.
+    /// Module name that owns this FSM.
     module: String
+    /// FSM name.
     name: String
+    /// Number of states declared.
     stateCount: Nat
+    /// All recorded transitions.
     edges: List[FsmEdge]
     declared: List[Nat]
     visited: List[Nat]
@@ -172,7 +183,9 @@ enum FsmCtxStack {
 /// context stack.  A wrapper struct is required because a mutable global's name
 /// must be an existing TYPE name (same pattern as hdl-core's `CombCtx`).
 struct FsmCtx {
+    /// FSM records collected for this module.
     fsms: List[FsmRec]
+    /// Stack of FSMs currently under construction.
     stack: FsmCtxStack
 }
 
