@@ -266,8 +266,11 @@ def eqAppend(a: List[EqTerm], b: List[EqTerm]): List[EqTerm] = match a {
 /// LHS bit-range of one drive, normalized to `hi >= lo`: `rFull` for a bare `create*` target, `rPart(hi, lo)` for a bitsel/partsel with ground literal indexes, `rUnknown` for any dynamic index.
 /// Only `rPart` takes part in overlap detection and in `rangeSafe` suppression, so dynamic indexes keep the phase-1 behaviour.
 enum DrvRange {
+    /// The drive covers the whole signal (no part-select).
     rFull
+    /// The drive covers the bit range [hi, lo].
     rPart(hi: Nat, lo: Nat)
+    /// The drive range could not be determined statically.
     rUnknown
 }
 
@@ -343,21 +346,32 @@ def rangeStr(r: DrvRange): String = match r {
 
 /// One RHS read of a driving statement: the read's `src` name plus the condition leaves/atoms it flows under (the statement enable already refined by the enclosing mux branches).
 struct CondSrc {
+    /// Name of the signal read on the right-hand side.
     src: String
+    /// Condition leaves this read flows under, mux branches already applied.
     leaves: List[NegLeaf]
     eqs: List[EqTerm]
 }
 
 /// One driving statement's complete graph fact set: `target`, `clocked`/`cd`, the accumulated `enable`/`eqs` and their `enableKey`, the RHS `rhsKey`, the LHS `rng`, and the reads (`srcs`) that produced it.
 struct DriveSrc {
+    /// Name of the driven signal (the LHS).
     target: String
+    /// True when this is a clocked drive (regAssign / regAssignCd).
     clocked: Boolean
+    /// Explicit clock domain of a regAssignCd drive; None for a plain regAssign.
     cd: Option[ClockDomain]
+    /// Accumulated statement enable leaves (when nesting plus mux refinement).
     enable: List[NegLeaf]
+    /// Accumulated equality atoms for the same path.
     eqs: List[EqTerm]
+    /// Canonical key of `enable`, used for when-group equality.
     enableKey: String
+    /// Canonical key of the right-hand expression, used for statement dedup.
     rhsKey: String
+    /// Bit range of the LHS that this statement drives.
     rng: DrvRange
+    /// The right-hand reads with their conditions.
     srcs: List[CondSrc]
 }
 
@@ -370,10 +384,15 @@ def drvReverse(l: List[DriveSrc], acc: List[DriveSrc]): List[DriveSrc] = match l
 /// A hierarchical connection with its statement enable ("u.port := p" /
 /// "q := u.op"); sig = the parent-side signal ("" when not a bare signal).
 struct ConnEx {
+    /// Instance name on the connecting side ("" for an internal edge).
     inst: String
+    /// Port name on the instance side.
     port: String
+    /// Module-level signal name on the parent side ("" when not a bare signal).
     sig: String
+    /// True when this edge drives the instance port (u.port := p).
     isLhs: Boolean
+    /// Statement enable leaves under which this connection holds.
     leaves: List[NegLeaf]
 }
 
@@ -385,9 +404,13 @@ def connReverse(l: List[ConnEx], acc: List[ConnEx]): List[ConnEx] = match l {
 
 /// A declaration with the width/cd the phase-1 SigDecl drops.
 struct GDecl {
+    /// Declared signal name.
     name: String
+    /// Signal kind (wire / in / out / inout / reg / mem).
     kind: SigKind
+    /// Declared bit width when it is statically known.
     width: Option[Nat]
+    /// Declared clock domain for the *Cd register variants.
     cd: Option[ClockDomain]
     key: String
 }
@@ -400,7 +423,9 @@ def gdeclReverse(l: List[GDecl], acc: List[GDecl]): List[GDecl] = match l {
 
 /// Statement-level enable context threaded through the scan.
 struct EnableCtx {
+    /// Accumulated enable leaves of the when nesting.
     leaves: List[NegLeaf]
+    /// Accumulated equality atoms of the when nesting.
     eqs: List[EqTerm]
     key: String
 }
@@ -413,12 +438,19 @@ def enableCtxEmpty: EnableCtx =
 
 /// The scan accumulator: `drives`/`conns`/`insts`/`decls` (all prepend-ordered, reversed later), the `seen` statement-key list, the concatenated `key`, and `pending` - the RHS reads of the statement being scanned, which become the next `DriveSrc.srcs`.
 struct GraphAcc {
+    /// Driving statements collected so far.
     drives: List[DriveSrc]
+    /// Hierarchical connections collected so far.
     conns: List[ConnEx]
+    /// Sub-module instantiations collected so far.
     insts: List[InstInfo]
+    /// Signal declarations collected so far.
     decls: List[GDecl]
+    /// Statement keys already scanned (dedup of macro replay).
     seen: List[String]
+    /// Accumulated statement keys, used as the module fingerprint.
     key: String
+    /// Reads waiting to be attached to the next driving statement.
     pending: List[CondSrc]
 }
 
@@ -826,9 +858,13 @@ def scanAllEx[ne: Nat](es: Vec[Expr] ne, acc: GraphAcc): GraphAcc = match es {
 
 /// A combinational edge for the Rust cycle detector: `dst` is driven from `src`, `cross` names the instance when the edge came from a child passthrough (empty for internal edges), and `leaves` are the conditions under which the edge is live.
 struct CombEdge {
+    /// Driven signal.
     dst: String
+    /// Source signal the driver reads.
     src: String
+    /// Instance name when the edge came from a child passthrough.
     cross: String
+    /// Conditions under which this combinational edge is live.
     leaves: List[NegLeaf]
 }
 
