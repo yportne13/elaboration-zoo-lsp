@@ -154,6 +154,7 @@ def reverseBitsExpr(w: Nat, e: Expr): Expr = match w {
 /// `Into[UInt[width]]` / `Into[Bits[width]]` / `Into[SInt[width]]` / `Into[Bool]`
 /// instances build the reversed Expr for the target type.
 struct ReverseExpr[T: Type 0, width: Nat] {
+    /// The operand whose bit order is reversed.
     value: T
 }
 
@@ -216,6 +217,7 @@ def propagateOnesToMsbExpr(w: Nat, e: Expr): Expr =
 /// (`toMsb`); its `Into` instances for UInt / Bits / SInt pick the matching
 /// expression.
 struct PropagateOnesExpr[T: Type 0, width: Nat] {
+    /// The operand whose trailing ones are propagated to the MSB side.
     value: T
     toMsb: Boolean
 }
@@ -435,6 +437,7 @@ def ohLastExpr(w: Nat, e: Expr): Expr =
 /// its `Into` instances for UInt / Bits / SInt pick `ohFirstExpr` /
 /// `ohLastExpr`.
 struct OHMaskingExpr[T: Type 0, width: Nat] {
+    /// The operand whose one-hot mask is computed.
     value: T
     isLast: Boolean
 }
@@ -500,7 +503,9 @@ def ohMaskingRoundRobinUInt[width: Nat](requests: UInt[width], ohPriority: UInt[
 /// the candidate values and a default; its `Into` instances for UInt / Bits /
 /// SInt / Bool build the chained `Expr.mux`.
 struct PriorityMuxExpr[T: Type 0, width: Nat] {
+    /// One-hot select, one bit per candidate value.
     sel: Bits[width]
+    /// The candidate values, in priority order (LSB first).
     vals: Vec[T] width
     dflt: T
 }
@@ -561,7 +566,9 @@ impl[width: Nat] Into[Bool] for PriorityMuxExpr[Bool, width] {
 /// equals an indexed mux for a legal one-hot selector) with element 0 as the
 /// default.
 struct MuxOHExpr[T: Type 0, width: Nat] {
+    /// The one-hot select.
     oneHot: Bits[width]
+    /// Candidate values, indexed by the select bit.
     vals: Vec[T] width
 }
 
@@ -599,7 +606,9 @@ def ohMuxOrExpr[width: Nat](oneHot: Expr, vals: Vec[Expr] width): Expr =
 /// Deferred masked-OR wrapper (SpinalHDL `OhMux.or`); its `Into` instances for
 /// UInt / Bits build `ohMuxOrExpr`.
 struct OhMuxOrExpr[T: Type 0, width: Nat] {
+    /// The one-hot select whose set bit picks a value.
     oneHot: Bits[width]
+    /// Candidate values, indexed by the select bit.
     vals: Vec[T] width
 }
 
@@ -628,8 +637,11 @@ impl[width: Nat, vw: Nat] Into[Bits[vw]] for OhMuxOrExpr[Bits[vw], width] {
 /// instances for UInt / SInt emit `<a> < <b> ? a : b` (or the swapped form for
 /// max).
 struct MinMaxExpr[T: Type 0] {
+    /// First operand.
     a: T
+    /// Second operand.
     b: T
+    /// True computes min, false computes max.
     isMin: Boolean
 }
 
@@ -646,8 +658,11 @@ def max[T: Type 0](a: T, b: T): MinMaxExpr[T] = MinMaxExpr.mk[T](a, b, false)
 /// instances for UInt / SInt emit `max(low, min(num, high))` as nested
 /// `Expr.mux`es.
 struct ClampExpr[T: Type 0] {
+    /// The value to clamp.
     num: T
+    /// Inclusive lower bound.
     low: T
+    /// Inclusive upper bound.
     high: T
 }
 
@@ -769,7 +784,9 @@ def endiannessSwapUInt[width: Nat](that: UInt[width], base: Nat): UInt[width] =
 /// The result of `addWithCarry`: the truncated `sum` (`UInt[width]`) and the
 /// `carry` Bool.
 struct AddCarryResult[width: Nat] {
+    /// The sum bits, one wider than the operands so the carry fits.
     sum: UInt[width]
+    /// True when the addition overflowed the operand width.
     carry: Bool
 }
 
@@ -1029,7 +1046,9 @@ def delayEvent[bn: BindingName](event: Bool, cycle: Nat): Bool =
 /// `clearWhen(cond)` resets them under a when context.
 struct TimeoutHandle[bn_name: String, cw: Nat] {
     state: Bool
+    /// Down-counter value, decremented while the timeout is armed.
     cnt: UInt[cw]
+    /// Reload value: how many cycles the timeout waits.
     limit: Nat
 }
 
@@ -1117,6 +1136,7 @@ def whenMasked[width: Nat, T: Type 0](things: Vec[T] width, conds: Bits[width], 
 /// Handle of `counterMod` / `downCounter`: the counter `value` (`UInt[w]`) and
 /// `willOverflow` (true on the wrap cycle); `clear()` resets the counter to 0.
 struct CounterMod[w: Nat] {
+    /// Current counter value.
     value: UInt[w]
     willOverflow: Bool
 }
@@ -1166,6 +1186,7 @@ def counterIncMod[bn: BindingName](stateCount: Nat, enable: Bool): CounterMod[ma
 /// direction) and `willOverflow` / `willUnderflow` (direction-gated).
 /// `clear()` resets the counter to 0.
 struct CounterUpDown[w: Nat] {
+    /// Current counter value.
     value: UInt[w]
     willOverflowIfInc: Bool
     willUnderflowIfDec: Bool
