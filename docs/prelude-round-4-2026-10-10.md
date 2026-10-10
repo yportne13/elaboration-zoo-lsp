@@ -196,7 +196,40 @@ DividerFSM.quotient/remainder、Module.tree、Encoding.encNative、SwitchHead.sh
    `///` 行，`git diff --numstat` 立刻看出异常）。**修法：最后 8 项改成逐条 `read` + `edit`
    手改**，全部命中。**教训：bulk 脚本只适合「字段名唯一」的场合；一旦出现重复名，停下读源码。**
 
-## 6. 未完成项（本轮已立项未做）
+## 4d. 收官判据复验（L3 仿真背书 + 19 档矩阵）
+
+本轮改动：`src/bin/l13bench.rs`（bench 缺省栈 256→1024 + `nf_parity` 比内容 + `BOTH-FAILED`
+标签）、`tools/gate_l13.ps1`（参数绑定加固）、20+ 个 prelude 文件的**纯文档**改动、
+`prelude_hdl_c_tests.rs`（(Q) 回归钉）。交付判据要求 L3 不退化，故用**冻结副本**重跑。
+
+**DUT 指纹**（`cargo build --bin` 产物 + `Copy-Item` 冻结，`size+mtime+sha256`）：
+`target/prelude_scratch/lead_r4_l3_typort.exe` size **20,143,104**、mtime **2026-10-10 07:49:20**、
+sha256 `8A74F512E4D61BED…`；`lead_r4_l3_l13bench.exe` size **9,320,960**、mtime 同时、sha `3FF87655016AB3A4…`。
+
+**L3 全用例集**（`TYPORT=<frozen>`，verilator = `C:\msys64\mingw64\bin\verilator`）：
+
+```
+== 51 passed, 0 failed, 51 total ==
+（v_utils_combinational / v_utils_sequential / v_stream_sequential /
+  v_misc_combinational / v_dualclock 五个 case 文件全 OK，逐模块与第 3 轮一致）
+```
+
+**PLRU 显式用例**（不在 `DEFAULT_CASES` 里，按第 3 轮的显式调用方式传 **case 文件**）：
+`python tools/spinalhdl-verify/verify.py tools/spinalhdl-verify/cases/r3_plru.typort`
+⇒ `[OK] r3Plru`，`1 passed, 0 failed, 1 total`。合计 **52/52**，零退化。
+
+> 坑（第 4 轮自己踩到）：`verify.py` 的位置参数是**用例文件路径**，不是用例名
+> （`--case r3Plru` 会走成「文件不存在」的 `[MISSING CASEFILE]` 分支，且**退出码仍是 0**
+> ——因为它只是 `continue`）。已在本节记下正确调法。
+
+**19 档形状矩阵**（用冻结的 `lead_r4_l3_l13bench.exe`，新缺省栈、内容级 oracle）：
+`AGREE 19 / DIVERGE 0 / BOTH-FAILED 0 / TIMEOUT 0`（e07 `nf=600002`）。
+
+**至此本轮全部交付判据齐备**：
+门禁四套件 `fail=0`（lib **613/0**、parity 15/0、twin 28/0、hdl042 2/0）；
+`typort doc --min-coverage 60 --deny-warnings` **exit 0**、warnings=0；
+prelude 顶层 **1195/1195 = 100%**、成员级 **1706/1706 = 100%**；
+L3 **52/52**；19 档 **19/19**。
 
 ### (O) `when { cdReg := x }` 组合驱动 —— **设计评估完成，结论：本轮不做**
 
