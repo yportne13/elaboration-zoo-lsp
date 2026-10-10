@@ -557,6 +557,80 @@ println(moduleTreeVL(mixA4.create.tree))
     );
 }
 
+// ── (P) round-4：主域 clk 端口只在主域有 clocked 内容时才合成 ──
+// 根因（第 3 轮 §5-8）：`moduleDefVLPlain` 的 `has_seq` 用 `clockedVL`（主域块
+// **加**每个额外域的块拼成的串）判空 ⇒ 只要模块里有任何额外 cd 块，就补一个
+// 没人用的主域 `clk` 端口。`manifestSynthPorts` 用同一口径，两处一起错。
+//
+// 判据（改前实测，冻结的 round-4 二进制）：纯额外域模块发出
+// `input wire clkA` 而 body 从不引用它；改后该端口消失，**且主域模块的
+// `clkA`/`rstA` 一行不动**（下面第二个用例就是这条的守卫）。
+// 本用例与 (K) 的 `when_with_only_cd_assign_is_emitted_once` 的区别：(K) 钉的是
+// 「不双发」，本用例钉的是「端口集合」——(K) 的钉刻意不断言端口，因为这个坑
+// 当时还没修。
+#[test]
+fn extra_cd_only_module_does_not_synthesize_main_clk_port() {
+    // 纯额外域时钟内容：主域 clk 端口必须消失。
+    // 注意：必须用 `createSignalExpr("", regAssignCd(..))` 这种**原语**写法构造
+    // 额外域 clocked 内容。`when en { cdReg := d }` 走 `pickAssign`，只产普通
+    // `regAssign`（它不查信号自身的 cd ⇒ 组合驱动，即 (O) 那个缺口），所以那种
+    // 写法根本没有 clocked 块，测不到 (P)。
+    let out = run_ok(
+        r#"
+def pCdA: ClockDomain = ClockDomain.mk "clkA" "rstA" Async RisingEdge ActiveHigh
+def pCdB: ClockDomain = ClockDomain.mk "clkB" "rstB" Async RisingEdge ActiveHigh
+module onlyExtra[pCdA] {
+    input d = UInt[4]
+    input en = Bool
+    output q = UInt[4]
+    let r2 = newUIntRegInitCdNamed("pR2", 4, 0, pCdB)
+    let _ = createSignalExpr("", regAssignCd(r2.zz_expr, d.zz_expr, pCdB))
+    q := r2
+}
+println(moduleTreeVL(onlyExtra.create[pCdA].tree))
+"#,
+    );
+    let ports: Vec<&str> = out
+        .lines()
+        .map(str::trim)
+        .filter(|l| l.starts_with("input wire") || l.starts_with("output wire"))
+        .collect();
+    assert!(
+        !ports.iter().any(|p| p.contains("clkA")),
+        "a module whose only clocked content is in an extra cd must NOT get the \
+         main clk port (round-4 (P)); got ports: {ports:?}\n{out}"
+    );
+    // 额外域自己的端口仍然要在（回归守卫：不能把 needed 的端口一起删掉）。
+    for needle in ["input wire clkB", "input wire rstB"] {
+        assert!(out.contains(needle), "missing extra-cd port {needle:?}:\n{out}");
+    }
+
+    // 对照组：主域确有 clocked 内容 ⇒ 主域 clk/rst 端口一个都不能少。
+    let out_main = run_ok(
+        r#"
+def pCdA2: ClockDomain = ClockDomain.mk "clkA" "rstA" Async RisingEdge ActiveHigh
+module pMainSeq[pCdA2] {
+    input d = UInt[4]
+    input en = Bool
+    output q = UInt[4]
+    let r1 = newUIntRegInitNatNamed("pR1", 4, 0)
+    when (en) {
+        r1 := d
+    }
+    q := r1
+}
+println(moduleTreeVL(pMainSeq.create[pCdA2].tree))
+"#,
+    );
+    for needle in ["input wire clkA", "input wire rstA", "always @(posedge clkA"] {
+        assert!(
+            out_main.contains(needle),
+            "a module with main-domain clocked content must keep its main \
+             clock/reset ports (round-4 (P) regression guard); missing {needle:?}:\n{out_main}"
+        );
+    }
+}
+
 // ── (J①) round-4：formB 通用方向臂不得误报合法端口类型 ──
 // `Expr` 宏按**单条语句**匹配（$x: Expr 片段一次解析一条端口声明），所以通用
 // `= $ty:ident` 臂只捕获出问题的那一条；合法臂（= Bool / Bits[w] / UInt[w] /
