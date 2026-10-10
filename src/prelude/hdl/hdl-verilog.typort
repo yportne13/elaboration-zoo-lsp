@@ -2002,7 +2002,20 @@ def moduleDefVLPlain(md: ModuleDef): String =
     let mem_decls = memsVL(md.expr);
     let assigns = assignsVL(md.expr, whenSigs);
     let always = alwaysVL(md.expr, whenSigs);
-    let clocked = clockedVL(md.expr, md.cd, strInList(resetName(md.cd), port_names));
+    // (P) round-4: `has_seq` decides whether the MAIN clock port is synthesized,
+    // so it must answer "does the MAIN domain emit a clocked block?" — not "does
+    // the module emit any block?".  `clockedVL` concatenates the main block AND
+    // one block per extra cd, so a module whose only clocked content lives in an
+    // extra domain used to get a SPURIOUS `input wire <clk>` that nothing reads
+    // (round-3 §5-8; the extra-cd blocks bring their own ports through
+    // collectClockCds/extraCdPortsVL, so they never needed the main one).
+    // MEASURED before the fix (frozen round-4 binary): a module with only
+    // `regAssignCd` content emitted `input wire clkA` plus clkB/rstB, and the
+    // body never referenced clkA.  After the fix that port is gone while the
+    // main-domain control module (a real `when` + regAssign) keeps its clk.
+    let reset_declared = strInList(resetName(md.cd), port_names);
+    let main_clocked = clockedBlockVL(md.expr, md.cd, reset_declared);
+    let clocked = clockedVL(md.expr, md.cd, reset_declared);
     let inst_lines = list_reverse(collectInstanceLinesTree md.expr);
     let has_regs = match list_reverse(collectRegLines md.expr port_names) {        case lnil => false
         case _ => true
@@ -2027,7 +2040,10 @@ def moduleDefVLPlain(md: ModuleDef): String =
         case lnil => false
         case _ => true
     };
-    let has_seq = match str_eq(clocked, "") {
+    // (P) round-4: gate the MAIN clock port on the MAIN block only — see the
+    // `main_clocked` note above.  `clocked` (main + extras) still drives the
+    // body, so an extra-cd-only module keeps its own domain blocks.
+    let has_seq = match str_eq(main_clocked, "") {
         case true => has_assert_main
         case false => true
     };
@@ -2356,17 +2372,24 @@ def manifestExtraCdPorts[ne: Nat](es: Vec[Expr] ne, cds: List[ClockDomain], main
 /// extra-cd ports.
 def manifestSynthPorts(md: ModuleDef): List[String] =
     let port_names = collectPortNames md.expr;
-    // Mirror moduleDefVL's p1 condition: the clk port exists iff a clocked
+    // Mirror moduleDefVL's p1 condition: the clk port exists iff a MAIN-CLOCKED
     // always block is emitted (see the has_seq note there) and the source did
     // not declare it (Verilog-compat folds `input clk` into a real port).
-    let clocked = clockedVL(md.expr, md.cd, strInList(resetName(md.cd), port_names));
+    // (P) round-4: this used to test `clockedVL`, which ALSO contains the extra
+    // cd blocks, so the manifest synthesized a main clk for modules whose only
+    // clocked content is in an extra domain — disagreeing with nothing (the
+    // Verilog emitter had the same bug) but leaving an unread port in both
+    // outputs.  Both call sites now gate on the MAIN block only, so the Verilog
+    // port list and the manifest stay byte-identical.
+    let port_names2 = port_names;
+    let main_clocked = clockedBlockVL(md.expr, md.cd, strInList(resetName(md.cd), port_names2));
     // Mirror moduleDefVL's has_seq, assert disjunct included: a main-cd assert
     // synthesizes the clk port even with no clocked always block.
     let has_assert_main = match list_reverse(collectAssertLinesCd(md.expr, md.cd, true)) {
         case lnil => false
         case _ => true
     };
-    let has_seq = match str_eq(clocked, "") {
+    let has_seq = match str_eq(main_clocked, "") {
         case true => has_assert_main
         case false => true
     };
