@@ -293,6 +293,30 @@ L3 用新冻结二进制（sha `17893340F513EA79…`）复跑：**51/0/51 + PLRU
    ⇒ 普通 `regAssign` ⇒ 组合驱动。
    ⇒ **第 5 轮 (O) 的优先级应上调**，且必须用**阻塞 `=` 签名**重扫 examples。
 
+#### (O) 重扫完成：**正确的源级签名下，examples 仍 0 命中**（但用户面可达，已实测）
+
+第 3 轮与我本轮的 emit 级签名都查错了，本轮最终改用**源级**签名并**先校准再扫**：
+
+- emit 级不可行：`newUIntRegInitCdNamed` 的寄存器和 `newUIntNamed` 的 wire **发射相同**
+  （都是 `reg NAME;` + `always @(*)` 里的阻塞 `=`），所以 emit 层面无法区分「(O) 缺口」
+  与「本来就组合的 wire」。实测：正控 `oCdOnly` 与负控 `oWireOnly` 在 `always @(*)` 签名下
+  **双双命中** ⇒ 该签名无效（这就是我此前「0 命中」可能是假阴性/假阳性的原因）。
+- 源级签名（有效）：binding 由 `*Cd*` 工厂 decl（`createRegWidthCd` 一族）
+  **且**在 `when { }` 内用自然 `:=` 驱动。
+- **校准（`target/prelude_scratch/o_audit_probe.typort`，三个模块，先校准后扫描）**：
+  `oCdOnly`（已知正例）**命中**；`oWireOnly`（普通 wire）**不命中**；
+  `oCdPrim`（`regAssignCd` 原语写法）**不命中**。三项全过才扫 examples。
+- **扫描结果：`examples/hdl/*` 0 命中。**
+
+**但用户面可达已被实测证明**：(P) 的回归钉第一版就是用自然写法
+`when (en) { r2 := d }` 写的，它发出 `always @(*) … pR2 = d;`（阻塞）且**没有** clocked 块。
+根因链已查实：`hdl-crossclock.typort:354` 明写「不能用 whenBegin 包裹 regAssignCd ——
+**when 没有 Cd 变体**」，且全 prelude 73 处 `regAssignCd` 里**只有库代码**
+（hdl-crossclock / hdl-clock）产它；用户面 `:=` 一律走 `pickAssign` ⇒ 普通 `regAssign` ⇒ 组合驱动。
+
+⇒ **结论**：仓库内 0 触发（这次的证据链完整：签名先校准、正负控都过），属**用户面缺口**；
+用户一旦用 `when` + cd 寄存器就会静默拿到组合逻辑。修法见第 5 轮候选。
+
 #### (P) 修完后的目标项最终状态
 
 | 项 | 状态 |
@@ -371,10 +395,9 @@ LSP 后端的诊断汇总顺序（影响所有报错），性价比不划算 ⇒
    （兜底臂只认字面 `Boolean`）。方向：给 formA 兜底臂补 `= $ty:ident` 组——但那次同样会
    捕获所有标量端口，需先证明「组内 run 匹配」能像 M1..M6 那样把它限制在出错端口上
    （第 3 轮正是据此否决的，第 4 轮证明该否决对 `= Boolean` 组成立、对 `$ty` 组未验证）。
-3. **(O) 的阻塞签名重扫**（本轮发现的签名错误，见 (P) 节）：用 `always @(*)` 内含**阻塞 `=`**
-   重扫 `examples/hdl/*`，确认 (O) 是否真的 0 命中。若确实 0 命中 ⇒ 用户面糖，做 (P) 式的
-   小修（`pickAssign` 查不了信号 cd，但**发射端**能：`collectClockLinesCd` 的主域臂可改为
-   「目标 decl 的 cd 非主域时归到该 cd」——即第 3 轮 §6 的方向 C，现在 (P) 已证明这条路径可行）。
+3. **(O) 修法**：发射端（方向 C）已被 (P) 证明可行——`collectClockLinesCd` 的主域臂改为
+   「目标 decl 的 cd 非主域时归到该 cd」，同时 `hasMainClocked` 同步。仓库内 0 触发 ⇒
+   可以做一枚用户面回归钉而不动 examples 基线。
 4. **(P) 主域多余 `clk` 端口**：改 `moduleDefVLPlain` 按域判空 + 端口集合断言（用户可见）。
 5. **(R) guard 文案排序**：需改 LSP 诊断汇总顺序，低优先级。
 
