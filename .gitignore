@@ -55,3 +55,8 @@ v3_fail.log
 # 2026-09-29 曾随目录整体提交了 1054 个产物文件，解除跟踪并在此收口。
 tools/spinalhdl-verify/__pycache__/
 tools/spinalhdl-verify/work/
+
+# Lean 4 形式化（lean/）的 Lake 构建产物：可再生产物，只提交源码。
+# 校验方式：cd lean && lake build（见 lean/README.md）。
+lean/.lake/
+

@@ -1,0 +1,7 @@
+name = "typort"
+version = "0.1.0"
+defaultTargets = ["Typort"]
+
+# 只依赖 Lean 4 core / Std，不需要 Mathlib：形式化本身是自足的核心演算开发。
+[[lean_lib]]
+name = "Typort"
