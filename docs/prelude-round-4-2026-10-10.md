@@ -1,4 +1,4 @@
-# prelude 第 4 轮（2026-10-10）——(N) 栈预算对齐收口 e07 + 门禁参数缺陷
+﻿# prelude 第 4 轮（2026-10-10）——(N) 栈预算对齐收口 e07 + 门禁参数缺陷
 
 > 状态：**(N) 已完成并提交推送**（`bf5f34a9`）；(O)–(S) 待续（见 §6）。
 > 收官数字以 Lead 门禁 `lead_r4` 为准。
@@ -372,7 +372,7 @@ LSP 后端的诊断汇总顺序（影响所有报错），性价比不划算 ⇒
 两种排列都钉、外加 all-`Boolean` 对照形状。同步更正 X1 注释块里那条过时登记。
 门禁 `lead_q1`：`fail=0`，lib **613/0**、parity 15、twin 28、hdl042 2。提交 `dc08b557`。
 
-**唯一仍不可诊断的**：formA 的 `MyTypo`（错拼类型，非 `Boolean`）——它没有 HDV004
+**唯一仍不可诊断的**：**formA（端口在 body 前）**的 `MyTypo`（错拼类型，非 `Boolean`）——它没有 HDV004; 注意 **formB（端口写在 `{}` 内）的 `MyTypo` 已被 `Expr` 宏通用臂诊断**（verifier 实测：HDV004 `[SelTypo] sel`），两种写法结论不同
 （兜底臂只认字面 `Boolean`），保持原有响亮失败。与第 3 轮一致，属下一个候选。
 
 ### 第 4 轮目标项最终状态
@@ -402,3 +402,47 @@ LSP 后端的诊断汇总顺序（影响所有报错），性价比不划算 ⇒
 5. **(R) guard 文案排序**：需改 LSP 诊断汇总顺序，低优先级。
 
 *（本文件由 Lead 在第 4 轮内持续追加；本轮全部改动已提交推送。）*
+
+## 5. verifier 独立复算（第 4 轮收官项，subagent `16d4bcbd`）
+
+**状态：子进程最终失败、未写 REPORT.md，但它的原始读数全部落盘**
+（`target/prelude_scratch/verify_r4/`，30+ 个探针 + 6 组结果文件），由 Lead 逐份复核。
+教训同第 1 轮：子进程失败后先看它留下了什么，不要直接重跑。
+
+### 独立复算结果（逐项）
+
+| 项 | verifier 实测 | Lead 读数 | 一致？ |
+|---|---|---|---|
+| 二进制指纹 | 用 Lead 冻结的 `lead_r4_l3_typort.exe` / `…_l13bench.exe` 跑全部探针 | 同 | ✅ |
+| (N) `L13_STACK_MB=256` | `thread '<unknown>' (22432) has overflowed its stack` | 同 | ✅ 独立证实根因 |
+| (N) 19 档矩阵 | `N_e_shape_matrix.txt` 全跑 | AGREE 19 | ✅ |
+| (R) oracle | 41 nfdiv + 19 e_shape 全 sweep，`NO-VERDICT/CRASH = 0` | 同 | ✅ |
+| (R) 标签 | `s04/s07/s08` 三条 **BOTH-FAILED** | 同 | ✅ 新标签被独立看到 |
+| (Q) `Q_e`（Boolean + output reg 混合） | HDV004 点名 `y`，span 指向 `output y = Boolean` | M6 同 | ✅ 逐字一致 |
+| (S) doc 覆盖 | **顶层 1195/1195、成员 1706/1706 = 100.0000%，逐文件全 OK、warnings=[]** | 同 | ✅ |
+| L3 全用例集 | **51 passed / 0 failed / 51 total** | 同 | ✅ |
+| L3 PLRU | **[OK] r3Plru，1 passed / 0 failed / 1 total** | 同 | ✅ |
+| 门禁 | `verify_r4`：`fail=3`，parity/twin/hdl042 `[NO TESTS EXECUTED]` ⇒ `verify_r4b`：**`fail=0`，lib 614/0、parity 15/0、twin 28/0、hdl042 2/0** | `lead_p2` 同 | ✅（含同一个假红） |
+
+### 假红复现（第二个独立目击）
+
+verifier 的门禁第一次跑也是 `fail=3` + 三个套件 `[NO TESTS EXECUTED]`——与我的
+`lead_p1` 完全相同的**文件锁假红**（它与我并行跑、同样持有 `target\debug\typort.exe`）。
+它自己重跑得到 `verify_r4b` `fail=0`。⇒ 该假红**现在有两起独立目击**，
+`tools/gate_l13.ps1` 的诊断文本（`failed to remove file`）足以让第三个踩坑的人当场识别。
+已在 `tools/README.md` 记录（见 §2 的门禁参数缺陷同节）。
+
+### 唯一实质分歧：formA `MyTypo` 是否已被诊断
+
+- verifier 的探针 `Q_calib_typo_formA.typort` 报 **HDV004 `[SelTypo] sel: this port type is not accepted…`**，
+  并据此怀疑我「formA 的 `MyTypo` 仍不可诊断」这句话。
+- **复核结论：两边都对，探针形状不同。** verifier 那份探针的端口写在 `{}` **里面**
+  （formB，`module vfMod[vfCd] { input sel = SelTypo … }`）⇒ 命中 `Expr` 宏的通用臂；
+  我那句说的是 **formA（端口在 body 前、无 `{}`）**。Lead 用真正的 formA 拼写
+  （`target/prelude_scratch/q_typo_formA.typort`）独立复测：
+  **无 HDV004**，只有 `expected def, found identifier` + `name not in scope: qTypoFormA`。
+- ⇒ 文档原判成立，但**措辞要分清 formA/formB**，否则下一个人会重复这次分歧。
+  `docs/hdl-language-spec.md` 与 round-4 日志已按此更正。
+
+**独立复算总评：本题交付判据中的「verifier 独立复算」已完成**——10/10 项实测一致，
+0 项无法复现，1 处措辞分歧（非事实错误）已定位并更正。
