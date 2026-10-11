@@ -1703,7 +1703,7 @@ impl Infer {
                     .into_iter()
                     .map(|(n, a, i)| {
                         let a = if i == Icit::Impl && matches!(a, Raw::Hole(_)) {
-                            Raw::U(0)
+                            Raw::U(0, empty_span(()))
                         } else {
                             a
                         };
@@ -1769,7 +1769,7 @@ impl Infer {
                     universe_lvl,
                     is_trait,
                 );
-                let typ = params.iter().rev().fold(Raw::U(universe_lvl), |a, b| {
+                let typ = params.iter().rev().fold(Raw::U(universe_lvl, empty_span(())), |a, b| {
                     Raw::Pi(b.0.clone(), b.2, Box::new(b.1.clone()), Box::new(a))
                 });
                 let bod = params.iter().rev().fold(sum.clone(), |a, b| {
@@ -2714,7 +2714,7 @@ impl Infer {
                     Box::new(go(a, names)?),
                     Box::new(go(b, &names.prepend(x.data.clone()))?),
                 )),
-                Tm::U(u) => Some(Raw::U(*u)),
+                Tm::U(u) => Some(Raw::U(*u, empty_span(()))),
                 // A (possibly partially applied) sum type: rebuild the
                 // application `Name[arg0][arg1]...` from the applied params.
                 Tm::Sum(name, params, _, _) => {
@@ -3304,7 +3304,7 @@ impl Infer {
             // `checked_add`：`Type 4294967295` 的 `x + 1` 在 u32 上溢——debug
             // 构建 panic、release 静默回绕成 `Type 0`（`Type MAX : Type 0` 假
             // 通过）。超界报普通错误；parser 侧对超出 u32 的字面量另有报错。
-            Raw::U(x) => match x.checked_add(1) {
+            Raw::U(x, _) => match x.checked_add(1) {
                 Some(lvl) => Ok((Tm::U(x).into(), Val::U(lvl).into())),
                 None => Err(Error(
                     t_span.map(|_| format!("universe level {x} is too large")),

@@ -96,7 +96,7 @@ pub enum Raw {
     Obj(Box<Raw>, Option<Span<SmolStr>>),
     Lam(Span<SmolStr>, Either, Box<Raw>),
     App(Box<Raw>, Box<Raw>, Either),
-    U(u32),
+    U(u32, Span<()>),
     Pi(Span<SmolStr>, Icit, Box<Raw>, Box<Raw>),
     Let(Span<SmolStr>, Box<Raw>, Box<Raw>, Box<Raw>),
     Hole(Span<()>),
@@ -128,7 +128,7 @@ impl PartialEq for Raw {
             (Raw::Obj(a, b), Raw::Obj(c, d)) => a == c && b == d,
             (Raw::Lam(a, b, c), Raw::Lam(d, e, f)) => a == d && b == e && c == f,
             (Raw::App(a, b, c), Raw::App(d, e, f)) => a == d && b == e && c == f,
-            (Raw::U(a), Raw::U(b)) => a == b,
+            (Raw::U(a, _), Raw::U(b, _)) => a == b,
             (Raw::Pi(a, b, c, d), Raw::Pi(e, f, g, h)) => a == e && b == f && c == g && d == h,
             (Raw::Let(a, b, c, d), Raw::Let(e, f, g, h)) => a == e && b == f && c == g && d == h,
             (Raw::Hole(a), Raw::Hole(b)) => a == b,
@@ -154,7 +154,7 @@ impl std::hash::Hash for Raw {
             Raw::Obj(x, y) => { x.hash(state); y.hash(state); }
             Raw::Lam(x, y, z) => { x.hash(state); y.hash(state); z.hash(state); }
             Raw::App(x, y, z) => { x.hash(state); y.hash(state); z.hash(state); }
-            Raw::U(x) => x.hash(state),
+            Raw::U(x, _) => x.hash(state),
             Raw::Pi(x, y, z, w) => { x.hash(state); y.hash(state); z.hash(state); w.hash(state); }
             Raw::Let(x, y, z, w) => { x.hash(state); y.hash(state); z.hash(state); w.hash(state); }
             Raw::Hole(x) => x.hash(state),
@@ -189,7 +189,7 @@ impl Raw {
                 Either::Name(span) => span.to_span(),
                 Either::Icit(_) => raw1.to_span(),
             },
-            Raw::U(_) => empty_span(()),//TODO:
+            Raw::U(_, span) => span.clone(),
             Raw::Pi(span, _, _, raw1) => span.to_span() + raw1.to_span(),
             Raw::Let(span, _, _, raw2) => span.to_span() + raw2.to_span(),
             Raw::Hole(span) => span.clone(),//TODO:
@@ -220,7 +220,7 @@ impl std::fmt::Display for Raw {
             Raw::App(func, arg, Either::Name(name)) => write!(f, "({} [{}={}])", func, name.data, arg),
             Raw::App(func, arg, Either::Icit(Icit::Impl)) => write!(f, "({} [{}])", func, arg),
             Raw::App(func, arg, Either::Icit(Icit::Expl)) => write!(f, "({} {})", func, arg),
-            Raw::U(level) => write!(f, "U{}", level),
+            Raw::U(level, _) => write!(f, "U{}", level),
             Raw::Pi(param, Icit::Impl, domain, codomain) => write!(f, "([{} : {}] -> {})", param.data, domain, codomain),
             Raw::Pi(param, Icit::Expl, domain, codomain) => write!(f, "({} : {}) -> {}", param.data, domain, codomain),
             Raw::Let(name, typ, expr, body) => write!(f, "(let {} : {} = {};\n{})", name.data, typ, expr, body),

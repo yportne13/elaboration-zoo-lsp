@@ -3469,7 +3469,16 @@ impl Machine {
             }
 
             // Infer universe type
-            Raw::U(x) => Ok((bump.alloc(Tm::U(*x)), v_u(x + 1))),
+            // checked_add: aligns with the reference elaboration.rs Raw::U arm --
+            // for Type 4294967295, x + 1 overflows u32 (debug panic /
+            // release silently wraps to Type 0). The F2 fix only landed in
+            // the reference engine; this twin arm kept the bare add. The
+            // error takes the twin's normal Error path; the span comes from
+            // the Raw::U node (the digit token of Type <num> in the parser).
+            Raw::U(x, u_span) => match x.checked_add(1) {
+                Some(lvl) => Ok((bump.alloc(Tm::U(*x)), v_u(lvl))),
+                None => Err(Error(u_span.map(|_| format!("universe level {x} is too large")), vec![])),
+            },
 
             // Infer dependent function types
             Raw::Pi(x, i, a, b) => {
@@ -3930,7 +3939,7 @@ impl Machine {
                     .iter()
                     .map(|(n, a, i)| {
                         let a = if *i == Icit::Impl && matches!(a, Raw::Hole(_)) {
-                            Raw::U(0)
+                            Raw::U(0, empty_span(()))
                         } else {
                             a.clone()
                         };
@@ -4001,7 +4010,7 @@ impl Machine {
                 let typ = params
                     .iter()
                     .rev()
-                    .fold(Raw::U(universe_lvl), |a, b| {
+                    .fold(Raw::U(universe_lvl, empty_span(())), |a, b| {
                         Raw::Pi(b.0.clone(), b.2, Box::new(b.1.clone()), Box::new(a))
                     });
                 let bod = params.iter().rev().fold(sum, |a, b| {
@@ -5202,7 +5211,7 @@ fn tm_to_raw_type(names: &crate::list::List<SmolStr>, tm: &CTm) -> Option<Raw> {
                 Box::new(go(a, names)?),
                 Box::new(go(b, &names.prepend(x.data.clone()))?),
             )),
-            CTm::U(u) => Some(Raw::U(*u)),
+            CTm::U(u) => Some(Raw::U(*u, empty_span(()))),
             CTm::Sum(name, params, _, _) => {
                 let mut acc = Raw::Var(name.clone());
                 for (_, v, _, i) in params.iter() {

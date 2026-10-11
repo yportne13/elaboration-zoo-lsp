@@ -367,7 +367,11 @@ fn owned_tokens_to_string_mapped(tokens: &[OwnedToken]) -> (String, Vec<Expansio
 trait ParserExt<I: Copy, A, S> {
     fn many1(self) -> impl Parser<I, Vec<A>, S, IError>;
     fn many1_sep<P: Parser<I, X, S, IError>, X>(self, sep: P) -> impl Parser<I, Vec<A>, S, IError>;
-    fn many1_sep_skip<P: Parser<I, X, S, IError>, X, Skip: Fn(I) -> Option<I> + Copy>(self, sep: P, skip: Skip) -> impl Parser<I, Vec<A>, S, IError>;
+    /// Like `many1_sep_skip` but accepts zero declarations: an empty (or
+    /// comment-only) file is a valid parse, not "expected at least one
+    /// element". Pure garbage still leaves non-Eof leftover tokens, which
+    /// the caller reports as a syntax error via the leftover check.
+    fn many0_sep_skip<P: Parser<I, X, S, IError>, X, Skip: Fn(I) -> Option<I> + Copy>(self, sep: P, skip: Skip) -> impl Parser<I, Vec<A>, S, IError>;
 }
 
 impl<'a: 'b, 'b, A, T: Parser<&'b [TokenNode<'a>], A, MacroState, IError>> ParserExt<&'b [TokenNode<'a>], A, MacroState> for T {
@@ -396,7 +400,7 @@ impl<'a: 'b, 'b, A, T: Parser<&'b [TokenNode<'a>], A, MacroState, IError>> Parse
             x => x,
         }
     }
-    fn many1_sep_skip<P, X, Skip>(self, sep: P, skip: Skip) -> impl Parser<&'b [TokenNode<'a>], Vec<A>, MacroState, IError>
+    fn many0_sep_skip<P, X, Skip>(self, sep: P, skip: Skip) -> impl Parser<&'b [TokenNode<'a>], Vec<A>, MacroState, IError>
     where
         P: Parser<&'b [TokenNode<'a>], X, MacroState, IError>,
         Skip: Fn(&'b [TokenNode<'a>]) -> Option<&'b [TokenNode<'a>]> + Copy,
@@ -410,14 +414,10 @@ impl<'a: 'b, 'b, A, T: Parser<&'b [TokenNode<'a>], A, MacroState, IError>> Parse
                         input = i;
                         result.push(a);
                     }
-                    Err(_) if result.is_empty() => {
-                        return Err(IError {
-                            msg: input.first()
-                                .map(|x| x.to_span())
-                                .unwrap_or(empty_span(()))
-                                .map(|_| ErrMsg::Base(BaseMsg::EmptyVec)),
-                        });
-                    }
+                    // Zero declarations so far: accept and stop (empty file),
+                    // but leave `input` untouched so non-Eof leftovers are
+                    // still reported by the caller's leftover check.
+                    Err(_) if result.is_empty() => break,
                     Err(_) => break,
                 }
                 if let Ok((i, _)) = sep.parse(input, state) {
@@ -425,15 +425,6 @@ impl<'a: 'b, 'b, A, T: Parser<&'b [TokenNode<'a>], A, MacroState, IError>> Parse
                 } else {
                     match skip(input) {
                         Some(at_sep) => {
-                            // A macro expansion may have consumed the newline
-                            // between two declarations (the literal-Token
-                            // matcher skips one EndLine after a match, which
-                            // when/switch-style macros rely on). When the
-                            // remainder already starts with a declaration
-                            // keyword, the expansion ate the separator — treat
-                            // it as an implicit one and keep the current
-                            // position (skip_until_decl would scan past this
-                            // decl to the next EndLine+keyword and drop it).
                             let is_decl_start = input.first().map(|t| matches!(t.data.1,
                                 TokenKind::DefKeyword
                                 | TokenKind::EnumKeyword
@@ -505,7 +496,10 @@ pub fn parser_with_macros(input: &str, id: u32, global_macros: &HashMap<String, 
                     skip_until_decl,
                     || Ok(Decl::Package { path: vec![] }),
                 )
-                .many1_sep_skip(kw(EndLine), skip_until_decl).parse(&ret, &mut err_collect);
+                // many0 (was many1): an empty or comment-only file parses to
+                // zero declarations instead of "expected at least one element"
+                // — a fresh empty .typort buffer in the editor is not an error.
+                .many0_sep_skip(kw(EndLine), skip_until_decl).parse(&ret, &mut err_collect);
             match ret {
                 Ok(ret) => {
                     let expansions = std::mem::take(&mut err_collect.2);
@@ -834,7 +828,7 @@ fn p_atom1<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IR
                 }
                 None => 0,
             };
-            Ok((rest, Raw::U(lvl)))
+            Ok((rest, Raw::U(lvl, num.as_ref().map(|x| x.to_span()).unwrap_or_else(|| empty_span(())))))
         })
         .or_far(kw(Hole).map(Raw::Hole))
         .or_far(string(Str).map(|x| Raw::LiteralIntro(x.map(|s| unescape(&s)))))
@@ -1408,7 +1402,7 @@ fn strip_spine_escapes(t: &mut Raw) {
                 strip_spine_escapes(ty);
             }
         }
-        Raw::Var(_) | Raw::U(_) | Raw::Hole(_) | Raw::LiteralIntro(_) | Raw::Nat(_)
+        Raw::Var(_) | Raw::U(..) | Raw::Hole(_) | Raw::LiteralIntro(_) | Raw::Nat(_)
         | Raw::Tm(_, _) => {}
     }
 }
@@ -2432,7 +2426,7 @@ fn p_trait_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -
                         // Desugar `type Elem` to `[Elem: outParam(Type 0)]` trait param
                         let out_param_raw = Raw::App(
                             Box::new(Raw::Var(type_name.to_span().map(|_| SmolStr::new("outParam")))),
-                            Box::new(Raw::U(0)),
+                            Box::new(Raw::U(0, empty_span(()))),
                             super::parser::syntax::Either::Icit(Icit::Expl),
                         );
                         assoc_defaults.push((type_name.data.clone(), default_type));
@@ -3982,7 +3976,7 @@ mod spine_paren_shape {
             Raw::Obj(x, None) => format!("{}._", shape(x)),
             Raw::Lam(n, _, b) => format!("(lam {} {})", n.data, shape(b)),
             Raw::Nat(n) => n.data.to_string(),
-            Raw::U(_) => "U".to_string(),
+            Raw::U(..) => "U".to_string(),
             Raw::Hole(_) => "_".to_string(),
             Raw::LiteralIntro(s) => format!("{:?}", s.data),
             other => format!("({:?})", other.to_span()),
@@ -4103,7 +4097,7 @@ mod spine_continuation {
                 arms.iter().map(|(_, b)| shape(b)).collect::<Vec<_>>().join(" ")
             ),
             Raw::Nat(n) => n.data.to_string(),
-            Raw::U(_) => "U".to_string(),
+            Raw::U(..) => "U".to_string(),
             Raw::Hole(_) => "_".to_string(),
             other => format!("({:?})", other.to_span()),
         }

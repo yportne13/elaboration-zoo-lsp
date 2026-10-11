@@ -842,7 +842,7 @@ fn raw_str(r: &Raw) -> String {
                 format!("{} {}", raw_str(f), raw_str(a))
             }
         },
-        Raw::U(n) => format!("Type {n}"),
+        Raw::U(n, _) => format!("Type {n}"),
         Raw::Nat(n) => n.data.to_string(),
         Raw::LiteralIntro(s) => format!("{:?}", s.data),
         Raw::Hole(_) => "_".to_string(),
