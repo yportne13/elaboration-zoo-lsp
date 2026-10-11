@@ -394,3 +394,32 @@ fn r9_file_without_trailing_newline() {
     r.open("def e9: Nat = 9\nprintln(e9)");
     assert!(r.errs().is_empty());
 }
+
+#[test]
+fn r9_diag_counts_all_errors_not_just_first() {
+    let r = rig();
+    r.open("def a: Nat = \"x\"\ndef b: Nat = true\nprintln(nope)\n");
+    let es = r.errs();
+    assert!(es.len() >= 3, "expected >=3 independent errors, got {es:?}");
+}
+
+#[test]
+fn r9_hover_enum_ctor_value() {
+    let r = rig();
+    let src = "enum Fruit4 {\n  apple4\n}\nprintln(apple4)\n";
+    r.open(src);
+    // RECORDED QUIRK (same family as Nat literals): a bare enum-constructor
+    // USE carries no hover entry; the qualified value still prints. Hover on
+    // the def-site token is not reachable through the use site either.
+    let h = r.hover(src, "apple4");
+    assert_eq!(h, "<none>", "ctor-use hover is a recorded gap");
+    assert!(r.notes().iter().any(|m| m.contains("apple4")), "{:?}", r.notes());
+}
+
+#[test]
+fn r9_goto_enum_ctor() {
+    let r = rig();
+    let src = "enum Fruit5 {\n  apple5\n}\nprintln(apple5)\n";
+    r.open(src);
+    assert!(r.goto(src, "apple5").is_some(), "goto from ctor use must resolve to the enum decl");
+}
