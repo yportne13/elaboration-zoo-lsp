@@ -932,7 +932,14 @@ fn derive_show(decl: &Decl, _bundle_types: &BundleSet) -> Vec<Decl> {
                 .cloned()
                 .collect();
 
-            let body = if cases.len() == 1 {
+            // `struct X {f}` parses to a single case named `X.mk` and its
+            // values carry named-field projection (`this.f` works). A
+            // single-case *enum* (`enum X { c(f: T) }`) has NO field
+            // projection — the payload is positional — so its show body must
+            // bind fields through a match, exactly like the multi-case path
+            // (2026-10-11 R5: `#[derive(Show)] enum Snack { bar(n: Nat) }`
+            // used to fail with "`this`: Snack has no object `n`").
+            let body = if cases.len() == 1 && cases[0].0.data.ends_with(".mk") {
                 build_struct_show_body(name, &cases[0].1)
             } else {
                 let match_body: Vec<_> = cases.iter()
