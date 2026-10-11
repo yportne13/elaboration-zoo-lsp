@@ -1,0 +1,3 @@
+// probe: division by zero: must not hang or crash
+// expect: ok
+println(nat_div(5, 0))

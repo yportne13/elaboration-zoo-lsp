@@ -1,0 +1,4 @@
+// probe: no-space -> arrow in type
+// expect: ok
+def f: Nat->Nat = x => x
+println(f(1))

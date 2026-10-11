@@ -1,0 +1,5 @@
+// probe: leading-zero and large decimal literals
+// expect: stdout /7/
+println(0)
+println(007)
+println(1000000)

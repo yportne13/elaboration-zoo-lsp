@@ -1,0 +1,3 @@
+// probe: * binds tighter than +: prints 7
+// expect: stdout /7/
+println(1 + 2 * 3)

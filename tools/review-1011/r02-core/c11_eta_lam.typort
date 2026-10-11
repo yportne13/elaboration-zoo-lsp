@@ -1,0 +1,5 @@
+// probe: eta-expanded application still evaluates
+// expect: stdout /2/
+def f: Nat -> Nat = n => n + 1
+def g: Nat -> Nat = n => f(n)
+println(g(1))

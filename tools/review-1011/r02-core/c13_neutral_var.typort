@@ -1,0 +1,4 @@
+// probe: printing a function value (neutral) must not crash
+// expect: ok
+def f(n: Nat): Nat = n + 1
+println(f)

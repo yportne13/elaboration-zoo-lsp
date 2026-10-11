@@ -1,0 +1,4 @@
+// probe: semicolon after decl (probe: accepted or error?)
+// expect: error /error/
+def x: Nat = 1;
+println(x)

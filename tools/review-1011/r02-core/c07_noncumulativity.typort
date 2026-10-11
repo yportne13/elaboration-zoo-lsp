@@ -1,0 +1,4 @@
+// probe: Type 0 : Type 1 (a single step is fine)
+// expect: ok
+def T: Type 1 = Type 0
+println(0)

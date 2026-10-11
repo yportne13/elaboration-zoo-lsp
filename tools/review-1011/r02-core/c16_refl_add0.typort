@@ -1,0 +1,4 @@
+// probe: refl proves closed arithmetic equalities
+// expect: ok
+def p: Eq(nat_add(2,3), 5) = rfl
+println(p)

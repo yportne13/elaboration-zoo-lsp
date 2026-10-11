@@ -1,0 +1,4 @@
+// probe: nested block comments (are they nesting?)
+// expect: ok
+/* outer /* inner */ still outer */ def x: Nat = 1
+println(x)

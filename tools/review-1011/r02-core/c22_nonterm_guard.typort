@@ -1,0 +1,3 @@
+// probe: self-call with no structural decrease: termination checker verdict
+// expect: error /termination|error/
+def bad(n: Nat): Nat = bad(n)

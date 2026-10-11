@@ -1,0 +1,5 @@
+// probe: stuck term reduces when instantiated: Eq(f 0, 1) holds by refl
+// expect: ok
+def f(n: Nat): Nat = n + 1
+def pEq: Eq(f(0), 1) = rfl
+println(pEq)

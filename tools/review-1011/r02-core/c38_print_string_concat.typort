@@ -1,0 +1,3 @@
+// probe: string primop evaluates
+// expect: stdout /foobar/
+println(string_concat("foo", "bar"))

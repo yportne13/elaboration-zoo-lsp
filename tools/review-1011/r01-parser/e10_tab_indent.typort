@@ -1,0 +1,5 @@
+// probe: tab indentation
+// expect: ok
+def f(x: Nat): Nat =
+	x + 1
+println(f(1))

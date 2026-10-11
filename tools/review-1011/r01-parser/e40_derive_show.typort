@@ -1,0 +1,5 @@
+// probe: #[derive(Show)] enum; one-line multi-ctor braces need newlines (layout)
+// expect: error /error/
+#[derive(Show)]
+enum Color { red green }
+println(Color.red)

@@ -1,0 +1,4 @@
+// probe: nested beta redexes fully evaluate
+// expect: stdout /10/
+def add(x: Nat, y: Nat): Nat = x + y
+println(add(add(1,2), add(3,4)))

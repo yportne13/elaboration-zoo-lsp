@@ -1,0 +1,6 @@
+// probe: let shadows parameter
+// expect: stdout /10/
+def f(x: Nat): Nat =
+  let x: Nat = 10;
+  x
+println(f(1))

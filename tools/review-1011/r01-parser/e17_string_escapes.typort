@@ -1,0 +1,4 @@
+// probe: string escape sequences parse
+// expect: ok
+def s: String = "a\nb\"c"
+println(s)

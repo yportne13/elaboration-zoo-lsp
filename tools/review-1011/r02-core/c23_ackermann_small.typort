@@ -1,0 +1,4 @@
+// probe: nested recursion (ack 2 3 = 9) evaluates
+// expect: stdout /9/
+def ack(m: Nat, n: Nat): Nat = match m { case zero => n + 1 case succ(mm) => match n { case zero => ack(mm, 1) case succ(nn) => ack(mm, ack(m, nn)) } }
+println(ack(2, 3))

@@ -1,0 +1,4 @@
+// probe: higher-order application
+// expect: stdout /7/
+def twice(f: Nat -> Nat, x: Nat): Nat = f(f(x))
+println(twice(n => n + 3, 1))

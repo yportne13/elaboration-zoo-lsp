@@ -1,0 +1,8 @@
+// probe: match arms parse with varied spacing
+// expect: stdout /s/
+def n: Nat = 2
+def r: String = match n {
+  case zero => "z"
+  case succ(m) => "s"
+}
+println(r)

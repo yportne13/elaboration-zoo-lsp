@@ -1,0 +1,4 @@
+// probe: explicit implicit application f[Nat]
+// expect: stdout /1/
+def f[A: Type 0](x: A): A = x
+println(f[Nat](1))

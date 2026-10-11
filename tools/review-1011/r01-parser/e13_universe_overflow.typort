@@ -1,0 +1,3 @@
+// probe: universe level beyond u32 must be a parser error (F2 pin)
+// expect: error /error/
+def U: Type 4294967296 = Type 0

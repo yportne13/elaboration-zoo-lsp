@@ -1,0 +1,5 @@
+// probe: partial application via currying
+// expect: stdout /42/
+def add(x: Nat, y: Nat): Nat = x + y
+def inc: Nat -> Nat = add(1)
+println(inc(41))

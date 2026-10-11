@@ -1,0 +1,5 @@
+// probe: line comment inside call args
+// expect: ok
+def r: Nat = succ( // c
+  zero)
+println(r)

@@ -1,0 +1,4 @@
+// probe: space-separated args inside call parens
+// expect: error /error/
+def add2(x: Nat, y: Nat): Nat = x + y
+println(add2(1 2))

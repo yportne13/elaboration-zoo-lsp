@@ -1,0 +1,4 @@
+// probe: beta: identity application evaluates
+// expect: stdout /42/
+def id (A : Type 0)(x : A): A = x
+println(id[Nat](41) + 1)

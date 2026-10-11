@@ -1,0 +1,4 @@
+// probe: GADT-index function type checks with neutral index
+// expect: error /unsolved/
+enum Vec[A](len: Nat) { nil -> Vec[A] 0 cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (l + 1) }
+def head[A: Type 0](l: Nat)(v: Vec[A] (l + 1)): A = _

@@ -1,0 +1,4 @@
+// probe: trailing comma in parameter list is accepted
+// expect: ok
+def f(x: Nat,): Nat = x
+println(f(1))
