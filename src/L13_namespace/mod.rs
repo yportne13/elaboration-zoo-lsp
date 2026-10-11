@@ -4496,10 +4496,14 @@ pub fn format_check_warning(line: &str) -> String {
     let parts: Vec<&str> = line.splitn(4, '|').collect();
     match parts.as_slice() {
         [code, module, signal, message] => {
+            // HDL/HDV self-check codes keep the [hdl] tag; language-level
+            // codes (TY001 Nat-defaulting notice, ...) get a neutral tag so
+            // users do not look for a hardware cause.
+            let tag = if code.starts_with("HDL") || code.starts_with("HDV") { "hdl" } else { "typort" };
             if signal.is_empty() {
-                format!("[hdl][warning] {} [{}] {}", code, module, message)
+                format!("[{}][warning] {} [{}] {}", tag, code, module, message)
             } else {
-                format!("[hdl][warning] {} [{}] {}: {}", code, module, signal, message)
+                format!("[{}][warning] {} [{}] {}: {}", tag, code, module, signal, message)
             }
         }
         _ => format!("[hdl][warning] {}", line),
