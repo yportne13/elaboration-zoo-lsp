@@ -16,7 +16,7 @@
 | R6 | 宏/规范形 | 35 | 35 PASS | r06-macros.md |
 | R7 | 命名空间 + 双引擎一致性 | 30 + 33 | 30/30 + 矩阵全一致 | r07-namespace.md |
 | R8 | HDL→Verilog 语义 | 30 | 30 PASS | r08-hdl.md |
-| R9 | LSP 行为 | 27 测试(50+ 断言) | 27 PASS | r09-lsp.md |
+| R9 | LSP 行为 | 30 测试(60+ 断言) | 30 PASS | r09-lsp.md |
 | R10 | 性能(33 计时维度)+ 门禁 | 33 | 数据齐 | r10-perf.md |
 
 回归钉套件(随轮新增,全部进 `cargo test`):`r1_parser_regression`(4)、
