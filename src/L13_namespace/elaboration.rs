@@ -149,6 +149,24 @@ struct TermWalker<'a> {
     pat_marks: Vec<bool>,
 }
 
+/// 无参 def 的注解驱动体是一串 lambda（`bod = body`，params 为空），
+/// 这些绑定者正是 params 形式下的结构根（2026-10-11 R4：`def f: Nat ->
+/// Nat = n => match n { case succ(m) => f(m) }` 曾被误判非终止——
+/// `params.len() == 0` 使 λ 绑定者不算结构根）。只数前导显式 λ，且仅在
+/// params 为空时启用（params 形式的前导 λ 已由 params.len() 覆盖）。
+fn leading_lam_arity(t: &Tm) -> usize {
+    let mut n = 0;
+    let mut cur = t;
+    while let Tm::Lam(_, i, b) = cur {
+        if !matches!(i, Icit::Expl) {
+            break;
+        }
+        n += 1;
+        cur = b.as_ref();
+    }
+    n
+}
+
 /// Level A 检查：`Err(())` = 存在无法证明终止的自调用（调用方渲染 decl
 /// 错误；错误恢复按既有失败 decl 通道自动生效）。
 fn check_def_termination(
@@ -1419,7 +1437,11 @@ impl Infer {
                     // 体检查通过后、wrap 前走查自调用；失败按普通 decl 错误
                     // 上抛（infer_after_prefix 的 cxt.clone 隔离 / 下游错误
                     // 恢复自动生效）。
-                    check_def_termination(&fake_cxt.decl, &name.data, params.len(), &t_checked)
+                    // 无参 def：注解驱动体的前导 λ 是结构根（leading_lam_arity，
+                    // 2026-10-11 R4）。params 形式保持 params.len() 口径。
+                    let term_n_params = params.len()
+                        + if params.is_empty() { leading_lam_arity(&t_checked) } else { 0 };
+                    check_def_termination(&fake_cxt.decl, &name.data, term_n_params, &t_checked)
                         .map_err(|()| {
                             Error(
                                 name.to_span().map(|_| format!(
@@ -1452,7 +1474,7 @@ impl Infer {
                                 .map(|(i, _)| i)
                                 .collect();
                             if to_default.is_empty() {
-                                false
+                                None
                             } else {
                                 // Phase 2: mutate those metas (mutable borrow)
                                 for &idx in &to_default {
@@ -1462,18 +1484,34 @@ impl Infer {
                                 }
                                 let _ = self.solve_multi_trait(&fake_cxt, MetaVar(this_meta as u32), false);
                                 if t_tm.no_metas(self, &ret_cxt.decl, ret_cxt.lvl).is_none() {
-                                    true
+                                    Some(to_default.len())
                                 } else {
                                     // Restore original meta state for proper error reporting
                                     self.meta = saved_meta;
-                                    false
+                                    None
                                 }
                             }
                         } else {
-                            false
+                            None
                         };
 
-                        if !nat_solved {
+                        // Silent Nat-defaulting changed program meaning invisibly:
+                        // `def f: _ = 3` and `def f = x => x` both became
+                        // Nat-typed with no diagnostic (2026-10-11 R3). Surface
+                        // it as a TY001 warning on the CheckIssues channel (the
+                        // same drain/anchor the HDL self-checks use) so the
+                        // defaulting is visible instead of load-bearing magic.
+                        if let Some(n) = nat_solved {
+                            super::cxt::push_check_issue(
+                                self,
+                                "TY001",
+                                &name.data,
+                                "",
+                                &format!("{n} unsolved type meta(s) defaulted to Nat; write the type explicitly if this is wrong"),
+                            );
+                        }
+
+                        if nat_solved.is_none() {
                             let err_msg = if let Val::Sum(name, params, _, true) = oty.as_ref() {
                                 let has_flex = params.iter().any(|(_, val, _, _)| {
                                     matches!(self.force(&ret_cxt.decl, val).as_ref(), Val::Flex(..))
@@ -2125,6 +2163,25 @@ impl Infer {
                                 }
                             }
                         }
+                    }
+                    // Reorder to the trait record's field order (trait's own
+                    // methods first, then inherited ones — the order the
+                    // TraitDecl arm builds the record enum from all_methods).
+                    // The instance record applies `methods` positionally, so an
+                    // impl that declares a supertrait method before its own
+                    // used to swap the record slots and field projection
+                    // returned the WRONG method implementation (2026-10-11 R5:
+                    // `d.sm` ran the supertrait's `bm` body). Stable sort;
+                    // methods not listed for the trait keep their relative
+                    // order at the end.
+                    if let Some((_, _, _, trait_methods)) = self.trait_definition.get(&trait_full).cloned() {
+                        methods.sort_by_key(|(decl, _)| {
+                            let mname = match decl {
+                                Decl::Def { name, .. } => name.data.clone(),
+                                _ => SmolStr::new("\u{0}unlisted"),
+                            };
+                            trait_methods.iter().position(|m| m.0.data == mname).unwrap_or(usize::MAX)
+                        });
                     }
                     let mut ret = std::iter::once(name.clone())
                         .chain(trait_params.clone())
