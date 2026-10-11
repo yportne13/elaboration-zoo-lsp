@@ -1,0 +1,5 @@
+// probe: four-level package path
+// expect: stdout /10/
+package a.b.c.d
+def deep_fn(x: Nat): Nat = x + 1
+println(a.b.c.d.deep_fn(9))

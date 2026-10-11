@@ -1,0 +1,8 @@
+// probe: struct + factory in a package
+// expect: stdout /7/
+package boxes
+struct W2 {
+  v: Nat
+}
+def mk(x: Nat): W2 = W2.mk(x)
+println(boxes.mk(7).v)

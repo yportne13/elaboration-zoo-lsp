@@ -1,0 +1,11 @@
+// probe: suffix fallback only for known decl-key heads (works here)
+// expect: stdout /9/
+package ff
+struct TT {
+  n: Nat
+}
+impl TT {
+  def mux(k: Nat): Nat = k
+}
+def tt: TT = TT.mk(4)
+println(tt.mux(9))

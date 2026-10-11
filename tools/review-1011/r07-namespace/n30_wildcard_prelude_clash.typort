@@ -1,0 +1,11 @@
+// probe: user zero shadows prelude ctor ambiguously (probe: unify error)
+// expect: error /error/
+package mylib.math
+def sq(x: Nat): Nat = x * x
+def half(x: Nat): Nat = nat_div(x, 2)
+package other
+def other_fn(x: Nat): Nat = x + 100
+def zero(x: Nat): Nat = x
+import mylib.math._
+println(zero(3))
+println(nat_add(1, 1))

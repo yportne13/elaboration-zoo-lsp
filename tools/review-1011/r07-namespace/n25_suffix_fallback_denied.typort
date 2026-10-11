@@ -1,0 +1,4 @@
+// probe: suffix fallback denied on a plain function value
+// expect: error /error/
+def plain(x: Nat): Nat = x
+println(plain.mux(1))
