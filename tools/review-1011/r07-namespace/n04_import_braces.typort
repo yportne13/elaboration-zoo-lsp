@@ -1,0 +1,9 @@
+// probe: braced selective import
+// expect: stdout /40/
+package mylib.math
+def sq(x: Nat): Nat = x * x
+def half(x: Nat): Nat = nat_div(x, 2)
+package other
+def other_fn(x: Nat): Nat = x + 100
+import mylib.math.{ sq, half }
+println(sq(6) + half(8))

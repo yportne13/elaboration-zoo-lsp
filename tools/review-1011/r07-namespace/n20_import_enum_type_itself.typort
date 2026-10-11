@@ -1,0 +1,9 @@
+// probe: import the type; ctor via prelude-like bare alias (probe)
+// expect: stdout /1/
+package shapes3
+enum Fruit3 {
+  apple3
+}
+import shapes3.Fruit3
+def f(x: Fruit3): Nat = 1
+println(f(apple3))

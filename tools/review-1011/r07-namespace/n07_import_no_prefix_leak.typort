@@ -1,0 +1,9 @@
+// probe: braced import does NOT bring the mylib prefix itself (S3)
+// expect: stdout /4/
+package mylib.math
+def sq(x: Nat): Nat = x * x
+def half(x: Nat): Nat = nat_div(x, 2)
+package other
+def other_fn(x: Nat): Nat = x + 100
+import mylib.math.{ sq }
+println(sq(2))

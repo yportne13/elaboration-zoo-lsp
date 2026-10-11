@@ -1,0 +1,8 @@
+// probe: both packages usable in one file
+// expect: stdout /106/
+package mylib.math
+def sq(x: Nat): Nat = x * x
+def half(x: Nat): Nat = nat_div(x, 2)
+package other
+def other_fn(x: Nat): Nat = x + 100
+println(mylib.math.sq(2) + other.other_fn(2))

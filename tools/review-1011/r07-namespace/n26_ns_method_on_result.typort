@@ -1,0 +1,12 @@
+// probe: inherent impl method in a package still resolves
+// expect: stdout /12/
+package mylib.math
+def sq(x: Nat): Nat = x * x
+def half(x: Nat): Nat = nat_div(x, 2)
+package other
+def other_fn(x: Nat): Nat = x + 100
+impl Nat {
+  def double2: Nat = this + this
+}
+def six: Nat = 6
+println(six.double2)

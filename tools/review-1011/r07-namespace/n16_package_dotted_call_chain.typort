@@ -1,0 +1,9 @@
+// probe: qualified calls inside another package's def
+// expect: stdout /8/
+package mylib.math
+def sq(x: Nat): Nat = x * x
+def half(x: Nat): Nat = nat_div(x, 2)
+package other
+def other_fn(x: Nat): Nat = x + 100
+def h(x: Nat): Nat = mylib.math.half(x) + mylib.math.half(x)
+println(h(8))

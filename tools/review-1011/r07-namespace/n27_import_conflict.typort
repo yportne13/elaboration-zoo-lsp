@@ -1,0 +1,12 @@
+// probe: two imports of different names coexist
+// expect: stdout /3/
+package mylib.math
+def sq(x: Nat): Nat = x * x
+def half(x: Nat): Nat = nat_div(x, 2)
+package other
+def other_fn(x: Nat): Nat = x + 100
+package p2
+def dup(x: Nat): Nat = x + 1
+import mylib.math.sq
+import p2.dup
+println(sq(1) + dup(1))

@@ -1,0 +1,8 @@
+// probe: import Type._ brings constructors (S1/S3 semantics)
+// expect: stdout /apple2/
+package shapes2
+enum Fruit2 {
+  apple2
+}
+import shapes2.Fruit2._
+println(apple2)

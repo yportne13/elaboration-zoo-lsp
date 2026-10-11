@@ -1,0 +1,3 @@
+// probe: unknown namespace prefix errors
+// expect: error /error/
+println(nosuch.fn(1))

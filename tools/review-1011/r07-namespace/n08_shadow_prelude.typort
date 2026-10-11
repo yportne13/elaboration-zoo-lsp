@@ -1,0 +1,6 @@
+// probe: D1 confirmed: prelude bare alias wins over imported user def
+// expect: stdout /3/
+package mm
+def nat_add(x: Nat, y: Nat): Nat = x * 10 + y
+import mm.nat_add
+println(nat_add(1, 2))

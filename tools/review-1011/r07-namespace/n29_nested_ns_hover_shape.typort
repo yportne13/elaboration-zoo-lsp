@@ -1,0 +1,8 @@
+// probe: fully-qualified type and ctor paths compose
+// expect: stdout /1/
+package n29
+enum E9 {
+  c9
+}
+def g(x: E9): Nat = 1
+println(n29.g(n29.E9.c9))

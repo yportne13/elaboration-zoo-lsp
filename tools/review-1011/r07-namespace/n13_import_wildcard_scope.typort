@@ -1,0 +1,11 @@
+// probe: wildcard import then local def of same name
+// expect: stdout /5/
+package mylib.math
+def sq(x: Nat): Nat = x * x
+def half(x: Nat): Nat = nat_div(x, 2)
+package other
+def other_fn(x: Nat): Nat = x + 100
+import mylib.math._
+def sq(x: Nat): Nat = x
+println(sq(5))
+println(mylib.math.sq(5))

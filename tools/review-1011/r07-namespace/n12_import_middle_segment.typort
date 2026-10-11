@@ -1,0 +1,9 @@
+// probe: import middle segment NOT supported (D2: last seg is a member)
+// expect: error /error/
+package mylib.math
+def sq(x: Nat): Nat = x * x
+def half(x: Nat): Nat = nat_div(x, 2)
+package other
+def other_fn(x: Nat): Nat = x + 100
+import mylib.math
+println(math.sq(3))

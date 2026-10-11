@@ -1,0 +1,4 @@
+// probe: package decl with no members still parses
+// expect: stdout /0/
+package lonely
+println(0)

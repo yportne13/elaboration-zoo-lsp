@@ -1,0 +1,8 @@
+// probe: package-prefixed def called with full path
+// expect: stdout /16/
+package mylib.math
+def sq(x: Nat): Nat = x * x
+def half(x: Nat): Nat = nat_div(x, 2)
+package other
+def other_fn(x: Nat): Nat = x + 100
+println(mylib.math.sq(4))
