@@ -1,0 +1,11 @@
+// probe: async read is a continuous assign
+// mode: emit -- --top MemR
+// expect: stdout assign
+module MemR {
+  input addr = UInt[8]
+  let m = memUInt(8, 16)
+  let q = m.readAsync(addr)
+  output out = UInt[8]
+  out := q
+}
+println(moduleTreeVL(MemR.create.tree))

@@ -1,0 +1,10 @@
+// probe: a := b direction probe verdict
+// mode: emit -- --top Bdl1
+// expect: stdout assign a = b;
+module Bdl1 {
+  input a = UInt[8]
+  output b = UInt[8]
+  b := a
+  a := b
+}
+println(moduleTreeVL(Bdl1.create.tree))

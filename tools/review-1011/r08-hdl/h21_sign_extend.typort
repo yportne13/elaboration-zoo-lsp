@@ -1,0 +1,9 @@
+// probe: SInt expand sign-extends to 5 bits
+// mode: emit -- --top Sxt8
+// expect: stdout s[3], s
+module Sxt8 {
+  input s = SInt[4]
+  output w = SInt[5]
+  w := s.expand
+}
+println(moduleTreeVL(Sxt8.create.tree))

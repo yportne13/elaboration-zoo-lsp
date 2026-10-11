@@ -1,0 +1,7 @@
+// probe: undriven output accepted (probe verdict)
+// mode: emit -- --top Unassigned
+// expect: stdout output
+module Unassigned {
+  output b = UInt[8]
+}
+println(moduleTreeVL(Unassigned.create.tree))

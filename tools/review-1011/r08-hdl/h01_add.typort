@@ -1,0 +1,10 @@
+// probe: a + b emits an addition
+// mode: emit -- --top Add8
+// expect: stdout assign s = (a + b);
+module Add8 {
+  let a = UInt[8]
+  let b = UInt[8]
+  let s = UInt[8]
+  s := a + b
+}
+println(moduleTreeVL(Add8.create.tree))

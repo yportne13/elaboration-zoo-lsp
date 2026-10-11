@@ -1,0 +1,11 @@
+// probe: ? : desugars to mux
+// mode: emit -- --top Tern8
+// expect: stdout ?
+module Tern8 {
+  let c = Bool
+  let a = UInt[8]
+  let b = UInt[8]
+  let r = UInt[8]
+  r := c ? a : b
+}
+println(moduleTreeVL(Tern8.create.tree))

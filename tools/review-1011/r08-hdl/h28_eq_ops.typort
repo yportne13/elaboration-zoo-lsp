@@ -1,0 +1,10 @@
+// probe: === equality emits Verilog ==
+// mode: emit -- --top EqOps
+// expect: stdout (a == b)
+module EqOps {
+  let a = UInt[8]
+  let b = UInt[8]
+  let e = Bool
+  e := a === b
+}
+println(moduleTreeVL(EqOps.create.tree))

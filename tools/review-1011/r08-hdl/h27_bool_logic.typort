@@ -1,0 +1,10 @@
+// probe: boolean && maps to Verilog &&
+// mode: emit -- --top BoolL
+// expect: stdout &&
+module BoolL {
+  let a = Bool
+  let b = Bool
+  let r = Bool
+  r := (a && b) || !a
+}
+println(moduleTreeVL(BoolL.create.tree))

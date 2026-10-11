@@ -1,0 +1,10 @@
+// probe: UInt[8] + UInt[4]: unsolved meta error (probe verdict)
+// mode: emit -- --top WM8
+// expect: error /error/
+module WM8 {
+  let a = UInt[8]
+  let b = UInt[4]
+  let r = UInt[8]
+  r := a + b
+}
+println(moduleTreeVL(WM8.create.tree))

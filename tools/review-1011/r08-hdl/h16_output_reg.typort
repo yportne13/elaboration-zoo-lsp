@@ -1,0 +1,8 @@
+// probe: output reg port emits a clocked output
+// mode: emit -- --top OReg8
+// expect: stdout output reg
+module OReg8 {
+  output reg q = UInt[8]
+  q := q + 1
+}
+println(moduleTreeVL(OReg8.create.tree))

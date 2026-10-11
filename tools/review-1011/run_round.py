@@ -52,7 +52,7 @@ def parse_header(text: str) -> dict:
     return hdr
 
 
-def classify(expect: str | None, stdout: str, stderr: str, code: int, timed_out: bool) -> tuple[str, str]:
+def classify(expect: str | None, stdout: str, stderr: str, code: int, timed_out: bool, emit: bool = False) -> tuple[str, str]:
     """Return (verdict, note). verdict in PASS/FAIL/TIMEOUT/NOEXPECT."""
     if expect is None:
         return ("NOEXPECT", "no // expect: header")
@@ -73,7 +73,12 @@ def classify(expect: str | None, stdout: str, stderr: str, code: int, timed_out:
         lines = [l for l in stderr.splitlines() if "error:" in l or "panicked" in l]
         return ("FAIL", " | ".join(lines[:2]) or f"exit={code}")
     kind, _, pat = expect.partition(" ")
-    if kind == "stdout":
+    if kind == "stdout" and emit:
+        # `typort emit` writes the Verilog to fd 1; match the raw stdout.
+        if "error:" in stderr or "panicked" in stderr:
+            return ("FAIL", "expected Verilog but errors present")
+        blob = stdout
+    elif kind == "stdout":
         # A program-output expectation means println notes -- and a program
         # with errors cannot have produced them.  Matching the raw combined
         # transcript let rendered line numbers ("3 | ...") and error text
@@ -137,7 +142,7 @@ def main() -> int:
     counts = {"PASS": 0, "FAIL": 0, "TIMEOUT": 0, "NOEXPECT": 0}
     for f in files:
         out, err, code, to, dt, hdr = run_one(args.bin, f, args.wall)
-        verdict, note = classify(hdr["expect"], out, err, code, to)
+        verdict, note = classify(hdr["expect"], out, err, code, to, emit=hdr["mode"].startswith("emit"))
         if hdr["expect_not"]:
             blob = out + err
             if hdr["expect_not"] in blob:

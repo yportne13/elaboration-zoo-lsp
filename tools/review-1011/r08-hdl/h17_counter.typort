@@ -1,0 +1,9 @@
+// probe: counter wrap is (~value == 0) combinational
+// mode: emit -- --top Cnt8
+// expect: stdout == 0)
+module Cnt8 {
+  let c = counter(8)
+  let w = Bool
+  w := c.willOverflow
+}
+println(moduleTreeVL(Cnt8.create.tree))

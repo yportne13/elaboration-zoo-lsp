@@ -1,0 +1,9 @@
+// probe: register with async reset value
+// mode: emit -- --top RegI8
+// expect: stdout posedge reset
+module RegI8 {
+  let a = UInt[8]
+  reg r = UInt[8] init 0
+  r := a
+}
+println(moduleTreeVL(RegI8.create.tree))

@@ -1,0 +1,9 @@
+// probe: UInt -> Bits cast
+// mode: emit -- --top Cast8
+// expect: stdout assign b = a;
+module Cast8 {
+  let a = UInt[8]
+  let b = Bits[8]
+  b := a.asBits
+}
+println(moduleTreeVL(Cast8.create.tree))

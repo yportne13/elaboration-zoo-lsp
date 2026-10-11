@@ -1,0 +1,10 @@
+// probe: ## concatenation emits {a, b}
+// mode: emit -- --top Cat8
+// expect: stdout {a, b}
+module Cat8 {
+  let a = UInt[4]
+  let b = UInt[4]
+  let c = UInt[8]
+  c := a ## b
+}
+println(moduleTreeVL(Cat8.create.tree))
