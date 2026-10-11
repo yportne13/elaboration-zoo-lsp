@@ -1,0 +1,6 @@
+// probe: $n used twice creates duplicate defs (probe)
+// expect: error /error/
+macro_rules two_use {
+  ($n:ident) => { def $n: Nat = 1; def $n: Nat = 2 };
+}
+two_use tu

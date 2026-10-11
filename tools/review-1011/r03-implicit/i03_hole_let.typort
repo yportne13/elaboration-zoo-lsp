@@ -1,0 +1,5 @@
+// probe: hole in let RHS
+// expect: error /unsolved/
+def f: Nat =
+  let y: Nat = _;
+  y

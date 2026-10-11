@@ -1,0 +1,12 @@
+// probe: Opt none/some exhaustive
+// expect: stdout /0/
+enum Opt[A: Type 0] {
+  none -> Opt[A]
+  some(v: A) -> Opt[A]
+}
+def f[A: Type 0](o: Opt[A]): Nat = match o {
+  case none => 0
+  case some(v) => 1
+}
+println(f(none))
+println(f(some(8)))

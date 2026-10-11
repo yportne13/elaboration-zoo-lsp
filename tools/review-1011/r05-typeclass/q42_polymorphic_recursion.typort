@@ -1,0 +1,14 @@
+// probe: generic inherent impl with receiver recursion
+// expect: stdout /2/
+enum L2[A: Type 0] {
+  n2 -> L2[A]
+  c2(x: A, tl: L2[A]) -> L2[A]
+}
+impl[A: Type 0] L2[A] {
+  def lenOf: Nat = match this {
+    case n2 => 0
+    case c2(x, tl) => tl.lenOf + 1
+  }
+}
+def ll: L2[Nat] = c2(1, c2(2, n2[Nat]))
+println(ll.lenOf)

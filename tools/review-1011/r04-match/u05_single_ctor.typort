@@ -1,0 +1,9 @@
+// probe: single-constructor match
+// expect: stdout /1/
+enum UOne {
+  u1
+}
+def f(u: UOne): Nat = match u {
+  case u1 => 1
+}
+println(f(u1))

@@ -1,0 +1,4 @@
+// probe: prelude show on Nat via receiver
+// expect: stdout /42/
+def ff: Nat = 42
+println(ff.show)

@@ -1,4 +1,7 @@
 // probe: 100-deep result quoting round-trips
 // expect: stdout /100/
-def big(n: Nat): Nat = match n { case zero => 0 case succ(m) => big(m) + 1 }
-println(big(100))
+def big2(n: Nat): Nat = match n {
+  case zero => 0
+  case succ(m) => big2(m) + 1
+}
+println(big2(100))

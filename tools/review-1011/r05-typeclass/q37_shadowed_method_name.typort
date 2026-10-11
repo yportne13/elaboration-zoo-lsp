@@ -1,0 +1,12 @@
+// probe: top-level fn and trait method coexist with the same name
+// expect: stdout /5/
+trait SameN {
+  def m7: Nat
+}
+impl SameN for Nat {
+  def m7: Nat = 5
+}
+def m7(x: Nat): Nat = 6
+def zz: Nat = 0
+println(zz.m7)
+println(m7(0))

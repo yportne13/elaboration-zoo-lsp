@@ -1,0 +1,8 @@
+// probe: impl constrained by a prelude trait (probe)
+// expect: error /error/
+trait Needs {
+  def need_v(x: Nat): Nat
+}
+impl[T][s: Show[T]] Needs for T {
+  def need_v(x: Nat): Nat = 1
+}

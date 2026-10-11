@@ -1,0 +1,4 @@
+// probe: tuple literal creates value
+// expect: ok
+def t = (1, 2)
+println(t)

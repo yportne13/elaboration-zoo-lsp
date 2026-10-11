@@ -1,0 +1,7 @@
+// probe: pattern binder shadows scrutinee name
+// expect: stdout /3/
+def f(n: Nat): Nat = match n {
+  case zero => 0
+  case succ(n) => n
+}
+println(f(4))

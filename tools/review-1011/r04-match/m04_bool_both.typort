@@ -1,0 +1,7 @@
+// probe: Boolean exhaustive
+// expect: stdout /0/
+def f(b: Boolean): Nat = match b {
+  case true => 1
+  case false => 0
+}
+println(f(false))

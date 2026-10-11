@@ -1,0 +1,5 @@
+// probe: unknown fragment kind is silently accepted, rule never matches (quirk)
+// expect: ok
+macro_rules uf {
+  ($x:bogus) => { def uf_r: Nat = 1 }
+}

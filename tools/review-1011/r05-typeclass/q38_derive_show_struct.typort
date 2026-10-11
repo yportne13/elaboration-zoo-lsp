@@ -1,0 +1,9 @@
+// probe: derive(Show) on struct (X.mk case keeps this.field path)
+// expect: stdout /Pts\(1, 2\)/
+#[derive(Show)]
+struct Pts {
+  x: Nat
+  y: Nat
+}
+def p: Pts = Pts.mk(1, 2)
+println(p.show)

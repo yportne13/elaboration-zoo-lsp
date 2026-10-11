@@ -1,0 +1,8 @@
+// probe: raw fragment spanning lines
+// expect: stdout /5/
+macro_rules ml {
+  ($e:raw) => { def mlr: Nat = $e };
+}
+ml (nat_add(2,
+  3))
+println(mlr)

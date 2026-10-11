@@ -1,0 +1,11 @@
+// probe: declaration-level macro expands to an enum
+// expect: stdout /y/
+macro_rules make_bool {
+  (yes) => {
+    enum Yes { y }
+  };
+}
+make_bool yes
+
+def b = y
+println(b)

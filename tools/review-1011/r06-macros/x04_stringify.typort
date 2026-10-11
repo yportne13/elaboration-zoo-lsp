@@ -1,0 +1,3 @@
+// probe: stringify builtin on an identifier
+// expect: stdout /hello123/
+println(stringify hello123)

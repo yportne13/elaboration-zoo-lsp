@@ -1,0 +1,5 @@
+// probe: multiple implicits resolved in order
+// expect: stdout /3/
+def f[A: Type 0, B: Type 0](g: A -> B, x: A): B = g(x)
+def inc(n: Nat): Nat = n + 1
+println(f[Nat, Nat](inc, 2))

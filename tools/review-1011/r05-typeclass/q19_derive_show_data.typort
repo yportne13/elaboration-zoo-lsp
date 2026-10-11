@@ -1,0 +1,7 @@
+// probe: derive(Show) single-case enum WITH ctor args (fixed R5)
+// expect: stdout /bar\(3\)/
+#[derive(Show)]
+enum Snack {
+  bar(n: Nat)
+}
+println(bar(3).show)

@@ -1,0 +1,13 @@
+// probe: all constructors covered
+// expect: stdout /3/
+enum Color {
+  red
+  green
+  blue
+}
+def f(c: Color): Nat = match c {
+  case red => 1
+  case green => 2
+  case blue => 3
+}
+println(f(blue))

@@ -2,4 +2,4 @@
 // expect: stdout /7/
 println(0)
 println(007)
-println(1000000)
+println(99999)

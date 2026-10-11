@@ -1,0 +1,3 @@
+// probe: stringify needs an identifier; numbers error
+// expect: error /error/
+println(stringify 42)

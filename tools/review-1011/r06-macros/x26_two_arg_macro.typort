@@ -1,0 +1,8 @@
+// probe: two-parameter macro with ; inside transcriber
+// expect: stdout /1/
+macro_rules pair2 {
+  ($a:ident, $b:ident) => { def $a: Nat = 1; def $b: Nat = 2 };
+}
+pair2 (p1, p2)
+println(p1)
+println(p2)

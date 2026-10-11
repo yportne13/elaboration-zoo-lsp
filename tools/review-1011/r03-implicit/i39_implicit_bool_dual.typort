@@ -1,0 +1,7 @@
+// probe: implicit solved from two positions consistently
+// expect: stdout /1/
+def pick[A: Type 0](c: Boolean)(t: A, f: A): A = match c {
+  case true => t
+  case false => f
+}
+println(pick(true, 1, 2))

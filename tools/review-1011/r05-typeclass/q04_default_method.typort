@@ -1,0 +1,9 @@
+// probe: default method body used when impl is empty
+// expect: stdout /hi/
+trait Greet {
+  def hello: String = "hi"
+}
+impl Greet for Nat {
+}
+def useG[T][d: Greet[T]](t: T): String = d.hello t
+println(useG(1))

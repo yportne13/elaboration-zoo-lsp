@@ -1,0 +1,5 @@
+// probe: GADT-style enum implicit parameter solved by constructor
+// expect: stdout /11/
+enum Wrap[A: Type 0] { wrap(v: A) -> Wrap[A] }
+def unwrap[A: Type 0](w: Wrap[A]): A = match w { case wrap(v) => v }
+println(unwrap(wrap(11)))

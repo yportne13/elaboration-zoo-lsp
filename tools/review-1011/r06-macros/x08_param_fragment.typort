@@ -1,0 +1,10 @@
+// probe: $p:param fragment
+// expect: stdout /3/
+macro_rules fnum {
+  ($p:param) => {
+    def fnm: Nat -> Nat = $p
+  };
+}
+fnum (n => n + 1)
+def v8: Nat -> Nat = fnm
+println(v8(2))

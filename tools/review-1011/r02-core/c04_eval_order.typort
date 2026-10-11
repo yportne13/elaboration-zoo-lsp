@@ -1,4 +1,4 @@
-// probe: arguments evaluate inside applications (call-by-value NBE)
+// probe: arguments evaluate inside applications
 // expect: stdout /0/
 def f(x: Nat): Nat = x * 0
 println(f(nat_add(2, 3)))

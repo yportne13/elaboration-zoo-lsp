@@ -1,0 +1,3 @@
+// probe: body type error under check mode points into the body
+// expect: error /error/
+def f: Nat -> Nat = x => x && true

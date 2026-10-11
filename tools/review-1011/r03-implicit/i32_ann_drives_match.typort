@@ -1,0 +1,7 @@
+// probe: annotation drives recursive function elaboration
+// expect: stdout /1/
+def f: Nat -> Nat = n => match n {
+  case zero => 1
+  case succ(m) => f(m)
+}
+println(f(3))

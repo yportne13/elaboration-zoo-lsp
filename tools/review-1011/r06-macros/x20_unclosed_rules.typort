@@ -1,0 +1,4 @@
+// probe: unclosed macro_rules braces error
+// expect: error /error/
+macro_rules uc {
+  (a) => { def uc_r: Nat = 1 }

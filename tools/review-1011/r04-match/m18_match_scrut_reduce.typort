@@ -1,0 +1,7 @@
+// probe: scrutinee reduces before match
+// expect: stdout /2/
+def f: Nat = match 2 + 1 {
+  case zero => 0
+  case succ(m) => m
+}
+println(f)

@@ -1,0 +1,4 @@
+// probe: implicit lambda inserted when checking against implicit Pi
+// expect: stdout /2/
+def f: (x: Nat) -> [b: Boolean] -> Nat = x => [b] => x
+println(f(2))

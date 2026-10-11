@@ -1,0 +1,4 @@
+// probe: hole passed as an explicit implicit: solved from the next arg
+// expect: stdout /3/
+def idd[A: Type 0](x: A): A = x
+println(idd[_](3))

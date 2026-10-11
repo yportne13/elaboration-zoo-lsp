@@ -1,0 +1,4 @@
+// probe: term binder shadowing an implicit type name
+// expect: stdout /8/
+def f[A: Type 0](A: Nat): Nat = A
+println(f[Nat](8))

@@ -1,0 +1,3 @@
+// probe: hole in def body -> unsolved meta error
+// expect: error /unsolved/
+def x: Nat = _

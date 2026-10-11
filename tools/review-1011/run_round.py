@@ -73,9 +73,23 @@ def classify(expect: str | None, stdout: str, stderr: str, code: int, timed_out:
         lines = [l for l in stderr.splitlines() if "error:" in l or "panicked" in l]
         return ("FAIL", " | ".join(lines[:2]) or f"exit={code}")
     kind, _, pat = expect.partition(" ")
-    # println notes are emitted on stderr alongside diagnostics; match the
-    # combined transcript so `stdout:` means "program output" not "fd 1".
-    blob = stdout + "\n" + stderr if kind == "stdout" else stderr
+    if kind == "stdout":
+        # A program-output expectation means println notes -- and a program
+        # with errors cannot have produced them.  Matching the raw combined
+        # transcript let rendered line numbers ("3 | ...") and error text
+        # ("unreachable pattern: 3") satisfy /3/, masking real failures
+        # (found while adjudicating round 4; rounds 2/3 verdicts re-derived).
+        if "error:" in stderr or "panicked" in stderr:
+            return ("FAIL", "expected program output but errors present")
+        notes = "\n".join(l for l in (stdout + "\n" + stderr).splitlines()
+                          if l.startswith("note:"))
+        blob = notes
+    elif kind == "warn":
+        # match rendered warning lines only (e.g. the TY001 defaulting notice)
+        blob = "\n".join(l for l in (stdout + "\n" + stderr).splitlines()
+                         if "warning" in l)
+    else:
+        blob = stderr
     if pat.startswith("/") and pat.endswith("/") and len(pat) > 2:
         hit = re.search(pat[1:-1], blob) is not None
     else:

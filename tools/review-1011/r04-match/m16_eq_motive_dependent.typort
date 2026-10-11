@@ -1,0 +1,6 @@
+// probe: dependent motive: refl arm transports x to y
+// expect: ok
+def f[A: Type 0](x: A, y: A)(e: Eq(x, y)): Eq(y, x) = match e {
+  case refl(a) => rfl
+}
+println(f(1, 1)(rfl))

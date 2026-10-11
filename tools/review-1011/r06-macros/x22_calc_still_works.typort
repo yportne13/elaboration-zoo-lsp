@@ -1,0 +1,7 @@
+// probe: prelude calc macro on a trivial chain
+// expect: ok
+def r: Eq(nat_add(1, 1), 2) =
+  calc {
+    nat_add(1, 1) = 2 by rfl
+  }
+println(r)

@@ -1,0 +1,3 @@
+// probe: nat_eq works
+// expect: stdout /true/
+println(nat_eq(3, 3))

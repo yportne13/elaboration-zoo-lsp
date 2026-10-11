@@ -1,0 +1,9 @@
+// probe: macro name as let binder does not trigger expansion
+// expect: stdout /99/
+macro_rules hy {
+  ($n:ident) => { def $n: Nat = 1 };
+}
+def shadow_test: Nat =
+  let hy: Nat = 99;
+  hy
+println(shadow_test)

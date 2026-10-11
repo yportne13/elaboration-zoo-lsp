@@ -1,0 +1,5 @@
+// probe: bare lambda: lazy domain meta, monomorphic after first use (quirk)
+// expect: stdout /1/
+// expect-not: error:
+def f = x => x
+println(f(1))

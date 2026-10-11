@@ -1,0 +1,8 @@
+// probe: struct make + field access
+// expect: stdout /34/
+struct Pair {
+  fst: Nat
+  snd: Nat
+}
+def p: Pair = Pair.mk(3, 4)
+println(p.fst * 10 + p.snd)

@@ -1,0 +1,5 @@
+// probe: implicit type parameter on a match function (hole in dead arm)
+// expect: error /unsolved/
+enum Option[A: Type 0] { none -> Option[A] some(v: A) -> Option[A] }
+def d[A: Type 0](o: Option[A]): A = match o { case none => _ case some(v) => v }
+println(d(some(9)))

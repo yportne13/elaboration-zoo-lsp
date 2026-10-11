@@ -1,0 +1,10 @@
+// probe: match inside an arm body, two-arg call
+// expect: stdout /100/
+def f(n: Nat, m: Nat): Nat = match n {
+  case zero => match m {
+    case zero => 100
+    case succ(k) => k
+  }
+  case succ(k) => k
+}
+println(f(0, 0))

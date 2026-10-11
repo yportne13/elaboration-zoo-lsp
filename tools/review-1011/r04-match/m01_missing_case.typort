@@ -1,0 +1,11 @@
+// probe: missing constructor blue -> non-exhaustive error
+// expect: error /exhaustive|error/
+enum Color {
+  red
+  green
+  blue
+}
+def f(c: Color): Nat = match c {
+  case red => 1
+  case green => 2
+}

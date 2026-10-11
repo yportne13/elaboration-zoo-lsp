@@ -1,0 +1,3 @@
+// probe: arity mismatch between annotation and lambda
+// expect: error /error/
+def f: Nat -> Nat -> Nat = x => x

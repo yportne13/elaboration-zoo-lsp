@@ -1,0 +1,7 @@
+// probe: inherent impl adds a method (receiver dot-call)
+// expect: stdout /15/
+impl Nat {
+  def triple: Nat = this * 3
+}
+def five: Nat = 5
+println(five.triple)

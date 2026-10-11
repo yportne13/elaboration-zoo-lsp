@@ -1,0 +1,9 @@
+// probe: user operator trait ++ as infix WORKS
+// expect: stdout /101/
+trait Plus2[T, O: outParam(Type 0)] {
+  def ++(that: T): O
+}
+impl Plus2[Nat, Nat] for Nat {
+  def ++(that: Nat): Nat = this + 100
+}
+println(1 ++ 2)

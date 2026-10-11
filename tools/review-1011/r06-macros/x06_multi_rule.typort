@@ -1,0 +1,8 @@
+// probe: second rule matches
+// expect: stdout /2/
+macro_rules pick {
+  (a) => { def picked: Nat = 1 };
+  (b) => { def picked: Nat = 2 };
+}
+pick b
+println(picked)

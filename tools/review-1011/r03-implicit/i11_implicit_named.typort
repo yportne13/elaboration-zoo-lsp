@@ -1,0 +1,4 @@
+// probe: named implicit application
+// expect: stdout /5/
+def idd[A: Type 0](x: A): A = x
+println(idd[A = Nat](5))

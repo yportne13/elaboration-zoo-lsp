@@ -1,0 +1,6 @@
+// probe: J-style match on Eq refl
+// expect: stdout /1/
+def useEq[A: Type 0](x: A)(e: Eq(x, x)): Nat = match e {
+  case refl(a) => 1
+}
+println(useEq(3)(rfl))

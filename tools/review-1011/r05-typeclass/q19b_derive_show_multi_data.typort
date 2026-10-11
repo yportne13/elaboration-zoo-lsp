@@ -1,0 +1,9 @@
+// probe: derive(Show) multi-case with args
+// expect: stdout /bar2\(4\)/
+#[derive(Show)]
+enum Snack2 {
+  plain
+  bar2(n: Nat)
+}
+println(bar2(4).show)
+println(plain.show)

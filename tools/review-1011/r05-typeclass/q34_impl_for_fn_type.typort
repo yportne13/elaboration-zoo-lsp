@@ -1,0 +1,10 @@
+// probe: instance for a function type (probe)
+// expect: error /error/
+trait FnMark {
+  def marked(x: Nat): Nat
+}
+impl FnMark for (Nat -> Nat) {
+  def marked(x: Nat): Nat = 3
+}
+def g: Nat -> Nat = n => n
+println(FnMark.marked(g))

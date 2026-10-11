@@ -1,0 +1,11 @@
+// probe: qualified ctor names (Color7.red) NOT supported in patterns (quirk)
+// expect: error /error/
+enum Color7 {
+  red
+  green
+}
+def f(c: Color7): Nat = match c {
+  case Color7.red => 1
+  case Color7.green => 2
+}
+println(f(Color7.green))

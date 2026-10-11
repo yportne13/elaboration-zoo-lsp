@@ -1,0 +1,10 @@
+// probe: nested struct field chain
+// expect: stdout /6/
+struct Inner {
+  v: Nat
+}
+struct Outer {
+  i: Inner
+}
+def o: Outer = Outer.mk(Inner.mk(6))
+println(o.i.v)

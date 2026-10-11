@@ -1,0 +1,10 @@
+// probe: dict-projected call on a concrete instance
+// expect: stdout /8/
+trait Doubles {
+  def dbl_val: Nat
+}
+impl Doubles for Nat {
+  def dbl_val: Nat = this + this
+}
+def useD0[T][d: Doubles[T]](t: T): Nat = d.dbl_val t
+println(useD0(4))

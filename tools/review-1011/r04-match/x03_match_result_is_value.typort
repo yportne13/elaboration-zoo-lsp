@@ -1,0 +1,8 @@
+// probe: match expression used inside arithmetic
+// expect: stdout /1/
+def f(b: Boolean): Nat = match b {
+  case true => 1
+  case false => 0
+}
+def g: Nat = f(true) + f(false)
+println(g)

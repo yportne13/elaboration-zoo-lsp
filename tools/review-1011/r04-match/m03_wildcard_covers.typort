@@ -1,0 +1,11 @@
+// probe: wildcard arm covers everything
+// expect: stdout /9/
+enum Color {
+  red
+  green
+  blue
+}
+def f(c: Color): Nat = match c {
+  case _ => 9
+}
+println(f(red))

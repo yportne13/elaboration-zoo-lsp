@@ -1,0 +1,4 @@
+// probe: elaborator inserts implicit lambda around explicit-only body
+// expect: stdout /4/
+def idq: [A: Type 0] -> A -> A = x => x
+println(idq[Nat](4))

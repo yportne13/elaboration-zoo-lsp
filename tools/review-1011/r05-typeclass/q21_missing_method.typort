@@ -1,0 +1,8 @@
+// probe: impl missing a required method (probe: error at impl or at use)
+// expect: error /error/
+trait Half2 {
+  def half_v(x: Nat): Nat
+}
+impl Half2 for Nat {
+}
+println(Half2.half_v(4))

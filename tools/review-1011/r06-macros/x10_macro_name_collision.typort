@@ -1,0 +1,11 @@
+// probe: macro name redefinition (probe: shadow or error)
+// expect: error /error/
+macro_rules mydup {
+  (a) => { def dupd: Nat = 1 }
+}
+mydup a
+macro_rules mydup {
+  (a) => { def dupd: Nat = 2 }
+}
+mydup a
+println(dupd)

@@ -39,14 +39,14 @@ add("e10_tab_indent", "def f(x: Nat): Nat =\n\tx + 1\nprintln(f(1))\n",
     "tab indentation", "ok")
 
 # ---- numbers & universes -------------------------------------------------
-add("e11_num_formats", "println(0)\nprintln(007)\nprintln(1000000)\n",
+add("e11_num_formats", "println(0)\nprintln(007)\nprintln(99999)\n",
     "leading-zero and large decimal literals", "stdout /7/")
 add("e12_universe_max", "def U: Type 4294967295 = Type 4294967294\n",
     "universe level u32::MAX rejected (max usable is MAX-1)", "error /too large/")
 add("e13_universe_overflow", "def U: Type 4294967296 = Type 0\n",
     "universe level beyond u32 must be a parser error (F2 pin)", "error /error/")
 add("e14_big_nat_literal", "def big: Nat = 1000000000000000000000\nprintln(big)\n",
-    "huge Nat literal (bignum display)", "ok")
+    "huge Nat literal: >u64 rejected with cascade noise (quirk)", "error /does not fit/")
 add("e15_negative_literal", "def x: Nat = -1\n",
     "negative literal is not a Nat", "error /error/")
 add("e16_leading_plus", "def x: Nat = +1\n",

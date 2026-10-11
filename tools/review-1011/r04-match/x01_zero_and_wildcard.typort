@@ -1,0 +1,8 @@
+// probe: zero + wildcard coverage
+// expect: stdout /1/
+def f(n: Nat): Nat = match n {
+  case zero => 0
+  case _ => 1
+}
+println(f(3))
+println(f(0))

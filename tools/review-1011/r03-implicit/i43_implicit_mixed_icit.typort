@@ -1,0 +1,4 @@
+// probe: interleaved explicit/implicit parameter groups
+// expect: stdout /1/
+def f[A: Type 0](x: A)[B: Type 0](y: B): A = x
+println(f(1)[Boolean](true))

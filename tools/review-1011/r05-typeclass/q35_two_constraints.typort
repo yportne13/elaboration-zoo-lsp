@@ -1,0 +1,16 @@
+// probe: two dict constraints; unparenthesized d.m t + e.n t binds t as + lhs (precedence quirk)
+// expect: stdout /3/
+trait CA {
+  def ca_v: Nat
+}
+trait CB {
+  def cb_v: Nat
+}
+impl CA for Nat {
+  def ca_v: Nat = 1
+}
+impl CB for Nat {
+  def cb_v: Nat = 2
+}
+def both[T][a: CA[T], b: CB[T]](t: T): Nat = (a.ca_v t) + (b.cb_v t)
+println(both(0))

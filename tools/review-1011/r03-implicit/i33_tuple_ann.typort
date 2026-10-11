@@ -1,0 +1,8 @@
+// probe: struct literal checked against annotation
+// expect: stdout /3/
+struct Pair {
+  fst: Nat
+  snd: Nat
+}
+def p: Pair = Pair.mk(1, 2)
+println(p.fst + p.snd)

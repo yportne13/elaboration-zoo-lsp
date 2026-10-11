@@ -1,0 +1,6 @@
+// probe: three-level implicit alias chain
+// expect: stdout /12/
+def a[A: Type 0](x: A): A = x
+def b[B: Type 0](y: B): B = a(y)
+def c[C: Type 0](z: C): C = b(z)
+println(c(12))

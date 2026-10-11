@@ -1,0 +1,6 @@
+// probe: self-referential macro hits the depth limit (256) immediately
+// expect: error /too deep/
+macro_rules rl {
+  (a) => { rl a }
+}
+rl a

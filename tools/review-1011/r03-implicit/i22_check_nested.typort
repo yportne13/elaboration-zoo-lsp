@@ -1,0 +1,4 @@
+// probe: curried lambda check
+// expect: stdout /3/
+def f: Nat -> Nat -> Nat = x => y => x + y
+println(f(1)(2))

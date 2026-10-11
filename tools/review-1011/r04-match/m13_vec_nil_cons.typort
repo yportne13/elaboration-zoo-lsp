@@ -1,0 +1,14 @@
+// probe: Vec nil/cons match with implicit length index (qualified ctors; bare nil/cons hit prelude Vec per D1)
+// expect: stdout /0/
+enum MyVec[A: Type 0](len: Nat) {
+  nil -> MyVec[A] 0
+  cons[l: Nat](x: A, xs: MyVec[A] l) -> MyVec[A] (l + 1)
+}
+def vlen[A: Type 0][l: Nat](v: MyVec[A] l): Nat = match v {
+  case nil => 0
+  case cons(w, xs) => 1
+}
+def v0: MyVec[Nat] 0 = MyVec.nil
+def v1: MyVec[Nat] 1 = MyVec.cons[Nat][0](1, MyVec.nil)
+println(vlen(v0))
+println(vlen(v1))

@@ -1,0 +1,10 @@
+// probe: macro expanding to another macro invocation
+// expect: stdout /9/
+macro_rules inner {
+  ($n:ident) => { def $n: Nat = 9 };
+}
+macro_rules outer {
+  ($m:ident) => { inner $m };
+}
+outer inner_res
+println(inner_res)

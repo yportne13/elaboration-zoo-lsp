@@ -1,0 +1,4 @@
+// probe: hole in type annotation solves to Nat by unification
+// expect: stdout /3/
+def f: _ = 3
+println(f)

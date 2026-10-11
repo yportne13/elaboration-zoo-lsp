@@ -1,0 +1,7 @@
+// probe: scrutinee type hole (probe)
+// expect: error /unsolved|error/
+def f(x: _): Nat = match x {
+  case zero => 0
+  case succ(m) => m
+}
+println(f(3))

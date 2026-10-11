@@ -1,0 +1,4 @@
+// probe: macro with no rules (probe)
+// expect: error /error/
+macro_rules er {
+}

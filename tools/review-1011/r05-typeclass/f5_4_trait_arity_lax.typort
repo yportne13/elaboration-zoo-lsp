@@ -1,0 +1,9 @@
+// probe: impl arity < trait arity accepted without error (probe; laxness quirk)
+// expect: ok
+trait TwoP[A, B] {
+  def m2(a: A): B
+}
+impl TwoP[Nat] for Nat {
+  def m2(a: Nat): Nat = a
+}
+

@@ -1,0 +1,8 @@
+// probe: duplicate arm accepted silently (quirk; expect first-wins)
+// expect: stdout /1/
+def f(n: Nat): Nat = match n {
+  case zero => 0
+  case zero => 1
+  case succ(m) => m
+}
+println(f(2))

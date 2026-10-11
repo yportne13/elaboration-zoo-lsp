@@ -1,0 +1,4 @@
+// probe: dependent implicit chain: both args share A
+// expect: stdout /3/
+def f[A: Type 0](x: A, y: A): A = x
+println(f(3, 4))

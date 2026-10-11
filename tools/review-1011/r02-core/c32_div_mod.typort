@@ -1,4 +1,4 @@
-// probe: prelude div/mod primops
+// probe: prelude div/mod primops (nat_mod absent is the recorded quirk)
 // expect: error /error/
 println(nat_div(7, 2))
 println(nat_mod(7, 2))

@@ -1,0 +1,10 @@
+// probe: macro-expanded match: succ(zero) binds m=zero, prints 0
+// expect: stdout /0/
+macro_rules lay {
+  ($n:ident) => { def $n: Nat = match 1 {
+  case zero => 0
+  case succ(m) => m
+} };
+}
+lay lr
+println(lr)

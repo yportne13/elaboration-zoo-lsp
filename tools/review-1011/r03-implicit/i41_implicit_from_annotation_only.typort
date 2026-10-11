@@ -1,0 +1,3 @@
+// probe: type-only implicit with no explicit args (probe)
+// expect: error /unsolved|error/
+def empty[A: Type 0]: List0[A] = _

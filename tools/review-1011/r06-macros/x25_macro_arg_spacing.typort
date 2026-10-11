@@ -1,0 +1,7 @@
+// probe: extra spaces between macro name and argument
+// expect: stdout /6/
+macro_rules sp {
+  ($n:ident) => { def $n: Nat = 6 };
+}
+sp   spaced
+println(spaced)

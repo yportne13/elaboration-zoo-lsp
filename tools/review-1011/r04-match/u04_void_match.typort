@@ -1,0 +1,6 @@
+// probe: empty enum: absurd function (probe: empty match allowed?)
+// expect: error /error/
+enum Void {
+}
+def absurd[A: Type 0](v: Void): A = match v { }
+println(0)
