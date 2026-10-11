@@ -1,0 +1,10 @@
+// probe: & | ^ bitwise ops
+// mode: emit -- --top Logic8
+// expect: stdout &
+module Logic8 {
+  let a = UInt[8]
+  let b = UInt[8]
+  let r = UInt[8]
+  r := (a & b) | (a ^ b)
+}
+println(moduleTreeVL(Logic8.create.tree))

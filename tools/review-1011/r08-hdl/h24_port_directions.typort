@@ -1,0 +1,9 @@
+// probe: input/output port directions
+// mode: emit -- --top Dirs
+// expect: stdout input wire [7:0] a
+module Dirs {
+  input a = UInt[8]
+  output b = UInt[8]
+  b := a
+}
+println(moduleTreeVL(Dirs.create.tree))

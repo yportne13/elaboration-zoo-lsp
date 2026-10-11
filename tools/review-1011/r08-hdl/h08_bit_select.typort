@@ -1,0 +1,9 @@
+// probe: a[0] single-bit extraction
+// mode: emit -- --top BitSel
+// expect: stdout a[0]
+module BitSel {
+  let a = UInt[8]
+  let b = Bool
+  b := a.apply[0]
+}
+println(moduleTreeVL(BitSel.create.tree))

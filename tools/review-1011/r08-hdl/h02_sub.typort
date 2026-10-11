@@ -1,0 +1,10 @@
+// probe: a - b emits subtraction
+// mode: emit -- --top Sub8
+// expect: stdout a - b
+module Sub8 {
+  let a = UInt[8]
+  let b = UInt[8]
+  let d = UInt[8]
+  d := a - b
+}
+println(moduleTreeVL(Sub8.create.tree))

@@ -1,0 +1,8 @@
+// probe: FSM skeleton elaborates (probe)
+// mode: emit -- --top FSM1
+// expect: error /error/
+module FSM1 {
+  let ctrl = fsmNew[2](4)
+  println(0)
+}
+println(moduleTreeVL(FSM1.create.tree))

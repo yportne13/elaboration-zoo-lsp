@@ -1,0 +1,10 @@
+// probe: +^ result is 9-bit wide
+// mode: emit -- --top Inc9
+// expect: stdout wire [8:0] s;
+module Inc9 {
+  let a = UInt[8]
+  let b = UInt[8]
+  let s = UInt[9]
+  s := a +^ b
+}
+println(moduleTreeVL(Inc9.create.tree))

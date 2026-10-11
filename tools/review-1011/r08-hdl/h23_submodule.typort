@@ -1,0 +1,15 @@
+// probe: instance declaration with a defined child module
+// mode: emit -- --top Top2
+// expect: stdout Half8 u0 (
+module Top2 {
+  input a = UInt[8]
+  output s = UInt[8]
+  let u = mkInstance("u0", "Half8")
+  s := a
+}
+module Half8 {
+  input a = UInt[8]
+  output s = UInt[8]
+  s := a
+}
+println(moduleTreeVL(Top2.create.tree))

@@ -1,0 +1,10 @@
+// probe: < comparison
+// mode: emit -- --top Cmp8
+// expect: stdout <
+module Cmp8 {
+  let a = UInt[8]
+  let b = UInt[8]
+  let lt = Bool
+  lt := a < b
+}
+println(moduleTreeVL(Cmp8.create.tree))

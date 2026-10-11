@@ -1,0 +1,9 @@
+// probe: regNext delays by one cycle
+// mode: emit -- --top RN8
+// expect: stdout posedge clk
+module RN8 {
+  let a = UInt[8]
+  let d = UInt[8]
+  d := regNext(a)
+}
+println(moduleTreeVL(RN8.create.tree))

@@ -1,0 +1,8 @@
+// probe: constant addition folds or emits a literal
+// mode: emit -- --top Fold8
+// expect: stdout 5
+module Fold8 {
+  let r = UInt[8]
+  r := 2 + 3
+}
+println(moduleTreeVL(Fold8.create.tree))

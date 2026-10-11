@@ -1,0 +1,9 @@
+// probe: register: always @(posedge clk) with nonblocking assign
+// mode: emit -- --top Reg8
+// expect: stdout always @(posedge clk)
+module Reg8 {
+  let a = UInt[8]
+  reg r = UInt[8]
+  r := a + 1
+}
+println(moduleTreeVL(Reg8.create.tree))

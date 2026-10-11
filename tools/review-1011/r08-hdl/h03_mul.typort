@@ -1,0 +1,10 @@
+// probe: a * b emits multiplication with widened result
+// mode: emit -- --top Mul8
+// expect: stdout a * b
+module Mul8 {
+  let a = UInt[4]
+  let b = UInt[4]
+  let p = UInt[8]
+  p := a * b
+}
+println(moduleTreeVL(Mul8.create.tree))

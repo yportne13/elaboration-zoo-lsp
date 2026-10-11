@@ -1,0 +1,9 @@
+// probe: slice[3,0] extracts low nibble
+// mode: emit -- --top Slice8
+// expect: stdout a[3:0]
+module Slice8 {
+  let a = UInt[8]
+  let lo = UInt[4]
+  lo := a.slice[3, 0]
+}
+println(moduleTreeVL(Slice8.create.tree))

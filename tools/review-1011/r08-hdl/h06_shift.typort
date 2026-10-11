@@ -1,0 +1,10 @@
+// probe: left shift by a UInt signal
+// mode: emit -- --top Shift8
+// expect: stdout <<
+module Shift8 {
+  let a = UInt[8]
+  let sh = UInt[8]
+  let r = UInt[8]
+  r := a |<< sh
+}
+println(moduleTreeVL(Shift8.create.tree))
