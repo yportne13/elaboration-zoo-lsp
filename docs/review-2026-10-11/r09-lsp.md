@@ -2,7 +2,7 @@
 
 > 主题:**编辑器可见面**:诊断发布、println 两阶段、hover、goto、
 > completion、跨文件、重解析、鲁棒性。
-> `tests/r9_lsp_probes.rs` 27 个测试(50+ 断言),**终局 27/27**。
+> `tests/r9_lsp_probes.rs` 30 个测试(60+ 断言),**终局 30/30**。
 
 ## 1. 通过的关键行为
 - 错误 span 落在肇事 token(非文件头);undefined 名报 not in scope;
@@ -19,8 +19,9 @@
 - 300 def 大文件不挂;CJK 标识符、CRLF、无尾换行都正常。
 
 ## 2. 记录的行为细节/quirk(测试已固化)
-- **Nat 字面量无 hover 条目**(Raw::Nat infer 臂从不 push_hover)——
-  hover `42` 得 <none>;def 使用点有。记 P3(易补)。
+- **Nat 字面量与裸枚举构造子使用点无 hover 条目**(Raw::Nat 臂与构造子
+  使用路径从不 push_hover)——hover `42`/`apple4` 得 <none>;def 使用点
+  有。记 P3(易补)。
 - binder token(`def f(p: Boolean)` 的 p)无 hover 条目;类型经使用点
   字面量可查。
 - **仅 println 的文件 hover 表为空**(两阶段 deferred 路径不登记)。
@@ -33,8 +34,8 @@
   bounds,mod.rs:2608):两个 Backend 在同线程交错 elaborate 时,
   thread_local/全局 budget/hint 状态互踩。`--test-threads=1` 全绿;
   真实 LSP 单 Backend 单线程不受影响。现有测试套件并行全绿是因为
-  官方测试的形态恰好不触窗口;R9 的 27 个探针更密。记 P3(测试隔离)。
+  官方测试的形态恰好不触窗口;R9 的 30 个探针更密。记 P3(测试隔离)。
 
 ## 4. 验证
-- `cargo test --test r9_lsp_probes -- --test-threads=1`:27/27;
+- `cargo test --test r9_lsp_probes -- --test-threads=1`:30/30;
 - 全量门禁见 commit。
