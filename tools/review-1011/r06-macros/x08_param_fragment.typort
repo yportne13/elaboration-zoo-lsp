@@ -1,5 +1,5 @@
-// probe: $p:param fragment
-// expect: stdout /3/
+// probe: $p:param matches a binder LIST (x: A), not a lambda expr (recorded)
+// expect: error /error/
 macro_rules fnum {
   ($p:param) => {
     def fnm: Nat -> Nat = $p

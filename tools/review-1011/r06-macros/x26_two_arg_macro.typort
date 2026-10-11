@@ -1,5 +1,5 @@
-// probe: two-parameter macro with ; inside transcriber
-// expect: stdout /1/
+// probe: two-arg matcher (a, b) needs the SAME call shape; paren call fails (quirk)
+// expect: error /error/
 macro_rules pair2 {
   ($a:ident, $b:ident) => { def $a: Nat = 1; def $b: Nat = 2 };
 }

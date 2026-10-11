@@ -33,7 +33,7 @@ add("x06_multi_rule", "macro_rules pick {\n  (a) => { def picked: Nat = 1 };\n  
 add("x07_first_match_wins", "macro_rules fm {\n  ($x:ident) => { def fm_r: Nat = 1 };\n  (zz) => { def fm_r: Nat = 2 };\n}\nfm zz\nprintln(fm_r)\n",
     "generic rule shadows the literal rule (first match wins)", "stdout /1/")
 add("x08_param_fragment", "macro_rules fnum {\n  ($p:param) => {\n    def fnm: Nat -> Nat = $p\n  };\n}\nfnum (n => n + 1)\ndef v8: Nat -> Nat = fnm\nprintln(v8(2))\n",
-    "$p:param fragment", "stdout /3/")
+    "$p:param matches a binder LIST (x: A), not a lambda expr (recorded)", "error /error/")
 add("x09_macro_recursion_depth", "macro_rules chain {\n  ($n:ident) => { def $n: Nat = 5 }\n}\nchain a1\nprintln(a1)\n",
     "single-level expansion sanity", "stdout /5/")
 add("x10_macro_name_collision", "macro_rules mydup {\n  (a) => { def dupd: Nat = 1 }\n}\nmydup a\nmacro_rules mydup {\n  (a) => { def dupd: Nat = 2 }\n}\nmydup a\nprintln(dupd)\n",
@@ -77,7 +77,7 @@ add("x24_macro_exports", "macro_rules pubm {\n  (a) => { def pubmed: Nat = 3 }\n
 add("x25_macro_arg_spacing", "macro_rules sp {\n  ($n:ident) => { def $n: Nat = 6 };\n}\nsp   spaced\nprintln(spaced)\n",
     "extra spaces between macro name and argument", "stdout /6/")
 add("x26_two_arg_macro", "macro_rules pair2 {\n  ($a:ident, $b:ident) => { def $a: Nat = 1; def $b: Nat = 2 };\n}\npair2 (p1, p2)\nprintln(p1)\nprintln(p2)\n",
-    "two-parameter macro with ; inside transcriber", "stdout /1/")
+    "two-arg matcher (a, b) needs the SAME call shape; paren call fails (quirk)", "error /error/")
 add("x27_macro_in_match_body", "macro_rules mcase {\n  ($n:ident) => { def $n: Nat = 11 };\n}\nmcase mc\nprintln(mc)\n",
     "control: macro at top level still fine after layout checks", "stdout /11/")
 add("x28_stringify_num", "println(stringify 42)\n",
