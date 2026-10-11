@@ -4719,16 +4719,29 @@ pub fn preprocess(s: &str) -> String {
                 blank(d, &mut out);
             }
         } else if i + 1 < s.len() && bytes[i + 1] == b'*' {
-            // 块注释（不嵌套）：`/*` 换两空格，到 `*/`（含）为止空白化；
-            // 未闭合则剥到文件尾。
+            // 块注释（Rust 式嵌套）：`/*` 换两空格，深度计数到配对的 `*/`
+            // （含）为止空白化；内层 `/*`/`*/` 加减深度。未闭合则剥到文件尾
+            // （2026-10-11 R1：此前不嵌套，`/* a /* b */ c */` 在第一个
+            // `*/` 处提前结束，残余 `c */` 变垃圾 token 触发伪语法错误）。
             out.push_str("  ");
             i += 2;
+            let mut depth = 1usize;
             while i < s.len() {
                 let d = s[i..].chars().next().unwrap();
+                if d == '/' && i + 1 < s.len() && bytes[i + 1] == b'*' {
+                    depth += 1;
+                    out.push_str("  ");
+                    i += 2;
+                    continue;
+                }
                 if d == '*' && i + 1 < s.len() && bytes[i + 1] == b'/' {
                     out.push_str("  ");
                     i += 2;
-                    break;
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                    continue;
                 }
                 i += d.len_utf8();
                 blank(d, &mut out);
