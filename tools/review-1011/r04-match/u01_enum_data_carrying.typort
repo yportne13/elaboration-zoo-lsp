@@ -1,0 +1,12 @@
+// probe: data-carrying enum match (1-arg and 2-arg ctors)
+// expect: stdout /12/
+enum Shape {
+  circle(r: Nat)
+  rect(w: Nat, h: Nat)
+}
+def shArea(s: Shape): Nat = match s {
+  case circle(r) => 3 * r * r
+  case rect(w, h) => w * h
+}
+println(shArea(rect(3, 4)))
+println(shArea(circle(2)))

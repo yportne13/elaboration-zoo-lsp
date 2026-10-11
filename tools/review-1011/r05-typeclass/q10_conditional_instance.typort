@@ -1,0 +1,14 @@
+// probe: impl[T: Half] conditional instance: NOT supported (prelude show.typort documents)
+// expect: error /error/
+trait Half {
+  def half_v(x: Nat): Nat
+}
+impl Half for Nat {
+  def half_v(x: Nat): Nat = nat_div(x, 2)
+}
+trait Quarter {
+  def quarter_v(x: Nat): Nat
+}
+impl[T: Half] Quarter for T {
+  def quarter_v(x: Nat): Nat = 4
+}

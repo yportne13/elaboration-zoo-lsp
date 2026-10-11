@@ -1,0 +1,3 @@
+// probe: hole as scrutinee
+// expect: error /error/
+def f: Nat = match _ { case zero => 0 }

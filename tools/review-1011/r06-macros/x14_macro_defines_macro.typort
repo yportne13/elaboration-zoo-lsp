@@ -1,0 +1,8 @@
+// probe: macro defining a macro (probe)
+// expect: error /error/
+macro_rules outer2 {
+  () => { macro_rules inner2 { (a) => { def i2: Nat = 4 } } }
+}
+outer2
+inner2 a
+println(i2)

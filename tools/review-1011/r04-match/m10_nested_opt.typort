@@ -1,0 +1,13 @@
+// probe: nested constructor patterns
+// expect: stdout /1/
+enum Opt[A: Type 0] {
+  none -> Opt[A]
+  some(v: A) -> Opt[A]
+}
+def f(o: Opt[Opt[Nat]]): Nat = match o {
+  case none => 0
+  case some(none) => 1
+  case some(some(v)) => v
+}
+println(f(some(none)))
+println(f(some(some(7))))

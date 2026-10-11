@@ -1,0 +1,3 @@
+// probe: prelude Show on String
+// expect: stdout /abc/
+println("abc".show)

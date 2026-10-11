@@ -1,0 +1,7 @@
+// probe: expression-position macro WORKS (bare () => { 5 } body)
+// expect: stdout /5/
+macro_rules five {
+  () => { 5 }
+}
+def f5: Nat = five
+println(f5)

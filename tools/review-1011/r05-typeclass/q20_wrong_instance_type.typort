@@ -1,0 +1,9 @@
+// probe: method used at a type with no instance errors
+// expect: error /error/
+trait Doubles {
+  def dbl_val: Nat
+}
+impl Doubles for Nat {
+  def dbl_val: Nat = this + this
+}
+println(Doubles.dbl_val(true))

@@ -1,0 +1,9 @@
+// probe: $e:raw substitution in expression
+// expect: stdout /6/
+macro_rules twice {
+  ($e:raw) => {
+    def r2: Nat = $e + $e
+  };
+}
+twice (3)
+println(r2)

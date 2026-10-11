@@ -1,0 +1,7 @@
+// probe: identifier close to builtin names
+// expect: stdout /2/
+macro_rules sfn {
+  ($n:ident) => { def $n: Nat = 2 };
+}
+sfn strfn
+println(strfn)

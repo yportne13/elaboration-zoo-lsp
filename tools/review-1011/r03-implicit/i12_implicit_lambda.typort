@@ -1,0 +1,4 @@
+// probe: implicit lambda binds the implicit Pi
+// expect: stdout /7/
+def idf: [A: Type 0] -> A -> A = [A] => x => x
+println(idf[Nat](7))

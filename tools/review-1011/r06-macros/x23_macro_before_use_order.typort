@@ -1,0 +1,7 @@
+// probe: macro use before its definition line (probe: top-to-bottom)
+// expect: error /error/
+println(later)
+macro_rules later_m {
+  (a) => { def later: Nat = 8 }
+}
+later_m a

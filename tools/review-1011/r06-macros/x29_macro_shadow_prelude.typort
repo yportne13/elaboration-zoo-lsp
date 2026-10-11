@@ -1,0 +1,7 @@
+// probe: macro shadowing a prelude function name (probe)
+// expect: error /error/
+macro_rules nat_add {
+  (a) => { def nat_add: Nat = 50 };
+}
+nat_add a
+println(nat_add)

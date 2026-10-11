@@ -1,0 +1,7 @@
+// probe: chained receiver calls on a concrete type
+// expect: stdout /3/
+impl Nat {
+  def deep: Nat = this + 1
+}
+def one2: Nat = 1
+println(one2.deep.deep)

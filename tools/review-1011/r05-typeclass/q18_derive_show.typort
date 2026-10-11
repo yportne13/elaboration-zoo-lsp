@@ -1,0 +1,8 @@
+// probe: #[derive(Show)] zero-arg ctors
+// expect: stdout /apple/
+#[derive(Show)]
+enum Fruit {
+  apple
+  pear
+}
+println(apple.show)

@@ -1,0 +1,4 @@
+// probe: solved meta reused in wrong position fails
+// expect: error /error/
+def f[A: Type 0](x: A): A = x
+def g: Nat = f(3) && true

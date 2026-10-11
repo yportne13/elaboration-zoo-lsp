@@ -1,0 +1,10 @@
+// probe: instance for a tuple type (probe)
+// expect: error /error/
+trait TupM {
+  def tm_v: Nat
+}
+impl TupM for (Nat, Nat) {
+  def tm_v: Nat = 4
+}
+def t: (Nat, Nat) = (1, 2)
+println(t.tm_v)

@@ -1,0 +1,11 @@
+// probe: case after wildcard (probe: unreachable or accepted)
+// expect: error /error/
+enum Color2 {
+  red
+  green
+}
+def f(c: Color2): Nat = match c {
+  case _ => 0
+  case red => 1
+}
+println(f(green))

@@ -1,0 +1,7 @@
+// probe: missing field in literal errors
+// expect: error /error/
+struct Pair3 {
+  fst: Nat
+  snd: Nat
+}
+def p: Pair3 = Pair3.mk(3)

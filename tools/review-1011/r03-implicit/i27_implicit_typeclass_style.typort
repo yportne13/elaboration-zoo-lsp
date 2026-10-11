@@ -1,0 +1,5 @@
+// probe: Trait.method(x) static form is NOT supported (use x.method())
+// expect: error /error/
+trait MyShow[T] { def show(t: T): String }
+impl MyShow[Nat] { def show(t: Nat) = "nat" }
+println(MyShow.show(3))

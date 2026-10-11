@@ -1,0 +1,8 @@
+// probe: empty transcriber arm is a parse error
+// expect: error /error/
+macro_rules ut {
+  (a) => { def ut_r: Nat = 1 }
+  (b) => {
+}
+def zz2: Nat = 0
+println(zz2)

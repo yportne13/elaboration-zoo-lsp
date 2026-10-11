@@ -1,0 +1,4 @@
+// probe: < on Nat via prelude trait
+// expect: stdout /true/
+println(1 < 2)
+println(2 < 1)

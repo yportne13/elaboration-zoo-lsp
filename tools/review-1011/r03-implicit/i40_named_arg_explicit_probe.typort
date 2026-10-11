@@ -1,0 +1,4 @@
+// probe: named EXPLICIT args (probe: supported?)
+// expect: error /error/
+def sub(x: Nat, y: Nat): Nat = x - y
+println(sub(y = 1, x = 5))

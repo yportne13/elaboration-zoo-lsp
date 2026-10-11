@@ -1,0 +1,5 @@
+// probe: annotation-driven implicit solving (bidirectional)
+// expect: stdout /3/
+def the[A: Type 0](x: A): A = x
+def u: Nat = the(3)
+println(u)

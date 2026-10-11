@@ -1,0 +1,10 @@
+// probe: default method calls the impl's override (probe: qualified dict form)
+// expect: error /error/
+trait Chain2 {
+  def one(x: Nat): Nat
+  def two(x: Nat): Nat = one(x) + 1
+}
+impl Chain2 for Nat {
+  def one(x: Nat): Nat = 10
+}
+println(Chain2.two(0))

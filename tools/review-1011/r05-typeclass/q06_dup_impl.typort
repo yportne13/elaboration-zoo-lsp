@@ -1,0 +1,12 @@
+// probe: duplicate instance for the same type (probe)
+// expect: error /error/
+trait Dup5 {
+  def m5(x: Nat): Nat
+}
+impl Dup5 for Nat {
+  def m5(x: Nat): Nat = 1
+}
+impl Dup5 for Nat {
+  def m5(x: Nat): Nat = 2
+}
+println(Dup5.m5(0))

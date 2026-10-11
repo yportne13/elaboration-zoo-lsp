@@ -1,0 +1,8 @@
+// probe: deep succ(succ(m)) pattern
+// expect: stdout /2/
+def f(n: Nat): Nat = match n {
+  case zero => 0
+  case succ(zero) => 1
+  case succ(succ(m)) => 2
+}
+println(f(5))

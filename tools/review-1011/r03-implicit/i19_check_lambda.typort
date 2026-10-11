@@ -1,0 +1,4 @@
+// probe: lambda checked against Pi (check mode)
+// expect: stdout /2/
+def f: Nat -> Nat = x => x + 1
+println(f(1))

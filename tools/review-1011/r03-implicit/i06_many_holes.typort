@@ -1,0 +1,3 @@
+// probe: several holes in one expression
+// expect: error /unsolved/
+def f(a: Nat): Nat = _ + _ + a

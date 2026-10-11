@@ -1,0 +1,8 @@
+// probe: parametrized struct
+// expect: stdout /7/
+struct DPair[A: Type 0] {
+  fst: A
+  snd: A
+}
+def p: DPair[Nat] = DPair.mk(2, 5)
+println(p.fst + p.snd)

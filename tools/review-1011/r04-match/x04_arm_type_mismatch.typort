@@ -1,0 +1,6 @@
+// probe: arm body type mismatch errors
+// expect: error /error/
+def f(b: Boolean): Nat = match b {
+  case true => 1
+  case false => "no"
+}

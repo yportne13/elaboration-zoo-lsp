@@ -1,0 +1,3 @@
+// probe: stringify on an underscore ident
+// expect: stdout /xy_z/
+println(stringify xy_z)

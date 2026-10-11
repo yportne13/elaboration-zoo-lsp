@@ -1,0 +1,4 @@
+// probe: F5-2: prelude-instance dict can stay silently neutral (prints ?m.show, no error)
+// expect: ok
+def print_it[T][s: Show[T]](x: T): String = s.show x
+println(print_it(9))

@@ -1,0 +1,10 @@
+// probe: F5-1: receiver method on a type VARIABLE ignores the constraint (unsupported)
+// expect: error /error/
+trait Doubles {
+  def dbl_val: Nat
+}
+impl Doubles for Nat {
+  def dbl_val: Nat = this + this
+}
+def useR[T][d: Doubles[T]](t: T): Nat = t.dbl_val 3
+println(useR(6))

@@ -1,0 +1,12 @@
+// probe: same method in two satisfied traits -> ambiguity error (doc §5.2)
+// expect: error /ambiguous|error/
+trait FooQ { def methodQ(x: Nat): String }
+trait BarQ { def methodQ(x: Nat): String }
+impl FooQ for Boolean {
+  def methodQ(x: Nat): String = "foo"
+}
+impl BarQ for Boolean {
+  def methodQ(x: Nat): String = "bar"
+}
+def tt2 = true
+println(tt2.methodQ)

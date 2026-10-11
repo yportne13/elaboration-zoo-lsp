@@ -1,0 +1,6 @@
+// probe: printing a trait name (probe)
+// expect: ok
+trait Half3 {
+  def half_v(x: Nat): Nat
+}
+println(Half3)

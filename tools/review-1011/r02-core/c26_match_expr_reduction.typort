@@ -1,4 +1,7 @@
 // probe: scrutinee reduces before matching
 // expect: stdout /4/
-def f(n: Nat): Nat = match nat_add(n, 1) { case zero => 99 case succ(m) => m }
+def f(n: Nat): Nat = match nat_add(n, 1) {
+  case zero => 99
+  case succ(m) => m
+}
 println(f(4))

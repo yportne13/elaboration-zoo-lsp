@@ -1,0 +1,10 @@
+// probe: struct ctor patterns (P.mk(a, b)) NOT supported in match (parse error; quirk)
+// expect: error /error/
+struct Pair6 {
+  fst: Nat
+  snd: Nat
+}
+def f(p: Pair6): Nat = match p {
+  case Pair6.mk(a, b) => a + b
+}
+println(f(Pair6.mk(10, 20)))

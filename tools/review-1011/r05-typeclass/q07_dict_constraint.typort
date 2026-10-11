@@ -1,0 +1,10 @@
+// probe: [T][d: Doubles[T]] implicit fills the dict (canonical idiom)
+// expect: stdout /12/
+trait Doubles {
+  def dbl_val: Nat
+}
+impl Doubles for Nat {
+  def dbl_val: Nat = this + this
+}
+def useD[T][d: Doubles[T]](t: T): Nat = d.dbl_val t
+println(useD(6))

@@ -1,0 +1,14 @@
+// probe: supertrait dict satisfied by subtrait instance
+// expect: stdout /1/
+trait Base3 {
+  def baseM: Nat
+}
+trait Sub3: Base3 {
+  def subM: Nat
+}
+impl Sub3 for Nat {
+  def baseM: Nat = 1
+  def subM: Nat = 2
+}
+def wantBase[T][d: Base3[T]](t: T): Nat = d.baseM t
+println(wantBase(9))

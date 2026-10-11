@@ -1,0 +1,7 @@
+// probe: wrong field type errors
+// expect: error /error/
+struct Pair4 {
+  fst: Nat
+  snd: Nat
+}
+def p: Pair4 = Pair4.mk(true, 4)

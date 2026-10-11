@@ -1,0 +1,10 @@
+// probe: GADT: index 1 refines to cons arm (nil impossible; probe exhaustiveness)
+// expect: error /error/
+enum MyVec[A: Type 0](len: Nat) {
+  nil -> MyVec[A] 0
+  cons[l: Nat](x: A, xs: MyVec[A] l) -> MyVec[A] (l + 1)
+}
+def vhead[A: Type 0](v: MyVec[A] 1): A = match v {
+  case cons(w, xs) => w
+}
+println(vhead(cons(9, nil)))

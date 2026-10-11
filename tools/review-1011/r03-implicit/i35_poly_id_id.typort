@@ -1,0 +1,4 @@
+// probe: higher-kinded implicit: A := Nat -> Nat
+// expect: stdout /4/
+def idd[A: Type 0](x: A): A = x
+println(idd[Nat -> Nat](idd[Nat])(4))

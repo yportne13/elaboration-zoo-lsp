@@ -1,0 +1,4 @@
+// probe: explicit implicit mismatch (Nat vs Boolean arg) must fail
+// expect: error /unify|error/
+def idd[A: Type 0](x: A): A = x
+println(idd[Nat](true))

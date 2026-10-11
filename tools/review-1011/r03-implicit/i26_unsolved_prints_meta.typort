@@ -1,0 +1,5 @@
+// probe: implicit solves through a def alias chain
+// expect: stdout /true/
+def f[A: Type 0](x: A): A = x
+def h: Boolean = f(true)
+println(h)

@@ -1,0 +1,6 @@
+// probe: invocation not matching any rule errors
+// expect: error /error/
+macro_rules one {
+  (a) => { def only_a: Nat = 1 }
+}
+one b

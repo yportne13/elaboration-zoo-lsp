@@ -1,0 +1,12 @@
+// probe: Fin indexed match
+// expect: stdout /0/
+enum MyFin(n: Nat) {
+  fz[m: Nat] -> MyFin(m + 1)
+  fs[m: Nat](i: MyFin(m)) -> MyFin(m + 1)
+}
+def toNat(i: MyFin(3)): Nat = match i {
+  case fz => 0
+  case fs(j) => 1
+}
+println(toNat(fz))
+println(toNat(fs(fz)))

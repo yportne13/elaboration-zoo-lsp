@@ -1,0 +1,14 @@
+// probe: bare supertrait decl; impl provides both methods
+// expect: stdout /2/
+trait Base2 {
+  def baseM: Nat
+}
+trait Sub2: Base2 {
+  def subM: Nat
+}
+impl Sub2 for Nat {
+  def baseM: Nat = 1
+  def subM: Nat = 2
+}
+def useS2[T][d: Sub2[T]](t: T): Nat = d.subM t
+println(useS2(0))

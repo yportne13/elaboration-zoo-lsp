@@ -1,0 +1,4 @@
+// probe: prelude operator traits resolve on Nat
+// expect: stdout /5/
+println(2 + 3)
+println(2 * 4)

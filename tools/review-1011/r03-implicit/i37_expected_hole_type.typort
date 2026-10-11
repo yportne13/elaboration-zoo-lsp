@@ -1,0 +1,4 @@
+// probe: hole in codomain solved from the body (bidirectional)
+// expect: stdout /2/
+def f: Nat -> _ = n => n
+println(f(2))

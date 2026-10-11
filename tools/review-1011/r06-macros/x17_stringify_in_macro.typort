@@ -1,0 +1,6 @@
+// probe: stringify inside macro transcriber
+// expect: stdout /foo/
+macro_rules nm {
+  ($n:ident) => { println(stringify $n) };
+}
+nm foo

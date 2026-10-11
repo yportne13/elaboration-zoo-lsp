@@ -1,0 +1,10 @@
+// probe: one-arg method called `obj.method arg` (this receiver)
+// expect: stdout /7/
+trait Picker {
+  def pickN(k: Nat): Nat
+}
+impl Picker for Nat {
+  def pickN(k: Nat): Nat = this + k
+}
+def t3: Nat = 3
+println(t3.pickN 4)

@@ -1,0 +1,10 @@
+// probe: trait method result feeding another constrained call
+// expect: stdout /made/
+trait Maker {
+  def make: String
+}
+impl Maker for Nat {
+  def make: String = "made"
+}
+def useMaker[T][d: Maker[T]](t: T): String = d.make t
+println(useMaker(0))

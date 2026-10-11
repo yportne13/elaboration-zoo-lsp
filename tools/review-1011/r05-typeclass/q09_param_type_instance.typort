@@ -1,0 +1,13 @@
+// probe: impl[A] Trait for Box2[A] (generic instance, unconditional)
+// expect: stdout /1/
+enum Box2[A: Type 0] {
+  mk(v: A) -> Box2[A]
+}
+trait Unbox {
+  def un_n: Nat
+}
+impl[A: Type 0] Unbox for Box2[A] {
+  def un_n: Nat = 1
+}
+def b: Box2[Nat] = Box2.mk(3)
+println(b.un_n)

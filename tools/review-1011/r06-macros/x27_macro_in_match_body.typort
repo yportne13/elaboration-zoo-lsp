@@ -1,0 +1,7 @@
+// probe: control: macro at top level still fine after layout checks
+// expect: stdout /11/
+macro_rules mcase {
+  ($n:ident) => { def $n: Nat = 11 };
+}
+mcase mc
+println(mc)

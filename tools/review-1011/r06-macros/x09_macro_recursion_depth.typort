@@ -1,0 +1,7 @@
+// probe: single-level expansion sanity
+// expect: stdout /5/
+macro_rules chain {
+  ($n:ident) => { def $n: Nat = 5 }
+}
+chain a1
+println(a1)

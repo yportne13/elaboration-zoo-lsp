@@ -1,0 +1,7 @@
+// probe: extra argument in literal errors
+// expect: error /error/
+struct Pair5 {
+  fst: Nat
+  snd: Nat
+}
+def p: Pair5 = Pair5.mk(3, 4, 5)

@@ -1,0 +1,11 @@
+// probe: recursive enum + recursion
+// expect: stdout /6/
+enum Tree {
+  leaf(v: Nat)
+  node(l: Tree, r: Tree)
+}
+def treeSum(t: Tree): Nat = match t {
+  case leaf(v) => v
+  case node(l, r) => treeSum(l) + treeSum(r)
+}
+println(treeSum(node(leaf(1), node(leaf(2), leaf(3)))))

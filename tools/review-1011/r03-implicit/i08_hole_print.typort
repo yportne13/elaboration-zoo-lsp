@@ -1,0 +1,3 @@
+// probe: hole directly in println
+// expect: error /unsolved|error/
+println(_: Nat)

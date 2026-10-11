@@ -1,0 +1,12 @@
+// probe: specific + wildcard mix
+// expect: stdout /3/
+enum Color {
+  red
+  green
+  blue
+}
+def f(c: Color): Nat = match c {
+  case red => 1
+  case _ => 2
+}
+println(f(blue) + f(red))

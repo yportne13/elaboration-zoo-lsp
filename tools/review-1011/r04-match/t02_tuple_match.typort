@@ -1,0 +1,6 @@
+// probe: tuple pattern in match NOT supported (bizarre error; quirk)
+// expect: error /error/
+def f(t: (Nat, Nat)): Nat = match t {
+  case (a, b) => a + b
+}
+println(f((3, 4)))

@@ -1,0 +1,7 @@
+// probe: same-file macro defined+used
+// expect: stdout /3/
+macro_rules pubm {
+  (a) => { def pubmed: Nat = 3 }
+}
+pubm a
+println(pubmed)

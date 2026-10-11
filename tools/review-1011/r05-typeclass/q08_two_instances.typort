@@ -1,0 +1,14 @@
+// probe: search picks the matching instance among several
+// expect: stdout /12/
+trait Doubles {
+  def dbl_val: Nat
+}
+impl Doubles for Nat {
+  def dbl_val: Nat = this + this
+}
+impl Doubles for Boolean {
+  def dbl_val: Nat = 1
+}
+def useD[T][d: Doubles[T]](t: T): Nat = d.dbl_val t
+println(useD(6))
+println(useD(true))

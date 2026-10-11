@@ -1,4 +1,7 @@
 // probe: 50-deep recursion evaluates
 // expect: stdout /50/
-def count(n: Nat): Nat = match n { case zero => 0 case succ(m) => count(m) + 1 }
-println(count(50))
+def cnt1(n: Nat): Nat = match n {
+  case zero => 0
+  case succ(m) => cnt1(m) + 1
+}
+println(cnt1(50))

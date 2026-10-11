@@ -1,0 +1,9 @@
+// probe: empty trait round-trips as a marker via dict
+// expect: stdout /1/
+trait Empty5 {
+}
+def useE[T][d: Empty5[T]](t: T): Nat = 1
+impl Empty5 for Nat {
+}
+def z: Nat = 0
+println(useE(z))

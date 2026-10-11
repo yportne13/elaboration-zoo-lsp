@@ -1,0 +1,7 @@
+// probe: Nat zero/succ exhaustive
+// expect: stdout /4/
+def f(n: Nat): Nat = match n {
+  case zero => 0
+  case succ(m) => m
+}
+println(f(5))

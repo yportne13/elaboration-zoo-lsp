@@ -1,0 +1,4 @@
+// probe: Type-0 hole silently defaulting to Nat now surfaces TY001
+// expect: warn /TY001/
+def t: Type 0 = _
+println(3)

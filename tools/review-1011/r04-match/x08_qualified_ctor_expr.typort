@@ -1,0 +1,7 @@
+// probe: qualified constructor expression
+// expect: stdout /red/
+enum Color9 {
+  red
+  green
+}
+println(Color9.red)

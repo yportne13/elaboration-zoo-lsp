@@ -1,0 +1,6 @@
+// probe: hole in one match arm (arms on separate lines: layout)
+// expect: error /unsolved/
+def f(v: Boolean): Nat = match v {
+  case true => 1
+  case false => _
+}

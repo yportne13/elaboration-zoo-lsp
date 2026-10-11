@@ -1,0 +1,10 @@
+// probe: control: instance exists -> works
+// expect: stdout /1/
+trait Marks {
+  def mark: Nat
+}
+impl Marks for Boolean {
+  def mark: Nat = 1
+}
+def tt0 = true
+println(tt0.mark)

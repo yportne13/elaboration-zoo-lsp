@@ -1,0 +1,10 @@
+// probe: field access as scrutinee
+// expect: stdout /3/
+struct W {
+  n: Nat
+}
+def f(w: W): Nat = match w.n {
+  case zero => 0
+  case succ(m) => m
+}
+println(f(W.mk(4)))

@@ -1,0 +1,5 @@
+// probe: macro_rules without a name errors
+// expect: error /error/
+macro_rules {
+  (a) => { def q: Nat = 1 }
+}

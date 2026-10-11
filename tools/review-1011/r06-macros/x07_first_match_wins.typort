@@ -1,0 +1,8 @@
+// probe: generic rule shadows the literal rule (first match wins)
+// expect: stdout /1/
+macro_rules fm {
+  ($x:ident) => { def fm_r: Nat = 1 };
+  (zz) => { def fm_r: Nat = 2 };
+}
+fm zz
+println(fm_r)

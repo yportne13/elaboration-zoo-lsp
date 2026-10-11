@@ -1,0 +1,9 @@
+// probe: $n:ident substitution in def name
+// expect: stdout /7/
+macro_rules mk {
+  ($n:ident) => {
+    def $n: Nat = 7
+  };
+}
+mk seven
+println(seven)

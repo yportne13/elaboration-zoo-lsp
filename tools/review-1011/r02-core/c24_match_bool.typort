@@ -1,4 +1,7 @@
 // probe: match on Boolean evaluates
 // expect: stdout /1/
-def b(v: Boolean): Nat = match v { case true => 1 case false => 0 }
+def b(v: Boolean): Nat = match v {
+  case true => 1
+  case false => 0
+}
 println(b(true))

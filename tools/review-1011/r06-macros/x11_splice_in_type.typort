@@ -1,0 +1,9 @@
+// probe: macro in type position via def name
+// expect: stdout /3/
+macro_rules ty {
+  ($n:ident) => {
+    def tv: Nat = 3
+  }
+}
+ty Nat9
+println(tv)

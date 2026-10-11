@@ -1,0 +1,4 @@
+// probe: nested tuple
+// expect: ok
+def t = ((1, 2), 3)
+println(t)
