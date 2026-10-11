@@ -76,6 +76,24 @@ struct Walker<'a> {
     pat_marks: Vec<bool>,
 }
 
+/// 无参 def 的注解驱动体是一串 lambda（`bod = body`，params 为空），这些
+/// 绑定者正是 params 形式下的结构根（与参考版 elaboration.rs 的
+/// leading_lam_arity 成对——2026-10-11 R4：`def f: Nat -> Nat = n =>
+/// match n { case succ(m) => f(m) }` 曾被误判非终止）。只数前导显式 λ，
+/// 且仅在 params 为空时由调用方启用。
+pub(super) fn leading_lam_arity(t: &Tm) -> usize {
+    let mut n = 0;
+    let mut cur = t;
+    while let Tm::Lam(_, i, b) = cur {
+        if !matches!(i, Icit::Expl) {
+            break;
+        }
+        n += 1;
+        cur = *b;
+    }
+    n
+}
+
 /// Level A 检查：`Err(())` = 存在无法证明终止的自调用（调用方渲染 decl 错
 /// 误；错误恢复按既有失败 decl 通道自动生效——占位回滚 / 下游引用降噪）。
 pub(super) fn check_def_termination<'a>(

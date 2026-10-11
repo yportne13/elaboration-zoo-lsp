@@ -3758,10 +3758,14 @@ impl Machine {
                     "cannot prove termination of recursive call to '{}'",
                     name.data
                 );
+                // 无参 def：注解驱动体的前导 λ 是结构根（与参考版成对，
+                // 2026-10-11 R4）。params 形式保持 params.len() 口径。
+                let term_n_params = params.len()
+                    + if params.is_empty() { super::termination::leading_lam_arity(t_checked) } else { 0 };
                 super::termination::check_def_termination(
                     &fake.decls,
                     name.data.as_str(),
-                    params.len(),
+                    term_n_params,
                     t_checked,
                 )
                 .map_err(|()| Error(name.clone().map(move |_| term_msg.clone()), vec![]))?;
@@ -3815,7 +3819,7 @@ impl Machine {
                         if to_default.is_empty() {
                             // 无可默认化 meta：无写发生，直接出帧
                             meta_journal_discard();
-                            false
+                            None
                         } else {
                             for idx in &to_default {
                                 if let MetaEntry::Unsolved(ty, ..) = &self.metas[*idx] {
@@ -3826,17 +3830,32 @@ impl Machine {
                             let _ = self.solve_multi_trait_ref(bump, &fake, this_meta, false);
                             if no_metas(bump, self, &fake, t_tm).is_none() {
                                 meta_journal_discard();
-                                true
+                                Some(to_default.len())
                             } else {
                                 meta_journal_rollback(&mut self.metas, pre_meta_len);
-                                false
+                                None
                             }
                         }
                     } else {
                         meta_journal_discard();
-                        false
+                        None
                     };
-                    if !nat_solved {
+                    // TY001：Nat 默认化不再静默（与参考版 elaboration.rs 对齐，
+                    // 2026-10-11 R3）。走 prim.rs ReportCheckIssue 同款推送：
+                    // 行级去重 + StateUndo 记账，排水/锚定复用 CheckIssues 通道。
+                    if let Some(n) = nat_solved {
+                        let line = SmolStr::from(format!(
+                            "TY001|{}||{} unsolved type meta(s) defaulted to Nat; write the type explicitly if this is wrong",
+                            name.data, n
+                        ));
+                        let mut mu = self.mutable.borrow_mut();
+                        if !mu.check_line_set.contains(&line) {
+                            mu.check_line_set.insert(line.clone());
+                            mu.check_lines.push(line.clone());
+                            state_journal_record(StateUndo::CheckLinesPush(line));
+                        }
+                    }
+                    if nat_solved.is_none() {
                         return Err(self.mk_unsolved_meta_err(
                             bump, &fake, t_tm, meta_names, oty, &name.data,
                         ));
@@ -4531,6 +4550,19 @@ impl Machine {
                                 }
                             }
                         }
+                    }
+                    // 与参考版 elaboration.rs 成对：按 trait 记录字段序
+                    //（自身方法在前、继承在后）重排,否则 impl 先声明父类
+                    // 方法时记录槽位互换,字段投影返回错误实现
+                    //（2026-10-11 R5）。
+                    if let Some((_, _, _, trait_methods)) = self.tstate.definition.get(&*trait_full).cloned() {
+                        methods.sort_by_key(|(decl, _)| {
+                            let mname = match decl {
+                                Decl::Def { name, .. } => name.data.clone(),
+                                _ => SmolStr::new("\u{0}unlisted"),
+                            };
+                            trait_methods.iter().position(|m| m.0.data == mname).unwrap_or(usize::MAX)
+                        });
                     }
                     let mut ret = std::iter::once(name.clone())
                         .chain(trait_params.iter().cloned())
