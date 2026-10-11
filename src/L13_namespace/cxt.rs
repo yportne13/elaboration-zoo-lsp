@@ -390,7 +390,7 @@ fn report_check_issue(infer: &Infer, _decl: &Decl, args: &[Rc<Val>]) -> Option<R
 }
 
 /// Shared append+dedup body of report_check_issue / check_comb_cycles.
-fn push_check_issue(infer: &Infer, code: &str, module: &str, signal: &str, message: &str) {
+pub(crate) fn push_check_issue(infer: &Infer, code: &str, module: &str, signal: &str, message: &str) {
     if code.is_empty() || module.is_empty() { return; }
     let line = format!("{}|{}|{}|{}", code, module, signal, message);
     if let Ok(mut map) = infer.mutable_map.write() {
