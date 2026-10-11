@@ -1,0 +1,6 @@
+// probe: let-binding with semicolon inside def
+// expect: stdout /4/
+def x: Nat =
+  let y: Nat = 2;
+  y * y
+println(x)

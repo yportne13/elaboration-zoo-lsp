@@ -1,0 +1,5 @@
+// probe: closure captures environment
+// expect: stdout /8/
+def adder(n: Nat): Nat -> Nat = m => n + m
+def five: Nat -> Nat = adder(5)
+println(five(3))

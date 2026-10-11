@@ -1,0 +1,4 @@
+// probe: structural recursion evaluates
+// expect: stdout /8/
+def double(n: Nat): Nat = match n { case zero => 0 case succ(m) => double(m) + 2 }
+println(double(4))

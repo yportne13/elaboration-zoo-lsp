@@ -1,0 +1,3 @@
+// probe: unterminated string literal
+// expect: error /error/
+def s: String = "abc

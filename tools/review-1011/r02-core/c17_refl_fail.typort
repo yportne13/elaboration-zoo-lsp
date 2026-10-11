@@ -1,0 +1,3 @@
+// probe: refl must FAIL on false closed equality
+// expect: error /error/
+def p: Eq(nat_add(2,3), 6) = refl

@@ -1,0 +1,4 @@
+// probe: stray closing brace at top level
+// expect: error /error/
+def x: Nat = 1
+}

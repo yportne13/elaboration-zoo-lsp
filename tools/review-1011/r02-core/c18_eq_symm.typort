@@ -1,0 +1,4 @@
+// probe: symm of a definitional equality
+// expect: ok
+def p: Eq(5, nat_add(2,3)) = symm(rfl)
+println(p)

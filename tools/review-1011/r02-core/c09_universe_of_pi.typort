@@ -1,0 +1,4 @@
+// probe: Pi over small types lives in Type 1; polymorphic fn typechecks
+// expect: ok
+def f: Nat -> Type 0 = n => Boolean
+println(0)

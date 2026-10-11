@@ -1,0 +1,4 @@
+// probe: duplicate definition is an error or warning
+// expect: error /error|warn/
+def x: Nat = 1
+def x: Nat = 2

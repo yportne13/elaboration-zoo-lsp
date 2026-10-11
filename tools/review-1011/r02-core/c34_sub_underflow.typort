@@ -1,0 +1,3 @@
+// probe: truncated subtraction underflow semantics (probe: 0 or error)
+// expect: stdout /0/
+println(nat_sub(1, 5))

@@ -1,0 +1,4 @@
+// probe: match binds constructor args
+// expect: stdout /6/
+def pred(n: Nat): Nat = match n { case zero => 0 case succ(m) => m }
+println(pred(7))

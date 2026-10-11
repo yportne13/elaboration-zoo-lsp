@@ -1,0 +1,4 @@
+// probe: // inside string is not a comment
+// expect: ok
+def s: String = "// not a comment"
+println(s)

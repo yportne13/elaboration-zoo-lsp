@@ -1,0 +1,3 @@
+// probe: types convert under arithmetic (Vec index n+0 vs n)
+// expect: error /unsolved/
+def f(n: Nat): Vec[Boolean] (n + 0) = _

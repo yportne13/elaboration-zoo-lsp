@@ -1,0 +1,3 @@
+// probe: leading + on literal
+// expect: error /error/
+def x: Nat = +1

@@ -1,0 +1,4 @@
+// probe: Nat equality decision
+// expect: ok
+println(nat_eq(3, 3))
+println(nat_eq(3, 4))

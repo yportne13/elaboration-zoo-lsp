@@ -1,0 +1,4 @@
+// probe: unterminated block comment
+// expect: error /unterminated|expected|error/
+/* never closed
+def x: Nat = 1

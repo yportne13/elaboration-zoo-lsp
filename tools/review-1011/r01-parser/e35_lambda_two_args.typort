@@ -1,0 +1,4 @@
+// probe: (x, y) => ... multi-arg lambda is NOT supported (curry instead)
+// expect: error /error/
+def g: Nat -> Nat -> Nat = (x, y) => x
+println(g(1)(2))

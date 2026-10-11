@@ -1,0 +1,4 @@
+// probe: trailing comma in call args is accepted
+// expect: ok
+def r: Nat = succ(zero,)
+println(r)

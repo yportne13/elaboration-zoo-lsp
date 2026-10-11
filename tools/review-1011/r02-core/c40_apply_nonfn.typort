@@ -1,0 +1,4 @@
+// probe: applying a non-function errors cleanly
+// expect: error /error/
+def x: Nat = 3
+println(x(1))

@@ -1,0 +1,4 @@
+// probe: unclosed enum brace: error, no panic
+// expect: error /error/
+enum X {
+  a

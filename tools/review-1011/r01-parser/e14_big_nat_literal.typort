@@ -1,0 +1,4 @@
+// probe: huge Nat literal (bignum display)
+// expect: ok
+def big: Nat = 1000000000000000000000
+println(big)

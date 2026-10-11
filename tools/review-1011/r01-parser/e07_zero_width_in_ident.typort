@@ -1,0 +1,3 @@
+// probe: zero-width space inside identifier should error
+// expect: error /error/
+def a​b: Nat = 1

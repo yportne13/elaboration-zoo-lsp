@@ -1,0 +1,3 @@
+// probe: def with missing body errors gracefully
+// expect: error /error/
+def broken: Nat = 

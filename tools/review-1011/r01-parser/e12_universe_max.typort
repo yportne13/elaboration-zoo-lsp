@@ -1,0 +1,3 @@
+// probe: universe level u32::MAX rejected (max usable is MAX-1)
+// expect: error /too large/
+def U: Type 4294967295 = Type 4294967294

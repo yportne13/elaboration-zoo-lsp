@@ -1,0 +1,3 @@
+// probe: keyword as identifier rejected
+// expect: error /error/
+def enum: Nat = 1

@@ -1,0 +1,3 @@
+// probe: using a type as a function body errors
+// expect: error /error/
+def f: Nat -> Nat = Nat

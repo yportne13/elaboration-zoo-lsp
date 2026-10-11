@@ -1,0 +1,5 @@
+// probe: eta-related terms are definitionally equal via def aliasing
+// expect: stdout /5/
+def idn: Nat -> Nat = n => n
+def h: Nat -> Nat = idn
+println(h(5))

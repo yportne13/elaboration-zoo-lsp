@@ -1,0 +1,3 @@
+// probe: NO cumulativity: Type 0 does not check against Type 5
+// expect: error /unify|can't unify|error/
+def T: Type 5 = Type 0

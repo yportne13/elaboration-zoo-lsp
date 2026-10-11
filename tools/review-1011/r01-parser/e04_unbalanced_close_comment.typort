@@ -1,0 +1,4 @@
+// probe: stray closing comment delimiter
+// expect: error /error/
+/* ok */ */ extra
+def x: Nat = 1

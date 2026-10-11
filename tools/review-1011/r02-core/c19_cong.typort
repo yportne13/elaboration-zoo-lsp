@@ -1,0 +1,5 @@
+// probe: conversion under cong target: f(1+1) =?= f(2) =?= 4
+// expect: ok
+def f(x: Nat): Nat = x * 2
+def p: Eq(f(nat_add(1,1)), 4) = rfl
+println(p)

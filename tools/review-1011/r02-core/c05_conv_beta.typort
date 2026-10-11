@@ -1,0 +1,4 @@
+// probe: conversion under beta: 1+1 =?= 2 evaluates
+// expect: stdout /2/
+def two: Nat = 1 + 1
+println(two)

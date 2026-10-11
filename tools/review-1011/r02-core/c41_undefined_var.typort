@@ -1,0 +1,3 @@
+// probe: undefined name errors with span
+// expect: error /not in scope|error/
+println(no_such_name)

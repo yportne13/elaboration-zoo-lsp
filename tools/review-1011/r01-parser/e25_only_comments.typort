@@ -1,0 +1,4 @@
+// probe: only comments
+// expect: ok
+// nothing here
+/* really nothing */

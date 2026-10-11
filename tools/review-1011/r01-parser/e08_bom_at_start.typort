@@ -1,0 +1,4 @@
+// probe: UTF-8 BOM at file start is tolerated
+// expect: ok
+﻿def x: Nat = 1
+println(x)

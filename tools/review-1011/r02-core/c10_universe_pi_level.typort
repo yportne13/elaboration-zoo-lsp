@@ -1,0 +1,4 @@
+// probe: large elimination Pi at Type 1
+// expect: ok
+def g: (A: Type 1) -> A -> A = A => x => x
+println(0)

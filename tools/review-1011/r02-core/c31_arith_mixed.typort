@@ -1,0 +1,3 @@
+// probe: operator precedence and mixed arithmetic
+// expect: stdout /20/
+println((1 + 2) * (3 + 4) - 1)

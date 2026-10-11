@@ -1,0 +1,3 @@
+// probe: delta: prelude def unfolds in evaluation
+// expect: stdout /5/
+println(nat_add(2, 3))
