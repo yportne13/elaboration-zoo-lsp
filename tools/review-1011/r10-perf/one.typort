@@ -1,0 +1,2 @@
+def one: Nat = 1
+println(one)
