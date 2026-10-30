@@ -35,6 +35,77 @@ fn check_err(input: &str) -> String {
         .unwrap()
 }
 
+/// P2 回归钉（见 docs/compare-l07-vs-dpm/L07-RISKS.md）：两个递归 def 的
+/// 卡住索引方程互比时，结构快路径失效，`(Match, Match)` 臂会逐层在 fresh
+/// rigid 下重求值分支体——递归 def 每层再产生新的卡住 match，层级递增、永不
+/// 结构收敛。修复前唯一的下限是 fuel 池：4 个 def 的程序实测 **256 s** 才报
+/// 假不可达。`MATCH_CMP_DEPTH` 把最坏情况压到有界时间，判定（分支不可达）
+/// 与错误文案保持不变。
+#[test]
+fn test_stuck_match_equation_bounded() {
+    let src = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def f(x: Nat, y: Nat, e: Eq[Nat] (add x zero) (add y zero)): Nat =
+    match e {
+        case refl(a) => a
+    }
+"#;
+    let t0 = std::time::Instant::now();
+    let msg = check_err(src);
+    let dt = t0.elapsed();
+    assert!(msg.contains("分支不可达"), "err: {msg}");
+    assert!(
+        dt < std::time::Duration::from_secs(30),
+        "耗时 {dt:?}：卡住 match 比较的深度预算失效（修复前为分钟级）"
+    );
+}
+
+/// 反向钉：深度预算不能把**非递归**的卡住 match 误判为不等——同一位置换成
+/// 非递归的 `g` 仍应接受（修复前 13 ms 收敛，修复后必须保持）。
+#[test]
+fn test_stuck_match_nonrecursive_still_equal() {
+    let out = check(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def g(x: Nat): Nat =
+    match x {
+        case zero => zero
+        case succ(n) => zero
+    }
+
+def f(x: Nat, y: Nat, e: Eq[Nat] (g x) (g y)): Nat =
+    match e {
+        case refl(a) => a
+    }
+
+println "done"
+"#,
+    );
+    assert_eq!(out, "done\n");
+}
+
 /// 基础 ADT + 多态 + 高阶函数（移植自 L07a test2）
 #[test]
 fn test_basic() {

@@ -474,9 +474,24 @@ pub struct Infer {
     /// pattern 编译入口）充值；递归中递减，归零即 Err——防索引槽互相嵌入
     /// 的构造子值比较（SuccCase 的 typ 含索引、索引又是 SuccCase）无限递归。
     unify_fuel: std::cell::Cell<u32>,
+    /// 卡住 match 相等性比较的**递归深度**预算（与 fuel 无关）。
+    /// `(Match, Match)` 臂在结构快路径失效后会逐分支在 fresh rigid 下重求值；
+    /// 递归 def 的分支体每层再产生新的卡住 match，层级递增、永不结构收敛
+    /// （实测：4 个 def 的 `Eq (add x zero) (add y zero)` 要 256 s 才靠 fuel
+    /// 停下）。深度预算把它变成"有界失败"，与前缀相同的浅层比较不受影响。
+    match_cmp_depth: std::cell::Cell<u32>,
 }
 
 const UNIFY_FUEL: u32 = 4096;
+
+/// 卡住 match 相等性比较的深度上限。
+///
+/// 取值依据：结构快路径命中时根本不进这个预算；只有"同一递归 def、不同槽位"
+/// 的卡住 match 才会逐层下钻。同一 def 的两份值在**有限**层内（构造子字段深度）
+/// 就能比完；超过该深度说明双方的分支体在递归上互不相同，再钻也只会重复同一
+/// 形态。40 层足以覆盖 `Vec`/`add` 这类教学负载的构造子嵌套，同时把最坏情况
+/// 从"fuel 池耗尽（数分钟）"压到毫秒级。
+pub(crate) const MATCH_CMP_DEPTH: u32 = 40;
 
 /// [`Infer::meta_snapshot`] 的回滚句柄：undo 轨迹与 meta 表的两个水位
 /// （undo-log 方案，见 [`Infer::meta_snapshot`] 文档）。
@@ -494,6 +509,7 @@ impl Infer {
             mutable_map: RefCell::new(HashMap::new()),
             simpl_cache: RefCell::new(HashMap::new()),
             unify_fuel: std::cell::Cell::new(UNIFY_FUEL),
+            match_cmp_depth: std::cell::Cell::new(0),
         }
     }
 
