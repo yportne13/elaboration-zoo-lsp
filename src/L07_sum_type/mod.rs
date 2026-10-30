@@ -314,6 +314,76 @@ impl Subst {
         mentions_level(v, sub)
     }
 
+    /// 解值是否（浅层）引用 σ 的**任一**已解层级。
+    ///
+    /// 传递 occurs 的前置筛选（见 unification.rs 的 rigid 解臂）：只有解值
+    /// 真的挂在既有解链上时，才值得跑一次传递扫描；干净解零开销直通。
+    pub(crate) fn mentions_any_solved(self: &Rc<Self>, v: &Val) -> bool {
+        Self::mentions_level(v, self)
+    }
+
+    /// 传递 occurs：`v` 在 σ 之下是否**经已解层级**提到 `target`。
+    ///
+    /// 与 [`Self::mentions_level`] 同口径（只看浅结构 + 闭包 env 槽，不进
+    /// 闭包体），区别是遇到 `Rigid y` 且 σ 解出 y 时**继续扫解值**——这正是
+    /// 两跳环（`x := a`、`a := succ x`）的检测点。
+    ///
+    /// 不能用 `force(σ, v)` 代替：槽位纪律是"只包裹不物化"（frcs 对 spine /
+    /// Sum / SumCase 槽只 `wrap_sub`），force 不会把槽里的 `Rigid x` 化成
+    /// 解值 `a`，因此 force + 浅扫描看不出链式环。预算耗尽按"未出现"处理
+    /// （宁漏不误杀：误杀会把合法分支判成不可达）。
+    pub(crate) fn occurs_transitive(self: &Rc<Self>, v: &Val, target: Lvl) -> bool {
+        const BUDGET: u32 = 2048;
+        fn go(v: &Val, sub: &Rc<Subst>, target: Lvl, budget: &mut u32) -> bool {
+            if *budget == 0 {
+                return false;
+            }
+            *budget -= 1;
+            match v {
+                Val::Rigid(y, sp) => {
+                    if *y == target {
+                        return true;
+                    }
+                    if let Some(hit) = sub.lookup_hit(*y) {
+                        if go(&hit, sub, target, budget) {
+                            return true;
+                        }
+                    }
+                    sp.iter().any(|(u, _)| go(u, sub, target, budget))
+                }
+                Val::Flex(_, sp) | Val::Decl(_, sp) | Val::Prim(_, sp) => {
+                    sp.iter().any(|(u, _)| go(u, sub, target, budget))
+                }
+                Val::Obj(o, _, sp) => {
+                    go(o, sub, target, budget)
+                        || sp.iter().any(|(u, _)| go(u, sub, target, budget))
+                }
+                Val::Lam(_, _, cl) => cl.0.iter().any(|v| go(v, sub, target, budget)),
+                Val::Pi(_, _, a, cl) => {
+                    go(a, sub, target, budget)
+                        || cl.0.iter().any(|v| go(v, sub, target, budget))
+                }
+                Val::Sum(_, params, _) => params
+                    .iter()
+                    .any(|(_, v, t, _)| go(v, sub, target, budget) || go(t, sub, target, budget)),
+                Val::SumCase { typ, datas, .. } => {
+                    go(typ, sub, target, budget)
+                        || datas.iter().any(|(_, v, _)| go(v, sub, target, budget))
+                }
+                Val::Match(s, env, _, pending) => {
+                    go(s, sub, target, budget)
+                        || env.iter().any(|v| go(v, sub, target, budget))
+                        || pending.iter().any(|(u, _)| go(u, sub, target, budget))
+                }
+                // 内层 σ 优先：本值在 s2 之下，target 若被 s2 解出也要跟随
+                Val::VSub(inner, s2) => go(inner, s2, target, budget),
+                Val::U | Val::LiteralType | Val::LiteralIntro(_) => false,
+            }
+        }
+        let mut budget = BUDGET;
+        go(v, self, target, &mut budget)
+    }
+
     /// x 是否已有解（旧 `pm_def(x).is_none()` 的否定形式）。
     pub(crate) fn has(&self, x: Lvl) -> bool {
         let mut cur = self.head.clone();

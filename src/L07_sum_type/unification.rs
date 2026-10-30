@@ -908,6 +908,18 @@ impl Infer {
                 if val_mentions_lvl(v, *x) {
                     return Err(UnifyError);
                 }
+                // 传递 occurs（P1，见 L07-RISKS）：浅扫描只看单步环，挡不住
+                // 「x := a、a := succ x」这种经模式槽中转的两跳环——两步各自
+                // 无环，组合出的 σ 却是循环的。解值若挂在既有解链上，先置于
+                // acc 之下 force 一次再查；干净解不付这次 force。
+                if let Some(acc) = spec.as_deref().map(|s| s.acc.clone()) {
+                    if !acc.is_empty()
+                        && acc.mentions_any_solved(v)
+                        && acc.occurs_transitive(v, *x)
+                    {
+                        return Err(UnifyError);
+                    }
+                }
                 let s = spec.as_deref_mut().unwrap();
                 s.acc = Subst::extend(&s.acc, *x, v.clone());
                 Ok(())
@@ -921,6 +933,14 @@ impl Infer {
             {
                 if val_mentions_lvl(v, *x) {
                     return Err(UnifyError);
+                }
+                if let Some(acc) = spec.as_deref().map(|s| s.acc.clone()) {
+                    if !acc.is_empty()
+                        && acc.mentions_any_solved(v)
+                        && acc.occurs_transitive(v, *x)
+                    {
+                        return Err(UnifyError);
+                    }
                 }
                 let s = spec.as_deref_mut().unwrap();
                 s.acc = Subst::extend(&s.acc, *x, v.clone());
