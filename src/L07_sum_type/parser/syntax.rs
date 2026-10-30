@@ -26,6 +26,30 @@ impl Pattern {
         }
     }
 
+    /// 错误文案用的模式渲染：`Con` 递归成 `name(sub, ...)`，`Any` 成 `_`。
+    ///
+    /// 诊断里**不要**用 `{:?}`——它会泄漏内部表示（`Con("refl" @ 166,170, …)`），
+    /// 对 IDE / 终端用户都不可读。
+    pub fn pretty(&self) -> String {
+        match self {
+            Pattern::Any(..) => "_".to_owned(),
+            Pattern::Con(name, subs, _) => {
+                let mut s = name.data.clone();
+                if !subs.is_empty() {
+                    s.push('(');
+                    for (i, sub) in subs.iter().enumerate() {
+                        if i > 0 {
+                            s.push_str(", ");
+                        }
+                        s.push_str(&sub.pretty());
+                    }
+                    s.push(')');
+                }
+                s
+            }
+        }
+    }
+
     pub fn get_icit(&self) -> Icit {
         match self {
             Pattern::Any(_, icit) | Pattern::Con(_, _, icit) => *icit,

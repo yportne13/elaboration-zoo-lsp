@@ -61,7 +61,7 @@ impl Infer {
                     )
                 }
             }
-            _ => Err(Error(format!("no named implicit arg {:?}", name))),
+            _ => Err(Error(format!("no named implicit arg {}", name.data))),
         }
     }
 
