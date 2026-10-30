@@ -59,6 +59,9 @@ def bad(x: Nat, e: Eq[Nat] x (succ x)): Nat =
 "#,
     );
     assert!(msg.contains("分支不可达"), "err: {msg}");
+    // 文案按源码形态渲染（P9）：不得出现 `Con(\"refl\" @ 166,170, …)` 这类内部表示
+    assert!(msg.contains("refl(a)"), "err: {msg}");
+    assert!(!msg.contains("Con("), "诊断泄漏内部 Debug 表示: {msg}");
 }
 
 /// 正向对照：传递 occurs 只应拦住循环解，不能误伤正常的索引精化。

@@ -162,7 +162,7 @@ impl<'a> Compiler<'a> {
                 // owner 2026-09-20 口径：不可达的臂**报错**（与 Walk::Unreachable
                 // 的「分支不可达」同类），不静默跳过。
                 self.errors
-                    .push(format!("分支不可达：模式 {:?} 被前面的通配臂遮蔽", pat));
+                    .push(format!("分支不可达：模式 {} 被前面的通配臂遮蔽", pat.pretty()));
                 continue;
             }
             // 臂边界的精化替换快照（回滚 = Rc 指针赋值，见循环尾）。
@@ -217,7 +217,7 @@ impl<'a> Compiler<'a> {
                     // 荒谬臂的嵌套位置不产生覆盖义务（参考版同款，v3 回归钉）
                     self.pending_pos.clear();
                     self.errors
-                        .push(format!("分支不可达：模式 {:?} 与被匹配类型不相容", pat));
+                        .push(format!("分支不可达：模式 {} 与被匹配类型不相容", pat.pretty()));
                 }
             }
             // 臂边界：回滚本臂的精化替换与名字轨迹（本臂解出的 meta 保留
