@@ -222,10 +222,12 @@ impl Compiler {
                     // P3：判不出可达性 ≠ 不可达。不产生覆盖义务，但文案必须
                     // 区分"矛盾"与"算不出来"——对齐 dpm 的 `UnifyRes::UIDK`
                     // 与 Agda 的 "I am not sure if there should be a pattern …"。
+                    // 触发面不止卡住 match：rename/invert/solve 失败（作用域越界、
+                    // 剪枝失败）也归到这一档。
                     // 本臂不检查分支体（与不可达臂同处置）。
                     self.pending_pos.clear();
                     self.errors.push(format!(
-                        "无法判定：模式 {} 的索引方程无法判定（卡住的 match 相等性或预算耗尽）",
+                        "无法判定：模式 {} 的索引方程无法判定（卡住的相等性，或无法解出替换/rename）",
                         pat.pretty()
                     ));
                 }

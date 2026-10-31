@@ -1947,7 +1947,12 @@ def f(x: List[Nat]): Nat =
 
 /// P1（stale-solvable 臂序污染）：big 臂（5 槽）在前时，其陈旧可解条目
 /// 让后续 ident 荒谬臂的瞬态 η 被误判可解——修复前静默接受（臂序依赖），
-/// 修复后两种臂序一致报"分支不可达"。
+/// 修复后两种臂序一致拒绝。
+///
+/// 文案是"无法判定"而非"分支不可达"（P3 第二刀）：该方程是
+/// `n => n` ≐ `n => succ zero`，落到 λ 体 `n ≐ succ zero` —— 刚性变量
+/// 不能被求解（不在可解集），所以既不能证相等、也不能证矛盾（Agda/dpm 的
+/// "cannot solve / UIDK"），而不是"这两个函数确定不同"。
 #[test]
 fn test_stale_solvable_order_independent() {
     for arms in [
@@ -1974,7 +1979,8 @@ def t(w: W (n => succ zero)): Nat =
 "#
         );
         let msg = check_err(&src);
-        assert!(msg.contains("分支不可达"), "{msg}");
+        assert!(msg.contains("无法判定"), "{msg}");
+        assert!(!msg.contains("分支不可达"), "undecided 不得伪装成不可达: {msg}");
     }
 }
 
