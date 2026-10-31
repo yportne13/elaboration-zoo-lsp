@@ -495,6 +495,29 @@ def m: Nat = (cons two nil).len
     );
 }
 
+/// P1 孪生跟修守卫：浅 occurs 只挡单步环；经模式槽中转的两跳环
+/// （`x := a`、`a := succ x`）组合出的 σ 循环，两侧都必须拒绝。
+#[test]
+fn parity_occurs_transitive_chain() {
+    assert_parity(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def bad(x: Nat, e: Eq[Nat] x (succ x)): Nat =
+    match e {
+        case refl(a) => zero
+    }
+"#,
+    );
+}
+
 /// P13 回归钉（L07-RISKS）：两个递归 def 的卡住索引方程互比。
 ///
 /// 结构快路径失效后双实现都会逐层重求值分支体——参考版靠 `MATCH_CMP_DEPTH`、
