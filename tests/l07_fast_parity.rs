@@ -495,6 +495,47 @@ def m: Nat = (cons two nil).len
     );
 }
 
+/// S1 回归钉（FINDING-struct-eq-pending）：参考版 `struct_eq` 曾漏比卡住
+/// match 的 pending 值，使 `refl` 能证明两个闭实例化不同的函数相等；孪生版
+/// 一直正确 ⇒ 修复前该用例是 run=Ok / run_fast=Err 的判定分裂。现在两侧都
+/// 必须拒绝。
+#[test]
+fn parity_struct_eq_match_pending() {
+    assert_parity(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def pfun(n: Nat): Nat -> Nat =
+    match n {
+        case zero => k => k
+        case succ(j) => k => k
+    }
+
+def f(x: Nat): Nat =
+    match (pfun x zero) {
+        case zero => zero
+        case succ(m) => succ m
+    }
+
+def g(x: Nat): Nat =
+    match (pfun x (succ zero)) {
+        case zero => zero
+        case succ(m) => succ m
+    }
+
+def bad : Eq[Nat -> Nat] f g =
+    refl f
+"#,
+    );
+}
+
 /// P1 孪生跟修守卫：浅 occurs 只挡单步环；经模式槽中转的两跳环
 /// （`x := a`、`a := succ x`）组合出的 σ 循环，两侧都必须拒绝。
 #[test]
