@@ -1887,6 +1887,32 @@ fn deep_value_iterative_under_default_stack() {
         !struct_eq::val_eq(&deep, &c),
         "超预算应有界降级（false），不爆栈"
     );
+
+    // ③ quote（README §7.6：曾是仅剩的递归路径）+ pretty（定深截断）：
+    //    10 万层深链在**默认 2 MB 测试栈**下不爆栈。
+    //
+    //    值的消费路径是 move（frame 内 match 逐字段搬走、rc_take 对唯一
+    //    Rc try_unwrap 成功），不会触发深递归 Drop；返回的 Tm 是 Box 链，
+    //    必须 ManuallyDrop 泄漏（测试基建，同本测试的 Rc 链处理）。
+    let infer2 = Infer::new();
+    let decls = cxt::Decls::new();
+    let quoted = std::mem::ManuallyDrop::new(infer2.quote(&decls, Lvl(0), chain(&nat, N_OCCURS)));
+    // 迭代校验结构（不递归）：层数 = N_OCCURS + 1，且逐层是 SumCase
+    let mut depth = 1usize;
+    let mut cur: &Tm = &quoted;
+    loop {
+        match cur {
+            Tm::SumCase { datas, .. } if !datas.is_empty() => {
+                depth += 1;
+                cur = &datas[0].1;
+            }
+            _ => break,
+        }
+    }
+    assert_eq!(depth, N_OCCURS + 1, "quote 应逐层产出 SumCase");
+    // pretty：超深输入按 MAX_DEPTH 截断（不 panic、不爆栈）
+    let shown = pretty::pretty_tm(0, List::new(), &quoted);
+    assert!(shown.contains('…'), "深值显示应定深截断");
 }
 
 // --------------------------------------------------------------------------------

@@ -1359,6 +1359,193 @@ impl Infer {
     fn quote(&self, decl: &Decls, l: Lvl, t: Val) -> Tm {
         let t = self.force(decl, t);
         match t {
+            // 深链形态（Sum/SumCase/Obj 可按值深度自嵌，如 `succ^N zero`）
+            // 交给帧式收集器；其余形态（Lam/Pi/Match/spine 头，结构嵌套浅）
+            // 回落 `quote_arm`（README §7.6，2026-11-01 与 rename_deep 同构）。
+            Val::Sum(..) | Val::SumCase { .. } | Val::Obj(..) => self.quote_deep(decl, l, t),
+            Val::VSub(ref v, _) => {
+                // force 后顶层不应是 VSub；fuel 耗尽时会。解包继续（同旧版）。
+                let inner = v.clone();
+                self.quote(decl, l, *inner)
+            }
+            _ => self.quote_arm(decl, l, t),
+        }
+    }
+
+    /// quote 的深链收集器：**Sum / SumCase / Obj** 帧式下降/组装（与
+    /// [`Self::rename_deep`] 同构）。深值按值深递归会爆栈（参考版 README
+    /// §7.6：`quote` 曾是仅剩的递归路径之一）；子件回落 [`Self::quote_arm`]。
+    fn quote_deep(&self, decl: &Decls, l: Lvl, root: Val) -> Tm {
+        enum FrameKind {
+            Sum {
+                name: Span<String>,
+                cases: Vec<Span<String>>,
+                metas: Vec<(Span<String>, Icit)>,
+            },
+            SumCase {
+                case_name: Span<String>,
+                datas_metas: Vec<(Span<String>, Icit)>,
+            },
+            Obj {
+                name: Span<String>,
+            },
+        }
+        struct Frame {
+            pending: Vec<Val>,
+            icits: Vec<Icit>,
+            kind: FrameKind,
+            done: Vec<Tm>,
+            idx: usize,
+        }
+        fn frame_new(v: Val) -> Frame {
+            match v {
+                Val::Sum(name, params, cases) => {
+                    let mut pending = Vec::with_capacity(params.len() * 2);
+                    let mut metas = Vec::with_capacity(params.len());
+                    for (n, v, t, i) in params {
+                        pending.push(rc_take(v));
+                        pending.push(rc_take(t));
+                        metas.push((n, i));
+                    }
+                    let n_all = pending.len();
+                    Frame {
+                        pending,
+                        icits: Vec::new(),
+                        kind: FrameKind::Sum { name, cases, metas },
+                        done: Vec::with_capacity(n_all),
+                        idx: 0,
+                    }
+                }
+                Val::SumCase {
+                    typ,
+                    case_name,
+                    datas,
+                } => {
+                    let mut pending = Vec::with_capacity(datas.len() + 1);
+                    pending.push(rc_take(typ));
+                    let mut datas_metas = Vec::with_capacity(datas.len());
+                    for (n, v, i) in datas {
+                        pending.push(rc_take(v));
+                        datas_metas.push((n, i));
+                    }
+                    let n_all = pending.len();
+                    Frame {
+                        pending,
+                        icits: Vec::new(),
+                        kind: FrameKind::SumCase {
+                            case_name,
+                            datas_metas,
+                        },
+                        done: Vec::with_capacity(n_all),
+                        idx: 0,
+                    }
+                }
+                Val::Obj(x, name, sp) => {
+                    // pending = [被投影者, spine 实参…]；实参按 List 头→尾序入列
+                    let mut pending = vec![*x];
+                    let mut icits = Vec::new();
+                    for (u, i) in sp.iter() {
+                        pending.push(u.clone());
+                        icits.push(*i);
+                    }
+                    let n_all = pending.len();
+                    Frame {
+                        pending,
+                        icits,
+                        kind: FrameKind::Obj { name },
+                        done: Vec::with_capacity(n_all),
+                        idx: 0,
+                    }
+                }
+                _ => unreachable!("quote_deep 只接受 Sum/SumCase/Obj"),
+            }
+        }
+        fn frame_assemble(frame: Frame) -> Tm {
+            match frame.kind {
+                FrameKind::Sum { name, cases, metas } => {
+                    let mut it = frame.done.into_iter();
+                    let params = metas
+                        .into_iter()
+                        .map(|(n, i)| {
+                            let v = it.next().unwrap();
+                            let t = it.next().unwrap();
+                            (n, v, t, i)
+                        })
+                        .collect();
+                    Tm::Sum(name, params, cases)
+                }
+                FrameKind::SumCase {
+                    case_name,
+                    datas_metas,
+                } => {
+                    let mut it = frame.done.into_iter();
+                    let typ = it.next().unwrap();
+                    let datas = datas_metas
+                        .into_iter()
+                        .map(|(n, i)| (n, it.next().unwrap(), i))
+                        .collect();
+                    Tm::SumCase {
+                        typ: Box::new(typ),
+                        case_name,
+                        datas,
+                    }
+                }
+                FrameKind::Obj { name } => {
+                    let mut it = frame.done.into_iter();
+                    let head = Tm::Obj(Box::new(it.next().unwrap()), name);
+                    let args: Vec<Tm> = it.collect();
+                    let mut acc = head;
+                    // spine 头 = 最后应用 ⇒ 逆序折叠（与 quote_sp 应用序一致）
+                    for (u, i) in args.into_iter().zip(frame.icits).rev() {
+                        acc = Tm::App(Box::new(acc), Box::new(u), i);
+                    }
+                    acc
+                }
+            }
+        }
+        let mut frames: Vec<Frame> = vec![frame_new(root)];
+        let mut result: Option<Tm> = None;
+        while let Some(frame) = frames.last_mut() {
+            if frame.idx == frame.pending.len() {
+                let frame = frames.pop().unwrap();
+                let tm = frame_assemble(frame);
+                match frames.last_mut() {
+                    Some(parent) => {
+                        parent.done.push(tm);
+                        parent.idx += 1;
+                    }
+                    None => result = Some(tm),
+                }
+                continue;
+            }
+            // **move 出**待处理槽（不能 clone）：深链的原始值若留在 frame 里，
+            // 帧弹栈时的 Drop 会沿 Rc 链递归 → 10 万层直接爆栈（实测
+            // 0xC00000FD）。replace 成廉价占位后，值被逐层搬走、无深递归 Drop。
+            let w = std::mem::replace(&mut frame.pending[frame.idx], Val::U);
+            let w = self.force(decl, w);
+            match w {
+                // fuel 耗尽窗口：force 原样返回 VSub——解包后原地重试
+                Val::VSub(v, _) => {
+                    let frame = frames.last_mut().unwrap();
+                    frame.pending[frame.idx] = *v;
+                }
+                Val::Sum(..) | Val::SumCase { .. } | Val::Obj(..) => {
+                    frames.push(frame_new(w));
+                }
+                _ => {
+                    let tm = self.quote_arm(decl, l, w);
+                    let frame = frames.last_mut().unwrap();
+                    frame.done.push(tm);
+                    frame.idx += 1;
+                }
+            }
+        }
+        result.expect("quote_deep 至少产出一个 Tm")
+    }
+
+    /// quote 的浅结构臂（入口已 force、已分派掉深链形态）。
+    fn quote_arm(&self, decl: &Decls, l: Lvl, t: Val) -> Tm {
+        match t {
             // 正常路径 force 后顶层不会是 VSub；fuel 耗尽时 force 原样返回
             // VSub——解包打印内层（σ 未推开，保真度同旧版"打印未展开 rigid"），
             // 链式 VSub 由递归消化，不会产生 Tm::U 垃圾
