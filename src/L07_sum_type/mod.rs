@@ -1458,15 +1458,14 @@ impl Infer {
         self.reset_unify_kind();
         self.unify(decl, cxt.lvl, cxt, t.clone(), t_prime.clone(), None)
             .map_err(|_| {
-                // P3：把"算不出来/预算耗尽"与"结构矛盾"分开报（对齐 dpm 的
-                // UIDK 与 Agda 的 "I am not sure …"）。
+                // 分支体检查（常规转换）只需"成不成立"：Undecided 与 Absurd 都
+                // 是失败，文案保持旧口径（`can't unify …` + fuel 尾注），避免
+                // 把内部三档泄漏到普通转换错误里。分档的消费方是模式编译
+                // （可达性 / 覆盖 / "无法判定"文案），见 pattern_match.rs。
                 let fuel_note = if self.unify_fuel.get() == 0 {
                     " (fuel exhausted)"
                 } else {
-                    match self.unify_kind() {
-                        UnifyKind::Undecided => " (undecided: stuck-match equality)",
-                        UnifyKind::Absurd | UnifyKind::Fuel => "",
-                    }
+                    ""
                 };
                 Error(format!(
                     "can't unify{} {} == {}",
