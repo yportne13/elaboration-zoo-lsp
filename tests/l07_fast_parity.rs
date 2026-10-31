@@ -495,6 +495,38 @@ def m: Nat = (cons two nil).len
     );
 }
 
+/// P13 回归钉（L07-RISKS）：两个递归 def 的卡住索引方程互比。
+///
+/// 结构快路径失效后双实现都会逐层重求值分支体——参考版靠 `MATCH_CMP_DEPTH`、
+/// 孪生版靠 `MATCH_CMP_BUDGET`。缺任一侧的预算都会退化成分钟级：
+/// 修复前参考版 256 s、孪生版 26.3 s（debug）。两侧判定必须一致（Err）。
+#[test]
+fn parity_stuck_match_equation_bounded() {
+    assert_parity(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def f(x: Nat, y: Nat, e: Eq[Nat] (add x zero) (add y zero)): Nat =
+    match e {
+        case refl(a) => a
+    }
+"#,
+    );
+}
+
 #[test]
 fn parity_tests_rs_stuck_match() {
     // test_stuck_match_unify / _splice / _applied_with_outer_binder /
