@@ -89,6 +89,104 @@ println "done"
     assert_eq!(out, "done\n");
 }
 
+/// S1 回归钉（FINDING-struct-eq-pending）：`struct_eq` 的卡住 match 臂
+/// 必须比较 pending **值**，不能只比长度/icit。否则「scrutinee 本身是另一个
+/// pending 不同的卡住 match」的两份 match 会被判等，`refl` 可证明两个
+/// 闭实例化结果不同的函数相等（`f 1 = zero` vs `g 1 = succ zero`）。
+/// 本缺陷由 commit 2309e2a4 的迭代化重写引入（注释仍写"访问序含 pending"，
+/// 实现却只压了分支体）。
+#[test]
+fn test_struct_eq_compares_match_pending_values() {
+    let msg = check_err(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def pfun(n: Nat): Nat -> Nat =
+    match n {
+        case zero => k => k
+        case succ(j) => k => k
+    }
+
+def f(x: Nat): Nat =
+    match (pfun x zero) {
+        case zero => zero
+        case succ(m) => succ m
+    }
+
+def g(x: Nat): Nat =
+    match (pfun x (succ zero)) {
+        case zero => zero
+        case succ(m) => succ m
+    }
+
+def bad : Eq[Nat -> Nat] f g =
+    refl f
+"#,
+    );
+    assert!(msg.contains("can't unify"), "err: {msg}");
+}
+
+/// 该缺陷的强化后果：在上面的 `bad` 之上可证 `False`。修复后必须在
+/// `bad` 处就失败（不得走到 `boom`）。
+#[test]
+fn test_nested_match_pending_cannot_prove_false() {
+    let msg = check_err(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def pfun(n: Nat): Nat -> Nat =
+    match n {
+        case zero => k => k
+        case succ(j) => k => k
+    }
+
+def f(x: Nat): Nat =
+    match (pfun x zero) {
+        case zero => zero
+        case succ(m) => succ m
+    }
+
+def g(x: Nat): Nat =
+    match (pfun x (succ zero)) {
+        case zero => zero
+        case succ(m) => succ m
+    }
+
+def bad : Eq[Nat -> Nat] f g =
+    refl f
+
+def False : U = (A : U) -> A
+
+def ap(f: Nat -> Nat, g: Nat -> Nat, e: Eq[Nat -> Nat] f g): Eq[Nat] (f (succ zero)) (g (succ zero)) =
+    match e {
+        case refl(a) => refl (a (succ zero))
+    }
+
+def eqn : Eq[Nat] zero (succ zero) =
+    ap f g bad
+
+def boom : False =
+    match eqn {
+    }
+"#,
+    );
+    assert!(msg.contains("can't unify"), "err: {msg}");
+}
+
 /// P2 回归钉（见 docs/compare-l07-vs-dpm/L07-RISKS.md）：两个递归 def 的
 /// 卡住索引方程互比时，结构快路径失效，`(Match, Match)` 臂会逐层在 fresh
 /// rigid 下重求值分支体——递归 def 每层再产生新的卡住 match，层级递增、永不
