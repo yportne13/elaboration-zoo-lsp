@@ -7,6 +7,27 @@ use crate::list::List;
 
 use super::{parser::syntax::Icit, Tm};
 
+/// 显示层递归深度上限（README §7.6b 的"定深拒绝"路线）。
+///
+/// `go` 对 `Tm` 结构递归；深值（`succ^N zero` 经 quote 得到 10^5 层
+/// `Tm::SumCase`）在默认 2 MB 栈下会爆栈。显示层不需要完整性：超过上限
+/// 输出 `…` 截断即可（不 panic、不改变类型检查结果）。取 1024 是因为
+/// 正常教学程序远低于此（最深是嵌套 def 的项），且 1024 帧在默认 2 MB
+/// 测试栈下留足余量（实测 256/1024 均通过；2000 帧偏高，保守取 1024）。
+const MAX_DEPTH: u32 = 1_024;
+
+thread_local! {
+    static DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+struct DepthGuard;
+
+impl Drop for DepthGuard {
+    fn drop(&mut self) {
+        DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+    }
+}
+
 const ATP: i32 = 3; // atom
 const APPP: i32 = 2; // app
 const PIP: i32 = 1; // pi
@@ -58,6 +79,14 @@ fn go_app_pruning(prec: i32, ns: List<String>, t: &Tm) -> String {
 /// 嵌套链全链 O(n²) 字节复制（perf-debt 剩余机会 9，同 L11/L12 P3 模板）。
 /// 输出与旧实现逐字节一致。
 fn go(prec: i32, ns: List<String>, tm: &Tm, out: &mut String) {
+    // 显示层定深截断：深值不爆栈（见 `MAX_DEPTH`）
+    let depth = DEPTH.with(|d| d.get());
+    if depth >= MAX_DEPTH {
+        out.push('…');
+        return;
+    }
+    DEPTH.with(|d| d.set(depth + 1));
+    let _guard = DepthGuard;
     match tm {
         Tm::Var(ix) => out.push_str(&go_ix(ns, ix.0)),
         Tm::Decl(name) => out.push_str(name),

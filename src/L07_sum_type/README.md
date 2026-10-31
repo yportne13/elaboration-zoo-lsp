@@ -336,8 +336,13 @@ solve / intersect）。在此之上：
    a. 深值的**释放**是 Rc/Box 链的递归 Drop——参考版的真树表示在深值析构
       时仍按深度吃栈（回归测试用句柄保留 + `mem::forget` 泄漏承接，测试
       基建行为、非被测路径）；孪生 arena 表示不跑 `Drop`，天然豁免；
-   b. `quote` / `pretty` 对深值仍是递归路径（触发面 = nf 输出与错误显示，
-      未含在本轮迭代化内，走 LSP 前需一并迭代化或定深拒绝）。
+   b. ~~`quote` / `pretty` 对深值仍是递归路径~~ **已处理（2026-11-01，P11）**：
+      `quote` 的 Sum/SumCase/Obj 深链改帧式收集器 `quote_deep`（与
+      `rename_deep` 同构，子件回落 `quote_arm`；坑：待处理槽必须 **move 出**
+      而非 clone，否则帧弹栈的 Drop 沿 Rc 链递归爆栈——实测 0xC00000FD）；
+      `pretty` 改为**定深截断**（`MAX_DEPTH = 1024`，超出输出 `…`，显示层
+      不需要完整性）。回归钉扩展 `deep_value_iterative_under_default_stack`
+      （10 万层 quote + pretty，默认 2 MB 栈）。仍余 a 的递归 `Drop` 未解。
 7. **孪生 σ 的跨轮回收已落地（2026-09-18）**：bump `reset()` 不跑 `Drop`，
    arena 内 `XCell::VSub` 持有的 `Rc<SubstV>` 克隆跨轮不递减。修：
    `wrap_sub` 在构造克隆的同一时刻把 `Rc::as_ptr` 登记进 `VSUB_REGS`
