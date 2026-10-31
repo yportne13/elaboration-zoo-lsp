@@ -18,7 +18,7 @@ use super::prim::{DeclEntryF, Fuel, MutableMap};
 use super::rename::{invert_bump, prune_meta_bump, solve_bump, solve_with_pren_bump, RenBuf};
 use super::spine::{head_kind, is_flex, is_objheaded, xcell_head_name, HK_DECL, HK_OBJ, HK_PRIM, MetaEntry, Spine};
 use super::struct_eq::{struct_env_eq, struct_tm_eq, struct_val_eq};
-use super::subst::{simpl_decl, wrap_sub, SpecSolve, SubstV};
+use super::subst::{mentions_level, occurs_transitive, simpl_decl, wrap_sub, SpecSolve, SubstV};
 use super::syntax::{
     pending_len, pending_struct_eq, Tm, V, XCell, v_clo_of, v_lit_ty, v_lvl, v_lvl_of,
     v_meta_of,
@@ -511,6 +511,18 @@ pub(super) fn unify_iter<'a>(
             if val_mentions_lvl(spine, defs, u, v_lvl_of(t)) {
                 return false;
             }
+            // P1 孪生跟修（参考版 `occurs_transitive` 同款）：浅扫描只挡单步
+            // 环，挡不住经模式槽中转的两跳环（`x := a`、`a := succ x`）。
+            // 仅当解值挂在既有解链上时才付这次扫描（干净解零开销）。
+            {
+                let s = spec.as_deref().unwrap();
+                if !s.acc.is_empty()
+                    && mentions_level(spine, defs, u, &s.acc)
+                    && occurs_transitive(bump, spine, defs, u, v_lvl_of(t), &s.acc)
+                {
+                    return false;
+                }
+            }
             let s = spec.as_deref_mut().unwrap();
             s.acc = SubstV::extend(&s.acc, v_lvl_of(t), u);
             continue;
@@ -524,6 +536,15 @@ pub(super) fn unify_iter<'a>(
         {
             if val_mentions_lvl(spine, defs, t, v_lvl_of(u)) {
                 return false;
+            }
+            {
+                let s = spec.as_deref().unwrap();
+                if !s.acc.is_empty()
+                    && mentions_level(spine, defs, t, &s.acc)
+                    && occurs_transitive(bump, spine, defs, t, v_lvl_of(u), &s.acc)
+                {
+                    return false;
+                }
             }
             let s = spec.as_deref_mut().unwrap();
             s.acc = SubstV::extend(&s.acc, v_lvl_of(u), t);
