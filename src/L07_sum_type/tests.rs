@@ -121,10 +121,68 @@ def f(x: Nat, y: Nat, e: Eq[Nat] (add x zero) (add y zero)): Nat =
     let t0 = std::time::Instant::now();
     let msg = check_err(src);
     let dt = t0.elapsed();
-    assert!(msg.contains("分支不可达"), "err: {msg}");
+    // P3：判不出来 ≠ 矛盾——必须报"无法判定"，不得伪装成"不可达"
+    assert!(msg.contains("无法判定"), "err: {msg}");
+    assert!(!msg.contains("不相容"), "undecided 不得伪装成矛盾: {msg}");
     assert!(
         dt < std::time::Duration::from_secs(30),
         "耗时 {dt:?}：卡住 match 比较的深度预算失效（修复前为分钟级）"
+    );
+}
+
+/// P3 分档对照：**结构矛盾**仍报「分支不可达」，**判不出来**报「无法判定」。
+/// 两档不能混——前者是"这个分支不可能"，后者是"我不知道"（对齐 dpm 的
+/// `UnifyRes::UAbs` / `UIDK`）。
+#[test]
+fn test_unify_kind_separates_absurd_from_undecided() {
+    // 结构矛盾：zero ≐ succ zero 无解
+    let absurd = check_err(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def f(e: Eq[Nat] zero (succ zero)): Nat =
+    match e {
+        case refl(a) => zero
+    }
+"#,
+    );
+    assert!(absurd.contains("分支不可达"), "err: {absurd}");
+
+    // 判不出来：两个递归 def 的卡住 match 相等性
+    let undecided = check_err(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def f(x: Nat, y: Nat, e: Eq[Nat] (add x zero) (add y zero)): Nat =
+    match e {
+        case refl(a) => a
+    }
+"#,
+    );
+    assert!(undecided.contains("无法判定"), "err: {undecided}");
+    assert!(
+        !undecided.contains("分支不可达"),
+        "undecided 不得伪装成不可达: {undecided}"
     );
 }
 

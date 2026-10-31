@@ -841,6 +841,8 @@ impl Infer {
                     pretty_tm(0, cxt.names(), &self.quote(decl, l, u.clone()))
                 );
             }
+            // P3：预算耗尽 ≠ 结构矛盾——调用方据此报"无法判定"而不是"不相容"。
+            self.note_unify_kind(super::UnifyKind::Fuel);
             return Err(UnifyError);
         }
         self.unify_fuel.set(fuel - 1);
@@ -1058,6 +1060,8 @@ impl Infer {
                 // 相等"保守失败，与 fuel 耗尽同口径（见 L07-RISKS P2/P3）。
                 let saved_depth = self.match_cmp_depth.get();
                 if saved_depth >= super::MATCH_CMP_DEPTH {
+                    // P3：预算内没比出来 ≠ 两侧不等 ⇒ 记"无法判定"。
+                    self.note_unify_kind(super::UnifyKind::Undecided);
                     return Err(UnifyError);
                 }
                 self.match_cmp_depth.set(saved_depth + 1);
@@ -1121,8 +1125,9 @@ impl Infer {
             // 通配且分支体就是 scrutinee 本身。无条件接受会把 `f x` 证成 `x`。
             (Val::Match(s, _, cases, pending), other) | (other, Val::Match(s, _, cases, pending)) => {
                 // 带 pending 实参的卡住 match 不是 eta 形态（分支体经实参
-                // 应用后不再等于 scrutinee）
+                // 应用后不再等于 scrutinee）。P3：这是"不是 eta"而非"矛盾"。
                 if !pending.is_empty() {
+                    self.note_unify_kind(super::UnifyKind::Undecided);
                     return Err(UnifyError);
                 }
                 match (self.force(decl, (**s).clone()), other) {
@@ -1137,10 +1142,15 @@ impl Infer {
                         if is_eta {
                             Ok(())
                         } else {
+                            // 非 eta 形态：判不出相等，但不是矛盾。
+                            self.note_unify_kind(super::UnifyKind::Undecided);
                             Err(UnifyError)
                         }
                     }
-                    _ => Err(UnifyError),
+                    _ => {
+                        self.note_unify_kind(super::UnifyKind::Undecided);
+                        Err(UnifyError)
+                    }
                 }
             }
             _ => Err(UnifyError),

@@ -495,6 +495,36 @@ fn lvl2ix(l: Lvl, x: Lvl) -> Ix {
 #[derive(Debug)]
 pub(crate) struct UnifyError;
 
+/// 合一失败的**原因分档**（对齐 dpm-nbe 的 `UnifyRes = USucc | UAbs | UIDK`）。
+///
+/// `UnifyError` 本身保持无字段：53 处构造点不动，分档挂在 [`Infer`] 上——
+/// 每个顶层合一入口先 [`Infer::reset_unify_kind`]，失败臂按语义 `note`，
+/// 调用方取 [`Infer::unify_kind`] 决定诊断与覆盖处理。这样既拿到三档信息，
+/// 又不改 `unify` 的签名与所有既有调用点。
+///
+/// 默认值 = `Absurd`：**未被显式分档的失败沿用旧行为**（分支不可达）。
+/// 这是有意的渐进策略——把"确定无解"与"判不出来"逐点分清需要逐个臂论证，
+/// 目前只给"卡住 match 相等性"与"fuel 耗尽"两类标注（P3 第一刀）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UnifyKind {
+    /// 结构性矛盾：确定无解（`zero ≐ succ _`、不同构造子、不同字面量）。
+    Absurd,
+    /// 无法判定：既不能证相等、也不是矛盾（卡住 match 的相等性、不可解中性值）。
+    Undecided,
+    /// 预算耗尽（fuel）：判定不可信，最保守。
+    Fuel,
+}
+
+impl UnifyKind {
+    fn rank(self) -> u8 {
+        match self {
+            UnifyKind::Absurd => 0,
+            UnifyKind::Undecided => 1,
+            UnifyKind::Fuel => 2,
+        }
+    }
+}
+
 fn empty_span<T>(data: T) -> Span<T> {
     Span {
         data,
@@ -550,6 +580,9 @@ pub struct Infer {
     /// （实测：4 个 def 的 `Eq (add x zero) (add y zero)` 要 256 s 才靠 fuel
     /// 停下）。深度预算把它变成"有界失败"，与前缀相同的浅层比较不受影响。
     match_cmp_depth: std::cell::Cell<u32>,
+    /// 最近一次合一失败的**原因分档**（见 [`UnifyKind`]）。顶层入口 reset、
+    /// 失败臂 note、调用方读取；`Cell` 让 `&self` 的 force/quote 路径也能标注。
+    unify_kind: std::cell::Cell<UnifyKind>,
 }
 
 const UNIFY_FUEL: u32 = 4096;
@@ -580,6 +613,7 @@ impl Infer {
             simpl_cache: RefCell::new(HashMap::new()),
             unify_fuel: std::cell::Cell::new(UNIFY_FUEL),
             match_cmp_depth: std::cell::Cell::new(0),
+            unify_kind: std::cell::Cell::new(UnifyKind::Absurd),
         }
     }
 
@@ -644,6 +678,25 @@ impl Infer {
     /// 时区分"结构冲突（真 absurd）"与"预算耗尽（假 absurd）"。
     pub(crate) fn fuel_exhausted(&self) -> bool {
         self.unify_fuel.get() == 0
+    }
+
+    /// 顶层合一入口调用：把"失败原因"重置为中性值（`Absurd`，沿用旧口径）。
+    pub(crate) fn reset_unify_kind(&self) {
+        self.unify_kind.set(UnifyKind::Absurd);
+    }
+
+    /// 失败臂调用：按"最不结论化"的语义累积（`Absurd < Undecided < Fuel`）。
+    /// 一处判不出 ⇒ 整个方程判不出；一处预算耗尽 ⇒ 整个结果不可信。
+    pub(crate) fn note_unify_kind(&self, k: UnifyKind) {
+        let cur = self.unify_kind.get();
+        if k.rank() > cur.rank() {
+            self.unify_kind.set(k);
+        }
+    }
+
+    /// 读取当前失败原因（只在 `unify` 返回 `Err` 后有意义）。
+    pub(crate) fn unify_kind(&self) -> UnifyKind {
+        self.unify_kind.get()
     }
 
     /// 合一器**参数视角**的 WHNF：与 `force` 相同，但不做 Match 重选。
@@ -1402,12 +1455,18 @@ impl Infer {
 
     fn unify_catch(&mut self, decl: &Decls, cxt: &Cxt, t: Val, t_prime: Val) -> Result<(), Error> {
         self.unify_fuel.set(UNIFY_FUEL);
+        self.reset_unify_kind();
         self.unify(decl, cxt.lvl, cxt, t.clone(), t_prime.clone(), None)
             .map_err(|_| {
+                // P3：把"算不出来/预算耗尽"与"结构矛盾"分开报（对齐 dpm 的
+                // UIDK 与 Agda 的 "I am not sure …"）。
                 let fuel_note = if self.unify_fuel.get() == 0 {
                     " (fuel exhausted)"
                 } else {
-                    ""
+                    match self.unify_kind() {
+                        UnifyKind::Undecided => " (undecided: stuck-match equality)",
+                        UnifyKind::Absurd | UnifyKind::Fuel => "",
+                    }
                 };
                 Error(format!(
                     "can't unify{} {} == {}",

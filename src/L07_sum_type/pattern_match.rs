@@ -84,15 +84,26 @@ struct NestedCheck {
 enum Walk {
     Matched(PatternDetail, Cxt),
     Unreachable,
+    /// P3：索引方程**无法判定**（卡住的 match 相等性预算耗尽 / fuel 耗尽）
+    /// ——既不是可达、也不是矛盾。不产生覆盖义务，但诊断必须与"不可达"分开。
+    Undecided,
 }
 
 impl Walk {
     fn matched(self) -> Option<(PatternDetail, Cxt)> {
         match self {
             Walk::Matched(d, c) => Some((d, c)),
-            Walk::Unreachable => None,
+            Walk::Unreachable | Walk::Undecided => None,
         }
     }
+}
+
+/// `unify_indices` 的失败形态：索引方程失败（带三档原因）或内部不变量错误。
+enum IndexUnify {
+    /// 合一失败：[Absurd] = 确定无解；[Undecided]/[Fuel] = 判不出来。
+    Kind(super::UnifyKind),
+    /// 构造子/类型形状不合约（内部不变量），不是合一结论。
+    Msg(String),
 }
 
 impl Compiler {
@@ -206,6 +217,17 @@ impl Compiler {
                     self.pending_pos.clear();
                     self.errors
                         .push(format!("分支不可达：模式 {} 与被匹配类型不相容", pat.pretty()));
+                }
+                Walk::Undecided => {
+                    // P3：判不出可达性 ≠ 不可达。不产生覆盖义务，但文案必须
+                    // 区分"矛盾"与"算不出来"——对齐 dpm 的 `UnifyRes::UIDK`
+                    // 与 Agda 的 "I am not sure if there should be a pattern …"。
+                    // 本臂不检查分支体（与不可达臂同处置）。
+                    self.pending_pos.clear();
+                    self.errors.push(format!(
+                        "无法判定：模式 {} 的索引方程无法判定（卡住的 match 相等性或预算耗尽）",
+                        pat.pretty()
+                    ));
                 }
             }
             // 臂边界：回滚本臂的精化替换（O(1) 指针赋值）。本臂解出的
@@ -333,12 +355,16 @@ impl Compiler {
                             solvable: &solvable,
                             acc: sub.clone(),
                         };
-                        // fuel 耗尽的失败是预算问题而非结构冲突：按可达处理
-                        // （保守地要求覆盖）。反方向（判不可达 → 覆盖检查放
-                        // 过该构造子）会让深负载下的非穷尽 match 被静默接受。
-                        Self::unify_indices(infer, cxt, lvl, &mut spec, head_sum, &ret_sum, &ctor.data)
-                            .is_ok()
-                            || infer.fuel_exhausted()
+                        // P3：只有**结构矛盾**才判不可达；"无法判定"与 fuel
+                        // 耗尽按可达处理（保守地要求覆盖）。反方向（判不可达 →
+                        // 覆盖检查放过该构造子）会让非穷尽 match 被静默接受。
+                        match Self::unify_indices(
+                            infer, cxt, lvl, &mut spec, head_sum, &ret_sum, &ctor.data,
+                        ) {
+                            Ok(()) => true,
+                            Err(IndexUnify::Kind(k)) => k != super::UnifyKind::Absurd,
+                            Err(IndexUnify::Msg(_)) => true,
+                        }
                     };
                 }
             }
@@ -361,16 +387,22 @@ impl Compiler {
         head_sum: &Val,
         ret_sum: &Val,
         ctor: &str,
-    ) -> Result<(), Error> {
+    ) -> Result<(), IndexUnify> {
         let (hp, rp) = match (head_sum, ret_sum) {
             (Val::Sum(_, p1, _), Val::Sum(_, p2, _)) => (p1, p2),
-            _ => return Err(Error(format!("构造子 {ctor} 的返回类型不是和类型"))),
+            _ => return Err(IndexUnify::Msg(format!("构造子 {ctor} 的返回类型不是和类型"))),
         };
         if hp.len() != rp.len() {
-            return Err(Error(format!("构造子 {ctor} 与被匹配类型的参数数不一致")));
+            return Err(IndexUnify::Msg(format!(
+                "构造子 {ctor} 与被匹配类型的参数数不一致"
+            )));
         }
         for (a, b) in hp.iter().zip(rp.iter()) {
-            infer
+            // P3：每个方程独立记录失败原因。任一处"判不出 / 预算耗尽"都
+            // 说明整组方程不是**结构矛盾**——调用方据此报"无法判定"而非
+            // "不相容（分支不可达）"（对齐 dpm 的 `UnifyRes::UIDK`）。
+            infer.reset_unify_kind();
+            if infer
                 .unify(
                     cxt.decl(),
                     lvl,
@@ -379,18 +411,10 @@ impl Compiler {
                     b.1.as_ref().clone(),
                     Some(spec),
                 )
-                .map_err(|_| {
-                    // fuel 耗尽的失败是"假 absurd"（预算问题非结构冲突），
-                    // 文案带尾注供诊断——与 unify_catch 的同名尾注一致
-                    let fuel_note = if infer.fuel_exhausted() {
-                        " (fuel exhausted)"
-                    } else {
-                        ""
-                    };
-                    Error(format!(
-                        "构造子 {ctor} 与被匹配类型不相容（分支不可达）{fuel_note}"
-                    ))
-                })?;
+                .is_err()
+            {
+                return Err(IndexUnify::Kind(infer.unify_kind()));
+            }
         }
         Ok(())
     }
@@ -584,13 +608,13 @@ impl Compiler {
                                     field_sum.clone(),
                                 ));
                                 self.cur_path.push((name.data.clone(), details.len()));
-                                let walked = self
-                                    .walk_con(infer, cn, csubs, dom.clone(), u.clone(), &cxt)?
-                                    .matched();
+                                let walked =
+                                    self.walk_con(infer, cn, csubs, dom.clone(), u.clone(), &cxt)?;
                                 self.cur_path.pop();
                                 match walked {
-                                    Some(dc) => dc,
-                                    None => return Ok(Walk::Unreachable),
+                                    Walk::Matched(d, c) => (d, c),
+                                    Walk::Unreachable => return Ok(Walk::Unreachable),
+                                    Walk::Undecided => return Ok(Walk::Undecided),
                                 }
                             } else {
                                 if !csubs.is_empty() {
@@ -642,10 +666,17 @@ impl Compiler {
             solvable: &self.solvable,
             acc: self.sub.clone(),
         };
-        let spec_res = Self::unify_indices(infer, &cxt, cxt.lvl, &mut spec, &head_sum, &ret_sum, &name.data);
+        let spec_res =
+            Self::unify_indices(infer, &cxt, cxt.lvl, &mut spec, &head_sum, &ret_sum, &name.data);
         self.sub = spec.acc;
-        if spec_res.is_err() {
-            return Ok(Walk::Unreachable);
+        match spec_res {
+            Ok(()) => {}
+            // 真矛盾：分支不可达（旧行为）
+            Err(IndexUnify::Kind(super::UnifyKind::Absurd)) => return Ok(Walk::Unreachable),
+            // 判不出来：不是矛盾，单独分流（P3）
+            Err(IndexUnify::Kind(_)) => return Ok(Walk::Undecided),
+            // 内部不变量错误：原样上报
+            Err(IndexUnify::Msg(m)) => return Err(Error(m)),
         }
         // 头部精化（无条件）：被匹配变量本身写入精化替换。`V a`、`add a zero`
         // 这类依赖被匹配变量的类型，要等 a := zero / a := succ t 之后才能
