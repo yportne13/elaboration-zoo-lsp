@@ -25,6 +25,16 @@ use super::syntax::{
     v_pi_of, v_spine_of, v_tag, v_xcell_of,
 };
 
+/// 卡住 match 相等性比较的**次数**预算（镜像参考版 `MATCH_CMP_DEPTH`）。
+///
+/// 本版是工作表迭代、没有递归深度可比拟；用「一次 `unify_iter` 调用里
+/// Match/Match 臂被命中的次数」作代理。结构快路径失效后该臂会逐分支在
+/// fresh rigid 下重求值，递归 def 的分支体每层再产生新的卡住 match——无预算
+/// 时只能等 fuel 烧完（实测 `Eq (add x zero) (add y zero)`：debug 26.3 s）。
+/// 64 次足以覆盖正常的构造子嵌套/宽 spine 比较，同时把最坏情况压到与
+/// 参考版同量级（参考版 40 层深度 ⇒ 278 ms；本版 64 次 ≈ 1.4 s/debug）。
+const MATCH_CMP_BUDGET: u32 = 64;
+
 // unify（工作表迭代 + force 前置 + 模式求解 + intersect/flex-flex + L07 臂）
 // --------------------------------------------------------------------------------
 
@@ -336,6 +346,8 @@ pub(super) fn unify_iter<'a>(
     let memo = &mut conv.memo;
     stack.clear();
     stack.push(UItem::Pair(l0, t0, u0));
+    // 卡住 match 相等性比较的次数预算（见 `MATCH_CMP_BUDGET`）。
+    let mut match_cmp_budget: u32 = MATCH_CMP_BUDGET;
     while let Some(item) = stack.pop() {
         let (l, t, u) = match item {
             UItem::Store(key) => {
@@ -900,6 +912,12 @@ pub(super) fn unify_iter<'a>(
                 {
                     continue;
                 }
+                // 预算（P2 镜像）：快路径失效后本臂逐层重求值，递归 def 会
+                // 无限下钻；超出预算按「无法判定为相等」保守失败。
+                if match_cmp_budget == 0 {
+                    return false;
+                }
+                match_cmp_budget -= 1;
                 // 参考版比较序（unification.rs Match/Match 臂）逐点对齐：
                 // scrutinee → 分支数检查 → 逐分支（模式检查 + 体合一）→
                 // pending 长度 → 逐 pending（icit 检查 + 值合一）。栈 LIFO
