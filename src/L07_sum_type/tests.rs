@@ -2114,3 +2114,41 @@ fn parse_error_carries_span() {
     let tok = &src2[sp2.start_offset as usize..sp2.end_offset as usize];
     assert_eq!(tok, ";", "位置应指向残余 token: {tok:?}");
 }
+
+/// P6 回归钉（**已知边界**，不是 bug）：σ 只作用于被 `VSub` 包裹过的值；
+/// decl 表条目（`Val::Decl` 展开后的缓存 WHNF）与 meta 解值不在扫描/包裹
+/// 范围内。因此「def 缓存值里引用稍后被特化的槽位」时，精化在该读点不可见
+/// ——这是 README §1.3 记录的既有取舍（与 dpm 的对齐边界）。
+///
+/// 若未来把 σ 也推进 decl 条目，本钉会红：届时必须**同步更新 README/设计稿**
+/// 说明意图变化，而不是默默改掉语义。
+#[test]
+fn visibility_boundary_decl_value_is_not_refined() {
+    let infer = Infer::new();
+    let cxt = Cxt::new(&infer);
+    // def d := x（缓存值直接引用槽位 Lvl(0)）
+    let cxt = cxt.decl_insert(
+        "d",
+        cxt::DeclEntry {
+            ty: Val::U,
+            val: Val::vvar(Lvl(0)),
+        },
+    );
+    let decls: &cxt::Decls = cxt.decl();
+    let sub = Subst::extend(&std::rc::Rc::new(Subst::default()), Lvl(0), Val::U);
+
+    // ① 直接包裹的 rigid：σ 在 force 读点推开 ⇒ 精化可见
+    let direct = infer.force(&decls.clone(), Val::VSub(Box::new(Val::vvar(Lvl(0))), sub.clone()));
+    assert!(matches!(direct, Val::U), "被包裹的 rigid 应按 σ 展开为 U，got {direct:?}");
+
+    // ② decl 条目里的同名引用：σ 不进入 decl 缓存值 ⇒ 精化不可见
+    let d = Val::Decl("d".into(), List::new());
+    let via_decl = infer.force(decls, Val::VSub(Box::new(d), sub));
+    match via_decl {
+        Val::Rigid(l, ref sp) => {
+            assert_eq!(l, Lvl(0), "decl 缓存值应原样（未被 σ 推开）");
+            assert!(sp.is_empty());
+        }
+        other => panic!("decl 缓存值不应被 σ 精化，got {other:?}"),
+    }
+}

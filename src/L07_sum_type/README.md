@@ -357,7 +357,7 @@ solve / intersect）。在此之上：
 
 ## 8. 测试
 
-`cargo test --lib L07_sum_type`（48 个测试；除深值栈安全 3 个外都在
+`cargo test --lib L07_sum_type`（**64 个测试** = `tests.rs` 58 + mod.rs / unification / 孪生 entry / lex 等 6 个；除深值栈安全 3 个外都在
 64 MB 栈线程里跑）：
 
 - 移植自 L07a：基础 ADT / 索引族与投影 / 依赖匹配（`t`）/ 嵌套 match /
@@ -378,6 +378,14 @@ solve / intersect）。在此之上：
   VSub 分支；`test_fn_typed_index_slot_applied_after_refine` 钉死
   frcs 对"已解 rigid + 非空 spine"的解析应用行为（旧版卡住，孪生版
   移植必须复刻）；
+- 2026-10/11 修复轮回归钉：`test_struct_eq_compares_match_pending_values` /
+  `test_nested_match_pending_cannot_prove_false`（struct_eq 漏比 pending 值的
+  S1 声张性缺陷）、`test_occurs_check_transitive_chain`（两跳环）、
+  `test_stuck_match_equation_bounded`（256 s 悬崖）、
+  `test_unify_kind_separates_absurd_from_undecided`（三档判定）、
+  `error_carries_pattern_span` / `parse_error_carries_span`（错误带位置）、
+  `visibility_boundary_decl_value_is_not_refined`（σ 可见性边界的**已知**
+  取舍钉，见 §1.3）；
 - 深值栈安全（2026-09-18）回归钉：`deep_value_iterative_under_default_
   stack`（参考版 occurs/结构相等，10 万层，**默认 2 MB 测试栈**）、
   `unification::deep_rename_tests::deep_rename_collector_under_default_
@@ -392,7 +400,7 @@ builtin 全量扫描含文件 IO 卡住降级契约（IO 失败不 panic，与�
 空 enum、点号限定名、命名隐式实参）/ 类型层 match / preprocess 怪癖 /
 run 层契约（Display、path_id、并发、跨 run 隔离）；§6 两条新修复的
 回归在此）；`cargo test --test
-l07_blackbox_v3`（95 个：94 可跑 + 1 个 `--ignored` 格式探针；它同样
+l07_blackbox_v3`（111 个：110 可跑 + 1 个 `--ignored` 格式探针；它同样
 `#[path]` 引入 `mod.rs`，故深值栈安全 3 钉也在其中跑。三轮攻击面：
 依赖匹配深水区（`T n` 返回族 / 臂体换行嵌套 match / 双重精化 / `add` 型
 索引算术 / 荒谬嵌套模式 / 零臂假前提 / 投影 scrutinee / 隐式子模式具名 /
@@ -400,7 +408,7 @@ l07_blackbox_v3`（95 个：94 可跑 + 1 个 `--ignored` 格式探针；它同�
 占位 Decl、flex-flex、卡住投影不证等）/ 性能悬崖表征（深嵌套模式、
 多 pending 卡住 match，带超时防护）/ 解析残缺（截断不 panic、match
 位置精确刻画、CRLF、非 ASCII）；§6 三轮修复的回归在此）；`cargo test --test
-l07_fast_parity`（70 个：run vs run_fast 逐字节互检，见 §10；含
+l07_fast_parity`（90 个 = 26 自有 + 64 引入的 lib 测试：run vs run_fast 逐字节互检，见 §10；含
 2026-09-17 评审轮的 `parity_vsub_slot_applied_closure_workbuf`、本轮
 `fast_substv_reclaimed_across_rounds`（σ 跨轮回收）与孪生深值默认栈钉等
 工作区回归钉）。
