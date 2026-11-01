@@ -2174,3 +2174,39 @@ fn cross_meta_cycle_force_is_bounded() {
     );
     assert!(infer.meta_expanding.borrow().is_empty(), "展开栈应在返回时清空");
 }
+
+/// P8 回归钉：宽松合一（String vs 未登记名的卡住 Decl/Prim）只对**空 spine**
+/// 放行——string_to_global_type 的"动态类型"是裸 Decl(name, [])；带实参的
+/// 未知卡住头不是动态类型（只是未知函数被应用），与 String 判不出来
+/// （Undecided），不得静默判等。
+#[test]
+fn loose_string_requires_empty_spine() {
+    let mut infer = Infer::new();
+    let cxt = Cxt::new(&infer);
+    let decls: &cxt::Decls = cxt.decl();
+
+    // ① 空 spine（st2g 对未知名的产物）：放行
+    let bare = Val::Decl("Missing".into(), List::new());
+    assert!(
+        infer.unify(decls, Lvl(0), &cxt, Val::LiteralType, bare, None).is_ok(),
+        "未知名裸 Decl 应作为动态类型放行"
+    );
+
+    // ② 非空 spine（未知函数被应用）：判不出来，且不得标记为 Absurd
+    let applied = Val::Decl(
+        "Missing".into(),
+        List::new().prepend((Val::U, Icit::Expl)),
+    );
+    infer.reset_unify_kind();
+    assert!(
+        infer
+            .unify(decls, Lvl(0), &cxt, Val::LiteralType, applied, None)
+            .is_err(),
+        "未知名 + 非空 spine 不应被宽松臂放行"
+    );
+    assert_eq!(
+        infer.unify_kind(),
+        UnifyKind::Undecided,
+        "应记为无法判定（不是矛盾）"
+    );
+}

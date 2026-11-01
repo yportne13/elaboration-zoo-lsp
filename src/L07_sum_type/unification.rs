@@ -853,19 +853,30 @@ impl Infer {
     }
 
     /// 宽松臂的实现体：未登记名放行，已登记名按登记类型把关。
+    ///
+    /// P8 收窄：未登记名的放行**仅限空 spine**——`string_to_global_type` 对未
+    /// 知名返回的是以其名字的**裸**卡住 `Decl(name, [])`（动态类型的逃逸舱
+    /// 口）；带实参的未知名卡住头只是"某个未知函数被应用"，不是动态类型，
+    /// 与 String 相等判不出来（Undecided，dpm 的 conv false ⇒ UIDK），不得
+    /// 静默放行。
     fn loose_string(
         &mut self,
         decl: &Decls,
         l: Lvl,
         cxt: &Cxt,
         n: &SmolStr,
+        sp_is_empty: bool,
         spec: Option<&mut SpecSolve<'_>>,
     ) -> Result<(), UnifyError> {
         match decl.get(n) {
-            None => Ok(()),
             Some(e) => {
                 let ty = e.ty.clone();
                 self.unify(decl, l, cxt, Val::LiteralType, ty, spec)
+            }
+            None if sp_is_empty => Ok(()),
+            None => {
+                self.note_unify_kind(super::UnifyKind::Undecided);
+                Err(UnifyError)
             }
         }
     }
@@ -1037,11 +1048,11 @@ impl Infer {
             // 合一只对 decl 表**未登记名**放行——string_to_global_type 对
             // 未知名返回以其名字的卡住 Decl（动态类型的逃逸舱口）；已登记
             // 名按登记类型把关（U 型返回的 builtin 卡住值不再冒充 String）
-            (Val::LiteralType, Val::Prim(n, _)) | (Val::Prim(n, _), Val::LiteralType) => {
-                self.loose_string(decl, l, cxt, n, spec)
+            (Val::LiteralType, Val::Prim(n, sp)) | (Val::Prim(n, sp), Val::LiteralType) => {
+                self.loose_string(decl, l, cxt, n, sp.is_empty(), spec)
             }
-            (Val::LiteralType, Val::Decl(n, _)) | (Val::Decl(n, _), Val::LiteralType) => {
-                self.loose_string(decl, l, cxt, n, spec)
+            (Val::LiteralType, Val::Decl(n, sp)) | (Val::Decl(n, sp), Val::LiteralType) => {
+                self.loose_string(decl, l, cxt, n, sp.is_empty(), spec)
             }
             // 卡住的内建：同名比实参 spine（异名失败）——不带实参的单元
             // Prim 会把 `x ++ y ≡ x ++ z` 判成相等
