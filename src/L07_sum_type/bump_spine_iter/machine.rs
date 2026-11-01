@@ -629,7 +629,7 @@ impl Machine {
             let tq = export(self.quote(bump, &decls, cxt.lvl, t));
             let uq = export(self.quote(bump, &decls, cxt.lvl, t_prime));
             let names = types_names_list(cxt.types);
-            Err(Error(format!(
+            Err(Error::new(format!(
                 "can't unify{} {} == {}",
                 fuel_note,
                 pretty_tm(0, names.clone(), &tq),
@@ -825,7 +825,7 @@ impl Machine {
                 t = bump.alloc(Tm::App(t, m, Icit::Impl));
                 va = b;
             } else {
-                return Err(Error(format!("no named implicit arg {name}")));
+                return Err(Error::new(format!("no named implicit arg {name}")));
             }
         }
     }
@@ -944,7 +944,7 @@ impl Machine {
     /// 不受扰动）。
     fn ty_precheck(&mut self, bump: &Bump, decls: &FxHashMap<String, DeclEntryF>, t: &Raw) -> Result<(), Error> {
         match t {
-            Raw::LiteralIntro(_) => Err(Error("expected universe, got LiteralType".to_owned())),
+            Raw::LiteralIntro(_) => Err(Error::new("expected universe, got LiteralType".to_owned())),
             Raw::Var(x) => {
                 // 局部优先（name_map），其次全局 decl 表——与 infer 的
                 // Var 臂解析序一致
@@ -966,7 +966,7 @@ impl Machine {
                     if is_flex(&self.spine, v) {
                         Ok(())
                     } else {
-                        Err(Error(format!("expected universe, got V({})", v.0)))
+                        Err(Error::new(format!("expected universe, got V({})", v.0)))
                     }
                 } else {
                     Ok(()) // 未知名：主检查报 name-not-in-scope（原路径）
@@ -1040,7 +1040,7 @@ impl Machine {
                 if let Some(e) = cxt.decl.borrow().get(x.data.as_str()) {
                     return Ok((bump.alloc(Tm::Decl(bump.alloc_str(&x.data))), e.ty));
                 }
-                Err(Error(format!("name not in scope: {}", x.data)))
+                Err(Error::new(format!("name not in scope: {}", x.data)))
             }
 
             Raw::Obj(x, f) => {
@@ -1085,7 +1085,7 @@ impl Machine {
                         let fty = match params.iter().find(|p| p.name == f.data) {
                             Some(p) => p.ty,
                             None => {
-                                return Err(Error(format!("{} has no field {}", sname, f.data)))
+                                return Err(Error::new(format!("{} has no field {}", sname, f.data)))
                             }
                         };
                         return Ok((
@@ -1103,7 +1103,7 @@ impl Machine {
                         // 类型取字段真实类型
                         let (sname, sparams) = match v_xcell_of(*typ) {
                             XCell::Sum { name, params, .. } => (*name, *params),
-                            _ => return Err(Error("ill-scoped SumCase".to_owned())),
+                            _ => return Err(Error::new("ill-scoped SumCase".to_owned())),
                         };
                         if let Some(p) = sparams.iter().find(|p| p.name == f.data) {
                             return Ok((
@@ -1115,7 +1115,7 @@ impl Machine {
                             .decl
                             .borrow()
                             .get(&format!("{}.{}", sname, case_name))
-                            .ok_or_else(|| Error("missing constructor decl".to_owned()))?
+                            .ok_or_else(|| Error::new("missing constructor decl".to_owned()))?
                             .ty;
                         let impl_vals: Vec<V> = sparams
                             .iter()
@@ -1142,7 +1142,7 @@ impl Machine {
                                     match datas.iter().find(|d| d.name == p.name) {
                                         Some(d) => d.val,
                                         None => {
-                                            return Err(Error(format!(
+                                            return Err(Error::new(format!(
                                                 "no field {} on {}",
                                                 f.data, sname
                                             )))
@@ -1152,7 +1152,7 @@ impl Machine {
                                 let env = env_ext(bump, p.env, u);
                                 ty = self.eval(bump, &decls, env, p.body);
                             } else {
-                                return Err(Error(format!(
+                                return Err(Error::new(format!(
                                     "{} has no field {}",
                                     sname, f.data
                                 )));
@@ -1160,7 +1160,7 @@ impl Machine {
                         }
                     }
                 }
-                Err(Error(format!("cannot project field {}", f.data)))
+                Err(Error::new(format!("cannot project field {}", f.data)))
             }
 
             // λ 推断：域用 fresh meta，值域闭包封口
@@ -1187,7 +1187,7 @@ impl Machine {
             }
 
             Raw::Lam(x, Either::Name(_), _) => {
-                Err(Error(format!("infer named lambda {:?}", x)))
+                Err(Error::new(format!("infer named lambda {:?}", x)))
             }
 
             // 应用
@@ -1214,7 +1214,7 @@ impl Machine {
                 let (a, bcell) = if v_tag(tty) == 4 {
                     let p = v_pi_of(tty);
                     if p.icit != i {
-                        return Err(Error(format!("icit mismatch {:?} {:?}", i, p.icit)));
+                        return Err(Error::new(format!("icit mismatch {:?} {:?}", i, p.icit)));
                     }
                     (p.dom, p)
                 } else {
@@ -1301,7 +1301,7 @@ impl Machine {
             )),
 
             // match 只能在检查模式下使用（期望类型决定分支体怎么查）
-            Raw::Match(..) => Err(Error(
+            Raw::Match(..) => Err(Error::new(
                 "match cannot be inferred; give it an expected type".to_owned(),
             )),
 
@@ -1395,7 +1395,7 @@ impl Machine {
                 // 先前 def / enum 已登记 → 定向报错。必须在占位插入之前查
                 // （占位会平铺覆盖同名条目），且先类型后重定义与参考版一致。
                 if cxt.decl.borrow().contains_key(name.data.as_str()) {
-                    return Err(Error(format!("redefine {}", name.data)));
+                    return Err(Error::new(format!("redefine {}", name.data)));
                 }
                 // 递归：先把名字登记成指向自身的中性占位，检查体，再用真实
                 // 值覆盖。占位只存在于克隆出来的 decl 表里，不影响外层。
@@ -1504,7 +1504,7 @@ impl Machine {
                 // 重定义检查（与参考版同款）：同名 enum / def / builtin →
                 // 定向报错，先类型后重定义，占位插入之前查表。
                 if cxt.decl.borrow().contains_key(name.data.as_str()) {
-                    return Err(Error(format!("redefine {}", name.data)));
+                    return Err(Error::new(format!("redefine {}", name.data)));
                 }
                 // 先占位再检查本体（本体内部引用自身时报"指向自身的中性值"）
                 let fake = decl_insert(
@@ -1602,14 +1602,14 @@ impl Machine {
         };
         let retf = self.force_v(bump, &decls, ret);
         if !(v_tag(retf) == 7 && matches!(v_xcell_of(retf), XCell::Sum { .. })) {
-            return Err(Error(format!(
+            return Err(Error::new(format!(
                 "构造子 {ctor_name} 的返回类型不是和类型"
             )));
         }
         match v_xcell_of(retf) {
             XCell::Sum { name: sname, params, .. } => {
                 if *sname != enum_name {
-                    return Err(Error(format!(
+                    return Err(Error::new(format!(
                         "构造子 {ctor_name} 的返回类型是 {sname}，不是 {enum_name}"
                     )));
                 }
@@ -1620,7 +1620,7 @@ impl Machine {
                             && v_lvl_of(v) >= base
                             && v_lvl_of(v) < base + bound;
                         if !bare_rigid {
-                            return Err(Error(format!(
+                            return Err(Error::new(format!(
                                 "构造子 {ctor_name} 的返回类型参数必须是 {enum_name} 的参数变量（参数不得特化，特化请用显式索引）"
                             )));
                         }
