@@ -1965,3 +1965,53 @@ def f(x: Nat, y: Nat, e: Eq[Nat] (add x zero) (add y zero)): Nat =
         "耗时 {dt:?}：卡住 match 比较的深度预算失效（修复前为分钟级）"
     );
 }
+
+/// L07 P1 迁移的回归钉：浅 occurs 只挡单步环（`Id Nat (succ x) x` 直接
+/// `x := succ x`）；经构造子模式槽中转的两跳环（`x := a`、`a := succ x`）
+/// 每一步各自无环，组合出的 σ 却是循环的——旧实现接受该子句。
+#[test]
+fn test_occurs_check_transitive_chain() {
+    let msg = check_err(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def bad(x: Nat, e: Eq[Nat] x (succ x)): Nat =
+    match e {
+        case refl(a) => zero
+    }
+"#,
+    );
+    assert!(msg.contains("分支不可达"), "err: {msg}");
+}
+
+/// 正向对照：传递 occurs 只应拦住循环解，不能误伤正常的索引精化。
+#[test]
+fn test_occurs_check_keeps_legit_refinement() {
+    let out = check(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def symm[A, x, y: A](e: Eq[A] x y): Eq[A] y x =
+    match e {
+        case refl(a) => refl[A] a
+    }
+
+println "done"
+"#,
+    );
+    assert_eq!(out, "done\n");
+}
