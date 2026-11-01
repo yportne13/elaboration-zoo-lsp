@@ -697,6 +697,16 @@ impl Infer {
                 if val_mentions_lvl(v, *x) {
                     return Err(UnifyError);
                 }
+                // L07 P1 迁移：传递 occurs（两跳环）。仅当解值挂在既有解链上
+                // 时才付这次扫描；干净解零开销。
+                if let Some(acc) = spec.as_deref().map(|s| s.acc.clone()) {
+                    if !acc.is_empty()
+                        && acc.mentions_any_solved(v)
+                        && acc.occurs_transitive(v, *x)
+                    {
+                        return Err(UnifyError);
+                    }
+                }
                 let s = spec.as_deref_mut().unwrap();
                 s.acc = Subst::extend(&s.acc, *x, v.clone());
                 Ok(())
@@ -710,6 +720,14 @@ impl Infer {
             {
                 if val_mentions_lvl(v, *x) {
                     return Err(UnifyError);
+                }
+                if let Some(acc) = spec.as_deref().map(|s| s.acc.clone()) {
+                    if !acc.is_empty()
+                        && acc.mentions_any_solved(v)
+                        && acc.occurs_transitive(v, *x)
+                    {
+                        return Err(UnifyError);
+                    }
                 }
                 let s = spec.as_deref_mut().unwrap();
                 s.acc = Subst::extend(&s.acc, *x, v.clone());
