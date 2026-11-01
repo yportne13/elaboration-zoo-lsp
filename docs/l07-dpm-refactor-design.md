@@ -4,6 +4,10 @@
 基于 elaboration-zoo + Kovács cctt 的 explicit substitutions & forcing，
 特化合一来自 Norell 论文 / Cockx《Pattern Matching Without K》）。
 
+> **理论定位警示**：本层是 **with-K** 教学检查器，**不做** without-K 安全论证
+> （详见 `src/L07_sum_type/README.md` §7.3）。"被本层接受"不等于数学证明；
+> 产品化需在理论侧补 without-K 限制。
+
 ## 1. 旧架构（pm_defs 事实表）与其结构性弱点
 
 旧 L07 的精化机制（`Infer` 上的全局可变状态）：
