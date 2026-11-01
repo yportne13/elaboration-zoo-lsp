@@ -1928,3 +1928,40 @@ def bad(v: Vec[Nat] (succ zero)): Nat =
         "nil 在 succ zero 上不可达，不应报缺:\n{msg}"
     );
 }
+
+/// L07 P2 迁移的回归钉：两个递归 def 的卡住索引方程互比时，结构快路径失效，
+/// Match/Match 臂会逐层在 fresh rigid 下重求值分支体——递归 def 每层再产生
+/// 新的卡住 match，层级递增、永不结构收敛。无预算时唯一的下限是 fuel 池
+/// （L07 同形输入实测 256 s）；`MATCH_CMP_DEPTH` 把最坏情况压到有界时间。
+#[test]
+fn test_stuck_match_equation_bounded() {
+    let src = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def f(x: Nat, y: Nat, e: Eq[Nat] (add x zero) (add y zero)): Nat =
+    match e {
+        case refl(a) => a
+    }
+"#;
+    let t0 = std::time::Instant::now();
+    let msg = check_err(src);
+    let dt = t0.elapsed();
+    assert!(msg.contains("分支不可达"), "err: {msg}");
+    assert!(
+        dt < std::time::Duration::from_secs(30),
+        "耗时 {dt:?}：卡住 match 比较的深度预算失效（修复前为分钟级）"
+    );
+}
