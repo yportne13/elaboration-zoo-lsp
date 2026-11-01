@@ -61,7 +61,7 @@ impl Infer {
                     )
                 }
             }
-            _ => Err(Error(format!("no named implicit arg {}", name.data))),
+            _ => Err(Error::new(format!("no named implicit arg {}", name.data))),
         }
     }
 
@@ -142,7 +142,7 @@ impl Infer {
     /// 不造 meta，?N 编号不受扰动）。
     fn ty_precheck(&self, cxt: &Cxt, t: &Raw) -> Result<(), Error> {
         match t {
-            Raw::LiteralIntro(_) => Err(Error("expected universe, got LiteralType".to_owned())),
+            Raw::LiteralIntro(_) => Err(Error::new("expected universe, got LiteralType".to_owned())),
             Raw::Var(x) => {
                 // L07 的全局只登记在 decl 表（不 define 进 src_names）——
                 // 与 infer 的 Var 臂解析序一致：局部优先，其次 decl
@@ -158,7 +158,7 @@ impl Infer {
                         // 走 pretty（而非 Val 的 Debug 转储——大值树会印出
                         // 巨量结构且不可读）；前缀 "expected universe" 被
                         // blackbox v3 钉住，尾部文案自由
-                        other => Err(Error(format!(
+                        other => Err(Error::new(format!(
                             "expected universe, got {}",
                             pretty_tm(0, cxt.names(), &self.quote(cxt.decl(), cxt.lvl, other))
                         ))),
@@ -211,7 +211,7 @@ impl Infer {
                 // 先前 def / enum）→ 定向报错，不再静默覆盖。先类型后重定义，
                 // 与 L13 检查顺序一致。
                 if cxt.decl().contains_key(name.data.as_str()) {
-                    return Err(Error(format!("redefine {}", name.data)));
+                    return Err(Error::new(format!("redefine {}", name.data)));
                 }
                 // 递归：先把名字登记成指向自身的中性占位，检查体，再用真实值覆盖。
                 // 占位只存在于克隆出来的 decl 表里，不影响外层。
@@ -316,7 +316,7 @@ impl Infer {
                 // 重定义检查（L13 `fake_bind` 移植）：同名 enum / def / builtin
                 // → 定向报错，不再静默覆盖。
                 if cxt.decl().contains_key(name.data.as_str()) {
-                    return Err(Error(format!("redefine {}", name.data)));
+                    return Err(Error::new(format!("redefine {}", name.data)));
                 }
                 // 先占位再检查本体（本体内部引用自身时报"指向自身的中性值"）
                 let fake_cxt = cxt.decl_insert(
@@ -411,7 +411,7 @@ impl Infer {
         let ret_sum = match self.force(decl, ret) {
             s @ Val::Sum(..) => s,
             _ => {
-                return Err(Error(format!(
+                return Err(Error::new(format!(
                     "构造子 {ctor_name} 的返回类型不是和类型"
                 )))
             }
@@ -421,7 +421,7 @@ impl Infer {
             _ => unreachable!(),
         };
         if sname.data != enum_name {
-            return Err(Error(format!(
+            return Err(Error::new(format!(
                 "构造子 {ctor_name} 的返回类型是 {}，不是 {enum_name}",
                 sname.data
             )));
@@ -435,7 +435,7 @@ impl Infer {
             });
         if let Some(v) = non_rigid {
             let _ = v;
-            return Err(Error(format!(
+            return Err(Error::new(format!(
                 "构造子 {ctor_name} 的返回类型参数必须是 {enum_name} 的参数变量（参数不得特化，特化请用显式索引）"
             )));
         }
@@ -452,7 +452,7 @@ impl Infer {
                 } else if let Some(e) = cxt.decl_get(&x.data) {
                     Ok((Tm::Decl(SmolStr::new(&x.data)), e.ty.clone()))
                 } else {
-                    Err(Error(format!("name not in scope: {}", x.data)))
+                    Err(Error::new(format!("name not in scope: {}", x.data)))
                 }
             }
 
@@ -480,7 +480,7 @@ impl Infer {
                             (Tm::Obj(Box::new(tm), f.clone()), fty.as_ref().clone())
                         })
                         .ok_or_else(|| {
-                            Error(format!("{} has no field {}", sname.data, f.data))
+                            Error::new(format!("{} has no field {}", sname.data, f.data))
                         }),
                     // 接收者类型是构造子值：索引参数优先，否则剥构造子类型取字段真实类型
                     Val::SumCase {
@@ -490,7 +490,7 @@ impl Infer {
                     } => {
                         let (sname, params) = match self.force(decl, super::rc_take(typ)) {
                             Val::Sum(sname, params, _) => (sname, params),
-                            _ => return Err(Error("ill-scoped SumCase".to_owned())),
+                            _ => return Err(Error::new("ill-scoped SumCase".to_owned())),
                         };
                         if let Some((_, _, fty, _)) =
                             params.iter().find(|(n, ..)| n == &f)
@@ -502,7 +502,7 @@ impl Infer {
                         }
                         let ctor_ty = cxt
                             .decl_get(&format!("{}.{}", sname.data, case_name.data))
-                            .ok_or_else(|| Error("missing constructor decl".to_owned()))?
+                            .ok_or_else(|| Error::new("missing constructor decl".to_owned()))?
                             .ty
                             .clone();
                         let impl_vals: Vec<Val> = params
@@ -531,7 +531,7 @@ impl Infer {
                                             .find(|(n, _, _)| n == &bname)
                                             .map(|(_, v, _)| v.as_ref().clone())
                                             .ok_or_else(|| {
-                                                Error(format!(
+                                                Error::new(format!(
                                                     "no field {} on {}",
                                                     f.data, sname.data
                                                 ))
@@ -540,7 +540,7 @@ impl Infer {
                                     ty = self.closure_apply(decl, &closure, u);
                                 }
                                 _ => {
-                                    return Err(Error(format!(
+                                    return Err(Error::new(format!(
                                         "{} has no field {}",
                                         sname.data, f.data
                                     )))
@@ -548,7 +548,7 @@ impl Infer {
                             }
                         }
                     }
-                    _ => Err(Error(format!("cannot project field {}", f.data))),
+                    _ => Err(Error::new(format!("cannot project field {}", f.data))),
                 }
             }
 
@@ -566,7 +566,7 @@ impl Infer {
                 ))
             }
 
-            Raw::Lam(x, Either::Name(_), _) => Err(Error(format!("infer named lambda {x:?}"))),
+            Raw::Lam(x, Either::Name(_), _) => Err(Error::new(format!("infer named lambda {x:?}"))),
 
             // 应用
             Raw::App(t, u, i) => {
@@ -591,7 +591,7 @@ impl Infer {
                         if i == i_t {
                             (*a, b_closure)
                         } else {
-                            return Err(Error(format!("icit mismatch {i:?} {i_t:?}")));
+                            return Err(Error::new(format!("icit mismatch {i:?} {i_t:?}")));
                         }
                     }
                     tty => {
@@ -681,7 +681,7 @@ impl Infer {
             Raw::LiteralIntro(literal) => Ok((Tm::LiteralIntro(literal), Val::LiteralType)),
 
             // match 只能在检查模式下使用（期望类型决定分支体怎么查）
-            Raw::Match(..) => Err(Error(
+            Raw::Match(..) => Err(Error::new(
                 "match cannot be inferred; give it an expected type".to_owned(),
             )),
 

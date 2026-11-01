@@ -296,7 +296,7 @@ impl Tycker {
 
     /// 参考版 `run` 的全流程等价物（含 preprocess/parse）。
     pub(crate) fn run_input(&mut self, input: &str, path_id: u32) -> Result<String, Error> {
-        let ast = super::parser::parser(&super::preprocess(input), path_id).map_err(Error)?;
+        let ast = super::parser::parser(&super::preprocess(input), path_id).map_err(Error::new)?;
         self.run_decls(&ast)
     }
 

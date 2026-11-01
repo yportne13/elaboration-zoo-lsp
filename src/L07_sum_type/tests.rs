@@ -2052,3 +2052,40 @@ enum Foo[A] {
     );
     assert!(msg.contains("参数变量"), "{msg}");
 }
+
+/// P10 回归钉：臂级错误携带源码 span（供 LSP 定位），且 `Display` 文案不变
+/// （位置**不**进文案——避免既有 golden 漂移）。
+#[test]
+fn error_carries_pattern_span() {
+    let src = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def f(n: Nat): Nat =
+    match n {
+        case x => zero
+        case zero => zero
+    }
+"#;
+    let input = src.to_owned();
+    let err = std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(move || run(&input, 0))
+        .unwrap()
+        .join()
+        .unwrap()
+        .expect_err("被遮蔽臂应报错");
+    let msg = err.to_string();
+    assert!(msg.contains("分支不可达"), "{msg}");
+    // Display 只打文案：不得出现行号/列号前缀
+    assert!(!msg.starts_with("1:"), "文案不应含位置前缀: {msg}");
+    let span = err.span().expect("臂级错误应携带 span");
+    assert!(span.start_offset < span.end_offset, "span 应非空");
+    assert!(span.end_offset as usize <= src.len(), "span 越界");
+    assert_eq!(span.path_id, 0);
+    // 定位应指向出问题的模式（被遮蔽臂的构造子 `zero`）
+    let tail = &src[span.start_offset as usize..span.end_offset as usize];
+    assert_eq!(tail, "zero", "span 应指向出问题的构造子: {tail:?}");
+}

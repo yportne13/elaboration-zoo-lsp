@@ -542,8 +542,39 @@ pub(crate) fn rc_take(v: Rc<Val>) -> Val {
     Rc::try_unwrap(v).unwrap_or_else(|v| (*v).clone())
 }
 
-#[derive(Debug)]
-pub struct Error(String);
+/// 错误：人类可读文案 + **可选源码位置**（P10）。
+///
+/// 保持元组形状：字段 0 仍是文案（`e.0` 的既有用法与 `Display` 文案零漂移），
+/// 字段 1 是错误对应的源码 span，供 LSP / 诊断渲染消费。构造用
+/// [`Error::new`]（无位置）或 [`Error::at`]（带位置），`to_string()` 永远
+/// 只打印文案。
+pub struct Error(pub String, pub Option<Span<()>>);
+
+impl Error {
+    /// 无位置的错误（沿用旧口径：文案不含行号/列号）。
+    pub fn new(msg: impl Into<String>) -> Self {
+        Error(msg.into(), None)
+    }
+
+    /// 带位置的错误：`span` 指向触发错误的源码片段（通常是模式/构造子的 span）。
+    pub fn at(msg: impl Into<String>, span: Span<()>) -> Self {
+        Error(msg.into(), Some(span))
+    }
+
+    /// 错误对应的源码位置（无则 `None`）。
+    pub fn span(&self) -> Option<Span<()>> {
+        self.1
+    }
+}
+
+impl std::fmt::Debug for Error {
+    /// 与旧版 `Error(String)` 的 Debug 输出**逐字节一致**（`Error("…")`）：
+    /// 多出来的 span 不进 Debug，避免既有 golden（黑盒套件用 `{:?}` 比较）
+    /// 与用户可见输出漂移。span 走 [`Error::span`]。
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Error({:?})", self.0)
+    }
+}
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1654,7 +1685,7 @@ impl Infer {
                 } else {
                     ""
                 };
-                Error(format!(
+                Error::new(format!(
                     "can't unify{} {} == {}",
                     fuel_note,
                     pretty_tm(0, cxt.names(), &self.quote(decl, cxt.lvl, t)),
@@ -1844,7 +1875,7 @@ static L07_DEBUG_ON: std::sync::LazyLock<bool> =
 
 pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
     let mut infer = Infer::new();
-    let ast = parser::parser(&preprocess(input), path_id).map_err(Error)?;
+    let ast = parser::parser(&preprocess(input), path_id).map_err(Error::new)?;
     let mut cxt = Cxt::new(&infer);
     let mut ret = String::new();
     for tm in ast {

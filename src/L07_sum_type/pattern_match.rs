@@ -68,6 +68,22 @@ pub struct Compiler {
     pending_pos: Vec<(Vec<(String, usize)>, Val)>,
     /// 当前下钻路径（根到当前字段的 ctor 选择链），臂内 push/pop 平衡。
     cur_path: Vec<(String, usize)>,
+    /// 第一条臂级错误对应的源码位置（P10）：`errors` 一次报全，位置取首条，
+    /// 供 LSP 把诊断指到出问题的模式上。
+    first_span: Option<Span<()>>,
+}
+
+/// 取模式的源码位置（用于错误定位）：`Any` 用自身 span，`Con` 用构造子名 span。
+fn pat_span(pat: &Pattern) -> Option<Span<()>> {
+    match pat {
+        Pattern::Any(s, _) => Some(*s),
+        Pattern::Con(name, _, _) => Some(Span {
+            data: (),
+            start_offset: name.start_offset,
+            end_offset: name.end_offset,
+            path_id: name.path_id,
+        }),
+    }
 }
 
 /// 一个嵌套拆分位置的记账：路径 = 根到被拆字段的 (构造子名, 字段下标)
@@ -116,6 +132,7 @@ impl Compiler {
             nested_checks: Vec::new(),
             pending_pos: Vec::new(),
             cur_path: Vec::new(),
+            first_span: None,
         }
     }
 
@@ -135,7 +152,7 @@ impl Compiler {
         infer.meta_refuel();
         let head_sum = match infer.force(cxt.decl(), scrut_ty.clone()) {
             s @ Val::Sum(..) => s,
-            _ => return Err(Error("match 的对象必须是和类型（enum）".to_owned())),
+            _ => return Err(Error::new("match 的对象必须是和类型（enum）".to_owned())),
         };
         let ctor_names: Vec<String> = match &head_sum {
             Val::Sum(_, _, cases) => cases.iter().map(|c| c.data.clone()).collect(),
@@ -166,6 +183,9 @@ impl Compiler {
                 // 被前面的通配臂遮蔽：运行时永不可达（首匹配语义）。
                 // owner 2026-09-20 口径：不可达的臂**报错**（与 Walk::Unreachable
                 // 的「分支不可达」同类），不静默跳过。
+                if self.first_span.is_none() {
+                    self.first_span = pat_span(pat);
+                }
                 self.errors
                     .push(format!("分支不可达：模式 {} 被前面的通配臂遮蔽", pat.pretty()));
                 continue;
@@ -215,6 +235,9 @@ impl Compiler {
                     // 荒谬臂的嵌套位置不产生覆盖义务：臂本身的"分支不可达"
                     // 报错已承担语义（v3_absurd_nested_pattern_both_errors 钉）
                     self.pending_pos.clear();
+                    if self.first_span.is_none() {
+                        self.first_span = pat_span(pat);
+                    }
                     self.errors
                         .push(format!("分支不可达：模式 {} 与被匹配类型不相容", pat.pretty()));
                 }
@@ -226,6 +249,9 @@ impl Compiler {
                     // 剪枝失败）也归到这一档。
                     // 本臂不检查分支体（与不可达臂同处置）。
                     self.pending_pos.clear();
+                    if self.first_span.is_none() {
+                        self.first_span = pat_span(pat);
+                    }
                     self.errors.push(format!(
                         "无法判定：模式 {} 的索引方程无法判定（卡住的相等性，或无法解出替换/rename）",
                         pat.pretty()
@@ -286,7 +312,8 @@ impl Compiler {
         if self.errors.is_empty() {
             Ok(())
         } else {
-            Err(Error(self.errors.join("\n")))
+            // P10：文案不变（Display 只打文案），附加首条模式错误的 span
+            Err(Error(self.errors.join("\n"), self.first_span))
         }
     }
 
@@ -468,7 +495,7 @@ impl Compiler {
             _ => {
                 // 非和类型头部：只能当变量绑定
                 if !subs.is_empty() {
-                    return Err(Error(format!(
+                    return Err(Error::new(format!(
                         "`{}` 不是构造子，不能带子模式解构",
                         name.data
                     )));
@@ -491,7 +518,7 @@ impl Compiler {
         if !is_ctor {
             // 不是该类型的构造子 → 变量绑定
             if !subs.is_empty() {
-                return Err(Error(format!(
+                return Err(Error::new(format!(
                     "`{}` 不是 {} 的构造子，不能带子模式解构",
                     name.data, sum_name.data
                 )));
@@ -507,7 +534,7 @@ impl Compiler {
         }
         let entry = cxt
             .decl_get(&format!("{}.{}", sum_name.data, name.data))
-            .ok_or_else(|| Error(format!("找不到构造子 {}.{}", sum_name.data, name.data)))?;
+            .ok_or_else(|| Error::new(format!("找不到构造子 {}.{}", sum_name.data, name.data)))?;
         // head 槽：Con 模式自身占一槽。运行时 eval_aux 的 Con 路径把被匹配值
         // prepend 进 env，三方（编译期绑定 / 运行时 prepend / bind_count）
         // 同序同数。
@@ -557,7 +584,7 @@ impl Compiler {
                         Icit::Expl => match sub_queue.first() {
                             Some(p) if p.get_icit() == Icit::Expl => Some(sub_queue.remove(0)),
                             _ => {
-                                return Err(Error(format!(
+                                return Err(Error::new(format!(
                                     "构造子 {} 缺少字段 {} 的模式",
                                     name.data, bname.data
                                 )))
@@ -620,7 +647,7 @@ impl Compiler {
                                 }
                             } else {
                                 if !csubs.is_empty() {
-                                    return Err(Error(format!(
+                                    return Err(Error::new(format!(
                                         "`{}` 不是构造子，不能带子模式解构",
                                         cn.data
                                     )));
@@ -646,7 +673,7 @@ impl Compiler {
             }
         };
         if !sub_queue.is_empty() {
-            return Err(Error(format!(
+            return Err(Error::new(format!(
                 "构造子 {} 的模式多了 {} 个子模式",
                 name.data,
                 sub_queue.len()
@@ -658,7 +685,7 @@ impl Compiler {
         let ret_sum = match infer.force(cxt.decl(), wrap_sub(&self.sub, ret)) {
             s @ Val::Sum(..) => s,
             _ => {
-                return Err(Error(format!(
+                return Err(Error::new(format!(
                     "构造子 {} 的返回类型不是和类型",
                     name.data
                 )))
@@ -678,7 +705,7 @@ impl Compiler {
             // 判不出来：不是矛盾，单独分流（P3）
             Err(IndexUnify::Kind(_)) => return Ok(Walk::Undecided),
             // 内部不变量错误：原样上报
-            Err(IndexUnify::Msg(m)) => return Err(Error(m)),
+            Err(IndexUnify::Msg(m)) => return Err(Error::new(m)),
         }
         // 头部精化（无条件）：被匹配变量本身写入精化替换。`V a`、`add a zero`
         // 这类依赖被匹配变量的类型，要等 a := zero / a := succ t 之后才能
