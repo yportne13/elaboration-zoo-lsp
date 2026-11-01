@@ -614,6 +614,10 @@ pub struct Infer {
     /// 最近一次合一失败的**原因分档**（见 [`UnifyKind`]）。顶层入口 reset、
     /// 失败臂 note、调用方读取；`Cell` 让 `&self` 的 force/quote 路径也能标注。
     unify_kind: std::cell::Cell<UnifyKind>,
+    /// 正在展开的 meta 链（跨 meta 环守卫，P5）：force 展开已解 meta 时压栈；
+    /// 同一 meta 在栈上再次出现即判定环，返回卡住的 Flex，不再递归烧 fuel。
+    /// RefCell 让 &self 的 force 路径可用；展开完成后显式弹栈。
+    meta_expanding: RefCell<Vec<MetaVar>>,
 }
 
 const UNIFY_FUEL: u32 = 4096;
@@ -645,6 +649,7 @@ impl Infer {
             unify_fuel: std::cell::Cell::new(UNIFY_FUEL),
             match_cmp_depth: std::cell::Cell::new(0),
             unify_kind: std::cell::Cell::new(UnifyKind::Absurd),
+            meta_expanding: RefCell::new(Vec::new()),
         }
     }
 
@@ -758,15 +763,41 @@ impl Infer {
     /// 展开，把值当作未解处理。
     pub fn force(&self, decl: &Decls, t: Val) -> Val {
         match t {
-            Val::Flex(m, sp) => match self.lookup_meta(m) {
-                MetaEntry::Solved(t_solved, _) if burn(&self.unify_fuel) => {
-                    if LOOP_DEBUG.load(Ordering::Relaxed) && self.unify_fuel.get() < 2200 {
-                        eprintln!("  force-expand meta {} (fuel {})", m.0, self.unify_fuel.get());
+            Val::Flex(m, sp) => {
+                let solved = match self.lookup_meta(m) {
+                    MetaEntry::Solved(v, _) => Some(v.clone()),
+                    MetaEntry::Unsolved(_) => None,
+                };
+                match solved {
+                    Some(t_solved) => {
+                        // P5 跨 meta 环守卫：同一 meta 已在展开栈上 ⇒ 环。
+                        // 返回卡住的 Flex（与 fuel 耗尽的降级同形），把
+                        // "靠 fuel 兜底"变成确定性的有界终止。
+                        if self.meta_expanding.borrow().contains(&m) {
+                            if LOOP_DEBUG.load(Ordering::Relaxed) {
+                                eprintln!("  force meta cycle at {}", m.0);
+                            }
+                            return Val::Flex(m, sp);
+                        }
+                        if !burn(&self.unify_fuel) {
+                            return Val::Flex(m, sp);
+                        }
+                        if LOOP_DEBUG.load(Ordering::Relaxed) && self.unify_fuel.get() < 2200 {
+                            eprintln!("  force-expand meta {} (fuel {})", m.0, self.unify_fuel.get());
+                        }
+                        self.meta_expanding.borrow_mut().push(m);
+                        let out = self.force(decl, self.v_app_sp(decl, t_solved, sp));
+                        // 展开完成：弹出本次压栈的条目（rposition 容错嵌套）
+                        let mut st = self.meta_expanding.borrow_mut();
+                        if let Some(i) = st.iter().rposition(|x| *x == m) {
+                            st.remove(i);
+                        }
+                        drop(st);
+                        out
                     }
-                    self.force(decl, self.v_app_sp(decl, t_solved.clone(), sp))
+                    None => Val::Flex(m, sp),
                 }
-                _ => Val::Flex(m, sp),
-            },
+            }
             // 显式替换（dpm-nbe `frc`）：把模式精化的解推进值的结构。入口
             // 不烧 fuel——真正的精化传播只发生在被解变量的读点（frcs 的
             // Rigid 臂 lookup 命中时烧 1），对齐旧 pm_defs 时代

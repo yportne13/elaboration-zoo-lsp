@@ -2152,3 +2152,25 @@ fn visibility_boundary_decl_value_is_not_refined() {
         other => panic!("decl 缓存值不应被 σ 精化，got {other:?}"),
     }
 }
+
+/// P5 回归钉：跨 meta 环（m1 := ?m2、m2 := ?m1）的 force 必须**有界终止**：
+/// 环守卫在展开栈上发现重复 meta 即返回卡住的 Flex，不再靠 fuel 烧尽兜底。
+#[test]
+fn cross_meta_cycle_force_is_bounded() {
+    let mut infer = Infer::new();
+    let ty = Val::U;
+    let m1 = infer.new_meta(ty.clone());
+    let m2 = infer.new_meta(ty.clone());
+    infer.overwrite_meta(m1, MetaEntry::Solved(Val::Flex(m2, List::new()), ty.clone()));
+    infer.overwrite_meta(m2, MetaEntry::Solved(Val::Flex(m1, List::new()), ty.clone()));
+    let decls = cxt::Decls::new();
+    infer.unify_fuel.set(64);
+    let out = infer.force(&decls, Val::Flex(m1, List::new()));
+    assert!(matches!(out, Val::Flex(..)), "环应降级为卡住的 Flex，got {out:?}");
+    assert!(
+        infer.unify_fuel.get() > 0,
+        "环守卫应避免烧光 fuel（旧行为靠耗尽兜底）：left {} ",
+        infer.unify_fuel.get()
+    );
+    assert!(infer.meta_expanding.borrow().is_empty(), "展开栈应在返回时清空");
+}
