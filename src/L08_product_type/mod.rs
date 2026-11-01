@@ -468,9 +468,19 @@ pub struct Infer {
     /// pattern 编译入口）充值；递归中递减，归零即 Err——防索引槽互相嵌入
     /// 的构造子值比较（SuccCase 的 typ 含索引、索引又是 SuccCase）无限递归。
     unify_fuel: std::cell::Cell<u32>,
+    /// 卡住 match 相等性比较的**递归深度**预算（L07 P2 的 L08 迁移）。
+    /// Match/Match 臂在结构快路径失效后会逐分支在 fresh rigid 下重求值；
+    /// 递归 def 的分支体每层再产生新的卡住 match，层级递增、永不收敛
+    /// （L07 实测 4 个 def 的程序要 256 s 才靠 fuel 停下）。深度预算把它
+    /// 变成"有界失败"，与前缀相同的浅层比较不受影响。
+    match_cmp_depth: std::cell::Cell<u32>,
 }
 
 const UNIFY_FUEL: u32 = 4096;
+
+/// 卡住 match 相等性比较的深度上限（与 L07 同值：40 层足够覆盖教学负载的
+/// 构造子嵌套，同时把最坏情况从"fuel 耗尽（分钟级）"压到毫秒级）。
+pub(crate) const MATCH_CMP_DEPTH: u32 = 40;
 
 impl Infer {
     pub fn new() -> Self {
@@ -478,6 +488,7 @@ impl Infer {
             meta: vec![],
             mutable_map: RefCell::new(HashMap::new()),
             unify_fuel: std::cell::Cell::new(UNIFY_FUEL),
+            match_cmp_depth: std::cell::Cell::new(0),
         }
     }
 
