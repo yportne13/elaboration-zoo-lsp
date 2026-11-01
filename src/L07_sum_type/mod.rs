@@ -1875,7 +1875,13 @@ static L07_DEBUG_ON: std::sync::LazyLock<bool> =
 
 pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
     let mut infer = Infer::new();
-    let ast = parser::parser(&preprocess(input), path_id).map_err(Error::new)?;
+    // P10 第二步：解析错误也带位置（文案契约不变：`parse error` / 残余 token）
+    let ast = parser::parser_with_span(&preprocess(input), path_id).map_err(|(msg, span)| {
+        match span {
+            Some(s) => Error::at(msg, s),
+            None => Error::new(msg),
+        }
+    })?;
     let mut cxt = Cxt::new(&infer);
     let mut ret = String::new();
     for tm in ast {

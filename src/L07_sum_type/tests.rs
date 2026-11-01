@@ -2089,3 +2089,28 @@ def f(n: Nat): Nat =
     let tail = &src[span.start_offset as usize..span.end_offset as usize];
     assert_eq!(tail, "zero", "span 应指向出问题的构造子: {tail:?}");
 }
+
+/// P10 第二步回归钉：解析错误也带位置，且文案契约**不变**（黑盒钉死）。
+#[test]
+fn parse_error_carries_span() {
+    // 语法错误：`)` 不是表达式
+    let src = "def f : Nat = )\n";
+    let err = run(src, 0).unwrap_err();
+    assert_eq!(err.to_string(), "parse error", "文案契约不变");
+    let sp = err.span().expect("parse error 应带位置");
+    assert!(sp.start_offset < sp.end_offset, "span 应非空");
+    assert!(sp.end_offset as usize <= src.len(), "span 越界");
+    assert_eq!(sp.path_id, 0);
+
+    // 残余 token：消息仍含偏移（旧契约），位置指向残余 token 本身
+    let src2 = "println U ;\n";
+    let err2 = run(src2, 0).unwrap_err();
+    assert!(
+        err2.to_string().starts_with("parse error: leftover token"),
+        "{}",
+        err2
+    );
+    let sp2 = err2.span().expect("leftover 应带位置");
+    let tok = &src2[sp2.start_offset as usize..sp2.end_offset as usize];
+    assert_eq!(tok, ";", "位置应指向残余 token: {tok:?}");
+}
