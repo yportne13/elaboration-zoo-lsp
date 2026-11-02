@@ -591,12 +591,13 @@ fn v2_coverage_error_lists_all_missing() {
 #[test]
 fn v2_gadt_impossible_arm_rejected() {
     // Vec[Nat] zero 上写 cons 臂：特化方程 zero ≡ succ l 结构冲突 →
-    // 「分支不可达」拒绝（报错含 Rust Debug 形式的模式——诊断渲染待打磨）。
+    // 「分支不可达」拒绝（模式按源码形态渲染：`cons(_, _)`，不再是 Debug 形式）。
     let msg = check_err(
         &format!("{NAT}{VEC}\ndef f(v : Vec[Nat] zero) : Nat =\nmatch v {{\ncase nil => zero\ncase cons(_, _) => zero\n}}\n"),
     );
     assert!(msg.contains("分支不可达"), "err: {msg}");
-    assert!(msg.contains("cons"), "err: {msg}");
+    assert!(msg.contains("cons(_, _)"), "err: {msg}");
+    assert!(!msg.contains("Con("), "诊断泄漏内部 Debug 表示: {msg}");
 }
 
 #[test]

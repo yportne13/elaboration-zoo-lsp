@@ -317,8 +317,14 @@ solve / intersect）。在此之上：
    `test_deep_pattern_fuel_budget_regression` 钉住边界），特化方程路径
    的失败文案带 `(fuel exhausted)` 尾注供诊断。更深的负载需加大
    `UNIFY_FUEL`。
-3. **没有 K 公理层面的安全保护**：精化一个出现在其它假设里的变量在
-   完整依赖理论里需要 `--without-K` 级论证，本层与 L07a 相同，是教学取舍。
+3. **没有 K 公理层面的安全保护（with-K 定位，务必注意）**：本层与 L07a 都是
+   with-K 实现——精化一个出现在其它假设里的变量，在完整依赖理论里需要
+   `--without-K` 级论证（Cockx & Abel 的 with-K 条件），本层**不做这项检查**。
+   因此它的定位是**教学检查器，不是证明助手**：在 K 不成立的模型（如
+   univalence / 高阶归纳类型）下不成立的等式，这里可能被当作可证。
+   若要产品化，应在理论侧补 without-K 限制（按 "Pattern Matching Without K"
+   的"精化不触碰其它假设"条件做检查，而不是靠本层现有机制）；在此之前，
+   "被本层接受"不能直接当作数学证明使用。
 4. **probe 与臂内方程理论上可能不同步**：两者跑同一套代码，但探测用
    scratch 层级、臂内用真槽，极端情形（方程解依赖层级数值本身）判定
    可能不一致——现有测试未触发。
@@ -336,8 +342,13 @@ solve / intersect）。在此之上：
    a. 深值的**释放**是 Rc/Box 链的递归 Drop——参考版的真树表示在深值析构
       时仍按深度吃栈（回归测试用句柄保留 + `mem::forget` 泄漏承接，测试
       基建行为、非被测路径）；孪生 arena 表示不跑 `Drop`，天然豁免；
-   b. `quote` / `pretty` 对深值仍是递归路径（触发面 = nf 输出与错误显示，
-      未含在本轮迭代化内，走 LSP 前需一并迭代化或定深拒绝）。
+   b. ~~`quote` / `pretty` 对深值仍是递归路径~~ **已处理（2026-11-01，P11）**：
+      `quote` 的 Sum/SumCase/Obj 深链改帧式收集器 `quote_deep`（与
+      `rename_deep` 同构，子件回落 `quote_arm`；坑：待处理槽必须 **move 出**
+      而非 clone，否则帧弹栈的 Drop 沿 Rc 链递归爆栈——实测 0xC00000FD）；
+      `pretty` 改为**定深截断**（`MAX_DEPTH = 1024`，超出输出 `…`，显示层
+      不需要完整性）。回归钉扩展 `deep_value_iterative_under_default_stack`
+      （10 万层 quote + pretty，默认 2 MB 栈）。仍余 a 的递归 `Drop` 未解。
 7. **孪生 σ 的跨轮回收已落地（2026-09-18）**：bump `reset()` 不跑 `Drop`，
    arena 内 `XCell::VSub` 持有的 `Rc<SubstV>` 克隆跨轮不递减。修：
    `wrap_sub` 在构造克隆的同一时刻把 `Rc::as_ptr` 登记进 `VSUB_REGS`
@@ -352,7 +363,7 @@ solve / intersect）。在此之上：
 
 ## 8. 测试
 
-`cargo test --lib L07_sum_type`（48 个测试；除深值栈安全 3 个外都在
+`cargo test --lib L07_sum_type`（**66 个测试** = `tests.rs` 60 + mod.rs / unification / 孪生 entry / lex 等 6 个；除深值栈安全 3 个外都在
 64 MB 栈线程里跑）：
 
 - 移植自 L07a：基础 ADT / 索引族与投影 / 依赖匹配（`t`）/ 嵌套 match /
@@ -373,6 +384,16 @@ solve / intersect）。在此之上：
   VSub 分支；`test_fn_typed_index_slot_applied_after_refine` 钉死
   frcs 对"已解 rigid + 非空 spine"的解析应用行为（旧版卡住，孪生版
   移植必须复刻）；
+- 2026-10/11 修复轮回归钉：`test_struct_eq_compares_match_pending_values` /
+  `test_nested_match_pending_cannot_prove_false`（struct_eq 漏比 pending 值的
+  S1 声张性缺陷）、`test_occurs_check_transitive_chain`（两跳环）、
+  `test_stuck_match_equation_bounded`（256 s 悬崖）、
+  `test_unify_kind_separates_absurd_from_undecided`（三档判定）、
+  `error_carries_pattern_span` / `parse_error_carries_span`（错误带位置）、
+  `visibility_boundary_decl_value_is_not_refined`（σ 可见性边界的**已知**
+  取舍钉，见 §1.3）、`cross_meta_cycle_force_is_bounded`（跨 meta 环守卫：
+  环上有界终止，不再靠 fuel 耗尽兜底）、`loose_string_requires_empty_spine`
+  （宽松合一只对裸未知名 Decl 放行）；
 - 深值栈安全（2026-09-18）回归钉：`deep_value_iterative_under_default_
   stack`（参考版 occurs/结构相等，10 万层，**默认 2 MB 测试栈**）、
   `unification::deep_rename_tests::deep_rename_collector_under_default_
@@ -387,7 +408,7 @@ builtin 全量扫描含文件 IO 卡住降级契约（IO 失败不 panic，与�
 空 enum、点号限定名、命名隐式实参）/ 类型层 match / preprocess 怪癖 /
 run 层契约（Display、path_id、并发、跨 run 隔离）；§6 两条新修复的
 回归在此）；`cargo test --test
-l07_blackbox_v3`（95 个：94 可跑 + 1 个 `--ignored` 格式探针；它同样
+l07_blackbox_v3`（113 个：112 可跑 + 1 个 `--ignored` 格式探针；它同样
 `#[path]` 引入 `mod.rs`，故深值栈安全 3 钉也在其中跑。三轮攻击面：
 依赖匹配深水区（`T n` 返回族 / 臂体换行嵌套 match / 双重精化 / `add` 型
 索引算术 / 荒谬嵌套模式 / 零臂假前提 / 投影 scrutinee / 隐式子模式具名 /
@@ -395,7 +416,7 @@ l07_blackbox_v3`（95 个：94 可跑 + 1 个 `--ignored` 格式探针；它同�
 占位 Decl、flex-flex、卡住投影不证等）/ 性能悬崖表征（深嵌套模式、
 多 pending 卡住 match，带超时防护）/ 解析残缺（截断不 panic、match
 位置精确刻画、CRLF、非 ASCII）；§6 三轮修复的回归在此）；`cargo test --test
-l07_fast_parity`（70 个：run vs run_fast 逐字节互检，见 §10；含
+l07_fast_parity`（92 个 = 26 自有 + 66 引入的 lib 测试：run vs run_fast 逐字节互检，见 §10；含
 2026-09-17 评审轮的 `parity_vsub_slot_applied_closure_workbuf`、本轮
 `fast_substv_reclaimed_across_rounds`（σ 跨轮回收）与孪生深值默认栈钉等
 工作区回归钉）。

@@ -35,6 +35,287 @@ fn check_err(input: &str) -> String {
         .unwrap()
 }
 
+/// P1 回归钉（见 docs/compare-l07-vs-dpm/L07-RISKS.md）：浅 occurs 只挡
+/// **单步**环（`Id Nat (succ x) x` 直接 `x := succ x`）；经构造子模式槽中转的
+/// 两跳环（`x := a`、`a := succ x`）每一步各自无环，组合出的 σ 却是循环的
+/// ——旧实现接受该子句（实测 81 ms 返回 OK）。传递 occurs 把它判为不可达。
+#[test]
+fn test_occurs_check_transitive_chain() {
+    let msg = check_err(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def bad(x: Nat, e: Eq[Nat] x (succ x)): Nat =
+    match e {
+        case refl(a) => zero
+    }
+"#,
+    );
+    assert!(msg.contains("分支不可达"), "err: {msg}");
+    // 文案按源码形态渲染（P9）：不得出现 `Con(\"refl\" @ 166,170, …)` 这类内部表示
+    assert!(msg.contains("refl(a)"), "err: {msg}");
+    assert!(!msg.contains("Con("), "诊断泄漏内部 Debug 表示: {msg}");
+}
+
+/// 正向对照：传递 occurs 只应拦住循环解，不能误伤正常的索引精化。
+#[test]
+fn test_occurs_check_keeps_legit_refinement() {
+    let out = check(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def symm[A, x, y: A](e: Eq[A] x y): Eq[A] y x =
+    match e {
+        case refl(a) => refl[A] a
+    }
+
+println "done"
+"#,
+    );
+    assert_eq!(out, "done\n");
+}
+
+/// S1 回归钉（FINDING-struct-eq-pending）：`struct_eq` 的卡住 match 臂
+/// 必须比较 pending **值**，不能只比长度/icit。否则「scrutinee 本身是另一个
+/// pending 不同的卡住 match」的两份 match 会被判等，`refl` 可证明两个
+/// 闭实例化结果不同的函数相等（`f 1 = zero` vs `g 1 = succ zero`）。
+/// 本缺陷由 commit 2309e2a4 的迭代化重写引入（注释仍写"访问序含 pending"，
+/// 实现却只压了分支体）。
+#[test]
+fn test_struct_eq_compares_match_pending_values() {
+    let msg = check_err(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def pfun(n: Nat): Nat -> Nat =
+    match n {
+        case zero => k => k
+        case succ(j) => k => k
+    }
+
+def f(x: Nat): Nat =
+    match (pfun x zero) {
+        case zero => zero
+        case succ(m) => succ m
+    }
+
+def g(x: Nat): Nat =
+    match (pfun x (succ zero)) {
+        case zero => zero
+        case succ(m) => succ m
+    }
+
+def bad : Eq[Nat -> Nat] f g =
+    refl f
+"#,
+    );
+    assert!(msg.contains("can't unify"), "err: {msg}");
+}
+
+/// 该缺陷的强化后果：在上面的 `bad` 之上可证 `False`。修复后必须在
+/// `bad` 处就失败（不得走到 `boom`）。
+#[test]
+fn test_nested_match_pending_cannot_prove_false() {
+    let msg = check_err(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def pfun(n: Nat): Nat -> Nat =
+    match n {
+        case zero => k => k
+        case succ(j) => k => k
+    }
+
+def f(x: Nat): Nat =
+    match (pfun x zero) {
+        case zero => zero
+        case succ(m) => succ m
+    }
+
+def g(x: Nat): Nat =
+    match (pfun x (succ zero)) {
+        case zero => zero
+        case succ(m) => succ m
+    }
+
+def bad : Eq[Nat -> Nat] f g =
+    refl f
+
+def False : U = (A : U) -> A
+
+def ap(f: Nat -> Nat, g: Nat -> Nat, e: Eq[Nat -> Nat] f g): Eq[Nat] (f (succ zero)) (g (succ zero)) =
+    match e {
+        case refl(a) => refl (a (succ zero))
+    }
+
+def eqn : Eq[Nat] zero (succ zero) =
+    ap f g bad
+
+def boom : False =
+    match eqn {
+    }
+"#,
+    );
+    assert!(msg.contains("can't unify"), "err: {msg}");
+}
+
+/// P2 回归钉（见 docs/compare-l07-vs-dpm/L07-RISKS.md）：两个递归 def 的
+/// 卡住索引方程互比时，结构快路径失效，`(Match, Match)` 臂会逐层在 fresh
+/// rigid 下重求值分支体——递归 def 每层再产生新的卡住 match，层级递增、永不
+/// 结构收敛。修复前唯一的下限是 fuel 池：4 个 def 的程序实测 **256 s** 才报
+/// 假不可达。`MATCH_CMP_DEPTH` 把最坏情况压到有界时间，判定（分支不可达）
+/// 与错误文案保持不变。
+#[test]
+fn test_stuck_match_equation_bounded() {
+    let src = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def f(x: Nat, y: Nat, e: Eq[Nat] (add x zero) (add y zero)): Nat =
+    match e {
+        case refl(a) => a
+    }
+"#;
+    let t0 = std::time::Instant::now();
+    let msg = check_err(src);
+    let dt = t0.elapsed();
+    // P3：判不出来 ≠ 矛盾——必须报"无法判定"，不得伪装成"不可达"
+    assert!(msg.contains("无法判定"), "err: {msg}");
+    assert!(!msg.contains("不相容"), "undecided 不得伪装成矛盾: {msg}");
+    assert!(
+        dt < std::time::Duration::from_secs(30),
+        "耗时 {dt:?}：卡住 match 比较的深度预算失效（修复前为分钟级）"
+    );
+}
+
+/// P3 分档对照：**结构矛盾**仍报「分支不可达」，**判不出来**报「无法判定」。
+/// 两档不能混——前者是"这个分支不可能"，后者是"我不知道"（对齐 dpm 的
+/// `UnifyRes::UAbs` / `UIDK`）。
+#[test]
+fn test_unify_kind_separates_absurd_from_undecided() {
+    // 结构矛盾：zero ≐ succ zero 无解
+    let absurd = check_err(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def f(e: Eq[Nat] zero (succ zero)): Nat =
+    match e {
+        case refl(a) => zero
+    }
+"#,
+    );
+    assert!(absurd.contains("分支不可达"), "err: {absurd}");
+
+    // 判不出来：两个递归 def 的卡住 match 相等性
+    let undecided = check_err(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def f(x: Nat, y: Nat, e: Eq[Nat] (add x zero) (add y zero)): Nat =
+    match e {
+        case refl(a) => a
+    }
+"#,
+    );
+    assert!(undecided.contains("无法判定"), "err: {undecided}");
+    assert!(
+        !undecided.contains("分支不可达"),
+        "undecided 不得伪装成不可达: {undecided}"
+    );
+}
+
+/// 反向钉：深度预算不能把**非递归**的卡住 match 误判为不等——同一位置换成
+/// 非递归的 `g` 仍应接受（修复前 13 ms 收敛，修复后必须保持）。
+#[test]
+fn test_stuck_match_nonrecursive_still_equal() {
+    let out = check(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def g(x: Nat): Nat =
+    match x {
+        case zero => zero
+        case succ(n) => zero
+    }
+
+def f(x: Nat, y: Nat, e: Eq[Nat] (g x) (g y)): Nat =
+    match e {
+        case refl(a) => a
+    }
+
+println "done"
+"#,
+    );
+    assert_eq!(out, "done\n");
+}
+
 /// 基础 ADT + 多态 + 高阶函数（移植自 L07a test2）
 #[test]
 fn test_basic() {
@@ -1606,6 +1887,32 @@ fn deep_value_iterative_under_default_stack() {
         !struct_eq::val_eq(&deep, &c),
         "超预算应有界降级（false），不爆栈"
     );
+
+    // ③ quote（README §7.6：曾是仅剩的递归路径）+ pretty（定深截断）：
+    //    10 万层深链在**默认 2 MB 测试栈**下不爆栈。
+    //
+    //    值的消费路径是 move（frame 内 match 逐字段搬走、rc_take 对唯一
+    //    Rc try_unwrap 成功），不会触发深递归 Drop；返回的 Tm 是 Box 链，
+    //    必须 ManuallyDrop 泄漏（测试基建，同本测试的 Rc 链处理）。
+    let infer2 = Infer::new();
+    let decls = cxt::Decls::new();
+    let quoted = std::mem::ManuallyDrop::new(infer2.quote(&decls, Lvl(0), chain(&nat, N_OCCURS)));
+    // 迭代校验结构（不递归）：层数 = N_OCCURS + 1，且逐层是 SumCase
+    let mut depth = 1usize;
+    let mut cur: &Tm = &quoted;
+    loop {
+        match cur {
+            Tm::SumCase { datas, .. } if !datas.is_empty() => {
+                depth += 1;
+                cur = &datas[0].1;
+            }
+            _ => break,
+        }
+    }
+    assert_eq!(depth, N_OCCURS + 1, "quote 应逐层产出 SumCase");
+    // pretty：超深输入按 MAX_DEPTH 截断（不 panic、不爆栈）
+    let shown = pretty::pretty_tm(0, List::new(), &quoted);
+    assert!(shown.contains('…'), "深值显示应定深截断");
 }
 
 // --------------------------------------------------------------------------------
@@ -1666,7 +1973,12 @@ def f(x: List[Nat]): Nat =
 
 /// P1（stale-solvable 臂序污染）：big 臂（5 槽）在前时，其陈旧可解条目
 /// 让后续 ident 荒谬臂的瞬态 η 被误判可解——修复前静默接受（臂序依赖），
-/// 修复后两种臂序一致报"分支不可达"。
+/// 修复后两种臂序一致拒绝。
+///
+/// 文案是"无法判定"而非"分支不可达"（P3 第二刀）：该方程是
+/// `n => n` ≐ `n => succ zero`，落到 λ 体 `n ≐ succ zero` —— 刚性变量
+/// 不能被求解（不在可解集），所以既不能证相等、也不能证矛盾（Agda/dpm 的
+/// "cannot solve / UIDK"），而不是"这两个函数确定不同"。
 #[test]
 fn test_stale_solvable_order_independent() {
     for arms in [
@@ -1693,7 +2005,8 @@ def t(w: W (n => succ zero)): Nat =
 "#
         );
         let msg = check_err(&src);
-        assert!(msg.contains("分支不可达"), "{msg}");
+        assert!(msg.contains("无法判定"), "{msg}");
+        assert!(!msg.contains("分支不可达"), "undecided 不得伪装成不可达: {msg}");
     }
 }
 
@@ -1738,4 +2051,162 @@ enum Foo[A] {
 "#,
     );
     assert!(msg.contains("参数变量"), "{msg}");
+}
+
+/// P10 回归钉：臂级错误携带源码 span（供 LSP 定位），且 `Display` 文案不变
+/// （位置**不**进文案——避免既有 golden 漂移）。
+#[test]
+fn error_carries_pattern_span() {
+    let src = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def f(n: Nat): Nat =
+    match n {
+        case x => zero
+        case zero => zero
+    }
+"#;
+    let input = src.to_owned();
+    let err = std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(move || run(&input, 0))
+        .unwrap()
+        .join()
+        .unwrap()
+        .expect_err("被遮蔽臂应报错");
+    let msg = err.to_string();
+    assert!(msg.contains("分支不可达"), "{msg}");
+    // Display 只打文案：不得出现行号/列号前缀
+    assert!(!msg.starts_with("1:"), "文案不应含位置前缀: {msg}");
+    let span = err.span().expect("臂级错误应携带 span");
+    assert!(span.start_offset < span.end_offset, "span 应非空");
+    assert!(span.end_offset as usize <= src.len(), "span 越界");
+    assert_eq!(span.path_id, 0);
+    // 定位应指向出问题的模式（被遮蔽臂的构造子 `zero`）
+    let tail = &src[span.start_offset as usize..span.end_offset as usize];
+    assert_eq!(tail, "zero", "span 应指向出问题的构造子: {tail:?}");
+}
+
+/// P10 第二步回归钉：解析错误也带位置，且文案契约**不变**（黑盒钉死）。
+#[test]
+fn parse_error_carries_span() {
+    // 语法错误：`)` 不是表达式
+    let src = "def f : Nat = )\n";
+    let err = run(src, 0).unwrap_err();
+    assert_eq!(err.to_string(), "parse error", "文案契约不变");
+    let sp = err.span().expect("parse error 应带位置");
+    assert!(sp.start_offset < sp.end_offset, "span 应非空");
+    assert!(sp.end_offset as usize <= src.len(), "span 越界");
+    assert_eq!(sp.path_id, 0);
+
+    // 残余 token：消息仍含偏移（旧契约），位置指向残余 token 本身
+    let src2 = "println U ;\n";
+    let err2 = run(src2, 0).unwrap_err();
+    assert!(
+        err2.to_string().starts_with("parse error: leftover token"),
+        "{}",
+        err2
+    );
+    let sp2 = err2.span().expect("leftover 应带位置");
+    let tok = &src2[sp2.start_offset as usize..sp2.end_offset as usize];
+    assert_eq!(tok, ";", "位置应指向残余 token: {tok:?}");
+}
+
+/// P6 回归钉（**已知边界**，不是 bug）：σ 只作用于被 `VSub` 包裹过的值；
+/// decl 表条目（`Val::Decl` 展开后的缓存 WHNF）与 meta 解值不在扫描/包裹
+/// 范围内。因此「def 缓存值里引用稍后被特化的槽位」时，精化在该读点不可见
+/// ——这是 README §1.3 记录的既有取舍（与 dpm 的对齐边界）。
+///
+/// 若未来把 σ 也推进 decl 条目，本钉会红：届时必须**同步更新 README/设计稿**
+/// 说明意图变化，而不是默默改掉语义。
+#[test]
+fn visibility_boundary_decl_value_is_not_refined() {
+    let infer = Infer::new();
+    let cxt = Cxt::new(&infer);
+    // def d := x（缓存值直接引用槽位 Lvl(0)）
+    let cxt = cxt.decl_insert(
+        "d",
+        cxt::DeclEntry {
+            ty: Val::U,
+            val: Val::vvar(Lvl(0)),
+        },
+    );
+    let decls: &cxt::Decls = cxt.decl();
+    let sub = Subst::extend(&std::rc::Rc::new(Subst::default()), Lvl(0), Val::U);
+
+    // ① 直接包裹的 rigid：σ 在 force 读点推开 ⇒ 精化可见
+    let direct = infer.force(&decls.clone(), Val::VSub(Box::new(Val::vvar(Lvl(0))), sub.clone()));
+    assert!(matches!(direct, Val::U), "被包裹的 rigid 应按 σ 展开为 U，got {direct:?}");
+
+    // ② decl 条目里的同名引用：σ 不进入 decl 缓存值 ⇒ 精化不可见
+    let d = Val::Decl("d".into(), List::new());
+    let via_decl = infer.force(decls, Val::VSub(Box::new(d), sub));
+    match via_decl {
+        Val::Rigid(l, ref sp) => {
+            assert_eq!(l, Lvl(0), "decl 缓存值应原样（未被 σ 推开）");
+            assert!(sp.is_empty());
+        }
+        other => panic!("decl 缓存值不应被 σ 精化，got {other:?}"),
+    }
+}
+
+/// P5 回归钉：跨 meta 环（m1 := ?m2、m2 := ?m1）的 force 必须**有界终止**：
+/// 环守卫在展开栈上发现重复 meta 即返回卡住的 Flex，不再靠 fuel 烧尽兜底。
+#[test]
+fn cross_meta_cycle_force_is_bounded() {
+    let mut infer = Infer::new();
+    let ty = Val::U;
+    let m1 = infer.new_meta(ty.clone());
+    let m2 = infer.new_meta(ty.clone());
+    infer.overwrite_meta(m1, MetaEntry::Solved(Val::Flex(m2, List::new()), ty.clone()));
+    infer.overwrite_meta(m2, MetaEntry::Solved(Val::Flex(m1, List::new()), ty.clone()));
+    let decls = cxt::Decls::new();
+    infer.unify_fuel.set(64);
+    let out = infer.force(&decls, Val::Flex(m1, List::new()));
+    assert!(matches!(out, Val::Flex(..)), "环应降级为卡住的 Flex，got {out:?}");
+    assert!(
+        infer.unify_fuel.get() > 0,
+        "环守卫应避免烧光 fuel（旧行为靠耗尽兜底）：left {} ",
+        infer.unify_fuel.get()
+    );
+    assert!(infer.meta_expanding.borrow().is_empty(), "展开栈应在返回时清空");
+}
+
+/// P8 回归钉：宽松合一（String vs 未登记名的卡住 Decl/Prim）只对**空 spine**
+/// 放行——string_to_global_type 的"动态类型"是裸 Decl(name, [])；带实参的
+/// 未知卡住头不是动态类型（只是未知函数被应用），与 String 判不出来
+/// （Undecided），不得静默判等。
+#[test]
+fn loose_string_requires_empty_spine() {
+    let mut infer = Infer::new();
+    let cxt = Cxt::new(&infer);
+    let decls: &cxt::Decls = cxt.decl();
+
+    // ① 空 spine（st2g 对未知名的产物）：放行
+    let bare = Val::Decl("Missing".into(), List::new());
+    assert!(
+        infer.unify(decls, Lvl(0), &cxt, Val::LiteralType, bare, None).is_ok(),
+        "未知名裸 Decl 应作为动态类型放行"
+    );
+
+    // ② 非空 spine（未知函数被应用）：判不出来，且不得标记为 Absurd
+    let applied = Val::Decl(
+        "Missing".into(),
+        List::new().prepend((Val::U, Icit::Expl)),
+    );
+    infer.reset_unify_kind();
+    assert!(
+        infer
+            .unify(decls, Lvl(0), &cxt, Val::LiteralType, applied, None)
+            .is_err(),
+        "未知名 + 非空 spine 不应被宽松臂放行"
+    );
+    assert_eq!(
+        infer.unify_kind(),
+        UnifyKind::Undecided,
+        "应记为无法判定（不是矛盾）"
+    );
 }

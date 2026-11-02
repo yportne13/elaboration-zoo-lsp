@@ -193,12 +193,20 @@ fn eq_run(first: EqTask<'_>) -> bool {
                                 return false;
                             }
                         }
-                        for ((_, xi), (_, yi)) in xp.iter().zip(yp.iter()) {
+                        // 访问序（旧递归）：scrutinee → env → 分支体 → pending。
+                        // **pending 的 icit 与值都要比**：卡住期累积的实参是值的一部分，
+                        // 漏比会让「scrutinee 是另一个 pending 不同的卡住 match」的两份
+                        // match 被判等（S1：可让 refl 证明两个闭实例化不同的函数相等，
+                        // 进而证 False）。LIFO ⇒ 先压 pending 值、最后弹出。
+                        //
+                        // 回归：commit 2309e2a4 把本函数改为任务栈迭代时漏掉了这一压栈
+                        // （注释仍写"访问序含 pending"，实现对 pending 只比长度/icit）。
+                        for ((xv, xi), (yv, yi)) in xp.iter().zip(yp.iter()) {
                             if xi != yi {
                                 return false;
                             }
+                            stack.push(EqTask::V(xv, yv));
                         }
-                        // 访问序（旧递归）：scrutinee → env → 分支体 → pending
                         for ((_, xb), (_, yb)) in xc.iter().zip(yc.iter()).rev() {
                             stack.push(EqTask::T(xb, yb));
                         }

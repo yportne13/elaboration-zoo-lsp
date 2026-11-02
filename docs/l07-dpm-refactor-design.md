@@ -4,6 +4,10 @@
 基于 elaboration-zoo + Kovács cctt 的 explicit substitutions & forcing，
 特化合一来自 Norell 论文 / Cockx《Pattern Matching Without K》）。
 
+> **理论定位警示**：本层是 **with-K** 教学检查器，**不做** without-K 安全论证
+> （详见 `src/L07_sum_type/README.md` §7.3）。"被本层接受"不等于数学证明；
+> 产品化需在理论侧补 without-K 限制。
+
 ## 1. 旧架构（pm_defs 事实表）与其结构性弱点
 
 旧 L07 的精化机制（`Infer` 上的全局可变状态）：
@@ -185,7 +189,11 @@ env 槽已带 VSub；方程两侧在 unify_spec 入口被 force 推开——已�
 
 ## 10. 预期收益
 
-1. force 热路径的 rigid 解查找 O(n) → O(1)（HashMap）；
+1. force 热路径的 rigid 解查找从"全局事实表 O(n) 反序扫"变为**持久化单链
+   + 条件包裹**（写 O(1) cons、读沿链首个命中；解值不引用已解层级时原样
+   返回、零分配零 fuel——见 §9.4 的定稿说明）。**不是** HashMap：初版
+   FxHashMap 写时整表重建 + 逐条深拷贝包裹是 O(n³/6) 分配，深嵌套实测
+   2.5×@depth40 回归，已废弃；
 2. 解是合一器的**返回值**，可解性不再经 Infer 全局可变通道——
    unify 与模式编译解耦，回滚 = Rc 指针赋值；
 3. 替换组合显式化：多方程场景（add_assoc 族）的传播路径从

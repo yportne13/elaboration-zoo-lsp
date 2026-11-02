@@ -314,6 +314,76 @@ impl Subst {
         mentions_level(v, sub)
     }
 
+    /// 解值是否（浅层）引用 σ 的**任一**已解层级。
+    ///
+    /// 传递 occurs 的前置筛选（见 unification.rs 的 rigid 解臂）：只有解值
+    /// 真的挂在既有解链上时，才值得跑一次传递扫描；干净解零开销直通。
+    pub(crate) fn mentions_any_solved(self: &Rc<Self>, v: &Val) -> bool {
+        Self::mentions_level(v, self)
+    }
+
+    /// 传递 occurs：`v` 在 σ 之下是否**经已解层级**提到 `target`。
+    ///
+    /// 与 [`Self::mentions_level`] 同口径（只看浅结构 + 闭包 env 槽，不进
+    /// 闭包体），区别是遇到 `Rigid y` 且 σ 解出 y 时**继续扫解值**——这正是
+    /// 两跳环（`x := a`、`a := succ x`）的检测点。
+    ///
+    /// 不能用 `force(σ, v)` 代替：槽位纪律是"只包裹不物化"（frcs 对 spine /
+    /// Sum / SumCase 槽只 `wrap_sub`），force 不会把槽里的 `Rigid x` 化成
+    /// 解值 `a`，因此 force + 浅扫描看不出链式环。预算耗尽按"未出现"处理
+    /// （宁漏不误杀：误杀会把合法分支判成不可达）。
+    pub(crate) fn occurs_transitive(self: &Rc<Self>, v: &Val, target: Lvl) -> bool {
+        const BUDGET: u32 = 2048;
+        fn go(v: &Val, sub: &Rc<Subst>, target: Lvl, budget: &mut u32) -> bool {
+            if *budget == 0 {
+                return false;
+            }
+            *budget -= 1;
+            match v {
+                Val::Rigid(y, sp) => {
+                    if *y == target {
+                        return true;
+                    }
+                    if let Some(hit) = sub.lookup_hit(*y) {
+                        if go(&hit, sub, target, budget) {
+                            return true;
+                        }
+                    }
+                    sp.iter().any(|(u, _)| go(u, sub, target, budget))
+                }
+                Val::Flex(_, sp) | Val::Decl(_, sp) | Val::Prim(_, sp) => {
+                    sp.iter().any(|(u, _)| go(u, sub, target, budget))
+                }
+                Val::Obj(o, _, sp) => {
+                    go(o, sub, target, budget)
+                        || sp.iter().any(|(u, _)| go(u, sub, target, budget))
+                }
+                Val::Lam(_, _, cl) => cl.0.iter().any(|v| go(v, sub, target, budget)),
+                Val::Pi(_, _, a, cl) => {
+                    go(a, sub, target, budget)
+                        || cl.0.iter().any(|v| go(v, sub, target, budget))
+                }
+                Val::Sum(_, params, _) => params
+                    .iter()
+                    .any(|(_, v, t, _)| go(v, sub, target, budget) || go(t, sub, target, budget)),
+                Val::SumCase { typ, datas, .. } => {
+                    go(typ, sub, target, budget)
+                        || datas.iter().any(|(_, v, _)| go(v, sub, target, budget))
+                }
+                Val::Match(s, env, _, pending) => {
+                    go(s, sub, target, budget)
+                        || env.iter().any(|v| go(v, sub, target, budget))
+                        || pending.iter().any(|(u, _)| go(u, sub, target, budget))
+                }
+                // 内层 σ 优先：本值在 s2 之下，target 若被 s2 解出也要跟随
+                Val::VSub(inner, s2) => go(inner, s2, target, budget),
+                Val::U | Val::LiteralType | Val::LiteralIntro(_) => false,
+            }
+        }
+        let mut budget = BUDGET;
+        go(v, self, target, &mut budget)
+    }
+
     /// x 是否已有解（旧 `pm_def(x).is_none()` 的否定形式）。
     pub(crate) fn has(&self, x: Lvl) -> bool {
         let mut cur = self.head.clone();
@@ -425,6 +495,36 @@ fn lvl2ix(l: Lvl, x: Lvl) -> Ix {
 #[derive(Debug)]
 pub(crate) struct UnifyError;
 
+/// 合一失败的**原因分档**（对齐 dpm-nbe 的 `UnifyRes = USucc | UAbs | UIDK`）。
+///
+/// `UnifyError` 本身保持无字段：53 处构造点不动，分档挂在 [`Infer`] 上——
+/// 每个顶层合一入口先 [`Infer::reset_unify_kind`]，失败臂按语义 `note`，
+/// 调用方取 [`Infer::unify_kind`] 决定诊断与覆盖处理。这样既拿到三档信息，
+/// 又不改 `unify` 的签名与所有既有调用点。
+///
+/// 默认值 = `Absurd`：**未被显式分档的失败沿用旧行为**（分支不可达）。
+/// 这是有意的渐进策略——把"确定无解"与"判不出来"逐点分清需要逐个臂论证，
+/// 目前只给"卡住 match 相等性"与"fuel 耗尽"两类标注（P3 第一刀）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UnifyKind {
+    /// 结构性矛盾：确定无解（`zero ≐ succ _`、不同构造子、不同字面量）。
+    Absurd,
+    /// 无法判定：既不能证相等、也不是矛盾（卡住 match 的相等性、不可解中性值）。
+    Undecided,
+    /// 预算耗尽（fuel）：判定不可信，最保守。
+    Fuel,
+}
+
+impl UnifyKind {
+    fn rank(self) -> u8 {
+        match self {
+            UnifyKind::Absurd => 0,
+            UnifyKind::Undecided => 1,
+            UnifyKind::Fuel => 2,
+        }
+    }
+}
+
 fn empty_span<T>(data: T) -> Span<T> {
     Span {
         data,
@@ -442,8 +542,39 @@ pub(crate) fn rc_take(v: Rc<Val>) -> Val {
     Rc::try_unwrap(v).unwrap_or_else(|v| (*v).clone())
 }
 
-#[derive(Debug)]
-pub struct Error(String);
+/// 错误：人类可读文案 + **可选源码位置**（P10）。
+///
+/// 保持元组形状：字段 0 仍是文案（`e.0` 的既有用法与 `Display` 文案零漂移），
+/// 字段 1 是错误对应的源码 span，供 LSP / 诊断渲染消费。构造用
+/// [`Error::new`]（无位置）或 [`Error::at`]（带位置），`to_string()` 永远
+/// 只打印文案。
+pub struct Error(pub String, pub Option<Span<()>>);
+
+impl Error {
+    /// 无位置的错误（沿用旧口径：文案不含行号/列号）。
+    pub fn new(msg: impl Into<String>) -> Self {
+        Error(msg.into(), None)
+    }
+
+    /// 带位置的错误：`span` 指向触发错误的源码片段（通常是模式/构造子的 span）。
+    pub fn at(msg: impl Into<String>, span: Span<()>) -> Self {
+        Error(msg.into(), Some(span))
+    }
+
+    /// 错误对应的源码位置（无则 `None`）。
+    pub fn span(&self) -> Option<Span<()>> {
+        self.1
+    }
+}
+
+impl std::fmt::Debug for Error {
+    /// 与旧版 `Error(String)` 的 Debug 输出**逐字节一致**（`Error("…")`）：
+    /// 多出来的 span 不进 Debug，避免既有 golden（黑盒套件用 `{:?}` 比较）
+    /// 与用户可见输出漂移。span 走 [`Error::span`]。
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Error({:?})", self.0)
+    }
+}
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -474,9 +605,31 @@ pub struct Infer {
     /// pattern 编译入口）充值；递归中递减，归零即 Err——防索引槽互相嵌入
     /// 的构造子值比较（SuccCase 的 typ 含索引、索引又是 SuccCase）无限递归。
     unify_fuel: std::cell::Cell<u32>,
+    /// 卡住 match 相等性比较的**递归深度**预算（与 fuel 无关）。
+    /// `(Match, Match)` 臂在结构快路径失效后会逐分支在 fresh rigid 下重求值；
+    /// 递归 def 的分支体每层再产生新的卡住 match，层级递增、永不结构收敛
+    /// （实测：4 个 def 的 `Eq (add x zero) (add y zero)` 要 256 s 才靠 fuel
+    /// 停下）。深度预算把它变成"有界失败"，与前缀相同的浅层比较不受影响。
+    match_cmp_depth: std::cell::Cell<u32>,
+    /// 最近一次合一失败的**原因分档**（见 [`UnifyKind`]）。顶层入口 reset、
+    /// 失败臂 note、调用方读取；`Cell` 让 `&self` 的 force/quote 路径也能标注。
+    unify_kind: std::cell::Cell<UnifyKind>,
+    /// 正在展开的 meta 链（跨 meta 环守卫，P5）：force 展开已解 meta 时压栈；
+    /// 同一 meta 在栈上再次出现即判定环，返回卡住的 Flex，不再递归烧 fuel。
+    /// RefCell 让 &self 的 force 路径可用；展开完成后显式弹栈。
+    meta_expanding: RefCell<Vec<MetaVar>>,
 }
 
 const UNIFY_FUEL: u32 = 4096;
+
+/// 卡住 match 相等性比较的深度上限。
+///
+/// 取值依据：结构快路径命中时根本不进这个预算；只有"同一递归 def、不同槽位"
+/// 的卡住 match 才会逐层下钻。同一 def 的两份值在**有限**层内（构造子字段深度）
+/// 就能比完；超过该深度说明双方的分支体在递归上互不相同，再钻也只会重复同一
+/// 形态。40 层足以覆盖 `Vec`/`add` 这类教学负载的构造子嵌套，同时把最坏情况
+/// 从"fuel 池耗尽（数分钟）"压到毫秒级。
+pub(crate) const MATCH_CMP_DEPTH: u32 = 40;
 
 /// [`Infer::meta_snapshot`] 的回滚句柄：undo 轨迹与 meta 表的两个水位
 /// （undo-log 方案，见 [`Infer::meta_snapshot`] 文档）。
@@ -494,6 +647,9 @@ impl Infer {
             mutable_map: RefCell::new(HashMap::new()),
             simpl_cache: RefCell::new(HashMap::new()),
             unify_fuel: std::cell::Cell::new(UNIFY_FUEL),
+            match_cmp_depth: std::cell::Cell::new(0),
+            unify_kind: std::cell::Cell::new(UnifyKind::Absurd),
+            meta_expanding: RefCell::new(Vec::new()),
         }
     }
 
@@ -560,6 +716,25 @@ impl Infer {
         self.unify_fuel.get() == 0
     }
 
+    /// 顶层合一入口调用：把"失败原因"重置为中性值（`Absurd`，沿用旧口径）。
+    pub(crate) fn reset_unify_kind(&self) {
+        self.unify_kind.set(UnifyKind::Absurd);
+    }
+
+    /// 失败臂调用：按"最不结论化"的语义累积（`Absurd < Undecided < Fuel`）。
+    /// 一处判不出 ⇒ 整个方程判不出；一处预算耗尽 ⇒ 整个结果不可信。
+    pub(crate) fn note_unify_kind(&self, k: UnifyKind) {
+        let cur = self.unify_kind.get();
+        if k.rank() > cur.rank() {
+            self.unify_kind.set(k);
+        }
+    }
+
+    /// 读取当前失败原因（只在 `unify` 返回 `Err` 后有意义）。
+    pub(crate) fn unify_kind(&self) -> UnifyKind {
+        self.unify_kind.get()
+    }
+
     /// 合一器**参数视角**的 WHNF：与 `force` 相同，但不做 Match 重选。
     /// `invert` / `prune_vflex` 关心的是"元变量被应用在哪些**槽位**上"
     /// ——槽位引用（`Rigid(x)`）本身就是作用域事实，分支内的精化等式
@@ -588,15 +763,41 @@ impl Infer {
     /// 展开，把值当作未解处理。
     pub fn force(&self, decl: &Decls, t: Val) -> Val {
         match t {
-            Val::Flex(m, sp) => match self.lookup_meta(m) {
-                MetaEntry::Solved(t_solved, _) if burn(&self.unify_fuel) => {
-                    if LOOP_DEBUG.load(Ordering::Relaxed) && self.unify_fuel.get() < 2200 {
-                        eprintln!("  force-expand meta {} (fuel {})", m.0, self.unify_fuel.get());
+            Val::Flex(m, sp) => {
+                let solved = match self.lookup_meta(m) {
+                    MetaEntry::Solved(v, _) => Some(v.clone()),
+                    MetaEntry::Unsolved(_) => None,
+                };
+                match solved {
+                    Some(t_solved) => {
+                        // P5 跨 meta 环守卫：同一 meta 已在展开栈上 ⇒ 环。
+                        // 返回卡住的 Flex（与 fuel 耗尽的降级同形），把
+                        // "靠 fuel 兜底"变成确定性的有界终止。
+                        if self.meta_expanding.borrow().contains(&m) {
+                            if LOOP_DEBUG.load(Ordering::Relaxed) {
+                                eprintln!("  force meta cycle at {}", m.0);
+                            }
+                            return Val::Flex(m, sp);
+                        }
+                        if !burn(&self.unify_fuel) {
+                            return Val::Flex(m, sp);
+                        }
+                        if LOOP_DEBUG.load(Ordering::Relaxed) && self.unify_fuel.get() < 2200 {
+                            eprintln!("  force-expand meta {} (fuel {})", m.0, self.unify_fuel.get());
+                        }
+                        self.meta_expanding.borrow_mut().push(m);
+                        let out = self.force(decl, self.v_app_sp(decl, t_solved, sp));
+                        // 展开完成：弹出本次压栈的条目（rposition 容错嵌套）
+                        let mut st = self.meta_expanding.borrow_mut();
+                        if let Some(i) = st.iter().rposition(|x| *x == m) {
+                            st.remove(i);
+                        }
+                        drop(st);
+                        out
                     }
-                    self.force(decl, self.v_app_sp(decl, t_solved.clone(), sp))
+                    None => Val::Flex(m, sp),
                 }
-                _ => Val::Flex(m, sp),
-            },
+            }
             // 显式替换（dpm-nbe `frc`）：把模式精化的解推进值的结构。入口
             // 不烧 fuel——真正的精化传播只发生在被解变量的读点（frcs 的
             // Rigid 臂 lookup 命中时烧 1），对齐旧 pm_defs 时代
@@ -1220,6 +1421,193 @@ impl Infer {
     fn quote(&self, decl: &Decls, l: Lvl, t: Val) -> Tm {
         let t = self.force(decl, t);
         match t {
+            // 深链形态（Sum/SumCase/Obj 可按值深度自嵌，如 `succ^N zero`）
+            // 交给帧式收集器；其余形态（Lam/Pi/Match/spine 头，结构嵌套浅）
+            // 回落 `quote_arm`（README §7.6，2026-11-01 与 rename_deep 同构）。
+            Val::Sum(..) | Val::SumCase { .. } | Val::Obj(..) => self.quote_deep(decl, l, t),
+            Val::VSub(ref v, _) => {
+                // force 后顶层不应是 VSub；fuel 耗尽时会。解包继续（同旧版）。
+                let inner = v.clone();
+                self.quote(decl, l, *inner)
+            }
+            _ => self.quote_arm(decl, l, t),
+        }
+    }
+
+    /// quote 的深链收集器：**Sum / SumCase / Obj** 帧式下降/组装（与
+    /// [`Self::rename_deep`] 同构）。深值按值深递归会爆栈（参考版 README
+    /// §7.6：`quote` 曾是仅剩的递归路径之一）；子件回落 [`Self::quote_arm`]。
+    fn quote_deep(&self, decl: &Decls, l: Lvl, root: Val) -> Tm {
+        enum FrameKind {
+            Sum {
+                name: Span<String>,
+                cases: Vec<Span<String>>,
+                metas: Vec<(Span<String>, Icit)>,
+            },
+            SumCase {
+                case_name: Span<String>,
+                datas_metas: Vec<(Span<String>, Icit)>,
+            },
+            Obj {
+                name: Span<String>,
+            },
+        }
+        struct Frame {
+            pending: Vec<Val>,
+            icits: Vec<Icit>,
+            kind: FrameKind,
+            done: Vec<Tm>,
+            idx: usize,
+        }
+        fn frame_new(v: Val) -> Frame {
+            match v {
+                Val::Sum(name, params, cases) => {
+                    let mut pending = Vec::with_capacity(params.len() * 2);
+                    let mut metas = Vec::with_capacity(params.len());
+                    for (n, v, t, i) in params {
+                        pending.push(rc_take(v));
+                        pending.push(rc_take(t));
+                        metas.push((n, i));
+                    }
+                    let n_all = pending.len();
+                    Frame {
+                        pending,
+                        icits: Vec::new(),
+                        kind: FrameKind::Sum { name, cases, metas },
+                        done: Vec::with_capacity(n_all),
+                        idx: 0,
+                    }
+                }
+                Val::SumCase {
+                    typ,
+                    case_name,
+                    datas,
+                } => {
+                    let mut pending = Vec::with_capacity(datas.len() + 1);
+                    pending.push(rc_take(typ));
+                    let mut datas_metas = Vec::with_capacity(datas.len());
+                    for (n, v, i) in datas {
+                        pending.push(rc_take(v));
+                        datas_metas.push((n, i));
+                    }
+                    let n_all = pending.len();
+                    Frame {
+                        pending,
+                        icits: Vec::new(),
+                        kind: FrameKind::SumCase {
+                            case_name,
+                            datas_metas,
+                        },
+                        done: Vec::with_capacity(n_all),
+                        idx: 0,
+                    }
+                }
+                Val::Obj(x, name, sp) => {
+                    // pending = [被投影者, spine 实参…]；实参按 List 头→尾序入列
+                    let mut pending = vec![*x];
+                    let mut icits = Vec::new();
+                    for (u, i) in sp.iter() {
+                        pending.push(u.clone());
+                        icits.push(*i);
+                    }
+                    let n_all = pending.len();
+                    Frame {
+                        pending,
+                        icits,
+                        kind: FrameKind::Obj { name },
+                        done: Vec::with_capacity(n_all),
+                        idx: 0,
+                    }
+                }
+                _ => unreachable!("quote_deep 只接受 Sum/SumCase/Obj"),
+            }
+        }
+        fn frame_assemble(frame: Frame) -> Tm {
+            match frame.kind {
+                FrameKind::Sum { name, cases, metas } => {
+                    let mut it = frame.done.into_iter();
+                    let params = metas
+                        .into_iter()
+                        .map(|(n, i)| {
+                            let v = it.next().unwrap();
+                            let t = it.next().unwrap();
+                            (n, v, t, i)
+                        })
+                        .collect();
+                    Tm::Sum(name, params, cases)
+                }
+                FrameKind::SumCase {
+                    case_name,
+                    datas_metas,
+                } => {
+                    let mut it = frame.done.into_iter();
+                    let typ = it.next().unwrap();
+                    let datas = datas_metas
+                        .into_iter()
+                        .map(|(n, i)| (n, it.next().unwrap(), i))
+                        .collect();
+                    Tm::SumCase {
+                        typ: Box::new(typ),
+                        case_name,
+                        datas,
+                    }
+                }
+                FrameKind::Obj { name } => {
+                    let mut it = frame.done.into_iter();
+                    let head = Tm::Obj(Box::new(it.next().unwrap()), name);
+                    let args: Vec<Tm> = it.collect();
+                    let mut acc = head;
+                    // spine 头 = 最后应用 ⇒ 逆序折叠（与 quote_sp 应用序一致）
+                    for (u, i) in args.into_iter().zip(frame.icits).rev() {
+                        acc = Tm::App(Box::new(acc), Box::new(u), i);
+                    }
+                    acc
+                }
+            }
+        }
+        let mut frames: Vec<Frame> = vec![frame_new(root)];
+        let mut result: Option<Tm> = None;
+        while let Some(frame) = frames.last_mut() {
+            if frame.idx == frame.pending.len() {
+                let frame = frames.pop().unwrap();
+                let tm = frame_assemble(frame);
+                match frames.last_mut() {
+                    Some(parent) => {
+                        parent.done.push(tm);
+                        parent.idx += 1;
+                    }
+                    None => result = Some(tm),
+                }
+                continue;
+            }
+            // **move 出**待处理槽（不能 clone）：深链的原始值若留在 frame 里，
+            // 帧弹栈时的 Drop 会沿 Rc 链递归 → 10 万层直接爆栈（实测
+            // 0xC00000FD）。replace 成廉价占位后，值被逐层搬走、无深递归 Drop。
+            let w = std::mem::replace(&mut frame.pending[frame.idx], Val::U);
+            let w = self.force(decl, w);
+            match w {
+                // fuel 耗尽窗口：force 原样返回 VSub——解包后原地重试
+                Val::VSub(v, _) => {
+                    let frame = frames.last_mut().unwrap();
+                    frame.pending[frame.idx] = *v;
+                }
+                Val::Sum(..) | Val::SumCase { .. } | Val::Obj(..) => {
+                    frames.push(frame_new(w));
+                }
+                _ => {
+                    let tm = self.quote_arm(decl, l, w);
+                    let frame = frames.last_mut().unwrap();
+                    frame.done.push(tm);
+                    frame.idx += 1;
+                }
+            }
+        }
+        result.expect("quote_deep 至少产出一个 Tm")
+    }
+
+    /// quote 的浅结构臂（入口已 force、已分派掉深链形态）。
+    fn quote_arm(&self, decl: &Decls, l: Lvl, t: Val) -> Tm {
+        match t {
             // 正常路径 force 后顶层不会是 VSub；fuel 耗尽时 force 原样返回
             // VSub——解包打印内层（σ 未推开，保真度同旧版"打印未展开 rigid"），
             // 链式 VSub 由递归消化，不会产生 Tm::U 垃圾
@@ -1316,14 +1704,19 @@ impl Infer {
 
     fn unify_catch(&mut self, decl: &Decls, cxt: &Cxt, t: Val, t_prime: Val) -> Result<(), Error> {
         self.unify_fuel.set(UNIFY_FUEL);
+        self.reset_unify_kind();
         self.unify(decl, cxt.lvl, cxt, t.clone(), t_prime.clone(), None)
             .map_err(|_| {
+                // 分支体检查（常规转换）只需"成不成立"：Undecided 与 Absurd 都
+                // 是失败，文案保持旧口径（`can't unify …` + fuel 尾注），避免
+                // 把内部三档泄漏到普通转换错误里。分档的消费方是模式编译
+                // （可达性 / 覆盖 / "无法判定"文案），见 pattern_match.rs。
                 let fuel_note = if self.unify_fuel.get() == 0 {
                     " (fuel exhausted)"
                 } else {
                     ""
                 };
-                Error(format!(
+                Error::new(format!(
                     "can't unify{} {} == {}",
                     fuel_note,
                     pretty_tm(0, cxt.names(), &self.quote(decl, cxt.lvl, t)),
@@ -1513,7 +1906,13 @@ static L07_DEBUG_ON: std::sync::LazyLock<bool> =
 
 pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
     let mut infer = Infer::new();
-    let ast = parser::parser(&preprocess(input), path_id).map_err(Error)?;
+    // P10 第二步：解析错误也带位置（文案契约不变：`parse error` / 残余 token）
+    let ast = parser::parser_with_span(&preprocess(input), path_id).map_err(|(msg, span)| {
+        match span {
+            Some(s) => Error::at(msg, s),
+            None => Error::new(msg),
+        }
+    })?;
     let mut cxt = Cxt::new(&infer);
     let mut ret = String::new();
     for tm in ast {

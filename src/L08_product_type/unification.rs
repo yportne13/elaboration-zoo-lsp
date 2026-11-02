@@ -697,6 +697,16 @@ impl Infer {
                 if val_mentions_lvl(v, *x) {
                     return Err(UnifyError);
                 }
+                // L07 P1 迁移：传递 occurs（两跳环）。仅当解值挂在既有解链上
+                // 时才付这次扫描；干净解零开销。
+                if let Some(acc) = spec.as_deref().map(|s| s.acc.clone()) {
+                    if !acc.is_empty()
+                        && acc.mentions_any_solved(v)
+                        && acc.occurs_transitive(v, *x)
+                    {
+                        return Err(UnifyError);
+                    }
+                }
                 let s = spec.as_deref_mut().unwrap();
                 s.acc = Subst::extend(&s.acc, *x, v.clone());
                 Ok(())
@@ -710,6 +720,14 @@ impl Infer {
             {
                 if val_mentions_lvl(v, *x) {
                     return Err(UnifyError);
+                }
+                if let Some(acc) = spec.as_deref().map(|s| s.acc.clone()) {
+                    if !acc.is_empty()
+                        && acc.mentions_any_solved(v)
+                        && acc.occurs_transitive(v, *x)
+                    {
+                        return Err(UnifyError);
+                    }
                 }
                 let s = spec.as_deref_mut().unwrap();
                 s.acc = Subst::extend(&s.acc, *x, v.clone());
@@ -838,6 +856,15 @@ impl Infer {
             // 卡住的 match vs 卡住的 match：scrutinee 合一 + 分支一一对应
             // + 卡住期累积的实参逐一比较
             (Val::Match(s1, env1, cases1, pending1), Val::Match(s2, env2, cases2, pending2)) => {
+                // 深度预算（L07 P2 迁移）：本臂在结构快路径失效后会逐分支重
+                // 求值，递归 def 会逐层产生新的卡住 match ⇒ 不设界时唯一的下限
+                // 是 fuel 池。超出预算按"无法判定为相等"保守失败。
+                let saved_depth = self.match_cmp_depth.get();
+                if saved_depth >= super::MATCH_CMP_DEPTH {
+                    return Err(UnifyError);
+                }
+                self.match_cmp_depth.set(saved_depth + 1);
+                let r = (|| -> Result<(), UnifyError> {
                 // 快路径：scrutinee、捕获 env、模式与分支体全部结构相同 ⇒ 两个
                 // match 值在所有实例化下行为一致，直接判等。逐分支重求值会把
                 // 递归函数的分支体再展开一层卡住 match（fresh rigid 层级随深度
@@ -887,6 +914,9 @@ impl Infer {
                     self.unify(decl, l, cxt, u1.clone(), u2.clone(), spec.as_deref_mut())?;
                 }
                 Ok(())
+                })();
+                self.match_cmp_depth.set(saved_depth);
+                r
             }
             // 卡住的 match vs 其它：能归约的已在入口 force 消掉（force 会在
             // scrutinee 上重试选分支），这里只接受严格 eta——每个分支都是
