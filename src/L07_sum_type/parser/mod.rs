@@ -102,6 +102,31 @@ impl<'a: 'b, 'b, A, T: Parser<&'b [TokenNode<'a>], A, MacroState, IError>> Parse
 /// 与偏移——`;` 结尾这类最常见错误不再无从定位。任何解析失败都折叠为
 /// 整体 `Err("parse error")`（契约被 l07 blackbox 钉死）。
 pub fn parser(input: &str, id: u32) -> Result<Vec<Decl>, String> {
+    parser_with_span(input, id).map_err(|(msg, _)| msg)
+}
+
+/// 解析错误（P10 第二步）：文案 + 可选位置。
+///
+/// 文案与 [`parser`] 的契约**逐字节一致**（`"parse error"` / 残余 token 那条），
+/// 只有位置是新增的：IError 的 span（失败 token 处）或残余 token 的 span。
+pub type ParseError = (String, Option<Span<()>>);
+
+fn span_of(s: &Span<ErrMsg>) -> Option<Span<()>> {
+    // 0,0 是"无位置"哨兵（空输入 / lexer 失败）；有偏移才返回
+    if s.start_offset == 0 && s.end_offset == 0 {
+        None
+    } else {
+        Some(Span {
+            data: (),
+            start_offset: s.start_offset,
+            end_offset: s.end_offset,
+            path_id: s.path_id,
+        })
+    }
+}
+
+/// 带位置的解析入口：[`parser`] 的契约 + 错误位置（供 LSP/诊断消费）。
+pub fn parser_with_span(input: &str, id: u32) -> Result<Vec<Decl>, ParseError> {
     match lex::lex(Span {
         data: input,
         start_offset: 0,
@@ -116,16 +141,26 @@ pub fn parser(input: &str, id: u32) -> Result<Vec<Decl>, String> {
                         Ok(decls)
                     } else {
                         let t = &rest[0];
-                        Err(format!(
-                            "parse error: leftover token `{}` @ {},{}",
-                            t.data.0, t.start_offset, t.end_offset
+                        Err((
+                            format!(
+                                "parse error: leftover token `{}` @ {},{}",
+                                t.data.0, t.start_offset, t.end_offset
+                            ),
+                            Some(t.to_span()),
                         ))
                     }
                 }
-                Err(_e) => Err("parse error".to_owned()),
+                Err(e) => {
+                    let span = span_of(&e.msg).or_else(|| {
+                        err_collect
+                            .first()
+                            .and_then(|c| span_of(&c.msg))
+                    });
+                    Err(("parse error".to_owned(), span))
+                }
             }
         }
-        None => Err("parse error".to_owned()),
+        None => Err(("parse error".to_owned(), None)),
     }
 }
 

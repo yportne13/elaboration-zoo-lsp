@@ -320,6 +320,70 @@ impl Subst {
         mentions_level(v, sub)
     }
 
+    /// 解值是否（浅层）引用 σ 的任一已解层级（传递 occurs 的前置筛选：
+    /// 只有真的挂在解链上才值得付一次链扫描）。
+    pub(crate) fn mentions_any_solved(self: &Rc<Self>, v: &Val) -> bool {
+        Self::mentions_level(v, self)
+    }
+
+    /// 传递 occurs：v 在 σ 之下是否经已解层级提到 target（L07 P1 的 L08 迁移）。
+    ///
+    /// 与 mentions_level 同口径（只看浅结构 + 闭包 env 槽，不进闭包体），区别是
+    /// 遇到已解 rigid 时继续扫解值——这正是两跳环（x := a、a := succ x）的检测点。
+    ///
+    /// 不能用 force(σ, v) 代替：槽位纪律是"只包裹不物化"，force 不会把槽里的
+    /// Rigid x 化成解值 a，因此 force + 浅扫描看不出链式环。预算耗尽按"未出现"
+    /// 处理（宁漏不误杀：误杀会把合法分支判成不可达）。
+    pub(crate) fn occurs_transitive(self: &Rc<Self>, v: &Val, target: Lvl) -> bool {
+        const BUDGET: u32 = 2048;
+        fn go(v: &Val, sub: &Rc<Subst>, target: Lvl, budget: &mut u32) -> bool {
+            if *budget == 0 {
+                return false;
+            }
+            *budget -= 1;
+            match v {
+                Val::Rigid(y, sp) => {
+                    if *y == target {
+                        return true;
+                    }
+                    if let Some(hit) = sub.lookup_hit(*y) {
+                        if go(&hit, sub, target, budget) {
+                            return true;
+                        }
+                    }
+                    sp.iter().any(|(u, _)| go(u, sub, target, budget))
+                }
+                Val::Flex(_, sp) | Val::Decl(_, sp) | Val::Prim(_, sp) => {
+                    sp.iter().any(|(u, _)| go(u, sub, target, budget))
+                }
+                Val::Obj(o, _, sp) => go(o, sub, target, budget)
+                    || sp.iter().any(|(u, _)| go(u, sub, target, budget)),
+                Val::Lam(_, _, cl) => cl.0.iter().any(|v| go(v, sub, target, budget)),
+                Val::Pi(_, _, a, cl) => {
+                    go(a, sub, target, budget)
+                        || cl.0.iter().any(|v| go(v, sub, target, budget))
+                }
+                Val::Sum(_, params, _) => params
+                    .iter()
+                    .any(|(_, v, t, _)| go(v, sub, target, budget) || go(t, sub, target, budget)),
+                Val::SumCase { typ, datas, .. } => {
+                    go(typ, sub, target, budget)
+                        || datas.iter().any(|(_, v, _)| go(v, sub, target, budget))
+                }
+                Val::Match(s, env, _, pending) => {
+                    go(s, sub, target, budget)
+                        || env.iter().any(|v| go(v, sub, target, budget))
+                        || pending.iter().any(|(u, _)| go(u, sub, target, budget))
+                }
+                // 内层 σ 优先：本值在 s2 之下，target 若被 s2 解出也要跟随
+                Val::VSub(inner, s2) => go(inner, s2, target, budget),
+                Val::U | Val::LiteralType | Val::LiteralIntro(_) => false,
+            }
+        }
+        let mut budget = BUDGET;
+        go(v, self, target, &mut budget)
+    }
+
     /// x 是否已有解（旧 `pm_def(x).is_none()` 的否定形式）。
     pub(crate) fn has(&self, x: Lvl) -> bool {
         let mut cur = self.head.clone();
@@ -468,9 +532,19 @@ pub struct Infer {
     /// pattern 编译入口）充值；递归中递减，归零即 Err——防索引槽互相嵌入
     /// 的构造子值比较（SuccCase 的 typ 含索引、索引又是 SuccCase）无限递归。
     unify_fuel: std::cell::Cell<u32>,
+    /// 卡住 match 相等性比较的**递归深度**预算（L07 P2 的 L08 迁移）。
+    /// Match/Match 臂在结构快路径失效后会逐分支在 fresh rigid 下重求值；
+    /// 递归 def 的分支体每层再产生新的卡住 match，层级递增、永不收敛
+    /// （L07 实测 4 个 def 的程序要 256 s 才靠 fuel 停下）。深度预算把它
+    /// 变成"有界失败"，与前缀相同的浅层比较不受影响。
+    match_cmp_depth: std::cell::Cell<u32>,
 }
 
 const UNIFY_FUEL: u32 = 4096;
+
+/// 卡住 match 相等性比较的深度上限（与 L07 同值：40 层足够覆盖教学负载的
+/// 构造子嵌套，同时把最坏情况从"fuel 耗尽（分钟级）"压到毫秒级）。
+pub(crate) const MATCH_CMP_DEPTH: u32 = 40;
 
 impl Infer {
     pub fn new() -> Self {
@@ -478,6 +552,7 @@ impl Infer {
             meta: vec![],
             mutable_map: RefCell::new(HashMap::new()),
             unify_fuel: std::cell::Cell::new(UNIFY_FUEL),
+            match_cmp_depth: std::cell::Cell::new(0),
         }
     }
 

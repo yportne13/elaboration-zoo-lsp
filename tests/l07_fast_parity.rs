@@ -495,6 +495,102 @@ def m: Nat = (cons two nil).len
     );
 }
 
+/// S1 回归钉（FINDING-struct-eq-pending）：参考版 `struct_eq` 曾漏比卡住
+/// match 的 pending 值，使 `refl` 能证明两个闭实例化不同的函数相等；孪生版
+/// 一直正确 ⇒ 修复前该用例是 run=Ok / run_fast=Err 的判定分裂。现在两侧都
+/// 必须拒绝。
+#[test]
+fn parity_struct_eq_match_pending() {
+    assert_parity(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def pfun(n: Nat): Nat -> Nat =
+    match n {
+        case zero => k => k
+        case succ(j) => k => k
+    }
+
+def f(x: Nat): Nat =
+    match (pfun x zero) {
+        case zero => zero
+        case succ(m) => succ m
+    }
+
+def g(x: Nat): Nat =
+    match (pfun x (succ zero)) {
+        case zero => zero
+        case succ(m) => succ m
+    }
+
+def bad : Eq[Nat -> Nat] f g =
+    refl f
+"#,
+    );
+}
+
+/// P1 孪生跟修守卫：浅 occurs 只挡单步环；经模式槽中转的两跳环
+/// （`x := a`、`a := succ x`）组合出的 σ 循环，两侧都必须拒绝。
+#[test]
+fn parity_occurs_transitive_chain() {
+    assert_parity(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def bad(x: Nat, e: Eq[Nat] x (succ x)): Nat =
+    match e {
+        case refl(a) => zero
+    }
+"#,
+    );
+}
+
+/// P13 回归钉（L07-RISKS）：两个递归 def 的卡住索引方程互比。
+///
+/// 结构快路径失效后双实现都会逐层重求值分支体——参考版靠 `MATCH_CMP_DEPTH`、
+/// 孪生版靠 `MATCH_CMP_BUDGET`。缺任一侧的预算都会退化成分钟级：
+/// 修复前参考版 256 s、孪生版 26.3 s（debug）。两侧判定必须一致（Err）。
+#[test]
+fn parity_stuck_match_equation_bounded() {
+    assert_parity(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def f(x: Nat, y: Nat, e: Eq[Nat] (add x zero) (add y zero)): Nat =
+    match e {
+        case refl(a) => a
+    }
+"#,
+    );
+}
+
 #[test]
 fn parity_tests_rs_stuck_match() {
     // test_stuck_match_unify / _splice / _applied_with_outer_binder /

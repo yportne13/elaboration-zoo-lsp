@@ -121,7 +121,12 @@ impl Infer {
                             Ok((dom + 1, ren, nlvars, fsp.prepend((x, a.head().unwrap().1))))
                         }
                     }
-                    _ => Err(UnifyError),
+                    _ => {
+                        // 不可逆的 spine（实参不是裸 rigid）：解不出来 ≠ 矛盾。
+                        // P3 第二刀：rename/invert/solve 族的失败一律 Undecided。
+                        self.note_unify_kind(super::UnifyKind::Undecided);
+                        Err(UnifyError)
+                    }
                 }
             }
         }
@@ -179,7 +184,11 @@ impl Infer {
                 let b = self.closure_apply(decl, &b, Val::vvar(pren.cod));
                 self.prune_ty_go(decl, rest, skip(pren), b)
             }
-            _ => Err(UnifyError),
+            _ => {
+                // 剪枝时类型形状与 Pruning 不符：解不出来，不是矛盾。
+                self.note_unify_kind(super::UnifyKind::Undecided);
+                Err(UnifyError)
+            }
         }
     }
 
@@ -207,7 +216,11 @@ impl Infer {
             // force 在 fuel 耗尽时会把已解 meta 当未解返回（拒绝展开），
             // 随后走到的剪枝/求解按合一失败降级，不 panic——与"fuel 耗尽
             // 按未解失败"的既有降级故事一致（窗口：恰在 1→0 递减帧内）
-            _ => return Err(UnifyError),
+            _ => {
+                // meta 已解（或 fuel 耗尽窗口把它当未解）：降级失败，非矛盾。
+                self.note_unify_kind(super::UnifyKind::Undecided);
+                return Err(UnifyError);
+            }
         };
 
         let prune_ty = self.prune_ty(decl, &pruning, mty.clone())?;
@@ -242,14 +255,21 @@ impl Infer {
                         sp_rest.prepend((Some(Tm::Var(lvl2ix(pren.dom, *x))), sp.head().unwrap().1)),
                         status,
                     )),
-                    (None, SpinePruneStatus::OKNonRenaming) => Err(UnifyError),
+                    (None, SpinePruneStatus::OKNonRenaming) => {
+                    // 非线性实参无法剪掉：解不出来。
+                    self.note_unify_kind(super::UnifyKind::Undecided);
+                    Err(UnifyError)
+                }
                     (None, _) => Ok((
                         sp_rest.prepend((None, sp.head().unwrap().1)),
                         SpinePruneStatus::NeedsPruning,
                     )),
                 },
                 t => match status {
-                    SpinePruneStatus::NeedsPruning => Err(UnifyError),
+                    SpinePruneStatus::NeedsPruning => {
+                        self.note_unify_kind(super::UnifyKind::Undecided);
+                        Err(UnifyError)
+                    }
                     _ => {
                         let t = self.rename(decl, pren, t)?;
                         Ok((
@@ -277,7 +297,10 @@ impl Infer {
                     MetaEntry::Unsolved(_) => m,
                     // fuel 耗尽窗口（同 prune_meta 注）：已解 meta 被 force
                     // 当未解返回后走到这里，按失败降级
-                    _ => return Err(UnifyError),
+                    _ => {
+                        self.note_unify_kind(super::UnifyKind::Undecided);
+                        return Err(UnifyError);
+                    }
                 }
             }
             SpinePruneStatus::NeedsPruning => {
@@ -525,16 +548,33 @@ impl Infer {
     fn rename_arm(&mut self, decl: &Decls, pren: &mut PartialRenaming, t: Val) -> Result<Tm, UnifyError> {
         match t {
             // 不变式：force 的返回值顶层不会是 VSub（入口已推开）
-            Val::VSub(..) => Err(UnifyError),
+            Val::VSub(..) => {
+                // 不变式被破（force 后顶层仍是 VSub）：判不出来，不是矛盾。
+                self.note_unify_kind(super::UnifyKind::Undecided);
+                Err(UnifyError)
+            }
             // 深链形态在入口已分派给 rename_deep，这里不可达；与 VSub 臂
             // 同样的防御性回落（不改写值，直接失败交上层诊断）
-            Val::Sum(..) | Val::SumCase { .. } | Val::Obj(..) => Err(UnifyError),
+            Val::Sum(..) | Val::SumCase { .. } | Val::Obj(..) => {
+                self.note_unify_kind(super::UnifyKind::Undecided);
+                Err(UnifyError)
+            }
             Val::Flex(m_prime, sp) => match pren.occ {
-                Some(m) if m == m_prime => Err(UnifyError),
+                Some(m) if m == m_prime => {
+                    // 要 rename 的值提到正在求解的 meta 本身（rename 视角的
+                    // occurs）：解不出来，不是矛盾。
+                    self.note_unify_kind(super::UnifyKind::Undecided);
+                    Err(UnifyError)
+                }
                 _ => self.prune_vflex(decl, pren, m_prime, sp),
             },
             Val::Rigid(x, sp) => match pren.ren.get(&x.0) {
-                None => Err(UnifyError), // scope error
+                None => {
+                    // 作用域越界：目标上下文无法表达该变量（Agda 同情境报
+                    // "cannot generalize"/blocked，而非矛盾）。
+                    self.note_unify_kind(super::UnifyKind::Undecided);
+                    Err(UnifyError)
+                } // scope error
                 Some(x_prime) => {
                     let t = Tm::Var(lvl2ix(pren.dom, *x_prime));
                     self.rename_sp(decl, pren, t, &sp)
@@ -667,7 +707,11 @@ impl Infer {
             MetaEntry::Unsolved(ref a) => a.clone(),
             // fuel 耗尽窗口（同 prune_meta 注）：已解 meta 被 force 当未解
             // 返回后走到求解臂，按合一失败降级而不是 panic
-            _ => return Err(UnifyError),
+            _ => {
+                // meta 已解（或 fuel 窗口）：求解降级失败，非矛盾。
+                self.note_unify_kind(super::UnifyKind::Undecided);
+                return Err(UnifyError);
+            }
         };
 
         // spine 非线性时，检查这些参数能从 meta 类型里剪掉（保证解是良型的）
@@ -710,7 +754,11 @@ impl Infer {
                     spec,
                 )
             }
-            _ => Err(UnifyError),
+            _ => {
+                // spine 长度不齐：判不出相等，但不是结构矛盾。
+                self.note_unify_kind(super::UnifyKind::Undecided);
+                Err(UnifyError)
+            }
         }
     }
 
@@ -805,19 +853,30 @@ impl Infer {
     }
 
     /// 宽松臂的实现体：未登记名放行，已登记名按登记类型把关。
+    ///
+    /// P8 收窄：未登记名的放行**仅限空 spine**——`string_to_global_type` 对未
+    /// 知名返回的是以其名字的**裸**卡住 `Decl(name, [])`（动态类型的逃逸舱
+    /// 口）；带实参的未知名卡住头只是"某个未知函数被应用"，不是动态类型，
+    /// 与 String 相等判不出来（Undecided，dpm 的 conv false ⇒ UIDK），不得
+    /// 静默放行。
     fn loose_string(
         &mut self,
         decl: &Decls,
         l: Lvl,
         cxt: &Cxt,
         n: &SmolStr,
+        sp_is_empty: bool,
         spec: Option<&mut SpecSolve<'_>>,
     ) -> Result<(), UnifyError> {
         match decl.get(n) {
-            None => Ok(()),
             Some(e) => {
                 let ty = e.ty.clone();
                 self.unify(decl, l, cxt, Val::LiteralType, ty, spec)
+            }
+            None if sp_is_empty => Ok(()),
+            None => {
+                self.note_unify_kind(super::UnifyKind::Undecided);
+                Err(UnifyError)
             }
         }
     }
@@ -841,6 +900,8 @@ impl Infer {
                     pretty_tm(0, cxt.names(), &self.quote(decl, l, u.clone()))
                 );
             }
+            // P3：预算耗尽 ≠ 结构矛盾——调用方据此报"无法判定"而不是"不相容"。
+            self.note_unify_kind(super::UnifyKind::Fuel);
             return Err(UnifyError);
         }
         self.unify_fuel.set(fuel - 1);
@@ -908,6 +969,18 @@ impl Infer {
                 if val_mentions_lvl(v, *x) {
                     return Err(UnifyError);
                 }
+                // 传递 occurs（P1，见 L07-RISKS）：浅扫描只看单步环，挡不住
+                // 「x := a、a := succ x」这种经模式槽中转的两跳环——两步各自
+                // 无环，组合出的 σ 却是循环的。解值若挂在既有解链上，先置于
+                // acc 之下 force 一次再查；干净解不付这次 force。
+                if let Some(acc) = spec.as_deref().map(|s| s.acc.clone()) {
+                    if !acc.is_empty()
+                        && acc.mentions_any_solved(v)
+                        && acc.occurs_transitive(v, *x)
+                    {
+                        return Err(UnifyError);
+                    }
+                }
                 let s = spec.as_deref_mut().unwrap();
                 s.acc = Subst::extend(&s.acc, *x, v.clone());
                 Ok(())
@@ -921,6 +994,14 @@ impl Infer {
             {
                 if val_mentions_lvl(v, *x) {
                     return Err(UnifyError);
+                }
+                if let Some(acc) = spec.as_deref().map(|s| s.acc.clone()) {
+                    if !acc.is_empty()
+                        && acc.mentions_any_solved(v)
+                        && acc.occurs_transitive(v, *x)
+                    {
+                        return Err(UnifyError);
+                    }
                 }
                 let s = spec.as_deref_mut().unwrap();
                 s.acc = Subst::extend(&s.acc, *x, v.clone());
@@ -967,18 +1048,23 @@ impl Infer {
             // 合一只对 decl 表**未登记名**放行——string_to_global_type 对
             // 未知名返回以其名字的卡住 Decl（动态类型的逃逸舱口）；已登记
             // 名按登记类型把关（U 型返回的 builtin 卡住值不再冒充 String）
-            (Val::LiteralType, Val::Prim(n, _)) | (Val::Prim(n, _), Val::LiteralType) => {
-                self.loose_string(decl, l, cxt, n, spec)
+            (Val::LiteralType, Val::Prim(n, sp)) | (Val::Prim(n, sp), Val::LiteralType) => {
+                self.loose_string(decl, l, cxt, n, sp.is_empty(), spec)
             }
-            (Val::LiteralType, Val::Decl(n, _)) | (Val::Decl(n, _), Val::LiteralType) => {
-                self.loose_string(decl, l, cxt, n, spec)
+            (Val::LiteralType, Val::Decl(n, sp)) | (Val::Decl(n, sp), Val::LiteralType) => {
+                self.loose_string(decl, l, cxt, n, sp.is_empty(), spec)
             }
             // 卡住的内建：同名比实参 spine（异名失败）——不带实参的单元
             // Prim 会把 `x ++ y ≡ x ++ z` 判成相等
             (Val::Prim(a, sp), Val::Prim(b, sp_prime)) if a == b => {
                 self.unify_sp(decl, l, cxt, sp, sp_prime, spec.as_deref_mut())
             }
-            (Val::Prim(..), Val::Prim(..)) => Err(UnifyError),
+            (Val::Prim(..), Val::Prim(..)) => {
+                // 异名卡住内建：不是同一个函数，但也不是构造子矛盾——判不出
+                // 相等（dpm 的 conv false ⇒ UIDK）。
+                self.note_unify_kind(super::UnifyKind::Undecided);
+                Err(UnifyError)
+            }
             // Sum：同名即逐参数（含索引）合一
             (Val::Sum(a, params_a, _), Val::Sum(b, params_b, _)) if a.data == b.data => {
                 for (a, b) in params_a.iter().zip(params_b.iter()) {
@@ -1032,6 +1118,18 @@ impl Infer {
             // 卡住的 match vs 卡住的 match：scrutinee 合一 + 分支一一对应
             // + 卡住期累积的实参逐一比较
             (Val::Match(s1, env1, cases1, pending1), Val::Match(s2, env2, cases2, pending2)) => {
+                // 深度预算（见 `MATCH_CMP_DEPTH`）：本臂在结构快路径失效后会
+                // 逐分支重求值，递归 def 会逐层产生新的卡住 match ⇒ 不设界时
+                // 唯一的下限是 fuel 池（实测 256 s）。超出预算按"无法判定为
+                // 相等"保守失败，与 fuel 耗尽同口径（见 L07-RISKS P2/P3）。
+                let saved_depth = self.match_cmp_depth.get();
+                if saved_depth >= super::MATCH_CMP_DEPTH {
+                    // P3：预算内没比出来 ≠ 两侧不等 ⇒ 记"无法判定"。
+                    self.note_unify_kind(super::UnifyKind::Undecided);
+                    return Err(UnifyError);
+                }
+                self.match_cmp_depth.set(saved_depth + 1);
+                let r = (|| -> Result<(), UnifyError> {
                 // 快路径：scrutinee、捕获 env、模式与分支体全部结构相同 ⇒ 两个
                 // match 值在所有实例化下行为一致，直接判等。逐分支重求值会把
                 // 递归函数的分支体再展开一层卡住 match（fresh rigid 层级随深度
@@ -1082,14 +1180,18 @@ impl Infer {
                     self.unify(decl, l, cxt, u1.clone(), u2.clone(), spec.as_deref_mut())?;
                 }
                 Ok(())
+                })();
+                self.match_cmp_depth.set(saved_depth);
+                r
             }
             // 卡住的 match vs 其它：能归约的已在入口 force 消掉（force 会在
             // scrutinee 上重试选分支），这里只接受严格 eta——每个分支都是
             // 通配且分支体就是 scrutinee 本身。无条件接受会把 `f x` 证成 `x`。
             (Val::Match(s, _, cases, pending), other) | (other, Val::Match(s, _, cases, pending)) => {
                 // 带 pending 实参的卡住 match 不是 eta 形态（分支体经实参
-                // 应用后不再等于 scrutinee）
+                // 应用后不再等于 scrutinee）。P3：这是"不是 eta"而非"矛盾"。
                 if !pending.is_empty() {
+                    self.note_unify_kind(super::UnifyKind::Undecided);
                     return Err(UnifyError);
                 }
                 match (self.force(decl, (**s).clone()), other) {
@@ -1104,14 +1206,44 @@ impl Infer {
                         if is_eta {
                             Ok(())
                         } else {
+                            // 非 eta 形态：判不出相等，但不是矛盾。
+                            self.note_unify_kind(super::UnifyKind::Undecided);
                             Err(UnifyError)
                         }
                     }
-                    _ => Err(UnifyError),
+                    _ => {
+                        self.note_unify_kind(super::UnifyKind::Undecided);
+                        Err(UnifyError)
+                    }
                 }
             }
-            _ => Err(UnifyError),
+            _ => self.unify_no_arm(&t, &u),
         }
+    }
+
+    /// 合一**到底**（没有任何臂命中）时的原因分档。
+    ///
+    /// 两侧都是**规范值**且形态不同（构造子值 / 字面量 / 和类型头）⇒ 确定不等
+    /// （Absurd，分支确不可达）；其余（中性头 vs 别的东西、卡住 match vs 非 eta、
+    /// 混合形态）⇒ 判不出来（Undecided，对齐 dpm `conv` false ⇒ `UIDK`）。
+    ///
+    /// 这条分档是 P3 第二刀的核心：它让"两个不同的 def / 两个不可解中性值"不再
+    /// 被报成"类型矛盾"。
+    fn unify_no_arm(&self, t: &Val, u: &Val) -> Result<(), UnifyError> {
+        let definite = matches!(
+            (t, u),
+            (Val::SumCase { .. }, Val::SumCase { .. })
+                | (Val::Sum(..), Val::Sum(..))
+                | (Val::LiteralIntro(_), Val::LiteralIntro(_))
+                | (Val::SumCase { .. }, Val::LiteralIntro(_))
+                | (Val::LiteralIntro(_), Val::SumCase { .. })
+                | (Val::U, Val::LiteralType)
+                | (Val::LiteralType, Val::U)
+        );
+        if !definite {
+            self.note_unify_kind(super::UnifyKind::Undecided);
+        }
+        Err(UnifyError)
     }
 }
 
