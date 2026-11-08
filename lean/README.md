@@ -4,11 +4,16 @@
 用 Lean 4 写出它的语法、转换关系、判型规则，并证明一批基础引理。
 
 * 工具链：**Lean 4.34.1**（`leanprover/lean4:v4.34.1`），**不依赖 Mathlib**（只用 core / Std）。
-* 规模：8 个模块、1029 行、57 条已证明的定理/引理，**无 `sorry`、无 `axiom`、无 `admit`、无 `unsafe`**。
+* 规模：`Typort`（声明层）8 个模块、1029 行、57 条已证明的定理/引理；
+  `TyportEngine`（引擎层，2026-11-08 起）7 个模块、1009 行、38 条已证明定理，
+  外加 M3 的 `engine-oracle` 可执行目标。
+  两库**无 `sorry`、无 `axiom`、无 `admit`、无 `unsafe`**。
 * 抽取规格（本形式化的依据，逐条带 `file:line` 锚点）在仓库 `docs/` 下：
   [`tt-spec-l09.md`](../docs/tt-spec-l09.md)（L09 内核）、
   [`tt-spec-l07-l08.md`](../docs/tt-spec-l07-l08.md)（归纳族 / 积类型 / match）、
   [`tt-spec-metas-typeclass.md`](../docs/tt-spec-metas-typeclass.md)（元变量 / 隐式参数 / 类型类）。
+* 引擎层的目标与分阶段计划见 [`../docs/lean-compiler-formalization-plan.md`](../docs/lean-compiler-formalization-plan.md)
+  （M1 核心语义定理 → M3 Lean oracle 差分测试；M2/M4 见计划）。
 
 ## 构建与校验
 
@@ -19,7 +24,17 @@ Lean 工具链未装在 PATH 上（本机 `~/.elan` 是 2021 年的 elan 1.0.7�
 $L = "$env:USERPROFILE\.lean4-toolchain\lean\lean-4.34.1-windows"
 $env:PATH = "$L\bin;$env:PATH"
 Set-Location lean
-lake build            # 构建整库（默认目标 Typort），应输出 Build completed successfully
+lake build            # 构建两个库：Typort（声明层）+ TyportEngine（引擎 M1），
+                      # 应输出 Build completed successfully
+lake build engine-oracle   # M3：构建 Lean 可执行 oracle（lean/.lake/build/bin/engine-oracle.exe）
+```
+
+M3 差分测试（可选、需 Lean 工具链）：
+
+```powershell
+$env:LEAN_ORACLE = '1'
+Set-Location ..    # 回到仓库根
+cargo test --test lean_oracle_parity
 ```
 
 如果装了可用的 elan（≥ 3.x）或 `lean` 在 PATH 上，直接 `lake build` 即可；
@@ -38,6 +53,57 @@ lake build            # 构建整库（默认目标 Typort），应输出 Build 
 | `Typort/Typing.lean` | 声明式判型 `HasType`（`u`/`pi`/`lam`/`app`/`letE`/`ind`/`ctor`/`matchE`/`convTy`）、上下文良构 `WF`、平移/重命名/覆盖性引理 | 双向走廊 `check`/`infer`：`L09_mltt/elaboration.rs:296-376`、`:624-917`；非累积宇宙 `:822` 与 `unification.rs:569`；`check_universe` `:246-295` |
 | `Typort/Prelude.lean` | 仓库 prelude 的**真实声明**：`Nat`、`Boolean`、`Eq`、`Vec`、`Void` 及其签名表 | `src/prelude/core/nat.typort:11-16`、`core/bool.typort:16-21`、`core/eq.typort:8-11`、`data/vec.typort:4-9`、`core/void.typort`；清单顺序 `L13_namespace/mod.rs:4095-4111` |
 | `Typort/Examples.lean` | 在演算内部构造的判型推导（恒等函数、`Nat`/`Boolean`/`Eq` 的族类型）与归约步（β/ζ/ι） | 对照 `L02_tyck` 的 `ex1`/`ex2`（`mod.rs:605-623`）与 prelude 的 `Eq` 组合子 |
+
+## Engine 形式化（M1，2026-11-08 起）
+
+声明层形式化刻意不覆盖 elaborator 引擎；2026-11-08 的 L07 review 修复轮暴露的缺陷
+（R1 分类器不完整 / R2 occurs 丢外层 σ / R3 预算代理不同构 / P15 struct_eq 漏比 pending）
+全部落在未覆盖层。`TyportEngine` 库把它们变成「规范 + 机检反例 + 不变式」。
+
+| Lean 模块 | 形式化内容 | 对应 Rust / 文档 |
+|---|---|---|
+| `Typort/Engine/Basic.lean` | `Val` 抽象片段（含 `VSub`）、`Subst`（持久化单链：`lookup`/`extend`/`compose`）、`Val.children` | `L07_sum_type/mod.rs` 的 `Val`/`Subst`/`frcs`；`review R2` 的最小反例只需空 spine 的 `Rigid` |
+| `Typort/Engine/Occurs.lean` | 组合语义 `Mentions`（`VSub` 下用 `compose σ s2`）vs R2 前的错误算法 `MentionsInner`（只看内层 σ） | `Subst::occurs_transitive`（`src/L07_sum_type/mod.rs:335`，review R2） |
+| `Typort/Engine/Budget.lean` | 比较形状 `CmpTree`、两种预算代理（递归深度 ≤40 / 总次数 ≤64） | `MATCH_CMP_BUDGET`（`src/L07_sum_type/mod.rs`，review R3/R8） |
+| `Typort/Engine/Classify.lean` | `UnifyKind` 三档分类器；规范头实例化下不变 ⇒ **T2**：`Absurd` ⇒ 无公共实例；**T3**：`Undecided`/`Fuel` 不伪装矛盾、预算耗尽不产生覆盖义务 | `unify_no_arm` / `UnifyKind`（`src/L07_sum_type/unification.rs`，review R1/R3） |
+| `Typort/Engine/StructEq.lean` | `struct_eq` 的 Match 臂：修复前只比 scrutinee（`eqBuggy`）vs 修复后比 pending 值（`eqFixed`）；**T5**：`eqFixed` ⇒ 可观测内容相同；**P15** 反例 | `struct_eq.rs` 的 Match 臂（review P15） |
+| `Typort/Engine/Oracle.lean` | **M3**：curated review 语料（c1/c2/空类型零臂/P15）的 Lean 侧裁决 + 可执行入口 `engine-oracle` | `tests/lean_oracle_parity.rs`（`LEAN_ORACLE=1` 差分测试） |
+| `Typort/Engine/Rank.lean` | **T1**：`Edge`/`Path`/`Acyclic` 图模型、`RankOK` 等级证书（`rank_acyclic` / `rankOK_extend`）；**精确刻画** `extend_acyclic_iff_no_reach`：σ 无环时扩展无环 ⟺ 新解不沿 σ 回到 x（T1 主定理 `extend_acyclic_of_no_reach` + 必要性 `extend_cyclic_of_occursReach`） | `Subst::occurs_transitive` 健全性的规范刻画（review R2） |
+
+已机检结论（全部 `#check`/`lake build` 通过，无 `sorry`）：
+
+* **R2**：`r2_buggy_misses`（错误算法在嵌套 `VSub(VSub(Rigid 0,∅),σ)` 上漏检）、
+  `r2_fixed_catches`（组合语义能看到）、`r2_buggy_accepts_cycle`（错误守卫会接受循环解：
+  `Cyclic (extend sigmaR2 9 nestedR2) 9`）。
+* **R3**：`r3_metrics_not_equivalent`——两个预算代理**互不蕴含**（宽而浅 / 深而合法
+  两个方向的判定漂移可构造），外加 4 条具体数值引理。
+* **R1 / T2+T3**：`classify_absurd_sound`（分类器返回 Absurd ⇒ 不存在任何替换让两侧
+  有公共实例）、`classify_neutral_not_absurd`（任一侧中性不判 Absurd）、
+  `probeUnreachable_iff_absurd`、`fuel_exhaustion_not_absurd`（预算耗尽不伪装矛盾）。
+* **P15 / T5**：`p15_counterexample`（旧快路径把 pending 不同的两个卡住 match 判等，
+  且可观测内容不同）、`eqFixed_sound`（修复后的快路径判等 ⇒ 两值可观测内容相同）。
+* **T1（直接环半边）**：`occursIn_mentions`（浅层出现 ⇒ 组合语义的 `Mentions` 为真，
+  对任意 σ）、`extend_cycles_of_shallow_occurs`（把浅层提到 x 的值作为解写入后 σ 成环）。
+* **T1（等级证书半边）**：`rank_acyclic`（`RankOK` ⇒ `Acyclic`）、`rankOK_extend` /
+  `extend_acyclic_of_rank`（新解被 rank 夹在 v 的浅层出现与前驱之间 ⇒ 扩展保持无环）。
+* **T1（主定理 + 精确刻画）**：
+  - `extend_acyclic_of_no_reach`：σ 无环、且 v 的浅层出现都不能沿 σ 回到 x
+    （`¬ OccursReach σ x v`）⇒ 把 `x ↦ v` 加入 σ 仍无环；证明核心是路径分解
+    `path_extend_decomp`；
+  - `extend_cyclic_of_occursReach`（必要性）：若 v 的浅层出现能沿 σ 回到 x，则
+    扩展**必然成环**；`extend_acyclic_iff_no_reach` 把两者合成 **"扩展无环 ⟺ check
+    通过"** 的精确刻画（σ 无环前提下）——这是 `occurs_transitive` 在模型层的
+    健全性 + 必要性。
+  **仍缺的桥（refinement 性质，归入后续 M4 方向）**：`Mentions`（Rust
+  `occurs_transitive` 的组合语义，含 `VSub`）与图模型 `OccursReach` 的等价性；
+  `Occurs.lean` 已用组合语义定义 + 具体反例覆盖 VSub 情形。
+* **M3 差分**：`engine-oracle` 可执行目标 + `tests/lean_oracle_parity.rs`
+  （`LEAN_ORACLE=1` 时）在 c1/c2/空类型零臂/P15 四组语料上与 Rust 参考引擎判定一致
+  （实测 4/4 通过、~1 s；未设置环境变量时测试自动跳过）。
+
+**边界**：M1 的 T1 已在"图模型（非 VSub 边）"层做到精确刻画；VSub 组合语义与
+`Mentions` 的细化桥、M2 精化 match 属后续轮；M3 oracle 只裁决 curated 语料
+（不解析 Typort 源码、不做完整 unify）。抽象省略 spine 应用/闭包体/fuel 实现/shadowing 细节。
 
 ## 形式化的类型论（摘要）
 
@@ -160,6 +226,7 @@ Lean 4 的 `induction` 对互归纳类型不可用（实测报
 2. 把 `Typort.Signature` 的 `Sig` 扩成含 def 的全局表，加 δ 归约，
    以便在演算内重演 `src/prelude/core/nat.typort` 的 `add_zero_right` 等 `rfl` 引理。
 3. 形式化精化式 match（依赖模式匹配的统一化），使 prelude 字面写法的
-   `trans`/`subst` 可判型——这是与实现对齐的最大缺口。
+   `trans`/`subst` 可判型——这是与实现对齐的最大缺口（M2）。
 4. 形式化 `unify` 及其健全性（成功 ⇒ 两值在 `Conv` 下相等），以及
-   `prune_meta`/occurs check 的语义。
+   `prune_meta`/occurs check 的语义（M1 续：T1/T2/T3/T5 + M3 oracle，
+   见 [`../docs/lean-compiler-formalization-plan.md`](../docs/lean-compiler-formalization-plan.md)）。

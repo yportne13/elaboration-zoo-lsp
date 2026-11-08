@@ -1,7 +1,17 @@
 name = "typort"
 version = "0.1.0"
-defaultTargets = ["Typort"]
+defaultTargets = ["Typort", "TyportEngine"]
 
 # 只依赖 Lean 4 core / Std，不需要 Mathlib：形式化本身是自足的核心演算开发。
+# `Typort` = 声明式类型论骨架（现有 8 模块/57 定理）；
+# `TyportEngine` = L07/L08 参考引擎的算法语义与不变式（M1，2026-11-08 起）。
 [[lean_lib]]
 name = "Typort"
+
+[[lean_lib]]
+name = "TyportEngine"
+
+# M3：Lean 可执行 oracle（curated review 语料；Rust 侧 LEAN_ORACLE=1 差分测试调用）。
+[[lean_exe]]
+name = "engine-oracle"
+root = "OracleMain"
