@@ -89,6 +89,51 @@ println "done"
     assert_eq!(out, "done\n");
 }
 
+/// R2 回归钉（2026-11-08 review R2，**当前已知限制**，不是缺陷修复）：
+/// `occurs_transitive` 的 `VSub` 臂只把**内层** σ 传给递归（`go(inner, s2, …)`），
+/// 外层 σ 的后续解在 VSub 内部不可见。按 force/frcs 的组合语义
+/// （`frcs(outer, VSub(v, s2)) = frcs(compose(outer, s2), v)`）本用例的值应
+/// 归约到 `Rigid(9)`，但传递 occurs 在 VSub 臂改用内层空 σ，查不到
+/// `0 ↦ 7 ↦ 9` 的两跳链 ⇒ 返回 false（漏检）。
+///
+/// σ = {0↦7, 7↦9}；`nested = VSub(VSub(Rigid(0), ∅), σ)`。
+/// **若未来实现「不物化 compose 的多 σ 查找」**（让 VSub 臂同时携带/组合
+/// 外层 σ，见 review R2 建议），本断言应改为 `true`——那是修复而非回归，
+/// 届时同步更新 README/设计稿的已知限制记录。单层 `VSub(Rigid(0), σ)` 的
+/// 对照表明：同一 σ 直接作用时两跳链能被正常检出（漏检只发生在嵌套包裹）。
+#[test]
+fn test_occurs_transitive_vsub_nested_is_documented_limitation() {
+    let empty: std::rc::Rc<Subst> = std::rc::Rc::new(Subst::default());
+    // 链头最新：σ = {0↦7, 7↦9}（先 extend 0↦7，再把 7↦9 cons 到链头）
+    let sigma = Subst::extend(
+        &Subst::extend(&empty, Lvl(0), Val::vvar(Lvl(7))),
+        Lvl(7),
+        Val::vvar(Lvl(9)),
+    );
+
+    // 对照：同一 σ 直接包裹一层 ⇒ 0 ↦ 7 ↦ 9 的两跳链被检出
+    let single = Val::VSub(Box::new(Val::vvar(Lvl(0))), sigma.clone());
+    assert!(
+        sigma.occurs_transitive(&single, Lvl(9)),
+        "单层 VSub 下 σ 的两跳链应被检出（occurs_transitive 返回 true）"
+    );
+
+    // 已知限制：嵌套 VSub 的外层 σ 在 VSub 臂被丢弃 ⇒ 漏检（当前期望 false）
+    let nested = Val::VSub(
+        Box::new(Val::VSub(
+            Box::new(Val::vvar(Lvl(0))),
+            empty.clone(),
+        )),
+        sigma.clone(),
+    );
+    assert!(
+        !sigma.occurs_transitive(&nested, Lvl(9)),
+        "R2 已知限制被改变：嵌套 VSub 现在能检出外层 σ 的两跳链。\
+         若这是修复（多 σ 查找落地），请把本断言改为 true 并更新 README/设计稿；\
+         若是意外回归，请检查 VSub 臂的 σ 传递"
+    );
+}
+
 /// S1 回归钉（FINDING-struct-eq-pending）：`struct_eq` 的卡住 match 臂
 /// 必须比较 pending **值**，不能只比长度/icit。否则「scrutinee 本身是另一个
 /// pending 不同的卡住 match」的两份 match 会被判等，`refl` 可证明两个
@@ -190,9 +235,11 @@ def boom : False =
 /// P2 回归钉（见 docs/compare-l07-vs-dpm/L07-RISKS.md）：两个递归 def 的
 /// 卡住索引方程互比时，结构快路径失效，`(Match, Match)` 臂会逐层在 fresh
 /// rigid 下重求值分支体——递归 def 每层再产生新的卡住 match，层级递增、永不
-/// 结构收敛。修复前唯一的下限是 fuel 池：4 个 def 的程序实测 **256 s** 才报
-/// 假不可达。`MATCH_CMP_DEPTH` 把最坏情况压到有界时间，判定（分支不可达）
-/// 与错误文案保持不变。
+/// 结构收敛。修复前唯一的下限是 fuel 池：4 个 def 的程序实测 **256 s** 才靠
+/// fuel 停下（旧口径报成"分支不可达"）。`MATCH_CMP_BUDGET`（总次数 64、每个
+/// 顶层合一入口一份；结构快路径**先试**，只有慢路径的逐分支重求值才计数）
+/// 把最坏情况压到有界时间；判定按 P3 分档为「无法判定」（`Undecided`），
+/// **不是**「分支不可达」——见下方两条断言（口径与 L07 孪生版对齐，R3/R8）。
 #[test]
 fn test_stuck_match_equation_bounded() {
     let src = r#"
@@ -282,6 +329,41 @@ def f(x: Nat, y: Nat, e: Eq[Nat] (add x zero) (add y zero)): Nat =
         !undecided.contains("分支不可达"),
         "undecided 不得伪装成不可达: {undecided}"
     );
+}
+
+/// R1 回归钉（2026-11-08 review R1）：`unify_no_arm` 的 definite 判定补全为
+/// 「两侧都是规范值/规范类型头且形态不同 ⇒ Absurd」后，空类型的零臂 match
+/// 恢复被接受。`enum T(A : U) { c -> T Nat }` 只有一个构造子 `c : T Nat`：
+/// `T Bool`（Nat 与 Bool 是不同 Sum ⇒ Sum×Sum）与 `T String`（String 是
+/// `LiteralType` ⇒ Sum×LiteralType）语义上都是**空类型**，零臂 match 是其
+/// 合法消去。修复前 `T String` 落 Undecided，被误报「match 不完整：缺少
+/// 构造子 c」——基线接受、修复前拒绝的接受集回归（S1）。
+#[test]
+fn test_empty_type_zero_arm_match_accepts_canonical_conflicts() {
+    let out = check(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+enum T(A : U) {
+    c -> T Nat
+}
+
+def ok_bool(e: T Bool): Nat = match e { }
+
+def ok_string(e: T String): Nat = match e { }
+
+println "done"
+"#,
+    );
+    assert_eq!(out, "done\n");
 }
 
 /// 反向钉：深度预算不能把**非递归**的卡住 match 误判为不等——同一位置换成
@@ -2091,6 +2173,8 @@ def f(n: Nat): Nat =
 }
 
 /// P10 第二步回归钉：解析错误也带位置，且文案契约**不变**（黑盒钉死）。
+/// R6（2026-11-08）：span 的**内容**也被钉住——语法错误指向失败 token `)`、
+/// 残余 token 指向 `;`（修复前前者切出 `def`，非空断言钉不住）。
 #[test]
 fn parse_error_carries_span() {
     // 语法错误：`)` 不是表达式
@@ -2098,9 +2182,17 @@ fn parse_error_carries_span() {
     let err = run(src, 0).unwrap_err();
     assert_eq!(err.to_string(), "parse error", "文案契约不变");
     let sp = err.span().expect("parse error 应带位置");
-    assert!(sp.start_offset < sp.end_offset, "span 应非空");
     assert!(sp.end_offset as usize <= src.len(), "span 越界");
     assert_eq!(sp.path_id, 0);
+    // R6（2026-11-08 review）：不只断言"非空"——span 必须指向**失败 token**
+    // 本身（`)`），而不是失败 decl 的首 token（`def`；修复前正是后者，旧断言
+    // 钉不住）。切片断言让位置错时立刻红。
+    let bad = &src[sp.start_offset as usize..sp.end_offset as usize];
+    assert_eq!(
+        bad, ")",
+        "span 应指向失败 token `)`，实际切片 {bad:?}（offset {}..{}）",
+        sp.start_offset, sp.end_offset
+    );
 
     // 残余 token：消息仍含偏移（旧契约），位置指向残余 token 本身
     let src2 = "println U ;\n";
@@ -2113,6 +2205,56 @@ fn parse_error_carries_span() {
     let sp2 = err2.span().expect("leftover 应带位置");
     let tok = &src2[sp2.start_offset as usize..sp2.end_offset as usize];
     assert_eq!(tok, ";", "位置应指向残余 token: {tok:?}");
+}
+
+/// R6 回归钉（2026-11-08 review R6）：语法错误的 span 必须指向**失败 token**
+/// 本身，而不是「失败 decl 的首 token」。修复前 `many1_sep` 在零 item 时用
+/// 剩余输入首 token 覆盖底层错误 ⇒ 本用例 span=(0,3) 切出 `def`；修复后
+/// `p_decl` 用 `or_far` 保留最远失败备选（p_def 在 `)` 处的错误优先于
+/// p_print/p_enum 在 decl 首 token 处的错误）⇒ span=(14,15) 切出 `)`。
+#[test]
+fn test_parse_error_span_points_at_failing_token() {
+    let src = "def f : Nat = )\n";
+    let err = run(src, 0).unwrap_err();
+    assert_eq!(err.to_string(), "parse error", "文案契约不变");
+    let sp = err.span().expect("语法错误应带位置");
+    assert!(sp.end_offset as usize <= src.len(), "span 越界");
+    let got = &src[sp.start_offset as usize..sp.end_offset as usize];
+    assert_eq!(
+        got, ")",
+        "语法错误 span 应指向失败 token `)`，实际切片 {got:?}（offset {}..{}）",
+        sp.start_offset, sp.end_offset
+    );
+}
+
+/// R7 回归钉（2026-11-08 review R7）：`preprocess` 把注释替换为**等字节数**
+/// 的空白（非 ASCII 字符按 `len_utf8` 个空格），因此注释里出现非 ASCII 字符时
+/// 后续 token 的 span 偏移也不会前移；`Error::span` 的偏移可按**原文本**切片。
+/// 本用例中 `;` 在原文本与预处理文本都是 27..28；修复前 4 个中文字（12 字节）
+/// 被压成 4 字节，leftover span=(19,20) 在原文本切出 `f`。
+#[test]
+fn test_parse_error_span_matches_raw_source_with_unicode_comment() {
+    let src = "// 中文注释\n\ndef x = U ;\n";
+    // 机制钉：注释替换保持字节长度，否则后续偏移必然漂移
+    assert_eq!(
+        preprocess(src).len(),
+        src.len(),
+        "preprocess 必须保持字节长度（非 ASCII 注释按 len_utf8 空格替换）"
+    );
+    let err = run(src, 0).unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.starts_with("parse error: leftover token"),
+        "文案契约不变，got: {msg}"
+    );
+    let sp = err.span().expect("leftover 错误应带位置");
+    assert!(sp.end_offset as usize <= src.len(), "span 越界");
+    let got = &src[sp.start_offset as usize..sp.end_offset as usize];
+    assert_eq!(
+        got, ";",
+        "span 必须按原文本坐标切开，实际切片 {got:?}（offset {}..{}）",
+        sp.start_offset, sp.end_offset
+    );
 }
 
 /// P6 回归钉（**已知边界**，不是 bug）：σ 只作用于被 `VSub` 包裹过的值；

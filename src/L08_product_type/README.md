@@ -168,7 +168,9 @@ struct basic k=10/k=11 格子（860.1 / 3242.9 ms）即该悬崖在 k≤11 的
 
 ### 双 oracle
 
-`cargo test --test l08_fast_parity`（74 例）：DEMO 全串（含积类型段）、
+`cargo test --test l08_fast_parity`（**本 PR 合并时点 93 例** = 33 个自有 parity
+用例 + 60 个 `#[cfg(test)]` lib 用例；2026-11-08 修复轮新增 c1/c2 两个
+verdict + 计时守卫，终值见 §8（静态核对 95），以 Lead 实跑为准）：DEMO 全串（含积类型段）、
 tests.rs 全部既有用例源码、积类型十连（基础 / 泛型 / 依赖 Sigma /
 投影链与部分应用 / Err 判定 / 剥链精确检查位 / new 直接接投影 /
 局部遮蔽与字段空行 / 同名重定义按名身份 / match 差分 pending 屏障）、
@@ -224,8 +226,32 @@ strchain/global/struct 的 basic 分钟级格子已被 decl 条目 Rc 化消除�
 
 ### 已知偏差（与参考版）
 
-同 L07：错误消息 span 全零；unify_catch 文案带 pretty 项 +
-`(fuel exhausted)` 尾注，span 数字两版不同。
+同 L07 的 span / 文案类偏差：`Error` 仍是单字段（**P10 Error span 未迁移**），
+错误消息 span 全零；unify_catch 文案带 pretty 项 + `(fuel exhausted)` 尾注，
+span 数字两版不同。
+
+**迁移现状（2026-11-08 review 修复轮）**：
+
+- **参考版已迁** P9（模式 `Pattern::pretty` 渲染）/ P2（卡住 match 比较
+  次数预算，本轮统一为 **64 次 / 顶层合一入口、结构快路径后计数**）/
+  P1（`occurs_transitive` 传递 occurs；**含与 L07 相同的 VSub 嵌套已知
+  限制**——外层 σ 不可见，review R2）；
+- **孪生版 P1 / P2 已在本轮镜像**：`bump_spine_iter/subst.rs` 补
+  `occurs_transitive`、`unify.rs` 补 `MATCH_CMP_BUDGET = 64`（`struct_val_eq`
+  结构快路径**之后**计数，每 `unify_iter` 一份）；`l08_fast_parity` 增加
+  c1 / c2 的 verdict + 计时守卫（`parity_l08_occurs_transitive_chain` /
+  `parity_l08_stuck_match_equation_bounded`，用 `assert_both_err_within`
+  同时钉"两侧都 Err"与耗时上界）——两侧判定分裂不再能靠"93 绿"掩盖
+  （review R4）；
+- **仍未迁移**：**P3 三档判定**（L08 参考版 / 孪生版都还是旧口径——预算
+  耗尽或判不出时仍报「分支不可达」，L07 已报「无法判定」；**层间**语义
+  不同，不是引擎间差异）、**P11 quote/pretty 深值**（`quote` 仍按值深
+  递归、`pretty` 无 `MAX_DEPTH` 截断）、**P10 Error span**（参考版
+  `Error(String)` 单字段）、**P5 / P8**（跨 meta 环守卫 / 宽松合一收窄：
+  L08 的 `loose_string` 判据仍是「名字是否在 decl 表登记」）；
+- **P9 的 `no named implicit arg` Span Debug 泄漏已在 L08 两引擎修掉**
+  （参考版 `elaboration.rs` / 孪生版 `machine.rs` 均改为 `{}` 直出名字，
+  与 L07 诊断口径对齐；review R5）。
 
 ## 7. 已知限制（诚实清单）
 
@@ -263,14 +289,15 @@ strchain/global/struct 的 basic 分钟级格子已被 decl 条目 Rc 化消除�
 
 ## 8. 测试
 
-- `cargo test --lib L08_product_type`：**49**（36 个 L07 继承 +
-  9 个积类型专项：`test_product_basic / _generic / _dependent /
+- `cargo test --lib L08_product_type`：HEAD **60**（`tests.rs` 56 个 = 44 个
+  L07 继承 + 9 个积类型专项：`test_product_basic / _generic / _dependent /
   _field_err / _vs_plain_enum / _dependent_check（剥链精确化回归）/
   _new_dot_chain（new 直接接投影）/ _shadow（投影局部遮蔽回归）/
-  _field_blank_lines（字段间空行与注释行）`，另 `parser/mod.rs` 3 个
-  解析器回归（`test / test_ok / test_leftover_located`）+ 1 个 lexer
-  回归 `test_string_empty_and_escape`（空字面量 `""` 与 `\"` / `\\`
-  转义））；64 MB 栈线程。
+  _field_blank_lines（字段间空行与注释行）` + 3 个 L08 自有回归
+  （`test_string_empty_and_escape` / `test_nested_pattern_refine_two_phase` /
+  `test_absurd_nested_pattern_not_missing_coverage`），另 `parser/mod.rs`
+  3 个解析器回归（`test / test_ok / test_leftover_located`）+ `parser/lex.rs`
+  1 个 lexer 单测）；64 MB 栈线程。
 - `cargo test --test l08_blackbox`：**58** 个 `#[test]`（L07 基线原样通过
   + 9 个 `product_*` 专项：打印形态 / 投影错误文案 / 普通 enum 门控 /
   投影链 / match 变量臂 / 泛型 struct / new 嵌套 / new 直接接投影 /
@@ -278,10 +305,13 @@ strchain/global/struct 的 basic 分钟级格子已被 decl 条目 Rc 化消除�
   **57** 活跃。
 - `cargo test --test l08_blackbox_v2`：**53** 个 `#[test]`（L07 第二卷
   基线原样通过），另 2 个 `#[ignore]` 探针 → **51** 活跃。
-- `cargo test --test l08_fast_parity`：**77**（§6 双 oracle：28 个 parity
-  用例；`#[cfg(test)]` 的 49 个 lib 用例（含解析器 / lexer 回归）随模块
-  在本目标内执行并计入总运行数——lexer 回归两版共享同一解析器，不构成
-  parity 对照）。
+- `cargo test --test l08_fast_parity`：**本 PR 合并时点 93**（§6 双 oracle：
+  **33** 个自有 parity 用例；**60** 个 `#[cfg(test)]` lib 用例（含解析器 /
+  lexer 回归）随模块在本目标内执行并计入总运行数——lexer 回归两版共享同一
+  解析器，不构成 parity 对照）。2026-11-08 修复轮新增两个 c1/c2 守卫
+  （`parity_l08_occurs_transitive_chain` / `parity_l08_stuck_match_equation_
+  bounded`，`assert_both_err_within` 同钉判定与耗时），**静态核对 95**
+  （93+2），以 Lead 实跑为准。
 
 ## 9. 相对旧 L08（移植前）改了什么
 
@@ -363,8 +393,8 @@ builtin 注册表 / decl 表 / 可变全局 / 文件 IO / Error Display、无性
   相对旧孪生（`bump_spine_iter` 未移植，仍为事实表机制）的唯一可观测
   差异即 §9 记录的"已解 rigid + 非空 spine 解析应用"（参考版更完备）；
   本层测试集无 L07 那条钉死用例的同构物，故 `l08_fast_parity` 保持全绿。
-- 验收：`--lib` 49 / `l08_blackbox` 57 / `l08_blackbox_v2` 51 /
-  `l08_fast_parity` 80 全绿（与移植前逐字节一致）。
+- 验收（**当时口径**；现计数见 §8）：`--lib` 49 / `l08_blackbox` 57 /
+  `l08_blackbox_v2` 51 / `l08_fast_parity` 80 全绿（与移植前逐字节一致）。
 
 ## 10. 参考资料
 

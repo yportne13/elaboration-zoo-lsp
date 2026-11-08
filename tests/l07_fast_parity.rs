@@ -5,6 +5,14 @@
 //! 判据：**Ok 输出逐字节一致 / Err 判定一致**。错误文案的 Debug-Span 偏移
 //! 是文档化偏差（快版导出项的 span 全零），不比内容。
 //!
+//! 覆盖边界（2026-11-08 修复轮）：`quote` 已对 `Sum`/`SumCase`/`Obj` 迭代化
+//! （深值不再爆栈），`Lam`/`Pi`/`Match` 分支体仍递归 quote——本套件对这两
+//! 类仍按栈深限制挑负载。parity 的 Err 侧只比**判定**不比正文：L07 参考版
+//! 的 P3 三档（`Absurd`/`Undecided`/`Fuel`）在孪生版仍是 bool，**未镜像段
+//! 仍可能出现判定分裂**（例如可达性探测把"判不出"当可达/不可达的边界），
+//! 已由下方新增的实现级回归钉（R1 空类型零臂 match、P1 两跳环、P2 预算）
+//! 部分覆盖；发现新的分裂时按"新钉 + 说明"处理，而不是放宽判据。
+//!
 //! 深递归（依赖匹配的精化合一链、深值 quote）远超测试线程默认 2MB 栈，
 //! 两侧都在 256MB 栈线程里跑（L07 tests.rs 的 64MB 惯例再放宽——快版
 //! quote 分支体重求值 + 参考版递归 quote 的深度都吃栈）。
@@ -501,8 +509,7 @@ def m: Nat = (cons two nil).len
 /// 必须拒绝。
 #[test]
 fn parity_struct_eq_match_pending() {
-    assert_parity(
-        r#"
+    const SRC: &str = r#"
 enum Nat {
     zero
     succ(x: Nat)
@@ -532,8 +539,20 @@ def g(x: Nat): Nat =
 
 def bad : Eq[Nat -> Nat] f g =
     refl f
-"#,
+"#;
+    // 显式"两侧都拒绝"：防止未来某侧把该输入静默改成 Ok 后，assert_parity
+    // 的 Err/Err 分支反而变成空转绿。
+    let b = run_basic(SRC);
+    let f = run_fast(SRC);
+    assert!(
+        b.is_err(),
+        "参考版应拒绝（struct_eq 漏比 pending 会把 refl 证出来），basic={b:?}\nsrc:\n{SRC}"
     );
+    assert!(
+        f.is_err(),
+        "孪生版应拒绝（结构快路径须报 pending 不同），fast={f:?}\nsrc:\n{SRC}"
+    );
+    assert_parity(SRC);
 }
 
 /// P1 孪生跟修守卫：浅 occurs 只挡单步环；经模式槽中转的两跳环
@@ -559,15 +578,50 @@ def bad(x: Nat, e: Eq[Nat] x (succ x)): Nat =
     );
 }
 
-/// P13 回归钉（L07-RISKS）：两个递归 def 的卡住索引方程互比。
-///
-/// 结构快路径失效后双实现都会逐层重求值分支体——参考版靠 `MATCH_CMP_DEPTH`、
-/// 孪生版靠 `MATCH_CMP_BUDGET`。缺任一侧的预算都会退化成分钟级：
-/// 修复前参考版 256 s、孪生版 26.3 s（debug）。两侧判定必须一致（Err）。
+/// R1 回归钉（review `FINAL.md` F1，2026-11-08）：**合法的空类型零臂 match**
+/// 必须被两侧接受。`T Bool` / `T String` 都没有可达构造子（构造子 `c` 返回
+/// `T Nat`，与 `Bool`/`String` 的位置不相容）⇒ 零臂 match 是空类型消去。
+/// 修复前参考版把 `String ≐ Nat` 这类冲突分档成 `Undecided`（判不出来）而
+/// 拒绝；`Bool ≐ Nat` 走 Sum×Sum 分档成 Absurd 而接受——同一语义两种判定。
+/// 现在两侧都应 Ok 且输出逐字节一致（`println "ok"`）。
 #[test]
-fn parity_stuck_match_equation_bounded() {
+fn parity_empty_type_zero_arm_match() {
     assert_parity(
         r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+enum T(A : U) {
+    c -> T Nat
+}
+
+def f1(e: T Bool): Nat =
+    match e { }
+
+def f2(e: T String): Nat =
+    match e { }
+
+println "ok"
+"#,
+    );
+}
+
+/// P13 回归钉（L07-RISKS）：两个递归 def 的卡住索引方程互比。
+///
+/// 结构快路径失效后双实现都会逐层重求值分支体——参考版与孪生版现在同用
+/// `MATCH_CMP_BUDGET`（总次数 64 / 每顶层合一入口一份 / 快路径后计数，
+/// review R3 已对齐）。缺任一侧的预算都会退化成分钟级：修复前参考版 256 s、
+/// 孪生版 26.3 s（debug）。两侧判定必须一致（Err），且各自耗时 < 10 s。
+#[test]
+fn parity_stuck_match_equation_bounded() {
+    let src = r#"
 enum Nat {
     zero
     succ(x: Nat)
@@ -587,7 +641,28 @@ def f(x: Nat, y: Nat, e: Eq[Nat] (add x zero) (add y zero)): Nat =
     match e {
         case refl(a) => a
     }
-"#,
+"#;
+    assert_parity(src);
+    // 耗时上界（review R3/R4）：两侧预算都失效时唯一的下限是 fuel 池
+    // （修复前参考版 256 s、孪生版 26.3 s）；预算生效后应回到有界时间。
+    // 各 <10 s 是"预算确实生效"的宽容上界（debug + 大栈线程创建开销）。
+    let t0 = std::time::Instant::now();
+    let b = run_basic(src);
+    let dt_basic = t0.elapsed();
+    let t1 = std::time::Instant::now();
+    let f = run_fast(src);
+    let dt_fast = t1.elapsed();
+    assert!(
+        b.is_err() && f.is_err(),
+        "两侧都应 Err（卡住 match 比较按不可判定保守失败）\nsrc:\n{src}\nbasic={b:?}\nfast={f:?}"
+    );
+    assert!(
+        dt_basic < std::time::Duration::from_secs(10),
+        "参考版耗时 {dt_basic:?} ≥ 10 s：MATCH_CMP_BUDGET 未生效"
+    );
+    assert!(
+        dt_fast < std::time::Duration::from_secs(10),
+        "孪生版耗时 {dt_fast:?} ≥ 10 s：MATCH_CMP_BUDGET 未生效"
     );
 }
 

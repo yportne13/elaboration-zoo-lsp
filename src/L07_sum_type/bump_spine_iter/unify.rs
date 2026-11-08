@@ -25,14 +25,18 @@ use super::syntax::{
     v_pi_of, v_spine_of, v_tag, v_xcell_of,
 };
 
-/// 卡住 match 相等性比较的**次数**预算（镜像参考版 `MATCH_CMP_DEPTH`）。
+/// 卡住 match 相等性比较的**总次数**预算（镜像参考版 `MATCH_CMP_BUDGET`）。
+///
+/// 与参考版同口径（总次数 64 / 每顶层 `unify_iter` 一份 / 快路径后计数；
+/// review R3 已对齐——此前参考版是「递归深度 40、快路径前检查」，与孪生版
+/// 「总次数 64、快路径后计数」不同构，会产生双向判定漂移）。
 ///
 /// 本版是工作表迭代、没有递归深度可比拟；用「一次 `unify_iter` 调用里
 /// Match/Match 臂被命中的次数」作代理。结构快路径失效后该臂会逐分支在
 /// fresh rigid 下重求值，递归 def 的分支体每层再产生新的卡住 match——无预算
 /// 时只能等 fuel 烧完（实测 `Eq (add x zero) (add y zero)`：debug 26.3 s）。
 /// 64 次足以覆盖正常的构造子嵌套/宽 spine 比较，同时把最坏情况压到与
-/// 参考版同量级（参考版 40 层深度 ⇒ 278 ms；本版 64 次 ≈ 1.4 s/debug）。
+/// 参考版同量级；超出按「无法判定为相等」保守失败。
 const MATCH_CMP_BUDGET: u32 = 64;
 
 // unify（工作表迭代 + force 前置 + 模式求解 + intersect/flex-flex + L07 臂）

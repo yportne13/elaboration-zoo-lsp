@@ -370,6 +370,9 @@ impl Compiler {
             return Err(Error(format!("构造子 {ctor} 与被匹配类型的参数数不一致")));
         }
         for (a, b) in hp.iter().zip(rp.iter()) {
+            // 卡住 match 比较次数预算按"每方程一份"重置（与 L07 参考版 /
+            // 孪生版每次 `unify_iter` 调用一份同口径，review R3/R8）。
+            infer.reset_match_cmp_budget();
             infer
                 .unify(
                     cxt.decl(),

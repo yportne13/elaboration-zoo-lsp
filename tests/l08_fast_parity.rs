@@ -6,6 +6,14 @@
 //! 正文逐字节一致**（`norm_err` 剥掉 Debug-Span 的 `@ N` 数字——快版导出项
 //! 的 span 全零属文档化偏差）。
 //!
+//! 覆盖边界（2026-11-08 修复轮）：L08 孪生版已镜像 L07 P1（传递 occurs
+//! `occurs_transitive` + 两处可解 rigid 臂）与 P2（`MATCH_CMP_BUDGET` 总次数
+//! 预算：每顶层 `unify_iter` 一份、快路径后计数）；P3/P10/P11 尚未镜像
+//! （参考版的三档 `UnifyKind` 在孪生版仍是 bool，失败文案可能不同）。因此
+//! 对两个**病理用例**（两跳环、递归 def 卡住 match 方程）Err 正文比较过强：
+//! 参考版可能多出"无法判定"分档语义/尾注；这两个用例改用 verdict + 耗时
+//! 断言（`assert_both_err_within`），其余用例仍比 Err 正文。
+//!
 //! 深递归（依赖匹配的精化合一链、深值 quote）远超测试线程默认 2MB 栈，
 //! 两侧都在 256MB 栈线程里跑（L07 tests.rs 的 64MB 惯例再放宽——快版
 //! quote 分支体重求值 + 参考版递归 quote 的深度都吃栈）。
@@ -104,6 +112,37 @@ fn assert_parity(src: &str) {
             f.as_ref().map(|_| "Ok").unwrap_or("Err")
         ),
     }
+}
+
+/// 病理用例的弱判据：两侧都 Err，且各自耗时 < `max`。
+///
+/// L08 参考版已迁 P1/P2，但 P3（`UnifyKind` 三档：Absurd/Undecided/Fuel）
+/// 未镜像——孪生版 unify 返回 bool，同一失败在参考版可能带"无法判定"分档
+/// 或 `(fuel exhausted)` 尾注，Err 正文比对对这些输入过强。这里只钉判定
+/// （两侧都拒绝）与预算生效（时间上界）。
+fn assert_both_err_within(src: &str, max: std::time::Duration) {
+    let t0 = std::time::Instant::now();
+    let b = run_basic(src);
+    let dt_basic = t0.elapsed();
+    let t1 = std::time::Instant::now();
+    let f = run_fast(src);
+    let dt_fast = t1.elapsed();
+    assert!(
+        b.is_err(),
+        "参考版应 Err（P1/P2 生效），basic={b:?}\nsrc:\n{src}"
+    );
+    assert!(
+        f.is_err(),
+        "孪生版应 Err（P1/P2 已镜像），fast={f:?}\nsrc:\n{src}"
+    );
+    assert!(
+        dt_basic < max,
+        "参考版耗时 {dt_basic:?} ≥ {max:?}：预算失效\nsrc:\n{src}"
+    );
+    assert!(
+        dt_fast < max,
+        "孪生版耗时 {dt_fast:?} ≥ {max:?}：预算失效\nsrc:\n{src}"
+    );
 }
 
 // 基础与 builtin
@@ -1958,5 +1997,67 @@ println (add (len (cons zero (cons zero nil))) (succ zero))
         (after1, after2),
         (base, base),
         "σ 链条目跨轮未回收（arena 克隆泄漏）：base={base} after1={after1} after2={after2}"
+    );
+}
+
+// 修复轮 P1/P2（L08 孪生镜像）的 parity 守卫（2026-11-08）
+// --------------------------------------------------------------------------------
+
+/// P1 孪生镜像守卫：浅 occurs 只挡单步环；`x := a`、`a := succ x` 经构造子
+/// 模式槽中转的两跳环，σ 组合起来是循环的——旧孪生版接受该子句。两侧都
+/// 必须拒绝（参考版已迁，孪生版本次镜像）；10 s 上界同时防闭环探测退化成
+/// 深展开。
+#[test]
+fn parity_l08_occurs_transitive_chain() {
+    assert_both_err_within(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def bad(x: Nat, e: Eq[Nat] x (succ x)): Nat =
+    match e {
+        case refl(a) => zero
+    }
+"#,
+        std::time::Duration::from_secs(10),
+    );
+}
+
+/// P2 孪生镜像守卫：两个递归 def 的卡住索引方程互比——结构快路径失效后
+/// Match/Match 臂逐层在 fresh rigid 下重求值分支体，递归 def 每层再产生
+/// 新的卡住 match，层级递增、永不结构收敛。缺预算时唯一下限是 fuel 池
+/// （L07 同形输入实测 256 s、孪生版 debug 26.3 s）；镜像后应回到有界失败。
+/// 30 s 为宽容上界（参考版/孪生版 64 次总次数预算在 debug 下约 1-2 s）。
+#[test]
+fn parity_l08_stuck_match_equation_bounded() {
+    assert_both_err_within(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def f(x: Nat, y: Nat, e: Eq[Nat] (add x zero) (add y zero)): Nat =
+    match e {
+        case refl(a) => a
+    }
+"#,
+        std::time::Duration::from_secs(30),
     );
 }

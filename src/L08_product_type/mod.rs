@@ -375,7 +375,8 @@ impl Subst {
                         || env.iter().any(|v| go(v, sub, target, budget))
                         || pending.iter().any(|(u, _)| go(u, sub, target, budget))
                 }
-                // 内层 σ 优先：本值在 s2 之下，target 若被 s2 解出也要跟随
+                // 内层 σ 优先（已知限制：外层 σ 的后续解在此处不可见——
+                // 见 review R2，修复需非物化 compose 的多 σ 查找）。
                 Val::VSub(inner, s2) => go(inner, s2, target, budget),
                 Val::U | Val::LiteralType | Val::LiteralIntro(_) => false,
             }
@@ -532,19 +533,18 @@ pub struct Infer {
     /// pattern 编译入口）充值；递归中递减，归零即 Err——防索引槽互相嵌入
     /// 的构造子值比较（SuccCase 的 typ 含索引、索引又是 SuccCase）无限递归。
     unify_fuel: std::cell::Cell<u32>,
-    /// 卡住 match 相等性比较的**递归深度**预算（L07 P2 的 L08 迁移）。
-    /// Match/Match 臂在结构快路径失效后会逐分支在 fresh rigid 下重求值；
-    /// 递归 def 的分支体每层再产生新的卡住 match，层级递增、永不收敛
-    /// （L07 实测 4 个 def 的程序要 256 s 才靠 fuel 停下）。深度预算把它
-    /// 变成"有界失败"，与前缀相同的浅层比较不受影响。
-    match_cmp_depth: std::cell::Cell<u32>,
+    /// 卡住 match 相等性比较的**总次数**预算（L07 P2 的 L08 迁移；2026-11-08
+    /// review R3/R8 起与 L07 参考版/孪生版统一为"每顶层合一入口 64 次"口径：
+    /// 结构快路径先试，只有逐分支重求值的比较才计数）。
+    match_cmp_budget: std::cell::Cell<u32>,
 }
 
 const UNIFY_FUEL: u32 = 4096;
 
-/// 卡住 match 相等性比较的深度上限（与 L07 同值：40 层足够覆盖教学负载的
-/// 构造子嵌套，同时把最坏情况从"fuel 耗尽（分钟级）"压到毫秒级）。
-pub(crate) const MATCH_CMP_DEPTH: u32 = 40;
+/// 卡住 match 相等性比较的总次数上限（与 L07 `MATCH_CMP_BUDGET` 同值同口径：
+/// 每顶层合一入口 64 次，超出按"无法判定为相等"保守失败；L08 未迁 P3 三档，
+/// 失败仍按旧口径报"分支不可达"）。
+pub(crate) const MATCH_CMP_BUDGET: u32 = 64;
 
 impl Infer {
     pub fn new() -> Self {
@@ -552,7 +552,7 @@ impl Infer {
             meta: vec![],
             mutable_map: RefCell::new(HashMap::new()),
             unify_fuel: std::cell::Cell::new(UNIFY_FUEL),
-            match_cmp_depth: std::cell::Cell::new(0),
+            match_cmp_budget: std::cell::Cell::new(MATCH_CMP_BUDGET),
         }
     }
 
@@ -595,6 +595,23 @@ impl Infer {
     /// 时区分"结构冲突（真 absurd）"与"预算耗尽（假 absurd）"。
     pub(crate) fn fuel_exhausted(&self) -> bool {
         self.unify_fuel.get() == 0
+    }
+
+    /// 顶层合一入口调用：每份"卡住 match 比较次数"预算重置（与 L07 /
+    /// 孪生版"每次顶层 unify 一份"同口径，review R3）。
+    pub(crate) fn reset_match_cmp_budget(&self) {
+        self.match_cmp_budget.set(MATCH_CMP_BUDGET);
+    }
+
+    /// 进入一次真正的卡住 match 逐分支比较时消耗一次预算；`false` = 耗尽。
+    pub(crate) fn burn_match_cmp_budget(&self) -> bool {
+        let b = self.match_cmp_budget.get();
+        if b == 0 {
+            false
+        } else {
+            self.match_cmp_budget.set(b - 1);
+            true
+        }
     }
 
     /// 合一器**参数视角**的 WHNF：与 `force` 相同，但不做 Match 重选。
@@ -1342,6 +1359,7 @@ impl Infer {
 
     fn unify_catch(&mut self, decl: &Decls, cxt: &Cxt, t: Val, t_prime: Val) -> Result<(), Error> {
         self.unify_fuel.set(UNIFY_FUEL);
+        self.reset_match_cmp_budget();
         self.unify(decl, cxt.lvl, cxt, t.clone(), t_prime.clone(), None)
             .map_err(|_| {
                 let fuel_note = if self.unify_fuel.get() == 0 {
@@ -1655,14 +1673,20 @@ pub(crate) fn bench_check_nf(decls: &[parser::syntax::Decl]) -> u64 {
 /// 注释剥离(行 `//` 与块 `/* */`),**字符串字面量内不生效**——旧版对
 /// `//` / `/*` 做纯文本剥离,会把 `"http://…"` 之类的字面量截成未闭合
 /// 字符串导致解析失败。现按词法规则跳过字符串区间(含 `\` 转义);注释
-/// 内容只替换为空白(ASCII 下 span 偏移稳定;非 ASCII 注释内容会使后续
-/// 偏移前移,仅影响错误消息中的偏移数字)。块注释不嵌套;未闭合的块
-/// 注释剥到 EOF(余下 decl 静默消失,历史行为)。
+/// 内容只替换为空白,且**保持字节长度**:非 ASCII 注释字符按 `len_utf8`
+/// 个空格替换,使后续 token 的 span 偏移相对原文本保持稳定（与 L07 同步,
+/// review R7）。块注释不嵌套;未闭合的块注释剥到 EOF(历史行为)。
 pub fn preprocess(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
     let mut in_string = false;
     let mut escaped = false;
+    // 把注释字符替换为**等字节数**的空白，保持后续偏移不变。
+    fn push_blank(out: &mut String, c: char) {
+        for _ in 0..c.len_utf8() {
+            out.push(' ');
+        }
+    }
     while let Some(c) = chars.next() {
         if in_string {
             out.push(c);
@@ -1683,26 +1707,26 @@ pub fn preprocess(s: &str) -> String {
             '/' if chars.peek() == Some(&'/') => {
                 chars.next();
                 out.push_str("  ");
-                // 行注释:换行前的内容替换为空白(保留换行符)
+                // 行注释:换行前的内容替换为等字节空白(保留换行符)
                 for rc in chars.by_ref() {
                     if rc == '\n' {
                         out.push('\n');
                         break;
                     }
-                    out.push(if rc.is_whitespace() { rc } else { ' ' });
+                    push_blank(&mut out, rc);
                 }
             }
             '/' if chars.peek() == Some(&'*') => {
                 chars.next();
                 out.push_str("  ");
-                // 块注释:到 `*/` 为止的内容替换为空白
+                // 块注释:到 `*/` 为止的内容替换为等字节空白
                 while let Some(rc) = chars.next() {
                     if rc == '*' && chars.peek() == Some(&'/') {
                         chars.next();
                         out.push_str("  ");
                         break;
                     }
-                    out.push(if rc.is_whitespace() { rc } else { ' ' });
+                    push_blank(&mut out, rc);
                 }
             }
             _ => out.push(c),

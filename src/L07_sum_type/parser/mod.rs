@@ -54,6 +54,15 @@ pub struct IError {
     pub msg: Span<ErrMsg>,
 }
 
+/// 错误进度 = 错误锚定的 token 源偏移。`or_far` 用它保留"最远失败"的备选
+/// 错误，而不是 last-branch-wins 把正确位置吞掉（review R6：`p_decl` 的
+/// `or` 链会把 `def` 在 `)` 处的错误换成 `enum` 分支在 `def` 处的错误）。
+impl ErrorProgress for IError {
+    fn parse_progress(&self) -> u32 {
+        self.msg.start_offset
+    }
+}
+
 type IResult<'a, 'b, O> = Result<(&'b [TokenNode<'a>], O), IError>;
 
 /// This lesson has no macros, so the parser state is just the error store.
@@ -85,14 +94,32 @@ impl<'a: 'b, 'b, A, T: Parser<&'b [TokenNode<'a>], A, MacroState, IError>> Parse
     where
         P: Parser<&'b [TokenNode<'a>], X, MacroState, IError>,
     {
-        move |input, state: &mut MacroState| match self.many0_sep(sep).parse(input, state) {
-            Ok((i, v)) if v.is_empty() => Err(IError {
-                msg: i.first()
-                    .map(|x| x.to_span())
-                    .unwrap_or(empty_span(()))
-                    .map(|_| ErrMsg::Base(BaseMsg::EmptyVec))
-            }),
-            x => x,
+        move |input, state: &mut MacroState| {
+            // 先试第一个 item：失败时**保留底层错误**（含失败 token 的真实
+            // span），不再像 `many0_sep` 那样吞掉错误、再在包装层用"剩余输
+            // 入首 token"伪装成 EmptyVec——后者会把语法错误定位到失败 decl
+            // 的起点（review R6）。
+            let (mut input, first) = self.parse(input, state)?;
+            let mut result = vec![first];
+            loop {
+                let (after_sep, _) = match sep.parse(input, state) {
+                    Ok(x) => x,
+                    Err(_) => break,
+                };
+                match self.parse(after_sep, state) {
+                    Ok((i, a)) => {
+                        input = i;
+                        result.push(a);
+                    }
+                    // 与 `many0_sep` 旧语义一致：分隔符已消费、下一个 item
+                    // 失败即正常结束（尾随换行/空行等），不报错。
+                    Err(_) => {
+                        input = after_sep;
+                        break;
+                    }
+                }
+            }
+            Ok((input, result))
         }
     }
 }
@@ -539,8 +566,11 @@ fn p_enum<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
 }
 
 fn p_decl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Decl> {
-    // 错误原样透传：外层按契约折叠为整体 `parse error`（Custom 文案不外泄）
-    p_def.or(p_print).or(p_enum).parse(input, state)
+    // 错误原样透传：外层按契约折叠为整体 `parse error`（Custom 文案不外泄）。
+    // `or_far`（而非 `or`）保留最远失败分支的错误位置——否则 `p_enum` 在
+    // `def` 首 token 的期望错误会覆盖 `p_def` 在真正失败 token（如 `)`）处
+    // 的错误（review R6）。
+    p_def.or_far(p_print).or_far(p_enum).parse(input, state)
 }
 
 #[test]

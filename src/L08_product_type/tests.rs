@@ -1932,7 +1932,8 @@ def bad(v: Vec[Nat] (succ zero)): Nat =
 /// L07 P2 迁移的回归钉：两个递归 def 的卡住索引方程互比时，结构快路径失效，
 /// Match/Match 臂会逐层在 fresh rigid 下重求值分支体——递归 def 每层再产生
 /// 新的卡住 match，层级递增、永不结构收敛。无预算时唯一的下限是 fuel 池
-/// （L07 同形输入实测 256 s）；`MATCH_CMP_DEPTH` 把最坏情况压到有界时间。
+/// （L07 同形输入实测 256 s）；`MATCH_CMP_BUDGET`（总次数 64/每顶层合一入口，
+/// 快路径后计数）把最坏情况压到有界时间。
 #[test]
 fn test_stuck_match_equation_bounded() {
     let src = r#"

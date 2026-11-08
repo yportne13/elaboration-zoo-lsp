@@ -431,6 +431,9 @@ impl Compiler {
             // 说明整组方程不是**结构矛盾**——调用方据此报"无法判定"而非
             // "不相容（分支不可达）"（对齐 dpm 的 `UnifyRes::UIDK`）。
             infer.reset_unify_kind();
+            // 卡住 match 比较次数预算按"每方程一份"重置（与孪生版每次
+            // `unify_iter` 调用一份同口径，review R3/R8）。
+            infer.reset_match_cmp_budget();
             if infer
                 .unify(
                     cxt.decl(),

@@ -1,6 +1,7 @@
 //! subst：模式特化的显式替换（`SubstV`/`SubEntryV`/`SUBSTV_ALIVE`）、σ 克隆
 //! 的跨轮回收（`VSUB_REGS`/`vsub_reclaim`）、读点包裹（`wrap_sub`）、浅扫描
-//! （`mentions_level`）、穿参状态（`SpecSolve`），以及卡住 match 分支体
+//! （`mentions_level`）、传递 occurs（`occurs_transitive`，L07 P1 的 L08
+//! 孪生移植）、穿参状态（`SpecSolve`），以及卡住 match 分支体
 //! 重求值用的 `simpl_decl`。原 bump_spine_iter.rs 的 SubstV 定义 +
 //! "σ 克隆的跨轮回收" 节 + simpl_decl 块，逐行搬运（2026-09-23 拆分）。
 
@@ -165,7 +166,7 @@ impl SubstV {
 /// scrutinee/captured env/pending；不含闭包体 / Match 分支体（Tm，求值时
 /// 才经 env 读到槽值）。VSub 保守记为引用（已包过 σ 的值再包一层无害）。
 /// Flex 只扫 spine。误报只多一次包裹，漏报才会丢精化——宁宽勿窄。
-fn mentions_level(spine: &Spine, defs: &[V], v: V, sub: &SubstV) -> bool {
+pub(super) fn mentions_level(spine: &Spine, defs: &[V], v: V, sub: &SubstV) -> bool {
     fn env_slots(spine: &Spine, defs: &[V], env: Env<'_>, sub: &SubstV) -> bool {
         let mut n = env.binds;
         while let Some(e) = n {
@@ -241,6 +242,134 @@ fn mentions_level(spine: &Spine, defs: &[V], v: V, sub: &SubstV) -> bool {
         },
         _ => false,
     }
+}
+
+/// 传递 occurs：`v` 在 σ 之下是否**经已解层级**提到 `target`（参考版
+/// `Subst::occurs_transitive` 同款；L07 P1 的 L08 孪生移植）。
+///
+/// 与 [`mentions_level`] 同一遍历面（含闭包 env 槽 / Match 的 scrutinee+env+
+/// pending；不含闭包体与分支体），区别只在前者遇已解 rigid 就返回 true，
+/// 这里则**跟随解值**继续扫——这正是 `x := a`、`a := succ x` 两跳环的
+/// 检测点。带 2048 步预算，耗尽按「未出现」（宁漏不误杀：误杀会把合法
+/// 分支判成不可达）。`VSub` 跟随内层 σ（外层 σ 对该值不再适用）。
+pub(super) fn occurs_transitive(
+    bump: &Bump,
+    spine: &Spine,
+    defs: &[V],
+    v: V,
+    target: u32,
+    sub: &Rc<SubstV>,
+) -> bool {
+    const BUDGET: u32 = 2048;
+    let mut budget = BUDGET;
+    let mut stack: Vec<(V, Rc<SubstV>)> = vec![(v, sub.clone())];
+    let mut args: Vec<(V, Icit)> = Vec::new();
+
+    fn push_env(defs: &[V], stack: &mut Vec<(V, Rc<SubstV>)>, env: Env<'_>, sub: &Rc<SubstV>) {
+        let mut n = env.binds;
+        while let Some(e) = n {
+            stack.push((e.val, sub.clone()));
+            n = e.next;
+        }
+        for k in 0..env.flat_len {
+            stack.push((defs[(env.flat_base + env.flat_len - 1 - k) as usize], sub.clone()));
+        }
+    }
+
+    /// 已解 rigid / 裸头：命中 target ⇒ true；有解 ⇒ 把解值压栈跟随。
+    fn visit_rigid(
+        bump: &Bump,
+        spine: &Spine,
+        defs: &[V],
+        stack: &mut Vec<(V, Rc<SubstV>)>,
+        sub: &Rc<SubstV>,
+        lvl: u32,
+        target: u32,
+    ) -> bool {
+        if lvl == target {
+            return true;
+        }
+        if sub.has(lvl) {
+            if let Some(hit) = SubstV::lookup_hit(bump, spine, defs, sub, lvl) {
+                stack.push((hit, sub.clone()));
+            }
+        }
+        false
+    }
+
+    while let Some((v, sub)) = stack.pop() {
+        if budget == 0 {
+            return false;
+        }
+        budget -= 1;
+        match v_tag(v) {
+            0 => {
+                if visit_rigid(bump, spine, defs, &mut stack, &sub, v_lvl_of(v), target) {
+                    return true;
+                }
+            }
+            2 => {
+                let h = v_spine_of(v);
+                let hd = spine.spine_head(h);
+                match v_tag(hd) {
+                    0 => {
+                        if visit_rigid(bump, spine, defs, &mut stack, &sub, v_lvl_of(hd), target) {
+                            return true;
+                        }
+                    }
+                    7 => {
+                        if let XCell::Obj { val, .. } = v_xcell_of(hd) {
+                            stack.push((*val, sub.clone()));
+                        }
+                    }
+                    _ => {}
+                }
+                args.clear();
+                spine.collect_args(h, &mut args);
+                for (a, _) in args.iter() {
+                    stack.push((*a, sub.clone()));
+                }
+            }
+            5 | 3 | 6 => {}
+            1 => push_env(defs, &mut stack, v_clo_of(v).env, &sub),
+            4 => {
+                let p = v_pi_of(v);
+                stack.push((p.dom, sub.clone()));
+                push_env(defs, &mut stack, p.env, &sub);
+            }
+            7 => match v_xcell_of(v) {
+                XCell::VSub { val, sub: s2 } => stack.push((*val, s2.clone())),
+                XCell::Lit(_) | XCell::Decl(_) | XCell::Prim(_) => {}
+                XCell::Obj { val, .. } => stack.push((*val, sub.clone())),
+                XCell::Sum { params, .. } => {
+                    for p in params.iter() {
+                        stack.push((p.val, sub.clone()));
+                        stack.push((p.ty, sub.clone()));
+                    }
+                }
+                XCell::SumCase { typ, datas, .. } => {
+                    stack.push((*typ, sub.clone()));
+                    for d in datas.iter() {
+                        stack.push((d.val, sub.clone()));
+                    }
+                }
+                XCell::Match {
+                    scrutinee,
+                    env,
+                    pending,
+                    ..
+                } => {
+                    stack.push((*scrutinee, sub.clone()));
+                    push_env(defs, &mut stack, *env, &sub);
+                    for (a, _) in pending.iter() {
+                        stack.push((*a, sub.clone()));
+                    }
+                }
+            },
+            _ => {}
+        }
+    }
+    false
 }
 
 /// "解前构建、解后消费"的值的读点纪律：用当前精化替换包裹（O(1) Rc

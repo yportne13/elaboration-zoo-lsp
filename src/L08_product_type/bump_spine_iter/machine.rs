@@ -809,10 +809,7 @@ impl Machine {
                 t = bump.alloc(Tm::App(t, m, Icit::Impl));
                 va = b;
             } else {
-                return Err(Error(format!(
-                    "no named implicit arg {:?}",
-                    empty_span(name.to_owned())
-                )));
+                return Err(Error(format!("no named implicit arg {name}")));
             }
         }
     }

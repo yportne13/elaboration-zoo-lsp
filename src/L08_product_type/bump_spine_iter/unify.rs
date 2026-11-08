@@ -17,11 +17,24 @@ use super::prim::{DeclEntryF, Fuel, MutableMap};
 use super::rename::{invert_bump, prune_meta_bump, RenBuf, solve_bump, solve_with_pren_bump};
 use super::spine::{head_kind, HK_DECL, HK_OBJ, HK_PRIM, is_flex, is_objheaded, MetaEntry, Spine, xcell_head_name};
 use super::struct_eq::{struct_env_eq, struct_tm_eq, struct_val_eq};
-use super::subst::{simpl_decl, SpecSolve, SubstV, wrap_sub};
+use super::subst::{mentions_level, occurs_transitive, simpl_decl, SpecSolve, SubstV, wrap_sub};
 use super::syntax::{Tm, V, v_clo_of, v_lit_ty, v_lvl, v_lvl_of, v_meta_of, v_pi_of, v_spine_of, v_tag, v_xcell_of, XCell};
 
 // unify（工作表迭代 + force 前置 + 模式求解 + intersect/flex-flex + L07 臂）
 // --------------------------------------------------------------------------------
+
+/// 卡住 match 相等性比较的**总次数**预算（镜像参考版 `MATCH_CMP_BUDGET`；
+/// L07 P2 的 L08 孪生移植）。
+///
+/// 本版是工作表迭代、没有递归深度可比拟；用「一次 `unify_iter` 调用里
+/// Match/Match 臂真正逐分支重求值的次数」作代理。结构快路径失效后该臂会
+/// 逐分支在 fresh rigid 下重求值，递归 def 的分支体每层再产生新的卡住
+/// match——无预算时只能等 fuel 烧完（实测 `Eq (add x zero) (add y zero)`：
+/// debug 26.3 s）。64 次足以覆盖正常的构造子嵌套/宽 spine 比较，同时把最坏
+/// 情况压到与参考版同量级；超出按「无法判定为相等」保守失败（与 L07
+/// 参考版/孪生版同一口径：每顶层 `unify_iter` 一份、快路径后计数，review
+/// R3 已对齐；`unify_with` 每次调用即一次顶层入口）。
+const MATCH_CMP_BUDGET: u32 = 64;
 
 /// A/B 实验开关（unify 工作表的判等记忆化消融）：置 `L06_NO_CONV_MEMO=1`
 /// 关闭（`=0` 不关闭）。
@@ -31,8 +44,9 @@ static NO_CONV_MEMO: std::sync::LazyLock<std::sync::atomic::AtomicBool> =
     });
 
 // （旧 `pm_solve_into` / `pm_solvable_contains` 已随事实表机制删除：解入
-// `SpecSolve::acc`（`SubstV::extend`）+ 入口 `val_mentions_lvl` occurs 守卫，
-// 可解集经 `SpecSolve.solvable` 穿参——见 `unify_iter` 的特化臂。）
+// `SpecSolve::acc`（`SubstV::extend`）+ 入口 `val_mentions_lvl` occurs 守卫
+// + 传递 `occurs_transitive` 链上环守卫（L07 P1 的 L08 迁移），可解集经
+// `SpecSolve.solvable` 穿参——见 `unify_iter` 的特化臂。）
 
 /// unify 工作表条目：待比较子对、Π 余定义域的惰性比较屏障、判等记忆化
 /// 屏障、或卡住 match 分支对的惰性求值屏障（简化 decl 表下重求值后压
@@ -320,6 +334,8 @@ pub(super) fn unify_iter<'a>(
     // 栈，靠下次入口 clear 兜住（Rc 随 clear 正确减计，引用无 Drop）
     debug_assert!(stack.is_empty());
     stack.push(UItem::Pair(l0, t0, u0));
+    // 卡住 match 相等性比较的次数预算（见 `MATCH_CMP_BUDGET`）。
+    let mut match_cmp_budget: u32 = MATCH_CMP_BUDGET;
     while let Some(item) = stack.pop() {
         let (l, t, u) = match item {
             UItem::Store(key) => {
@@ -522,6 +538,18 @@ pub(super) fn unify_iter<'a>(
             if val_mentions_lvl(spine, defs, u, v_lvl_of(t)) {
                 return false;
             }
+            // P1 孪生跟修（L08 参考版 `occurs_transitive` 同款）：浅扫描只挡
+            // 单步环，挡不住经模式槽中转的两跳环（`x := a`、`a := succ x`）。
+            // 仅当解值挂在既有解链上时才付这次扫描（干净解零开销）。
+            {
+                let s = spec.as_deref().unwrap();
+                if !s.acc.is_empty()
+                    && mentions_level(spine, defs, u, &s.acc)
+                    && occurs_transitive(bump, spine, defs, u, v_lvl_of(t), &s.acc)
+                {
+                    return false;
+                }
+            }
             let s = spec.as_deref_mut().unwrap();
             s.acc = SubstV::extend(&s.acc, v_lvl_of(t), u);
             continue;
@@ -535,6 +563,15 @@ pub(super) fn unify_iter<'a>(
         {
             if val_mentions_lvl(spine, defs, t, v_lvl_of(u)) {
                 return false;
+            }
+            {
+                let s = spec.as_deref().unwrap();
+                if !s.acc.is_empty()
+                    && mentions_level(spine, defs, t, &s.acc)
+                    && occurs_transitive(bump, spine, defs, t, v_lvl_of(u), &s.acc)
+                {
+                    return false;
+                }
             }
             let s = spec.as_deref_mut().unwrap();
             s.acc = SubstV::extend(&s.acc, v_lvl_of(u), t);
@@ -975,6 +1012,12 @@ pub(super) fn unify_iter<'a>(
                 {
                     continue;
                 }
+                // 预算（P2 镜像）：快路径失效后本臂逐分支重求值，递归 def 会
+                // 无限下钻；超出预算按「无法判定为相等」保守失败。
+                if match_cmp_budget == 0 {
+                    return false;
+                }
+                match_cmp_budget -= 1;
                 // 比较顺序与参考版逐项对齐（含失败路径的副作用时序）：
                 // scrutinee 最先比；cases/pending 的长度与 pattern 检查在
                 // scrutinee 之后由 MatchStruct 屏障执行（简化 decl 表的

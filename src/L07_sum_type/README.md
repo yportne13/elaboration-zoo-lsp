@@ -226,7 +226,10 @@ Val::Flex(MetaVar, Spine) | Val::Rigid(Lvl, Spine) | Val::Decl(SmolStr, Spine)
 索引槽与构造子值可能互相嵌入（`succ ?l` 的 `typ` 里 len 槽就是 `succ ?l`），
 某些合一路径会无限递归。共享 fuel 池（`Cell<u32>`，外层入口充值，递归
 入口递减）把无限递归转成可诊断的错误；`force` 的展开（meta 链 / decl /
-精化 def / Match 重选）同样受保护。测试在 64 MB 栈线程里运行。
+精化 def / Match 重选）同样受保护。另有一道与 fuel 独立的「卡住 match
+相等性比较次数」预算 `MATCH_CMP_BUDGET = 64`（每个顶层合一入口一份，
+结构快路径后计数，见 §7.2），两者共同构成有界防护。测试在 64 MB 栈线程
+里运行。
 
 ## 4. 模式匹配的编译（pattern_match.rs）
 
@@ -245,7 +248,12 @@ Val::Flex(MetaVar, Spine) | Val::Rigid(Lvl, Spine) | Val::Decl(SmolStr, Spine)
 3. **特化方程**：头部 Sum 参数与构造子返回 Sum 参数逐槽 `unify`
    （头部在前——双侧都是可解变量时解"头部变量 := 构造子侧值"；
    方程两侧由 unify 入口置于当前 acc 之下解释）。
-   失败 = 分支不可达（absurd），臂报错且不计入覆盖；
+   失败按三档处理（P3）：**确定冲突**（`Absurd`——两侧都是规范值/类型头
+   且形态不同）⇒ 分支不可达，臂报错且不计入覆盖；**判不出来**
+   （`Undecided`/`Fuel`——卡住 match 的相等性、rename/invert/solve 失败、
+   卡住比较预算耗尽等）⇒ 臂报「无法判定」且**按可达计入覆盖**（保守：
+   不允许把"算不出来"伪装成"矛盾"，否则合法空类型零臂 match 会被误拒；
+   见 §5、§7.2 与 review R1）；
 4. **头部精化（无条件）**：被匹配变量若是本子句未精化的 bare rigid，
    把构造子值（typ = 头部 Sum，datas = 模式变量）经 `wrap_sub` 包裹后
    `Subst::extend` 写入 σ（嵌套方程的解经组合链对其可见）；
@@ -278,7 +286,9 @@ solve / intersect）。在此之上：
   （§3.1）；`Val::Match` 的规则见 §3.3；
 - flex-flex 尝试两个方向（先短 spine 方向、失败回滚再反向）；
 - invert / prune_vflex 用 `force_arg`（§1.4）；
-- fuel 深度防护（§3.4）。
+- fuel 深度防护（§3.4）；
+- 失败原因分档 `UnifyKind`（`Absurd` / `Undecided` / `Fuel`，§7.2）与
+  卡住 match 比较次数预算 `MATCH_CMP_BUDGET = 64`/顶层合一入口（§7.2）。
 
 ## 6. 相对旧实现（改写式精化）修了什么
 
@@ -298,7 +308,7 @@ solve / intersect）。在此之上：
 | **黑盒三轮（2026-09）**：多隐式参数 enum 的无标注域洞在第 2+ 个参数处成为带 pruning 的部分应用 meta（`?m A`），构造子上显式供给枚举隐式实参（`P1[Nat][Bool]`）需解 `?m A := U`，invert 无法倒序 Decl 头 spine → 误报 can't unify | enum 声明处把无标注隐式参数的域**钉为 U**（方括号参数在语言定义上就是类型参数，任意类型的索引留给圆括号；显式标注 `[A : Nat]` 与显式索引不动）。参考版 + 孪生版同步；def 的隐式参数不限于类型，不受此修复影响（域洞保留，显式供参本就可用） |
 | **连贯性评审（2026-09）**：三处 L08 侧修复的 L07 同码位点回合——①投影限定构造子快捷路径尊重局部遮蔽（L08 b66f5e4，遮蔽时走投影而非静默解析全局构造子）；②enum case 分隔放宽为 `EndLine+`（case 间注释行/空行合法，同 match 臂）；③unify 的 Π 臂 quote 改用当前层级 `l`（η descent 后 `l == cxt.lvl` 不变式已破，L08 §5 同款） | ①参考版 `elaboration.rs` `Raw::Obj` 臂 + 孪生同位（消融口径同步）；②`parser/mod.rs` `p_enum`；③参考版 `unification.rs`（孪版 Pi 臂不 quote 域值，无此路径）。回归：`l07_blackbox_v3` §H |
 | **显式替换重构（2026-09，dpm-nbe 对齐）**：`pm_defs` 事实表 + `pm_solvable` 全局旁路作为精化载体，`pm_def` 读点 O(n) 反序扫、回滚靠长度截断、可解性与合一器经 Infer 全局状态耦合 | `Subst`（持久化单链，extend O(1)）+ `Val::VSub` 包裹 + `force` 的 frcs 臂；可解性经 `SpecSolve` 穿参（方程两侧在入口置于 acc 之下）；臂边界回滚 = Rc 指针赋值。机制、槽位纪律（spine 只包裹不物化）与多轮评审记录见 `docs/l07-dpm-refactor-design.md`。本表前各行所述的"事实表"载体自本轮起改为显式替换，行为语义不变（全套测试逐字节保持） |
-| **深值栈安全轮（2026-09-18，LSP 接入前置）**：①`val_mentions_lvl` / `struct_eq` 全家 / `rename` 的 Sum/SumCase/Obj 臂按**值深度**原生递归（`succ^N zero` 型深值可由 def 倍增链构造，~万级深度在常规栈 1–8 MB 爆栈）；②孪生同款（`mentions_level` / `struct_val_eq` 族 / `rename_iter` 深链内联递归）；③孪生 arena 内 `XCell::VSub` 持有的 `Rc<SubstV>` 克隆跨轮不回收（长生命周期 Machine 下无上界慢泄漏） | ①参考版：`struct_eq` 改任务栈（短路序与燃烧面逐点对齐旧递归）、`val_mentions_lvl` 改工作栈、`rename` 拆 `rename_deep` 帧式收集器（Sum/SumCase/Obj 整链消化，`rename_arm` 收口浅臂，深链在任意深度进入收集器后不再按值深递归）；②孪生：`val_mentions_lvl`/`mentions_level` 工作栈、`struct_val_eq` 族任务栈、`rename_iter` 新增 `ObjWrap`/`ObjSpineFold`/`SumBuild`/`SumCaseBuild` 四收集任务（icit 平行栈与折叠序与 `SpineFold` 同构）；③`wrap_sub` 登记 `Rc::as_ptr` 进 `VSUB_REGS`（thread_local）+ 轮界 `vsub_reclaim`（`clear_round` 与 `run_decls` 出口 guard）逐指针归还，`SUBSTV_ALIVE` 存活计数为观察口。回归钉：`deep_value_iterative_under_default_stack` ×3（**默认 2 MB 测试栈**：10 万层 occurs/结构比较、1 万层 rename 收集器）与 `fast_substv_reclaimed_across_rounds`（两轮复用后计数回落基线）。残留边界见 §7.6（深值的递归 Drop 与 quote/pretty 深路径） |
+| **深值栈安全轮（2026-09-18，LSP 接入前置）**：①`val_mentions_lvl` / `struct_eq` 全家 / `rename` 的 Sum/SumCase/Obj 臂按**值深度**原生递归（`succ^N zero` 型深值可由 def 倍增链构造，~万级深度在常规栈 1–8 MB 爆栈）；②孪生同款（`mentions_level` / `struct_val_eq` 族 / `rename_iter` 深链内联递归）；③孪生 arena 内 `XCell::VSub` 持有的 `Rc<SubstV>` 克隆跨轮不回收（长生命周期 Machine 下无上界慢泄漏） | ①参考版：`struct_eq` 改任务栈（短路序与燃烧面逐点对齐旧递归）、`val_mentions_lvl` 改工作栈、`rename` 拆 `rename_deep` 帧式收集器（Sum/SumCase/Obj 整链消化，`rename_arm` 收口浅臂，深链在任意深度进入收集器后不再按值深递归）；②孪生：`val_mentions_lvl`/`mentions_level` 工作栈、`struct_val_eq` 族任务栈、`rename_iter` 新增 `ObjWrap`/`ObjSpineFold`/`SumBuild`/`SumCaseBuild` 四收集任务（icit 平行栈与折叠序与 `SpineFold` 同构）；③`wrap_sub` 登记 `Rc::as_ptr` 进 `VSUB_REGS`（thread_local）+ 轮界 `vsub_reclaim`（`clear_round` 与 `run_decls` 出口 guard）逐指针归还，`SUBSTV_ALIVE` 存活计数为观察口。回归钉：`deep_value_iterative_under_default_stack` ×3（**默认 2 MB 测试栈**：10 万层 occurs/结构比较、1 万层 rename 收集器）与 `fast_substv_reclaimed_across_rounds`（两轮复用后计数回落基线）。残留边界见 §7.6（深值的递归 Drop；quote/pretty 深路径已于 2026-11-01 处理，见 §7.6b） |
 | **代码评审轮（2026-09-17）**：①孪生 `vapp1` 的 VSub→闭包路径用调用方的 work/vals 重入 `eval_iter`，入口 clear 静默截断外层在飞的求值任务（match 臂内对 let 绑定 λ 做多参应用 + 结果进注解即触发，**ref Ok / twin Err 判定分裂**，现有 65 个 parity 用例零命中）；②参考版 frcs 的"头不可应用"守卫不含 λ，与孪生 `vapp_ok`（Clo tag 放行）分裂；③文件族 IO 失败直接 panic（源码可达）；④参考版 `eval(Tm::Prim)` 从现场 env 收集实参 spine——只在 builtin λ 链体的正典路径下正确，quoted Prim 在其它 env 下重求值会捕获无关槽；⑤孪生 Match/Match 的结构预检整体前置，Err 路径上 scrutinee 合一的 meta 副作用被吞；⑥探测不独立充值燃料，多构造子枚举逐 ctor 探测互相挤占 | ①VSub→闭包 β 改用本次私有草稿栈（`force` 同款纪律；回归钉 `parity_vsub_slot_applied_closure_workbuf`）；②frcs 读点放行 `Val::Lam`（只改 frcs，η 臂共用的 `v_applicable` 语义不变）；③四个文件臂改卡住降级（双版同步，v2 三个 panic 契约改写为 `v2_file_*_stuck_not_panic`）；④`Tm::Prim` 改零元卡住头、builtin 值体与 quote 产物一律经 App 应用实参（双版同步）；⑤改为 `MatchPrecheck` / `MatchPendingLen` / `MatchPending` 三个屏障任务，与参考版逐点交错（scrutinee → 分支数 → 逐分支模式+体 → pending 长度 → 逐 pending icit+值）；⑥`probe_accessible` 入口充值（双版同点） |
 
 ## 7. 已知限制（诚实清单）
@@ -307,16 +317,37 @@ solve / intersect）。在此之上：
    meta，臂内约束可能把它解成含臂局部模式变量的值，rename 因作用域
    越界失败而报 can't unify（Agda 对此做 generalize / block）。教学取舍，
    与旧版同级。
-2. **force 无记忆 + fuel 预算是软防护**：`force(Val::Match)` 的重选与
-   def 展开不做缓存；精化读点（lookup 命中）与各展开臂消耗共享 fuel
-   池（4096，外层入口充值；**可达性探测每个 ctor 独立充值**——2026-09-17
-   起，多构造子枚举的逐 ctor 探测不互相挤占，见 §6 评审轮行）。
-   fuel 耗尽时精化读点**按未解处理**——极深嵌套模式负载下可能把合法
-   分支误判为不可达（假 absurd），这是有界降级而非纯显示问题：燃烧
-   剖面已对齐旧 pm_defs（旧版 d=2000 / 新版 d=400+ 同池均安全，
-   `test_deep_pattern_fuel_budget_regression` 钉住边界），特化方程路径
-   的失败文案带 `(fuel exhausted)` 尾注供诊断。更深的负载需加大
-   `UNIFY_FUEL`。
+2. **force 无记忆 + 两道有界防护（fuel / match 比较预算）**：
+   `force(Val::Match)` 的重选与 def 展开不做缓存；精化读点（lookup 命中）
+   与各展开臂消耗共享 fuel 池（4096，外层入口充值；**可达性探测每个
+   ctor 独立充值**——2026-09-17 起，多构造子枚举的逐 ctor 探测不互相
+   挤占，见 §6 评审轮行）。fuel 耗尽时精化读点**按未解处理**——极深嵌套
+   模式负载下可能把合法分支判成「不可判定」，这是有界降级而非纯显示
+   问题：燃烧剖面已对齐旧 pm_defs（旧版 d=2000 / 新版 d=400+ 同池均安全，
+   `test_deep_pattern_fuel_budget_regression` 钉住边界）。**常规转换**
+   （`unify_catch`）的失败文案保留旧口径 `can't unify …`，fuel 耗尽时带
+   `(fuel exhausted)` 尾注供诊断；**特化方程路径**改走三档文案
+   （「分支不可达」/「无法判定」，不把内部分档泄漏进普通转换错误，
+   见 §4.1）。更深的负载需加大 `UNIFY_FUEL`。
+
+   **卡住 match 相等性比较的次数预算（2026-11-08 review R3/R8 统一口径）**：
+   与 fuel 分开的第二道防护是 `MATCH_CMP_BUDGET = 64`。卡住的
+   `Match` vs `Match` 在结构快路径（`struct_eq::val_eq` 比 scrutinee /
+   捕获 env / 模式 / 分支体 / pending 全字面相同）失效后，会逐分支在
+   fresh rigid 下重求值——递归 def 的分支体每层再产生新的卡住 match，
+   层级递增、永不结构收敛（实测 4 个 def 的 `Eq (add x zero) (add y zero)`
+   无预算时要 256 s 才靠 fuel 停下）。预算口径 = **总次数上限 64，
+   每个顶层合一入口一份**（参考版在 `unify_catch` / `unify_indices`
+   每特化方程 reset；孪生版每次 `unify_iter` 一份），**结构快路径先试，
+   只有快路径失效后真正逐分支重求值的比较才计数**。超过 64 次 ⇒ 按
+   "无法判定为相等"保守失败：L07 记 `Undecided`（臂报「无法判定」，
+   不再伪装成「分支不可达」，见 §4.1 与 P3）；**L08 尚未迁移三档**，
+   仍报旧口径「分支不可达」（见 `../L08_product_type/README.md` §6）。
+   已知取舍（启发式上限，文档化）：合法但需要 **>64 次**逐分支比较的
+   深/宽嵌套卡住 match 会被报「无法判定」——64 次覆盖 `Vec` / `add`
+   这类教学负载；证得出但比较次数更多的负载需要调大常量。原先参考版
+   "递归深度 40"与孪生版"总次数 64"两套代理不同构（可双向判定漂移），
+   已统一为同一口径，不再作为已知差异列出。
 3. **没有 K 公理层面的安全保护（with-K 定位，务必注意）**：本层与 L07a 都是
    with-K 实现——精化一个出现在其它假设里的变量，在完整依赖理论里需要
    `--without-K` 级论证（Cockx & Abel 的 with-K 条件），本层**不做这项检查**。
@@ -342,13 +373,21 @@ solve / intersect）。在此之上：
    a. 深值的**释放**是 Rc/Box 链的递归 Drop——参考版的真树表示在深值析构
       时仍按深度吃栈（回归测试用句柄保留 + `mem::forget` 泄漏承接，测试
       基建行为、非被测路径）；孪生 arena 表示不跑 `Drop`，天然豁免；
-   b. ~~`quote` / `pretty` 对深值仍是递归路径~~ **已处理（2026-11-01，P11）**：
-      `quote` 的 Sum/SumCase/Obj 深链改帧式收集器 `quote_deep`（与
-      `rename_deep` 同构，子件回落 `quote_arm`；坑：待处理槽必须 **move 出**
-      而非 clone，否则帧弹栈的 Drop 沿 Rc 链递归爆栈——实测 0xC00000FD）；
-      `pretty` 改为**定深截断**（`MAX_DEPTH = 1024`，超出输出 `…`，显示层
-      不需要完整性）。回归钉扩展 `deep_value_iterative_under_default_stack`
-      （10 万层 quote + pretty，默认 2 MB 栈）。仍余 a 的递归 `Drop` 未解。
+   b. ~~`quote` / `pretty` 对深值仍是递归路径~~ **已处理（2026-11-01，P11；
+      2026-11-08 review R10/R11/R15 复核收口）**：
+      `quote` 的**仅 Sum / SumCase / Obj** 三条深链改帧式收集器 `quote_deep`
+      （与 `rename_deep` 同构，子件回落 `quote_arm`；坑：待处理槽必须
+      **move 出**而非 clone，否则帧弹栈的 Drop 沿 Rc 链递归爆栈——实测
+      0xC00000FD）；`quote()` 顶层 `VSub` 臂也已改回 **move**（`*v`；
+      深 Box 链的 clone 是递归深拷贝，review R11）。**Lam / Pi / Match
+      拼出的深链仍走 `quote_arm` 递归**——这三类无法由源程序构造出合法
+      的线性深值，列残余而非缺陷（review R10）。`pretty` 的**定深截断
+      只作用于显示核心 `pretty_tm`**（`MAX_DEPTH = 1024`，超出输出 `…`；
+      模式 pretty / 错误文案不走这条截断路径），显示层不需要完整性。
+      回归钉扩展 `deep_value_iterative_under_default_stack`（10 万层 quote +
+      pretty，**默认 2 MB 测试栈**）。该测试对输入值与返回 `Tm` 用
+      `ManuallyDrop` 泄漏以绕开递归 Drop——只证"遍历/打印不爆栈"，
+      **端到端 Drop 仍余 a 未解**（review R15）。
 7. **孪生 σ 的跨轮回收已落地（2026-09-18）**：bump `reset()` 不跑 `Drop`，
    arena 内 `XCell::VSub` 持有的 `Rc<SubstV>` 克隆跨轮不递减。修：
    `wrap_sub` 在构造克隆的同一时刻把 `Rc::as_ptr` 登记进 `VSUB_REGS`
@@ -363,7 +402,7 @@ solve / intersect）。在此之上：
 
 ## 8. 测试
 
-`cargo test --lib L07_sum_type`（**66 个测试** = `tests.rs` 60 + mod.rs / unification / 孪生 entry / lex 等 6 个；除深值栈安全 3 个外都在
+`cargo test --lib L07_sum_type`（**本 PR 合并时点 66 个测试** = `tests.rs` 60 + mod.rs / unification / 孪生 entry / lex 等 6 个；2026-11-08 修复轮新增 4 个 lib 回归钉（R1/R2/R6/R7）→ **静态核对 70**，以 Lead 实跑为准；除深值栈安全 3 个外都在
 64 MB 栈线程里跑）：
 
 - 移植自 L07a：基础 ADT / 索引族与投影 / 依赖匹配（`t`）/ 嵌套 match /
@@ -394,13 +433,36 @@ solve / intersect）。在此之上：
   取舍钉，见 §1.3）、`cross_meta_cycle_force_is_bounded`（跨 meta 环守卫：
   环上有界终止，不再靠 fuel 耗尽兜底）、`loose_string_requires_empty_spine`
   （宽松合一只对裸未知名 Decl 放行）；
+- **2026-11-08 review 修复轮**回归钉（口径见 §7.2 与
+  [`L07-RISKS` “review 修复轮”节](../../docs/compare-l07-vs-dpm/L07-RISKS.md)）：
+  `test_empty_type_zero_arm_match_accepts_canonical_conflicts`（R1：
+  `enum T(A : U) { c -> T Nat }` 上 `T Bool` 与 `T String` 的**零臂 match
+  都必须被接受**——`unify_no_arm` 的 definite 集合补全为"两侧都是规范值/
+  类型头（Sum/SumCase/LiteralType/LiteralIntro/U/Pi/Lam）即 Absurd"后，
+  "规范值形态不同"不再被误判成判不出来）、
+  `test_parse_error_span_points_at_failing_token`（R6：语法错误 span 必须
+  切中失败 token `)`——`many1_sep` 保留首个 item 的底层错误（不再用剩余
+  输入首 token 覆盖），`p_decl` 改用 `or_far` 保留**最远失败分支**的错误
+  位置）、`test_parse_error_span_matches_raw_source_with_
+  unicode_comment`（R7：`preprocess` 注释替换保持字节长度，中文注释之后
+  的 span 偏移仍对应原文本）、
+  `test_occurs_transitive_vsub_nested_is_documented_limitation`
+  （R2 **已知限制钉**：嵌套 `VSub` 时外层 σ 在 `occurs_transitive` 中
+  不可见——当前返回 false；未来实现非物化多 σ 查找后应改断言为 true）。
+  既有 `parse_error_carries_span` 同步增强为 **span 切片内容**断言（原断言
+  只验起止大小与 path_id，位置错了也全绿——review R6/R14）；
+  既有 `test_stuck_match_equation_bounded` 的注释同步改为与断言一致的
+  "无法判定"口径（原先仍写"判定/文案不变"）；
 - 深值栈安全（2026-09-18）回归钉：`deep_value_iterative_under_default_
   stack`（参考版 occurs/结构相等，10 万层，**默认 2 MB 测试栈**）、
   `unification::deep_rename_tests::deep_rename_collector_under_default_
   stack`（rename 收集器 1 万层，默认栈）、孪生同名单测（occurs /
   mentions / 结构比较，10 万层，默认栈）。
 
-黑盒与双 oracle：`cargo test --test l07_blackbox`（49 个：48 可跑 +
+黑盒与双 oracle（以下各套件计数为**本 PR 合并时点**；2026-11-08 修复轮后
+静态核对：`l07_blackbox` 49 / `v2` 53 不变，**`v3` 117**（自有 47 + 引入
+lib 70）、**`l07_fast_parity` 97**（27 自有 + 70 引入），以 Lead 实跑为准）：
+`cargo test --test l07_blackbox`（49 个：48 可跑 +
 1 个 `--ignored` 深度探针，参考版唯一入口 `run`）；`cargo test --test
 l07_blackbox_v2`（53 个：51 可跑 + 2 个 `--ignored` 格式探针，二轮攻击面：
 builtin 全量扫描含文件 IO 卡住降级契约（IO 失败不 panic，与实参非
@@ -408,7 +470,7 @@ builtin 全量扫描含文件 IO 卡住降级契约（IO 失败不 panic，与�
 空 enum、点号限定名、命名隐式实参）/ 类型层 match / preprocess 怪癖 /
 run 层契约（Display、path_id、并发、跨 run 隔离）；§6 两条新修复的
 回归在此）；`cargo test --test
-l07_blackbox_v3`（113 个：112 可跑 + 1 个 `--ignored` 格式探针；它同样
+l07_blackbox_v3`（本 PR 时点 113 个：112 可跑 + 1 个 `--ignored` 格式探针；它同样
 `#[path]` 引入 `mod.rs`，故深值栈安全 3 钉也在其中跑。三轮攻击面：
 依赖匹配深水区（`T n` 返回族 / 臂体换行嵌套 match / 双重精化 / `add` 型
 索引算术 / 荒谬嵌套模式 / 零臂假前提 / 投影 scrutinee / 隐式子模式具名 /
@@ -416,8 +478,12 @@ l07_blackbox_v3`（113 个：112 可跑 + 1 个 `--ignored` 格式探针；它�
 占位 Decl、flex-flex、卡住投影不证等）/ 性能悬崖表征（深嵌套模式、
 多 pending 卡住 match，带超时防护）/ 解析残缺（截断不 panic、match
 位置精确刻画、CRLF、非 ASCII）；§6 三轮修复的回归在此）；`cargo test --test
-l07_fast_parity`（92 个 = 26 自有 + 66 引入的 lib 测试：run vs run_fast 逐字节互检，见 §10；含
-2026-09-17 评审轮的 `parity_vsub_slot_applied_closure_workbuf`、本轮
+l07_fast_parity`（本 PR 时点 92 个 = 26 自有 parity + 66 引入的 lib 测试：run vs run_fast 逐字节互检，见 §10；2026-11-08 修复轮在此基础上新增
+`parity_empty_type_zero_arm_match`（空类型零臂）并给预算用例加逐侧耗时断言，
+终值见本节开头（静态核对 97），以 Lead 实跑为准；已含
+2026-09-17 评审轮的 `parity_vsub_slot_applied_closure_workbuf`、
+`parity_stuck_match_equation_bounded`、`parity_occurs_transitive_chain`、
+`parity_struct_eq_match_pending`（本轮升级为两侧都拒绝的显式断言）、
 `fast_substv_reclaimed_across_rounds`（σ 跨轮回收）与孪生深值默认栈钉等
 工作区回归钉）。
 
@@ -451,11 +517,15 @@ L06 的冠军配方（bump arena + 打包值 tag 编码 + 迭代内核 + 记忆�
 > 选择（`tests.rs` 的 `test_fn_typed_index_slot_applied_after_refine`
 > 钉死，l07_fast_parity 逐字节保证）。fuel 燃烧点同步对齐：VSub 推开
 > 入口不烧，frcs 的 lookup 命中烧 1（对齐旧 force(Rigid) 查表剖面），
-> 耗尽返回裸 rigid。σ 用 std `Rc`（不进 reset arena——跨越单次模式编译
-> 生存）。**轮界回收（2026-09-18）**：`wrap_sub` 登记 + `clear_round`/
-> `run_decls` 出口归还，消除 arena 内克隆的跨轮泄漏（见 §7.7 与
-> `VSUB_REGS` 注释）；`deep_value_tests`（默认栈深值）与
-> `fast_substv_reclaimed_across_rounds` 为孪生侧回归钉。
+> 耗尽返回裸 rigid。**卡住 match 比较预算（2026-11-08，review R3/R8）**：
+> 两侧统一为 `MATCH_CMP_BUDGET = 64` 次 / 顶层合一入口、**结构快路径后**
+> 计数（参考版在 `unify_catch` / `unify_indices` 每方程 reset，孪生版每次
+> `unify_iter` 一份）——原先参考版"递归深度 40"与孪生版"总次数 64"两套
+> 不同构的代理已对齐，不再作为已知偏差列出。σ 用 std `Rc`（不进 reset
+> arena——跨越单次模式编译生存）。**轮界回收（2026-09-18）**：
+> `wrap_sub` 登记 + `clear_round`/`run_decls` 出口归还，消除 arena 内
+> 克隆的跨轮泄漏（见 §7.7 与 `VSUB_REGS` 注释）；`deep_value_tests`
+> （默认栈深值）与 `fast_substv_reclaimed_across_rounds` 为孪生侧回归钉。
 
 机制落地清单（孪生侧现状）：
 
@@ -532,8 +602,13 @@ k=13  n=16384   fast_ss=0.053ms      basic=0.177ms      (≈3×)
 
 ### 已知偏差（与参考版）
 
-- 错误消息 span 全零（文档化偏差，同 L06）；unify_catch 文案带
-  pretty 项 + `(fuel exhausted)` 尾注，span 数字两版不同；
+- 错误消息 span：参考版模式臂 / 解析错误已带位置（P10，`Error::span()`），
+  **孪生版仍全零**（P10 未镜像）；unify_catch 文案带 pretty 项 +
+  `(fuel exhausted)` 尾注，span 数字两版不同；
+- **卡住 match 比较预算：已对齐（2026-11-08）**——两侧同为 `MATCH_CMP_BUDGET
+  = 64` 次总次数 / 结构快路径后计数（见上「机制对齐」段），此项不再是
+  引擎间偏差；耗尽后的**文案**仍分层：L07 报「无法判定」（P3 三档），
+  L08 报旧口径「分支不可达」（L08 未迁 P3）；
 - 卡住 Prim 的 force 每次烧 1 fuel（与参考版同语义，频率依赖）；
 - eval(Tm::App) 复合函数头的求值序是先函数后实参（参考版先实参后函数；
   仅当两侧都有 eval 期副作用时可观测，L06 孪生同序）；

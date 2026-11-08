@@ -789,6 +789,10 @@ impl Infer {
         // 第一次尝试可能已 solve 部分 meta 才失败，反向尝试前回滚。
         // （P0-2：回滚为 undo-log 水位，不再全量深拷贝 metacontext）
         let snap = self.meta_snapshot();
+        // review R9：`unify_kind` 是 Infer 上的 Cell，**不在** meta 快照内；
+        // 第一次尝试的失败分档（Undecided/Fuel）会单调残留，污染反向重试
+        // 的终判（真 Absurd 被报成"无法判定"）。重试前恢复分档水位。
+        let kind_before = self.unify_kind();
         let (m1, sp1, m2, sp2) = if sp.len() <= sp_prime.len() {
             (m, sp, m_prime, sp_prime)
         } else {
@@ -798,6 +802,7 @@ impl Infer {
             Ok(()) => Ok(()),
             Err(_) => {
                 self.meta_restore(snap);
+                self.unify_kind.set(kind_before);
                 match go(self, m2, sp2, m1, sp1) {
                     Ok(()) => Ok(()),
                     Err(e) => Err(e),
@@ -1118,18 +1123,6 @@ impl Infer {
             // 卡住的 match vs 卡住的 match：scrutinee 合一 + 分支一一对应
             // + 卡住期累积的实参逐一比较
             (Val::Match(s1, env1, cases1, pending1), Val::Match(s2, env2, cases2, pending2)) => {
-                // 深度预算（见 `MATCH_CMP_DEPTH`）：本臂在结构快路径失效后会
-                // 逐分支重求值，递归 def 会逐层产生新的卡住 match ⇒ 不设界时
-                // 唯一的下限是 fuel 池（实测 256 s）。超出预算按"无法判定为
-                // 相等"保守失败，与 fuel 耗尽同口径（见 L07-RISKS P2/P3）。
-                let saved_depth = self.match_cmp_depth.get();
-                if saved_depth >= super::MATCH_CMP_DEPTH {
-                    // P3：预算内没比出来 ≠ 两侧不等 ⇒ 记"无法判定"。
-                    self.note_unify_kind(super::UnifyKind::Undecided);
-                    return Err(UnifyError);
-                }
-                self.match_cmp_depth.set(saved_depth + 1);
-                let r = (|| -> Result<(), UnifyError> {
                 // 快路径：scrutinee、捕获 env、模式与分支体全部结构相同 ⇒ 两个
                 // match 值在所有实例化下行为一致，直接判等。逐分支重求值会把
                 // 递归函数的分支体再展开一层卡住 match（fresh rigid 层级随深度
@@ -1150,6 +1143,15 @@ impl Infer {
                         .all(|((a, i), (b, j))| i == j && super::struct_eq::val_eq(a, b))
                 {
                     return Ok(());
+                }
+                // 总次数预算（review R3/R8）：快路径**先试**，只有快路径失效、
+                // 真正逐分支重求值的比较才计入并消耗——与孪生
+                // `bump_spine_iter::MATCH_CMP_BUDGET = 64`（每顶层调用一份）
+                // 同口径。超出按"无法判定为相等"保守失败（P3：Undecided；
+                // 不放过真矛盾——任何 Err 在所有消费点都是失败/不可达）。
+                if !self.burn_match_cmp_budget() {
+                    self.note_unify_kind(super::UnifyKind::Undecided);
+                    return Err(UnifyError);
                 }
                 self.unify(decl, l, cxt, (**s1).clone(), (**s2).clone(), spec.as_deref_mut())?;
                 if cases1.len() != cases2.len() {
@@ -1180,9 +1182,6 @@ impl Infer {
                     self.unify(decl, l, cxt, u1.clone(), u2.clone(), spec.as_deref_mut())?;
                 }
                 Ok(())
-                })();
-                self.match_cmp_depth.set(saved_depth);
-                r
             }
             // 卡住的 match vs 其它：能归约的已在入口 force 消掉（force 会在
             // scrutinee 上重试选分支），这里只接受严格 eta——每个分支都是
@@ -1223,27 +1222,34 @@ impl Infer {
 
     /// 合一**到底**（没有任何臂命中）时的原因分档。
     ///
-    /// 两侧都是**规范值**且形态不同（构造子值 / 字面量 / 和类型头）⇒ 确定不等
-    /// （Absurd，分支确不可达）；其余（中性头 vs 别的东西、卡住 match vs 非 eta、
-    /// 混合形态）⇒ 判不出来（Undecided，对齐 dpm `conv` false ⇒ `UIDK`）。
+    /// 两侧都是**规范值/规范类型头**（构造子值 / 字面量 / 和类型头 / Π / λ /
+    /// U）且形态不同 ⇒ 确定不等（Absurd，分支确不可达）。同形态组合早已被
+    /// 前面的臂处理，走到这里只剩不同构造子 / 异名 / 不同字面量 / icit 不匹配
+    /// 等**确定**冲突；缺了 `Sum×LiteralType`、`U×Sum`、`Sum×Pi` 等组合会让
+    /// "空类型的零臂 match"被误判为不可判定而拒绝（review R1）。
     ///
-    /// 这条分档是 P3 第二刀的核心：它让"两个不同的 def / 两个不可解中性值"不再
-    /// 被报成"类型矛盾"。
+    /// 其余（中性头 vs 别的东西、卡住 match vs 非 eta、混合形态）⇒ 判不出来
+    /// （Undecided，对齐 dpm `conv` false ⇒ `UIDK`）。
     fn unify_no_arm(&self, t: &Val, u: &Val) -> Result<(), UnifyError> {
-        let definite = matches!(
-            (t, u),
-            (Val::SumCase { .. }, Val::SumCase { .. })
-                | (Val::Sum(..), Val::Sum(..))
-                | (Val::LiteralIntro(_), Val::LiteralIntro(_))
-                | (Val::SumCase { .. }, Val::LiteralIntro(_))
-                | (Val::LiteralIntro(_), Val::SumCase { .. })
-                | (Val::U, Val::LiteralType)
-                | (Val::LiteralType, Val::U)
-        );
+        let definite = Self::is_canonical_head(t) && Self::is_canonical_head(u);
         if !definite {
             self.note_unify_kind(super::UnifyKind::Undecided);
         }
         Err(UnifyError)
+    }
+
+    /// 规范值 / 规范类型头：两个这样的值形态不同即确定不等（不是"判不出来"）。
+    fn is_canonical_head(v: &Val) -> bool {
+        matches!(
+            v,
+            Val::Sum(..)
+                | Val::SumCase { .. }
+                | Val::LiteralType
+                | Val::LiteralIntro(_)
+                | Val::U
+                | Val::Pi(..)
+                | Val::Lam(..)
+        )
     }
 }
 
