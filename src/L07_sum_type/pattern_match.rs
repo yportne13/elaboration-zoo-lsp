@@ -165,14 +165,27 @@ impl Compiler {
         // 覆盖检查：每个可达构造子必须被某个臂覆盖（通配臂覆盖全部）。
         // 可达性 = 在（meta + σ + 本地可解集）快照回滚下跑一次特化方程
         // （与臂内走查同一套判定）。
-        for ctor in head_sum.sum_cases() {
-            if Self::probe_accessible(infer, cxt, cxt.lvl, &head_sum, &ctor, &self.sub, &self.solvable)
-                && !arms
-                    .iter()
-                    .any(|(pat, _)| covers(pat, &ctor.data, &ctor_names))
-            {
-                self.errors
-                    .push(format!("match 不完整：缺少构造子 {}", ctor.data));
+        //
+        // 性能（U2）：`probe_accessible` 的结果**只**用于"缺构造子"报错；若头部
+        // 和类型的每个构造子都已被某个臂覆盖（穷尽 match 的常态），下面的循环
+        // 不可能产生任何错误，整轮探测（每 ctor 一次 decl 表快照 + meta 快照 +
+        // 特化方程）纯属浪费，直接跳过。判据与循环体完全同源（同一个 `covers`），
+        // 不改变判定。
+        let ctors = head_sum.sum_cases();
+        let fully_covered = !ctors.is_empty()
+            && ctors
+                .iter()
+                .all(|c| arms.iter().any(|(pat, _)| covers(pat, &c.data, &ctor_names)));
+        if !fully_covered {
+            for ctor in ctors {
+                if Self::probe_accessible(infer, cxt, cxt.lvl, &head_sum, &ctor, &self.sub, &self.solvable)
+                    && !arms
+                        .iter()
+                        .any(|(pat, _)| covers(pat, &ctor.data, &ctor_names))
+                {
+                    self.errors
+                        .push(format!("match 不完整：缺少构造子 {}", ctor.data));
+                }
             }
         }
         // 逐臂下钻。一旦出现通配臂（覆盖所有取值），后续臂运行时永远不会被
@@ -353,14 +366,16 @@ impl Compiler {
         // 会假 absurd，与臂内方程的判定不同步）。孪生版同点充值。
         infer.meta_refuel();
         let snap = infer.meta_snapshot();
-        let decl = cxt.decl().clone();
+        // 性能（U1）：`probe_accessible` 只读 decl 表，借用即可；旧实现
+        // `cxt.decl().clone()` 是整张 `Decls` 的克隆（重建哈希桶 + 逐条
+        // `SmolStr`/`Rc` 递增），每 (match × 构造子) 一次 ⇒ O(matches×ctors×D)。
         let mut solvable = base_solvable.to_vec();
         let sub = init_sub.clone();
         let mut ty = entry.ty.clone();
         let mut impl_idx = 0;
         let mut scratch = 0u32;
         let ok = loop {
-            match infer.force(&decl, wrap_sub(&sub, ty.clone())) {
+            match infer.force(cxt.decl(), wrap_sub(&sub, ty.clone())) {
                 Val::Pi(_, _, _, closure) => {
                     let u = if impl_idx < impl_vals.len() {
                         let v = impl_vals[impl_idx].clone();
@@ -372,10 +387,10 @@ impl Compiler {
                         solvable.push(l);
                         Val::vvar(l)
                     };
-                    ty = infer.closure_apply(&decl, &closure, u);
+                    ty = infer.closure_apply(cxt.decl(), &closure, u);
                 }
                 ret => {
-                    let ret_sum = match infer.force(&decl, wrap_sub(&sub, ret)) {
+                    let ret_sum = match infer.force(cxt.decl(), wrap_sub(&sub, ret)) {
                         s @ Val::Sum(..) => s,
                         _ => break false,
                     };
