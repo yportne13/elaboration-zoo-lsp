@@ -1,11 +1,74 @@
+use std::cell::RefCell;
 use std::collections::HashSet;
 
-use crate::{bimap::BiMap, parser_lib::ToSpan};
+use crate::parser_lib::ToSpan;
 
 use super::{
     syntax::{Locals, Pruning},
     *,
 };
+
+/// 源码名表 + 撤销轨迹（L07 `d411debe` 的参考版对应物，双表版）。
+///
+/// 旧实现是**按值** `BiMap<String, Lvl, (Span<()>, Rc<VTy>)>`：`bind` /
+/// `define` 各深拷两张 FxHashMap——n 个绑定器的精化 O(n²)。新实现为
+/// "单张 shared 表 + 撤销轨迹 + 按 mark 惰性回退"：`bind`/`define` 只做
+/// 一次双表插入 + 追加一条轨迹，O(1)；上下文退出不显式撤销，而是在
+/// **下一次访问名字表前** 把轨迹裁回本上下文的 `name_mark`——语义与持久
+/// 表一致（每个 Cxt 看到的名字集 = 创建时快照）。
+#[derive(Debug)]
+struct NameTrailEntry {
+    /// 插入/覆盖的源码名（`Wrap` 式替换时为 None）。
+    name: Option<String>,
+    old_lvl: Option<Lvl>,
+    lvl: Lvl,
+    old_val: Option<(Span<()>, Rc<VTy>)>,
+}
+
+#[derive(Debug, Default)]
+struct NameState {
+    by_name: rustc_hash::FxHashMap<String, Lvl>,
+    by_lvl: rustc_hash::FxHashMap<Lvl, (Span<()>, Rc<VTy>)>,
+    trail: Vec<NameTrailEntry>,
+}
+
+impl NameState {
+    fn unwind(&mut self, mark: u32) {
+        debug_assert!(mark as usize <= self.trail.len(), "unwind: mark 超出轨迹");
+        while self.trail.len() > mark as usize {
+            let e = self.trail.pop().expect("unwind: 轨迹为空");
+            if let Some(k) = e.name {
+                match e.old_lvl {
+                    Some(l) => {
+                        self.by_name.insert(k, l);
+                    }
+                    None => {
+                        self.by_name.remove(&k);
+                    }
+                }
+            }
+            match e.old_val {
+                Some(v) => {
+                    self.by_lvl.insert(e.lvl, v);
+                }
+                None => {
+                    self.by_lvl.remove(&e.lvl);
+                }
+            }
+        }
+    }
+
+    fn insert(&mut self, k: String, lvl: Lvl, val: (Span<()>, Rc<VTy>)) {
+        let old_lvl = self.by_name.insert(k.clone(), lvl);
+        let old_val = self.by_lvl.insert(lvl, val);
+        self.trail.push(NameTrailEntry {
+            name: Some(k),
+            old_lvl,
+            lvl,
+            old_val,
+        });
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Cxt {
@@ -13,7 +76,13 @@ pub struct Cxt {
     pub lvl: Lvl, // Used for unification
     pub locals: Locals,
     pub pruning: Pruning,
-    pub src_names: BiMap<String, Lvl, (Span<()>, Rc<VTy>)>,
+    /// 源码变量名 → (绑定层级, 类型值)，共享可变表（见 [`NameState`]）。
+    /// 每次访问前先把轨迹裁回 `name_mark`，因此本上下文看到的名字集合恒等于
+    /// 创建时的快照；`bind` 条目值仍是 `Rc<VTy>`（O(1)）。旧实现是按值
+    /// `BiMap`：每次 bind/define 深拷两张表（def/n 层绑定器的 O(n²) 来源）。
+    names: Rc<RefCell<NameState>>,
+    /// 本上下文的名字表基线（轨迹长度）。
+    name_mark: u32,
     /// 全局 decl 表，按 `Rc` 共享（对齐 L13 与 L07 口径）：`Cxt` 的每次构造
     /// （bind / define / new_binder / subst_cxt …）只需递增引用计数，不再克隆
     /// 整张表。此前是**按值**持有 `HashMap`，每次 `Cxt` 构造都深克隆一遍
@@ -346,7 +415,8 @@ impl Cxt {
             lvl: Lvl(0),
             locals: Locals::Here,
             pruning: List::new(),
-            src_names: BiMap::new(),
+            names: Rc::new(RefCell::new(NameState::default())),
+            name_mark: 0,
             decl: Rc::new(Default::default()),
             namespace: List::new(),
         }
@@ -357,7 +427,8 @@ impl Cxt {
             lvl: self.lvl,
             locals: self.locals.clone(),
             pruning: self.pruning.clone(),
-            src_names: BiMap::new(),
+            names: Rc::new(RefCell::new(NameState::default())),
+            name_mark: 0,
             decl: self.decl.clone(),
             namespace: self.namespace.clone(),
         }
@@ -374,16 +445,37 @@ impl Cxt {
         go(&self.locals)
     }
 
+    /// 名字表访问前统一入口：把共享轨迹裁回本上下文基线（惰性回滚）。
+    #[inline]
+    fn unwind_names(&self) {
+        self.names.borrow_mut().unwind(self.name_mark);
+    }
+
+    /// 查一个源码局部名（局部 binder 优先于 decl 表）：返回
+    /// `(绑定层级, span, 类型值)` 的拷贝（Rc 递增）。
+    pub fn lookup_src(&self, n: &str) -> Option<(Lvl, Span<()>, Rc<VTy>)> {
+        self.unwind_names();
+        let s = self.names.borrow();
+        let lvl = *s.by_name.get(n)?;
+        let (sp, ty) = s.by_lvl.get(&lvl)?;
+        Some((lvl, sp.clone(), ty.clone()))
+    }
+
     pub fn bind(&self, x: Span<String>, a_quote: Rc<Tm>, a: Rc<Val>) -> Self {
         //println!("{} {x:?} {a:?} at {}", "bind".bright_purple(), self.lvl.0);
-        let mut src_names = self.src_names.clone();
-        src_names.insert(x.data.clone(), (self.lvl, (x.to_span(), a)));
+        let name_mark = {
+            let mut s = self.names.borrow_mut();
+            s.unwind(self.name_mark);
+            s.insert(x.data.clone(), self.lvl, (x.to_span(), a));
+            s.trail.len() as u32
+        };
         Cxt {
             env: self.env.prepend(Val::vvar(self.lvl).into()),
             lvl: self.lvl + 1,
             locals: Locals::Bind(Rc::new(self.locals.clone()), x, a_quote),
             pruning: self.pruning.prepend(Some(Icit::Expl)),
-            src_names,
+            names: Rc::clone(&self.names),
+            name_mark,
             decl: self.decl.clone(),
             namespace: self.namespace.clone(),
         }
@@ -429,7 +521,8 @@ impl Cxt {
             lvl: self.lvl + 1,
             locals: Locals::Bind(Rc::new(self.locals.clone()), x, a_quote),
             pruning: self.pruning.prepend(Some(Icit::Expl)),
-            src_names: self.src_names.clone(),
+            names: Rc::clone(&self.names),
+            name_mark: self.name_mark,
             decl: self.decl.clone(),
             namespace: self.namespace.clone(),
         }
@@ -437,14 +530,19 @@ impl Cxt {
 
     pub fn define(&self, x: Span<String>, t: Rc<Tm>, vt: Rc<Val>, a: Rc<Ty>, va: Rc<VTy>) -> Self {
         //println!("{} {}\n{t:?}\n{vt:?}\n{a:?}\n{va:?}", "define".bright_purple(), x.data);
-        let mut src_names = self.src_names.clone();
-        src_names.insert(x.data.clone(), (self.lvl, (x.to_span(), va)));
+        let name_mark = {
+            let mut s = self.names.borrow_mut();
+            s.unwind(self.name_mark);
+            s.insert(x.data.clone(), self.lvl, (x.to_span(), va));
+            s.trail.len() as u32
+        };
         Cxt {
             env: self.env.prepend(vt),
             lvl: self.lvl + 1,
             locals: Locals::Define(Rc::new(self.locals.clone()), x, a, t),
             pruning: self.pruning.prepend(None),
-            src_names,
+            names: Rc::clone(&self.names),
+            name_mark,
             decl: self.decl.clone(),
             namespace: self.namespace.clone(),
         }
@@ -464,29 +562,43 @@ impl Cxt {
     }
 
     /// 把精化替换 σ 施加到上下文（dpm-nbe `subst sub ctx`）：env 槽与
-    /// src_names 的类型包 `VSub`；lvl / locals / pruning / decl / namespace
-    /// 不动——**槽位布局（= 运行时布局）不变**，被解变量仍在原槽位，读点经
+    /// 名字表的类型包 `VSub`；lvl / locals / pruning / decl / namespace 不动
+    /// ——**槽位布局（= 运行时布局）不变**，被解变量仍在原槽位，读点经
     /// force 推开看到解。decl 表是全局声明登记（旧 `update_cxt` 也从不改写
     /// 它，故此处保持原样）。σ 为空时零开销直通。
     ///
-    /// 替代旧的 `update_cxt`/`refresh`（改写 env 槽 + 全量重引用）：解不再
-    /// 改写既有值，只包在外面，消费点惰性展开——旧架构"已捕获旧上下文的值
-    /// 过期、槽位错位"的 bug 族按构造消除。
+    /// 名字表按轨迹改写（L07 `d411debe` 同款）：现有条目的类型逐条换成包了
+    /// `VSub` 的新值并记录旧值，`name_mark` 指到轨迹新长度；父上下文下次
+    /// 访问时惰性还原（与 `bind`/`define` 同一机制）。
     pub fn subst_cxt(&self, sub: &Rc<Subst>) -> Self {
         if sub.is_empty() {
             return self.clone();
         }
         let wrap = |v: &Rc<Val>| Rc::new(Val::VSub(v.clone(), sub.clone()));
-        let mut src_names = BiMap::new();
-        for (k, l, (sp, ty)) in self.src_names.iter_all() {
-            src_names.insert(k.clone(), (*l, (*sp, wrap(ty))));
-        }
+        let name_mark = {
+            let mut s = self.names.borrow_mut();
+            s.unwind(self.name_mark);
+            let lvls: Vec<Lvl> = s.by_lvl.keys().copied().collect();
+            for l in lvls {
+                let old = s.by_lvl.get(&l).cloned().expect("by_lvl key vanished");
+                let newv = (old.0.clone(), wrap(&old.1));
+                s.by_lvl.insert(l, newv);
+                s.trail.push(NameTrailEntry {
+                    name: None,
+                    old_lvl: None,
+                    lvl: l,
+                    old_val: Some(old),
+                });
+            }
+            s.trail.len() as u32
+        };
         Cxt {
             env: self.env.map(wrap),
             lvl: self.lvl,
             locals: self.locals.clone(),
             pruning: self.pruning.clone(),
-            src_names,
+            names: Rc::clone(&self.names),
+            name_mark,
             decl: self.decl.clone(),
             namespace: self.namespace.clone(),
         }
