@@ -7,7 +7,7 @@
 //! "Elaboration 上下文" 节尾的类型类块，逐行搬运（2026-09-23 拆分）。
 
 use bumpalo::Bump;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use super::parser::syntax::{Icit, Raw};
 

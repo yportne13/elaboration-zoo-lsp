@@ -1,5 +1,5 @@
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use crate::list::List;
 
@@ -195,7 +195,7 @@ impl Synth {
         }
 
         // 一阶匹配：goal 视为已确定，pattern（实例断言）可含实例类型参数
-        let mut subst = Subst::new();
+        let mut subst = Subst::default();
         for (g_arg, i_arg) in goal.arguments.iter().zip(&instance.assertion.arguments) {
             if !match_typ(g_arg, i_arg, &mut subst) {
                 return None;

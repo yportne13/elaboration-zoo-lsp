@@ -1,7 +1,5 @@
-use std::{
-    collections::{BTreeSet, HashMap, HashSet},
-    rc::Rc,
-};
+use rustc_hash::FxHashSet as HashSet;
+use std::rc::Rc;
 
 use crate::parser_lib::{Span, ToSpan};
 
@@ -318,7 +316,7 @@ impl Compiler {
         // 献其末端构造子）。可达集取各记账臂探测的并集（保守：任一臂实例化
         // 下可达的构造子都要求被覆盖）。荒谬臂 / 被遮蔽臂不在 pats 里，天然
         // 不贡献覆盖——与运行时首匹配结构语义一致。
-        let mut reported = HashSet::new();
+        let mut reported = HashSet::default();
         for nc in std::mem::take(&mut self.nested_checks) {
             // 字段 Sum 置于记录臂的终态 σ 之下再 force：索引精化（如尾部
             // 长度 l := succ n）在 σ 里，推开后的 Sum 才是探测该用的类型
