@@ -409,7 +409,6 @@ fn lvl2ix(l: Lvl, x: Lvl) -> Ix {
 
 use std::{
     cell::Cell,
-    collections::HashMap,
     ops::{Add, Sub},
     rc::Rc,
 };
@@ -442,7 +441,7 @@ pub struct Error(pub Span<String>);
 #[derive(Clone)]
 pub struct Infer {
     meta: Vec<MetaEntry>,
-    global: HashMap<Lvl, VTy>,
+    global: FxHashMap<Lvl, VTy>,
     /// 顶层名字表（名字 → (层级, 类型值)）：**append-only，随 Infer 存续、
     /// 不随 Cxt 克隆**——顶层 def/enum/构造子的真名与 `fake_bind` 的递归
     /// 占位都记在这里（L10 的 `Cxt::define` 同源迁移，2026-09-20 参考版
@@ -479,7 +478,7 @@ impl Infer {
     pub fn new() -> Self {
         Self {
             meta: vec![],
-            global: HashMap::new(),
+            global: FxHashMap::default(),
             global_names: FxHashMap::default(),
             neutral_globals: Cell::new(false),
             unify_fuel: Cell::new(UNIFY_FUEL),
