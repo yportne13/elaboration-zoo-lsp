@@ -123,7 +123,8 @@ impl Cxt {
     /// 注册顺序敏感：`string_to_global_type` 必须先于引用它的 global 族
     /// （其类型的闭包体在 check 期才查表，但防御性保持 L06 顺序）。
     pub fn new(infer: &Infer) -> Self {
-        let cxt = Self::empty().decl_insert(
+        let mut cxt = Self::empty();
+        cxt.decl_insert_mut(
             "String",
             DeclEntry {
                 ty: Val::U,
@@ -204,7 +205,7 @@ impl Cxt {
     /// 闭包里到 check 期才解）；值 = λ 参数链 → **App 链**重新应用参数到
     /// `Tm::Prim(name)` 零元头，应用满元数后由 `force` 的 `prim_reduce`
     /// 归约。
-    fn add_builtin(self, infer: &Infer, name: &str, ty_tm: Tm) -> Self {
+    fn add_builtin(mut self, infer: &Infer, name: &str, ty_tm: Tm) -> Self {
         let ty = infer.eval(&self.decl, &List::new(), &ty_tm);
         // 值 = λ 参数链 → ((Prim 名 p1) p2 …)；参数名从类型的 Π 链取（与
         // 域同序）。实参经 App 显式应用而非 env 隐式收集——`Tm::Prim` 从
@@ -230,7 +231,8 @@ impl Cxt {
             val = Tm::Lam(empty_span(p.clone()), Icit::Expl, Box::new(val));
         }
         let val = infer.eval(&self.decl, &List::new(), &val);
-        self.decl_insert(SmolStr::new(name), DeclEntry { ty, val })
+        self.decl_insert_mut(SmolStr::new(name), DeclEntry { ty, val });
+        self
     }
     pub fn empty() -> Self {
         Cxt {
@@ -255,19 +257,24 @@ impl Cxt {
     /// 这正是递归定义需要的"占位只对本定义的检查可见"。表克隆是逐条 `Rc`
     /// 递增 + 重建哈希桶（条目本身共享，不深拷贝值）。新实例取唯一代数
     /// （`ver`，见 [`Decls`] 文档）。
-    pub fn decl_insert(&self, k: impl Into<SmolStr>, e: DeclEntry) -> Self {
-        let mut decl = self.decl.clone();
-        let d = Rc::make_mut(&mut decl);
+    /// 就地写入一个 decl（顺序声明路径专用）：调用方持有 `Cxt` 所有权，
+    /// 表的 `Rc` 强计数为 1，`Rc::make_mut` 原地写，不深拷整表。
+    ///
+    /// 这是 L13 参考版 `fake_bind`/`decl` 就地写模式在 L07 的对应物。
+    /// 旧 [`Cxt::decl_insert`] 先 `self.decl.clone()` 再 `Rc::make_mut`，
+    /// 强计数恒为 2 ⇒ 每个顶层 def 都深拷一次整张 decl 表（strchain/global
+    /// 这类每 k 翻倍生成 2^(k+1) 个 def 的负载上是 O(D²) 放大器）。
+    pub fn decl_insert_mut(&mut self, k: impl Into<SmolStr>, e: DeclEntry) {
+        let d = Rc::make_mut(&mut self.decl);
         d.ver = next_decl_version();
         d.insert(k.into(), Rc::new(e));
-        Cxt {
-            decl,
-            env: self.env.clone(),
-            lvl: self.lvl,
-            locals: self.locals.clone(),
-            pruning: self.pruning.clone(),
-            src_names: self.src_names.clone(),
-        }
+    }
+
+    /// 持久化插入包装（保持 `&Cxt` 调用方兼容）：浅克隆上下文后就地写。
+    pub fn decl_insert(&self, k: impl Into<SmolStr>, e: DeclEntry) -> Self {
+        let mut cxt = self.clone();
+        cxt.decl_insert_mut(k, e);
+        cxt
     }
 
     pub fn names(&self) -> List<String> {

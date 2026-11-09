@@ -1947,7 +1947,7 @@ pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
         if *L07_DEBUG_ON {
             eprintln!("> {}", parser::syntax::Decl::name(&tm));
         }
-        let (x, _, new_cxt) = infer.infer(&cxt, tm)?;
+        let (x, _, new_cxt) = infer.infer_owned(cxt, tm)?;
         cxt = new_cxt;
         if let DeclTm::Println(x) = x {
             ret += &pretty_tm(0, cxt.names(), &infer.nf(cxt.decl(), &cxt.env, x));
@@ -2047,7 +2047,7 @@ pub(crate) fn bench_check(decls: &[parser::syntax::Decl]) -> bool {
     let mut infer = Infer::new();
     let mut cxt = Cxt::new(&infer);
     for d in decls {
-        match infer.infer(&cxt, d.clone()) {
+        match infer.infer_owned(cxt, d.clone()) {
             Ok((_, _, nc)) => cxt = nc,
             Err(_) => return false,
         }
@@ -2118,7 +2118,7 @@ pub(crate) fn bench_check_nf(decls: &[parser::syntax::Decl]) -> u64 {
         if let parser::syntax::Decl::Def { name, .. } = d {
             last = Some(name.data.clone());
         }
-        match infer.infer(&cxt, d.clone()) {
+        match infer.infer_owned(cxt, d.clone()) {
             Ok((_, _, nc)) => cxt = nc,
             Err(_) => return 0,
         }
