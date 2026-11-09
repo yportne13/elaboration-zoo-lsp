@@ -12,6 +12,7 @@ use super::{
 };
 
 use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::collections::HashSet;
 
 /// [`Infer::solve_multi_trait`] 的待解条目快照缓冲池：旧实现每次调用
@@ -46,7 +47,7 @@ pub struct PartialRenaming {
     pub occ: Option<MetaVar>,
     pub dom: Lvl,
     pub cod: Lvl,
-    pub ren: Rc<HashMap<u32, Lvl>>,
+    pub ren: Rc<FxHashMap<u32, Lvl>>,
 }
 
 /// Whether `v_app` can be called on this value without panicking.
@@ -152,9 +153,9 @@ impl Infer {
         &self,
         decl: &Decl,
         sp: &Spine,
-    ) -> Result<(Lvl, HashMap<u32, Lvl>, HashSet<u32>, List<(Lvl, Icit)>), UnifyError> {
+    ) -> Result<(Lvl, FxHashMap<u32, Lvl>, HashSet<u32>, List<(Lvl, Icit)>), UnifyError> {
         match sp {
-            List { head: None, .. } => Ok((Lvl(0), HashMap::new(), HashSet::new(), List::new())),
+            List { head: None, .. } => Ok((Lvl(0), FxHashMap::default(), HashSet::new(), List::new())),
             a => {
                 let (dom, mut ren, mut nlvars, fsp) = self.invert_go(decl, &a.tail())?;
                 match self.force(decl, &a.head().unwrap().0).as_ref() {
@@ -245,7 +246,7 @@ impl Infer {
                 occ: None,
                 dom: Lvl(0),
                 cod: Lvl(0),
-                ren: Rc::new(HashMap::new()),
+                ren: Rc::new(FxHashMap::default()),
             },
             a,
         )
@@ -545,7 +546,7 @@ impl Infer {
                     occ: Some(m),
                     dom: Lvl(0),
                     cod: gamma,
-                    ren: Rc::new(HashMap::new()),
+                    ren: Rc::new(FxHashMap::default()),
                 };
                 let renamed = match self.rename(decl, &empty, rhs) {
                     Ok(t) => t,

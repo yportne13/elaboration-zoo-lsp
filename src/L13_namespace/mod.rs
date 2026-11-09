@@ -1424,16 +1424,22 @@ pub struct Infer {
     trait_metas: Vec<MetaVar>,
     trait_solver: typeclass::Synth,
     trait_definition: HashMap<SmolStr, (Vec<(Span<SmolStr>, Raw, Icit)>, Vec<bool>, Vec<Span<SmolStr>>, Vec<(Span<SmolStr>, Vec<(Span<SmolStr>, Raw, Icit)>, Raw, Option<Raw>)>)>,
-    trait_out_param: HashMap<SmolStr, Vec<bool>>,
+    trait_out_param: rustc_hash::FxHashMap<SmolStr, Vec<bool>>,
     /// (trait_name, assoc_type_name) -> optional default type value (Raw)
-    assoc_defaults: HashMap<(SmolStr, SmolStr), Option<Raw>>,
-    pub mutable_map: Rc<std::sync::RwLock<HashMap<String, Rc<Val>>>>,
+    assoc_defaults: rustc_hash::FxHashMap<(SmolStr, SmolStr), Option<Raw>>,
+    pub mutable_map: Rc<std::sync::RwLock<rustc_hash::FxHashMap<String, Rc<Val>>>>,
     pub hover_table: Vec<HoverEntry>,
     pub completion_table: Vec<(Span<()>, SmolStr)>,
     /// Inlay hints: (byte offset of insertion point, ": <type>" label).
     /// Populated for `def` without explicit return type and `let` without type
     /// annotation; consumed by the LSP `textDocument/inlayHint` request.
     pub inlay_hint_table: Vec<(u32, String)>,
+    /// Observation gate: when false, `push_hover`/`push_ctor_hover`/
+    /// `push_inlay_hint` return before doing the quote+pretty render.  Prelude
+    /// loading clears all three observation tables at the end (dead work), and
+    /// the bench entry points never consume observations; user-file
+    /// elaboration (LSP consumer) keeps it true.
+    pub lsp_collect: bool,
     /// Accumulated type errors from pattern match branches, reported as
     /// separate LSP diagnostics so each branch error gets its own red squiggle.
     pub accumulated_errors: Vec<Error>,
@@ -1450,7 +1456,7 @@ pub struct Infer {
     /// registered, so `quote` can restore the infix form (`x + y`) of an
     /// inlined helper call (`nat_add_helper x y`).  User-defined operator
     /// symbols are supported automatically.
-    pub symbol_table: HashMap<(SmolStr, usize), SmolStr>,
+    pub symbol_table: rustc_hash::FxHashMap<(SmolStr, usize), SmolStr>,
     /// Per-file import aliases: stripped alias name → fully-qualified decl key.
     /// Populated by `Decl::Import` (wildcard / brace / single-name forms) and
     /// consulted by variable lookup *after* the exact `cxt.decl` hit and
@@ -1460,7 +1466,7 @@ pub struct Infer {
     /// `Raw::Obj` qualified access (`Tree.leaf`) also resolves its first
     /// segment through this map; the `.mk` shorthand is covered by the dotted
     /// aliases (`X.mk`) this map also holds.
-    pub import_map: HashMap<SmolStr, SmolStr>,
+    pub import_map: rustc_hash::FxHashMap<SmolStr, SmolStr>,
     /// Cache of resolved trait-method elaboration: (method name, deterministic
     /// receiver-type key) → (checked Pi-chain Tm, its eval'd value, checked
     /// method-body lambda).  When the same operator is elaborated again on a
@@ -1468,7 +1474,7 @@ pub struct Infer {
     /// sites), both the check_universe of the Pi chain and the method-body
     /// re-elaboration are skipped (the create/tree eval still drives side
     /// effects through the applied result).
-    trait_method_cache: HashMap<(SmolStr, SmolStr), (Rc<Tm>, Rc<Val>, Rc<Tm>)>,
+    trait_method_cache: rustc_hash::FxHashMap<(SmolStr, SmolStr), (Rc<Tm>, Rc<Val>, Rc<Tm>)>,
     /// When true, `Decl::Println` skips the inline `nf` and records a
     /// `println_jobs` entry instead, deferring normalization to a later
     /// phase (used by the LSP worker so tyck diagnostics publish first).
@@ -1483,7 +1489,7 @@ pub struct Infer {
     /// cached WHNF.  The cached value would otherwise be produced once at
     /// declaration (outside any module tree) and never re-run, silently
     /// dropping HDL statements in parameterless hardware `def` bodies.
-    pub def_replay_memo: Rc<std::sync::RwLock<HashMap<SmolStr, bool>>>,
+    pub def_replay_memo: Rc<std::sync::RwLock<rustc_hash::FxHashMap<SmolStr, bool>>>,
     /// unify/force 共享 fuel 池（L08/L10-L12 同款）：外层入口（`nf`/
     /// `unify_catch`/canonical 探测点/check 的顶层 unify）充值；`unify`
     /// 递归与 `force` 的 meta 展开各烧 1，耗尽时 unify 按不可合一失败、
@@ -1496,7 +1502,7 @@ pub struct Infer {
     /// 只在渲染**无未解 meta** 时缓存（meta 可能在首见之后才被求解，
     /// 缓存串会把 `?N` 冻进使用处悬浮——LSP 快照克隆此表随 hover_table
     /// 一起留空，prelude 缓存态收尾清空）。
-    ctor_hover_memo: HashMap<SmolStr, std::rc::Rc<str>>,
+    ctor_hover_memo: rustc_hash::FxHashMap<SmolStr, std::rc::Rc<str>>,
 }
 
 impl Clone for Infer {
@@ -1513,16 +1519,17 @@ impl Clone for Infer {
             hover_table: self.hover_table.clone(),
             completion_table: self.completion_table.clone(),
             inlay_hint_table: self.inlay_hint_table.clone(),
+            lsp_collect: self.lsp_collect,
             symbol_table: self.symbol_table.clone(),
             import_map: self.import_map.clone(),
-            trait_method_cache: HashMap::new(),
+            trait_method_cache: Default::default(),
             defer_println: self.defer_println,
             println_jobs: Vec::new(),
             def_replay_memo: self.def_replay_memo.clone(),
             // 快照拿全新燃料池：fuel 是每轮 unify 的递归护栏，不跨快照继承
             unify_fuel: std::cell::Cell::new(self.unify_fuel.get()),
             // 快照不继承渲染缓存：条目与 hover_table 同生命周期纪律
-            ctor_hover_memo: HashMap::new(),
+            ctor_hover_memo: Default::default(),
             // accumulated_errors are ephemeral per-checking-pass;
             // a clone (used for read-only analysis) starts fresh.
             accumulated_errors: Vec::new(),
@@ -2202,16 +2209,17 @@ impl Infer {
             hover_table: vec![],
             completion_table: vec![],
             inlay_hint_table: vec![],
-            symbol_table: HashMap::new(),
-            import_map: HashMap::new(),
-            trait_method_cache: HashMap::new(),
+            lsp_collect: true,
+            symbol_table: Default::default(),
+            import_map: Default::default(),
+            trait_method_cache: Default::default(),
             accumulated_errors: vec![],
             failed_decls: std::collections::HashSet::new(),
             defer_println: false,
             println_jobs: vec![],
             def_replay_memo: Default::default(),
             unify_fuel: std::cell::Cell::new(UNIFY_FUEL),
-            ctor_hover_memo: HashMap::new(),
+            ctor_hover_memo: Default::default(),
         }
     }
 
@@ -4223,6 +4231,10 @@ fn load_prelude_state_impl(include_hdl: bool) -> Result<PreludeState, Error> {
     // Fresh force-memo epoch for the load (see `force_memo_clear`).
     force_memo_clear();
     let mut infer = Infer::new();
+    // Prelude load: the observation tables are cleared at the end of this
+    // function, so rendering them is dead work (same gate the twin has via
+    // `observe=false`); user-file elaboration keeps collecting.
+    infer.lsp_collect = false;
     let mut prelude: Vec<&str> = PRELUDE_CORE.iter().map(|(_, s)| *s).collect();
     if include_hdl {
         prelude.extend(PRELUDE_HDL.iter().map(|(_, s)| *s));
@@ -4366,6 +4378,7 @@ fn load_prelude_state_impl(include_hdl: bool) -> Result<PreludeState, Error> {
     // End-of-load epoch boundary: release the load's pinned intermediates
     // so they are not dropped in one batch inside the first user request.
     force_memo_clear();
+    infer.lsp_collect = true;
     Ok(PreludeState {
         infer,
         cxt,
@@ -4463,7 +4476,7 @@ pub fn clone_prelude_state(
     // the first run's decision sticks, the second def is not replayed and
     // its stored WHNF (stuck outside a module tree) leaks into the output.
     // Per-run reset restores isolation (names may legitimately repeat).
-    infer.def_replay_memo = Rc::new(std::sync::RwLock::new(HashMap::new()));
+    infer.def_replay_memo = Rc::new(std::sync::RwLock::new(rustc_hash::FxHashMap::default()));
     Ok((infer, cxt, global_macros))
 }
 
@@ -4875,6 +4888,7 @@ pub(crate) fn bench_check_nf_bounded(
     // 不中（CAP 前每 force 付死表 miss，CAP 1M 后还钉住数百万死值）。
     force_memo_clear();
     let mut infer = Infer::new();
+    infer.lsp_collect = false; // bench entry: observations are never consumed
     let mut cxt = Cxt::new(&infer);
     let mut last: Option<SmolStr> = None;
     for (i, d) in decls.iter().enumerate() {
@@ -4916,6 +4930,7 @@ pub(crate) fn bench_check_nf_pretty_bounded(
 ) -> Option<String> {
     force_memo_clear();
     let mut infer = Infer::new();
+    infer.lsp_collect = false; // bench entry: observations are never consumed
     let mut cxt = Cxt::new(&infer);
     let mut last: Option<SmolStr> = None;
     for (i, d) in decls.iter().enumerate() {
@@ -4951,6 +4966,7 @@ pub(crate) fn bench_check_first_err_bounded(
 ) -> Result<u64, Error> {
     force_memo_clear(); // 每轮入口清 memo（同 bench_check_nf_bounded）
     let mut infer = Infer::new();
+    infer.lsp_collect = false; // bench entry: observations are never consumed
     let mut cxt = Cxt::new(&infer);
     let mut last: Option<SmolStr> = None;
     for (i, d) in decls.iter().enumerate() {
