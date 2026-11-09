@@ -302,7 +302,7 @@ impl Cxt {
         Cxt {
             env: self.env.prepend(Val::vvar(self.lvl)),
             lvl: self.lvl + 1,
-            locals: Locals::Bind(Box::new(self.locals.clone()), x, a_quote),
+            locals: Locals::Bind(Rc::new(self.locals.clone()), x, a_quote),
             pruning: self.pruning.prepend(Some(Icit::Expl)),
             src_names,
             decl: self.decl.clone(),
@@ -314,7 +314,7 @@ impl Cxt {
         Cxt {
             env: self.env.prepend(Val::vvar(self.lvl)),
             lvl: self.lvl + 1,
-            locals: Locals::Bind(Box::new(self.locals.clone()), x, a_quote),
+            locals: Locals::Bind(Rc::new(self.locals.clone()), x, a_quote),
             pruning: self.pruning.prepend(Some(Icit::Expl)),
             src_names: Rc::clone(&self.src_names),
             decl: self.decl.clone(),
@@ -328,7 +328,7 @@ impl Cxt {
         Cxt {
             env: self.env.prepend(vt),
             lvl: self.lvl + 1,
-            locals: Locals::Define(Box::new(self.locals.clone()), x, a, t),
+            locals: Locals::Define(Rc::new(self.locals.clone()), x, a, t),
             pruning: self.pruning.prepend(None),
             src_names,
             decl: self.decl.clone(),
