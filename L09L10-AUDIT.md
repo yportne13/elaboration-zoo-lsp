@@ -107,35 +107,58 @@ enum/match/struct/投影/宇宙/深负载/σ 跨轮回收；L10 46 例含 trait 
 outParam 链 + 深负载 + 嵌套覆盖正负例。上述两轮全绿 ⇒ FxHashMap（含 `trait_definition` 顺序变化）
 与 U2 均未改变可观察行为 `[实测]`。
 
-## 6. A/B 性能（**待 Lead 安静窗口**；当前测量无效，按 Lead 要求推迟）
+## 6. A/B 性能（2026-11-10 05:55–05:57 安静窗口，已测）
 
-- 协议（已就绪）：基线二进制已存档 `C:\ezl-target-all-l09l10\baseline-bin\{l09bench,l10bench}.exe`
-  （`deef97f7` 构建）；新二进制在 `...\release\`。**同窗口交错**（base,new,base,new… ×3–5 rep，
-  每 run `--rounds 5`，取各侧 min 与 median），比值优先于绝对值。
-- 负载计划：
-  - L09：`match --max-k 11`（重点：U2 作用于 match 编译；`basic` 列 = 参考版编译期）、
-    `church --max-k 11`（global 表 get/insert 与 NameState 无关的常规路径）、`enum`（固定源）。
-  - L10：`match --max-k 11`、`church --max-k 11`、`traitchain --max-k 9 --only fast,fast_ss`
-    （Synth 三张 Fx 表的主战场：每层实例合成；参考版 basic 22s/次，不纳入 A/B，仅记录原因）。
-- 已测但**作废**的数据：05:31 smoke（`l10bench match k=9 basic 0.154ms`、`traitchain fast_ss 80.9ms`）
-  与基线（0.082ms / 41.5ms）差 ~2×，同期机器有 12+ 个其他 agent 的 rustc（l08/l11/l12 parity 构建）
-  打满 CPU `[实测]`；该窗口测量无效，不用于结论。
-- 预期（`[推断]`，待 A/B 证实/证伪）：FxHashMap 对这两层是**小幅**（名称表/BiMap 早已 Fx；剩余表
-  多为小表或低频调用）；可测信号最可能在 L10 `traitchain`（Synth 每子目标 get/clone 实例表）与
-  L09/L10 `match` 编译（PartialRenaming clone + U2 跳过探测）。若 A/B 落在噪声内，将如实报告
-  "无显著收益"，保留改动仅因与 L07/L13 口径一致且零风险。
+- 窗口确认：测前/测后 `Get-Process cargo,rustc,rustc_driver` 均为 **0**（Lead 协调暂停 l08/l12 线）。
+- 基线二进制：`C:\ezl-target-all-l09l10\baseline-bin\{l09bench,l10bench}.exe`（`deef97f7` 构建）；
+  新二进制：`...\release\`（4 commits 合并后构建）。raw：`C:\ezl-target-all-l09l10\bench-raw\final-ab{,2}\`。
+- 协议：每个负载每 rep = base→new 相邻各 1 次进程；综合轮 3 rep + 复核轮 5 rep；每次 `--rounds 5`；
+  表内取各侧 **min of reps**（min 与 median 同向才采信；跨 session 不比较绝对值）。
+- 结果（ms，min；ratio=new/base，<1 为变快）：
+
+| 负载 | k | 实现列 | base | new | ratio |
+|---|---:|---|---:|---:|---:|
+| L09 match | 9 | basic | 0.127 | 0.116 | **0.913** |
+| L09 match | 10 | basic | 0.136 | 0.126 | **0.926** |
+| L09 match | 11 | basic | 0.151 | 0.139 | **0.921** |
+| L09 match | 11 | fast_ss | 0.054 | 0.054 | 1.000 |
+| L09 enum | 9 | basic | 0.742 | 0.715 | 0.964 |
+| L09 church | 11 | basic | 3.524 | 3.594 | 1.020（噪声带） |
+| L09 church | 11 | fast_ss | 0.259 | 0.256 | 0.988 |
+| L10 match | 9 / 10 / 11 | basic | 0.079 / 0.087 / 0.101 | 0.077 / 0.086 / 0.092 | 0.975 / 0.989 / **0.911** |
+| L10 match | 11 | fast_ss | 0.054 | 0.054 | 1.000 |
+| L10 church | 11 | basic | 1.225 | 1.292 | 1.055（噪声带；k9/k10 = 0.96/1.01） |
+| L10 traitchain | 9 | fast_ss | 38.285 | 39.489 | 1.031（复核轮；综合轮 1.044） |
+| L10 traitchain | 9 | fast | 42.020 | 39.936 | 0.950（同负载两列方向相反 ⇒ 噪声） |
+
+- 解读：
+  1. **L09 参考版 match 编译期 −7%~−9%**（k=9/10/11 三档一致；min 与 median 同向）——与 U2 机制预期
+     一致（每 ctor 的 meta 快照 + 索引特化方程探测被整轮跳过）；L10 match 在 k=11 亦测得 **−8.9%**
+     （k=9/10 仅 −1%~−3%，负载小、探测本身更便宜）。
+  2. **孪生列不变**（fast/fast_ss 基本 1.000 ± 2%）：两层 U2 只改参考版 `compile()`；Fx 虽含 L10 共享
+     `typeclass.rs`，但 traitchain 两列方向相反（+3.1%/−5.0%）= 机器噪声带，无稳定变化。
+  3. 其余负载在噪声带（L09 enum −3.6% 可算轻微正收益；church ±2%~5% 混合）。
+  4. **归因限制**：A/B 对比的是"4 commits 合并后 vs 基线"，**未逐 commit 分离**（逐 commit 重建 4 次
+     release 会超出窗口）。match 的 −8% 主要归因 U2（L07 同 commit 自测 −10.7%@k13 `[历史实测]`），
+     Fx 贡献预计在噪声内 `[推断]`；若要严格归因需在安静窗口重建 c1/c2 中间二进制。
+  5. 跨 session 漂移个案：L10 match k11 basic 在综合轮/复核轮的 base 分别为 0.092/0.101（9% 漂移），
+     故只用**同 session 交错比值**判读。
+- 作废数据留档：05:31 争用窗口 smoke（L10 match k=9 basic 0.154ms、traitchain fast_ss 80.9ms，比基线
+  慢 ~2×）——同期 12+ rustc 打满 CPU，不用于结论。
 
 ## 7. 结论
 
 1. **落地 4 项**（FxHashMap ×2 层、U2 覆盖探测跳过 ×2 层），全部通过各自 lib + parity 门禁；
    判定：低风险、可合并候选。commit 1/2/3/4 = `0bf8118f`/`828df98d`/`f32734c6`/`9b37c278`。
+   **A/B（安静窗口，§6）**：L09 match 编译期 **−7%~−9%**（k=9/10/11 一致）、L10 match k=11 **−8.9%**；
+   孪生列不变、其余负载在噪声带；收益主要来自 U2（覆盖探测跳过），Fx 贡献在噪声内 `[推断]`。
 2. **N/A 三项**（有据）：L07 `Locals Rc` 已采用；`decl 表 COW` 因无 decl 表不适用；
    `NameState/trail` 因 global_names 设计已消除根因、且会引入不必要的共享可变结构 ⇒ 不改。
    `U1（probe 借用 decl 表）` 亦 N/A。
 3. **明确未做**：L07 hardening 的正确性/诊断类改动（三档 `UnifyKind`、occurs 传递、MATCH_CMP 分档）
    不在"性能优化"范围，且会改诊断语义，需另立任务；L09/L10 的 `src_names` 残余 O(B²/def) 登记为
    已知小项（B≤几十，见 §2）。
-4. **待补**：Lead 安静窗口下的 A/B 数字（§6 协议）。报告与 4 个 commit 目前均为**未合并**状态，
-   工作树干净（仅本报告 commit 预期）。
+4. **已补**：A/B 数字见 §6（05:55–05:57 安静窗口，0 竞争进程）。报告与 4 个 commit 目前均为**未合并**
+   状态，工作树干净。
 5. 环境/复现：Windows、Rust 1.98.1、`CARGO_TARGET_DIR=C:\ezl-target-all-l09l10`；
    复现命令即 §5 各行 + §6 的 bench 行；F: 未构建。
