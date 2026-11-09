@@ -461,20 +461,32 @@ impl Compiler {
         // 覆盖检查：可达且无臂覆盖 → Unmatched（形态 = 「构造子 + 999 通配」，
         // 与 L10–L12 的产出一致）。不可达（如 `Vec[A] zero` 上的 `cons`）不报
         // ——索引方程不可解即结构上不可能。
-        for (i, ctor) in constrs.iter().enumerate() {
-            if Self::ctor_accessible(infer, cxt, &typ, &constrs, &mut accessible, i)
-                && !arms
-                    .iter()
-                    .any(|(pat, _)| covers(pat, ctor.data.as_str(), &ctor_names))
-            {
-                self.warnings.push(Warning::Unmatched(Pattern::Con(
-                    ctor.clone(),
-                    vec![Pattern::Any(empty_span(false), Either::Icit(Icit::Expl)); 999],
-                    Either::Icit(Icit::Expl),
-                )));
+        //
+        // 性能（U2，port L07 a78daec7）：`ctor_accessible` 的探测结果只用于本
+        // 循环的"缺构造子"报错；若头部 Sum 的每个构造子都已被某个臂覆盖（穷尽
+        // match 的常态），循环不可能产生错误，整轮可达性探测（每 ctor 一次
+        // 特化方程 + meta 快照）是纯浪费。判据与循环体完全同源（同一个
+        // `covers`），不改变判定。L07 同款实测：manydefs −34~−64%、
+        // match k13 −10.7%；L13 的 match/enum 收益见 L13-AUDIT.md。
+        let fully_covered = !constrs.is_empty()
+            && constrs
+                .iter()
+                .all(|c| arms.iter().any(|(pat, _)| covers(pat, c.data.as_str(), &ctor_names)));
+        if !fully_covered {
+            for (i, ctor) in constrs.iter().enumerate() {
+                if Self::ctor_accessible(infer, cxt, &typ, &constrs, &mut accessible, i)
+                    && !arms
+                        .iter()
+                        .any(|(pat, _)| covers(pat, ctor.data.as_str(), &ctor_names))
+                {
+                    self.warnings.push(Warning::Unmatched(Pattern::Con(
+                        ctor.clone(),
+                        vec![Pattern::Any(empty_span(false), Either::Icit(Icit::Expl)); 999],
+                        Either::Icit(Icit::Expl),
+                    )));
+                }
             }
-        }
-        let mut unreachable: Vec<Warning> = Vec::new();
+        }        let mut unreachable: Vec<Warning> = Vec::new();
         let mut shadowed = false;
         for (pat, body) in arms {
             if shadowed {

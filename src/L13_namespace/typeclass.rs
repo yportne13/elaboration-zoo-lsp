@@ -1,6 +1,8 @@
 
 use std::collections::HashMap;
 
+use rustc_hash::FxHashMap;
+
 use smol_str::SmolStr;
 
 use crate::list::List;
@@ -86,16 +88,16 @@ pub struct Synth {
     /// A more in-depth explanation can be found in [`Synth::synth`].
     pub resume_stack: Vec<(ConsumerNode, Assertion)>,
     /// The instances available for a type class.
-    pub class_instances: HashMap<SmolStr, Vec<Instance>>,
+    pub class_instances: FxHashMap<SmolStr, Vec<Instance>>,
     /// Information about each `subgoal` being solved.
     pub assertion_table: Vec<(Assertion, TableEntry)>,
     /// The "final" answer for the algorithm.
     pub root_answer: Option<Span<SmolStr>>,
     /// Tracks which arguments of each trait are output params.
-    pub trait_out_params: HashMap<SmolStr, Vec<bool>>,
+    pub trait_out_params: FxHashMap<SmolStr, Vec<bool>>,
     /// Index from (trait_name, head_constructor) to instance indices.
     /// Uses the first non-out-param's head as the key for O(1) lookup.
-    pub head_index: HashMap<(SmolStr, SmolStr), Vec<usize>>,
+    pub head_index: FxHashMap<(SmolStr, SmolStr), Vec<usize>>,
 }
 
 impl Default for Synth {
@@ -103,11 +105,11 @@ impl Default for Synth {
         Self {
             generator_stack: vec![],
             resume_stack: vec![],
-            class_instances: HashMap::new(),
+            class_instances: FxHashMap::default(),
             assertion_table: vec![],
             root_answer: None,
-            trait_out_params: HashMap::new(),
-            head_index: HashMap::new(),
+            trait_out_params: FxHashMap::default(),
+            head_index: FxHashMap::default(),
         }
     }
 }

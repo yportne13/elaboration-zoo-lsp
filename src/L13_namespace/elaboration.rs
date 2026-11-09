@@ -479,6 +479,7 @@ impl Infer {
     /// Record an inlay hint `: <type>` at `offset`, skipping types that still
     /// contain unsolved metas and truncating over-long labels.
     fn push_inlay_hint(&mut self, cxt: &Cxt, offset: u32, val: &Rc<Val>) {
+        if !self.lsp_collect { return; }
         let lvl = cxt.lvl;
         let tm = self.quote(&cxt.decl, lvl, val);
         if tm.no_metas(self, &cxt.decl, lvl).is_some() {
@@ -1670,7 +1671,7 @@ impl Infer {
                     )
                 };
                 // Inlay hint: def without explicit return type → show inferred return type.
-                if matches!(ret_type, Raw::Hole(_)) {
+                if self.lsp_collect && matches!(ret_type, Raw::Hole(_)) {
                     let (ret_val, ret_lvl) = self.peel_pi(&ret_cxt, &vty);
                     let ret_tm = self.quote(&ret_cxt.decl, ret_lvl, &ret_val);
                     if ret_tm.no_metas(self, &ret_cxt.decl, ret_lvl).is_none() {
@@ -2824,6 +2825,7 @@ impl Infer {
     /// pretty，不再需要可 quote 的 live `Infer`——孪生（bump arena）供同一契约的
     /// 前提。quote 是纯函数（&self），与旧「存 Val、查询期 quote」逐字节等价。
     pub(crate) fn push_hover(&mut self, cxt: &Cxt, t_span: Span<()>, def_span: Span<()>, val: &Rc<Val>) {
+        if !self.lsp_collect { return; }
         let tm = self.quote(&cxt.decl, cxt.lvl, val);
         let rendered = super::pretty_tm(0, cxt.names(), &tm);
         self.hover_table.push((t_span, def_span, rendered));
@@ -2835,6 +2837,7 @@ impl Infer {
     /// （meta 可能在首见之后才被求解，缓存串会把 `?N` 冻进使用处悬浮；
     /// 快照克隆与 prelude 缓存态收尾都不继承此表）。
     pub(crate) fn push_ctor_hover(&mut self, cxt: &Cxt, t_span: Span<()>, def_span: Span<()>, val: &Rc<Val>, key: &str) {
+        if !self.lsp_collect { return; }
         if let Some(s) = self.ctor_hover_memo.get(key) {
             self.hover_table.push((t_span, def_span, s.as_ref().to_owned()));
             return;
