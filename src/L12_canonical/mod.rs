@@ -1268,7 +1268,7 @@ pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
                 println!("> impl");
             }
         }
-        let (x, _, new_cxt) = infer.infer(&cxt, tm.clone())?;
+        let (x, _, new_cxt) = infer.infer_owned(cxt, tm.clone())?;
         cxt = new_cxt;
         if let DeclTm::Println(_, s, _) = x {
             //ret += &format!("{:?}", infer.nf(&cxt.env, x));
@@ -1329,7 +1329,7 @@ pub fn run_with_prelude(input: &str) -> Result<String, Error> {
                 global_macros.insert(name, rules);
             }
             for tm in decls {
-                let (x, _, new_cxt) = infer.infer(&cxt, tm.clone())?;
+                let (x, _, new_cxt) = infer.infer_owned(cxt, tm.clone())?;
                 cxt = new_cxt;
             }
         }
@@ -1357,7 +1357,7 @@ pub fn run_with_prelude(input: &str) -> Result<String, Error> {
                 println!("> impl");
             }
         }
-        let (x, _, new_cxt) = infer.infer(&cxt, tm.clone())?;
+        let (x, _, new_cxt) = infer.infer_owned(cxt, tm.clone())?;
         cxt = new_cxt;
         if let DeclTm::Println(_, s, _) = x {
             //ret += &format!("{:?}", infer.nf(&cxt.env, x));

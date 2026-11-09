@@ -132,35 +132,35 @@ impl Cxt {
 
         let mut cxt = Self::empty();
 
-        cxt = cxt.decl(
+        cxt.decl_mut(
             empty_span(SmolStr::new("String")),
             Tm::LiteralType.into(),
             Val::LiteralType.into(),
             Tm::U(0).into(),
             Val::U(0).into(),
-        ).unwrap();
+        );
 
         let str_val = infer.eval(&cxt.decl, &cxt.env, &tm_decl("String"));
 
-        cxt = cxt.add_builtin(infer, "string_concat",
+        cxt.add_builtin_mut(infer, "string_concat",
             tm_lam(&["x", "y"], Tm::Prim(str_val.clone(), f_concat).into()),
             tm_pi(&[("x", tm_decl("String")), ("y", tm_decl("String"))], tm_decl("String")),
-        ).unwrap();
+        );
 
-        cxt = cxt.add_builtin(infer, "string_to_global_type",
+        cxt.add_builtin_mut(infer, "string_to_global_type",
             tm_lam(&["x"], Tm::Prim(str_val.clone(), f_to_global).into()),
             tm_pi(&[("x", tm_decl("String"))], Tm::U(0).into()),
-        ).unwrap();
+        );
 
-        cxt = cxt.add_builtin(infer, "create_global",
+        cxt.add_builtin_mut(infer, "create_global",
             tm_lam(&["x", "y"], Tm::Prim(Val::U(0).into(), f_create).into()),
             tm_pi(&[
                 ("x", tm_decl("String")),
                 ("y", tm_app(tm_decl("string_to_global_type"), Tm::Var(Ix(0)).into())),
             ], Tm::U(0).into()),
-        ).unwrap();
+        );
 
-        cxt = cxt.add_builtin(infer, "change_mutable",
+        cxt.add_builtin_mut(infer, "change_mutable",
             tm_lam(&["x", "y"], Tm::Prim(Val::U(0).into(), f_change).into()),
             tm_pi(&[
                 ("x", tm_decl("String")),
@@ -168,15 +168,15 @@ impl Cxt {
                     ("_", tm_app(tm_decl("string_to_global_type"), Tm::Var(Ix(0)).into())),
                 ], tm_app(tm_decl("string_to_global_type"), Tm::Var(Ix(1)).into()))),
             ], Tm::U(0).into()),
-        ).unwrap();
+        );
 
-        cxt = cxt.add_builtin(infer, "get_global",
+        cxt.add_builtin_mut(infer, "get_global",
             tm_lam(&["x"], Tm::Prim(Val::U(0).into(), f_get).into()),
             tm_pi(&[("x", tm_decl("String"))],
                 tm_app(tm_decl("string_to_global_type"), Tm::Var(Ix(0)).into())),
-        ).unwrap();
+        );
 
-        cxt = cxt.add_builtin(infer, "change_mutable_default",
+        cxt.add_builtin_mut(infer, "change_mutable_default",
             tm_lam(&["x", "y", "z"], Tm::Prim(Val::U(0).into(), f_change_def).into()),
             tm_pi(&[
                 ("x", tm_decl("String")),
@@ -185,15 +185,23 @@ impl Cxt {
                 ], tm_app(tm_decl("string_to_global_type"), Tm::Var(Ix(1)).into()))),
                 ("z", tm_app(tm_decl("string_to_global_type"), Tm::Var(Ix(1)).into())),
             ], Tm::U(0).into()),
-        ).unwrap();
+        );
 
         cxt
     }
 
     pub fn add_builtin(self, infer: &Infer, name: &str, val: Rc<Tm>, ty: Rc<Tm>) -> Result<Self, Error> {
+        let mut cxt = self;
+        cxt.add_builtin_mut(infer, name, val, ty);
+        Ok(cxt)
+    }
+
+    /// 就地注册 builtin（顺序构造路径专用）：调用方持有 `Cxt` 所有权，
+    /// decl 表 `Rc` 强计数为 1，`decl_mut` 的 `Rc::make_mut` 原地写。
+    fn add_builtin_mut(&mut self, infer: &Infer, name: &str, val: Rc<Tm>, ty: Rc<Tm>) {
         let vt = infer.eval(&self.decl, &self.env, &val);
         let va = infer.eval(&self.decl, &self.env, &ty);
-        self.decl(empty_span(SmolStr::new(name)), val, vt, ty, va)
+        self.decl_mut(empty_span(SmolStr::new(name)), val, vt, ty, va);
     }
 
     pub fn empty() -> Self {
@@ -245,22 +253,25 @@ impl Cxt {
         }
     }
 
+    /// 持久化 `fake_bind` 包装（保留旧 `&Cxt` 调用方）：浅克隆上下文后就地写。
     pub fn fake_bind(&self, x: Span<SmolStr>, a_quote: Rc<Tm>, a: Rc<Val>) -> Result<Self, Error> {
-        //println!("{} {x:?} {a:?} at {}", "bind".bright_purple(), self.lvl.0);
-        let mut decl = self.decl.clone();
-        let t = Rc::make_mut(&mut decl).insert(x.data.clone(), (x.to_span(), Tm::Decl(x.clone()).into(), Val::Decl(x.clone(), List::new()).into(), a_quote, a));
-        if t.is_some() {
+        let mut cxt = self.clone();
+        cxt.fake_bind_mut(x, a_quote, a)?;
+        Ok(cxt)
+    }
+
+    /// 就地插入递归定义占位（顺序声明路径专用）：调用方持有 `Cxt` 所有权，
+    /// `Rc::make_mut` 原地写，不再先 `clone` 整表（旧实现强计数恒 2 ⇒ 每个
+    /// 顶层 def 深拷一次整张 decl 表；port L07 c2fffd3f）。撞名报 redefine。
+    pub fn fake_bind_mut(&mut self, x: Span<SmolStr>, a_quote: Rc<Tm>, a: Rc<Val>) -> Result<(), Error> {
+        if self.decl.contains_key(x.data.as_str()) {
             return Err(Error(x.to_span().map(|_| format!("redefine {}", x.data)), vec![]));
         }
-        Ok(Cxt {
-            env: self.env.clone(),
-            lvl: self.lvl,
-            locals: self.locals.clone(),
-            pruning: self.pruning.clone(),
-            src_names: self.src_names.clone(),
-            decl,
-            namespace: self.namespace.clone(),
-        })
+        Rc::make_mut(&mut self.decl).insert(
+            x.data.clone(),
+            (x.to_span(), Tm::Decl(x.clone()).into(), Val::Decl(x.clone(), List::new()).into(), a_quote, a),
+        );
+        Ok(())
     }
 
     pub fn new_binder(&self, x: Span<SmolStr>, a_quote: Rc<Tm>) -> Self {
@@ -291,22 +302,18 @@ impl Cxt {
         }
     }
 
+    /// 持久化 `decl` 包装（保留旧 `&Cxt` 调用方）：浅克隆上下文后就地写。
     pub fn decl(&self, x: Span<SmolStr>, t: Rc<Tm>, vt: Rc<Val>, a: Rc<Ty>, va: Rc<VTy>) -> Result<Self, Error> {
-        //println!("{} {}\n{t:?}\n{vt:?}\n{a:?}\n{va:?}", "define".bright_purple(), x.data);
-        let mut decl = self.decl.clone();
-        let t = Rc::make_mut(&mut decl).insert(x.data.clone(), (x.to_span(), t, vt, a, va));
-        /*if let Some((span, _, _, _, _)) = t {
-            return Err(Error(span.map(|_| format!("redefine {}", x.data))));
-        }*/
-        Ok(Cxt {
-            env: self.env.clone(),
-            lvl: self.lvl,
-            locals: self.locals.clone(),
-            pruning: self.pruning.clone(),
-            src_names: self.src_names.clone(),
-            decl,
-            namespace: self.namespace.clone(),
-        })
+        let mut cxt = self.clone();
+        cxt.decl_mut(x, t, vt, a, va);
+        Ok(cxt)
+    }
+
+    /// 就地注册一个顶层 decl（顺序声明路径专用，port L07 c2fffd3f）：
+    /// 调用方持有 `Cxt` 所有权 ⇒ 表 `Rc` 强计数为 1 ⇒ `Rc::make_mut` 原地写，
+    /// 不再深拷整表。重定义静默覆盖（与旧 `decl` 一致：其撞名检查曾注释）。
+    pub fn decl_mut(&mut self, x: Span<SmolStr>, t: Rc<Tm>, vt: Rc<Val>, a: Rc<Ty>, va: Rc<VTy>) {
+        Rc::make_mut(&mut self.decl).insert(x.data.clone(), (x.to_span(), t, vt, a, va));
     }
 
     /// 把精化替换 σ 施加到上下文（dpm-nbe `subst sub ctx`）：env 槽与
