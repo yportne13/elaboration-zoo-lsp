@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use rustc_hash::FxHashMap;
@@ -28,13 +29,72 @@ pub struct DeclEntry {
     pub val: Val,
 }
 
+/// 源码名表 + 撤销轨迹（L08 孪生 `bump_spine_iter` 的 `name_map` +
+/// `name_trail` 的参考版对应物）。
+///
+/// 旧实现是按值 `FxHashMap`（更早是 `Rc<HashMap>` 写时复制）：`bind`/`define`
+/// 每次 `clone()`/`Rc::make_mut` **深拷整张表**（逐键 String 分配 + 逐条
+/// 条目拷贝），n 个绑定器的精化是 O(n²)。本地表按值克隆时还会深拷每个
+/// 条目里的 `VTy`（`Val` 树）——lookup 侧更早的形态也有同类问题。
+///
+/// 新实现改为"单张表 + 撤销轨迹 + 按 mark 惰性回退"：`bind`/`define` 只做
+/// 一次哈希插入 + 追加一条 (名字, 旧值) 轨迹，O(1)；上下文退出不显式
+/// 撤销，而在**下一次访问名字表前**把轨迹裁回本上下文的 `name_mark`——
+/// 语义与持久表一致（每个 Cxt 看到的名字集 = 创建时的快照），但不再有
+/// 整表拷贝。轨迹是单线程深度优先遍历的日志，(mark, 轨迹长度) 一一对应
+/// 地标识一个名字表版本。
+#[derive(Debug, Default)]
+pub struct NameState {
+    map: FxHashMap<String, Rc<(Lvl, VTy)>>,
+    /// (名字, 旧值)；旧值 `None` = 该名字此前不在表里。
+    trail: Vec<(String, Option<Rc<(Lvl, VTy)>>)>,
+}
+
+impl NameState {
+    /// 把轨迹裁回 `mark`（= 某个上下文的基线）：逆序还原被覆盖/删除的
+    /// 条目。调用方保证 `mark <= trail.len()`（mark 只会取自已发生过的
+    /// 轨迹长度；深度优先下不会出现"访问比自身更浅的上下文后再用更深
+    /// 上下文"——见 `Cxt::unwind_names` 的 debug_assert）。
+    fn unwind(&mut self, mark: u32) {
+        debug_assert!(
+            mark as usize <= self.trail.len(),
+            "unwind: mark {} 超出轨迹长度 {}",
+            mark,
+            self.trail.len()
+        );
+        while self.trail.len() > mark as usize {
+            let (k, prev) = self.trail.pop().expect("unwind: 轨迹为空");
+            match prev {
+                Some(v) => {
+                    self.map.insert(k, v);
+                }
+                None => {
+                    self.map.remove(&k);
+                }
+            }
+        }
+    }
+
+    /// 插入一条（名字, 层级, 类型），旧值入轨迹。
+    fn insert(&mut self, k: String, v: Rc<(Lvl, VTy)>) {
+        let prev = self.map.insert(k.clone(), v);
+        self.trail.push((k, prev));
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Cxt {
     pub env: Env, // 求值环境（局部变量，内层在前）
     pub lvl: Lvl, // 下一个 fresh 层级（unify / quote 用）
     pub locals: Locals,
     pub pruning: Pruning, // 与 env 一一对应：Some(icit) = 该槽是待插入的隐式参数
-    pub src_names: FxHashMap<String, (Lvl, VTy)>,
+    /// 源码变量名 → (绑定层级, 类型值)，共享可变表（见 [`NameState`]）。
+    /// 每次访问前先把轨迹裁回 `name_mark`，因此本上下文看到的名字集合
+    /// 恒等于创建时的快照；`bind` 条目值仍是 `Rc<(Lvl, VTy)>`（O(1)，
+    /// 不深拷 `Val` 类型树）。
+    names: Rc<RefCell<NameState>>,
+    /// 本上下文的名字表基线（轨迹长度）。
+    name_mark: u32,
     pub decl: Rc<Decls>,
 }
 
@@ -180,9 +240,32 @@ impl Cxt {
             lvl: Lvl(0),
             locals: Locals::Here,
             pruning: List::new(),
-            src_names: FxHashMap::default(),
+            names: Rc::new(RefCell::new(NameState::default())),
+            name_mark: 0,
             decl: Rc::new(FxHashMap::default()),
         }
+    }
+
+    /// 名字表访问前统一入口：把共享轨迹裁回本上下文的基线（惰性回滚）。
+    /// 深度优先遍历下这是幂等的零/常数开销；跨兄弟作用域时把对方残留的
+    /// 绑定逐条还原（每条只还原一次，均摊 O(1)）。
+    #[inline]
+    fn unwind_names(&self) {
+        self.names.borrow_mut().unwind(self.name_mark);
+    }
+
+    /// 查一个源码局部名（局部 binder 优先于 decl 表）：返回
+    /// `(绑定层级, 类型值)` 的共享条目（克隆 = 一次 Rc 递增）。
+    pub fn lookup_src(&self, n: &str) -> Option<Rc<(Lvl, VTy)>> {
+        self.unwind_names();
+        self.names.borrow().map.get(n).cloned()
+    }
+
+    /// 源码名是否已在本作用域绑定（`Enum.case` 限定构造子快捷路径的
+    /// 局部遮蔽判定用）。
+    pub fn has_src(&self, n: &str) -> bool {
+        self.unwind_names();
+        self.names.borrow().map.contains_key(n)
     }
 
     pub fn decl(&self) -> &Decls {
@@ -224,64 +307,92 @@ impl Cxt {
     }
 
     /// 引入一个源码变量（模式绑定 / λ 参数 / Π 域）：env 压入 fresh rigid。
+    ///
+    /// 名字表 O(1)：先裁轨迹回本上下文基线（丢弃兄弟作用域残留），插入
+    /// `(名字 → 本层级/类型)` 并把旧值追加进轨迹；子上下文只带新的
+    /// `name_mark`（= 轨迹长度）。条目值仍是共享 `Rc`，无 `Val` 深拷贝。
     pub fn bind(&self, x: Span<String>, a_quote: Tm, a: VTy) -> Self {
-        let mut src_names = self.src_names.clone();
-        src_names.insert(x.data.clone(), (self.lvl, a));
+        let name_mark = {
+            let mut s = self.names.borrow_mut();
+            s.unwind(self.name_mark);
+            s.insert(x.data.clone(), Rc::new((self.lvl, a)));
+            s.trail.len() as u32
+        };
         Cxt {
             env: self.env.prepend(Val::vvar(self.lvl)),
             lvl: self.lvl + 1,
             locals: Locals::Bind(Rc::new(self.locals.clone()), x, a_quote),
             pruning: self.pruning.prepend(Some(Icit::Expl)),
-            src_names,
+            names: Rc::clone(&self.names),
+            name_mark,
             decl: self.decl.clone(),
         }
     }
 
-    /// 引入一个"编译器插入"的绑定器（非 λ 项 against 隐式 Π 时）：不进 src_names。
+    /// 引入一个"编译器插入"的绑定器（非 λ 项 against 隐式 Π 时）：不进名字表。
     pub fn new_binder(&self, x: Span<String>, a_quote: Tm) -> Self {
         Cxt {
             env: self.env.prepend(Val::vvar(self.lvl)),
             lvl: self.lvl + 1,
             locals: Locals::Bind(Rc::new(self.locals.clone()), x, a_quote),
             pruning: self.pruning.prepend(Some(Icit::Expl)),
-            src_names: self.src_names.clone(),
+            names: Rc::clone(&self.names),
+            name_mark: self.name_mark,
             decl: self.decl.clone(),
         }
     }
 
     /// let 绑定：env 压入定义的值，pruning 对应槽为 None（后续隐式插入不再经过它）。
     pub fn define(&self, x: Span<String>, t: Tm, vt: Val, a: Ty, va: VTy) -> Self {
-        let mut src_names = self.src_names.clone();
-        src_names.insert(x.data.clone(), (self.lvl, va));
+        let name_mark = {
+            let mut s = self.names.borrow_mut();
+            s.unwind(self.name_mark);
+            s.insert(x.data.clone(), Rc::new((self.lvl, va)));
+            s.trail.len() as u32
+        };
         Cxt {
             env: self.env.prepend(vt),
             lvl: self.lvl + 1,
             locals: Locals::Define(Rc::new(self.locals.clone()), x, a, t),
             pruning: self.pruning.prepend(None),
-            src_names,
+            names: Rc::clone(&self.names),
+            name_mark,
             decl: self.decl.clone(),
         }
     }
 
     /// 把精化替换 σ 施加到上下文（dpm-nbe `subst sub ctx`）：env 槽与
-    /// src_names 的类型包 `VSub`；lvl / locals / pruning / decl 不动——
+    /// 名字表类型包 `VSub`；lvl / locals / pruning / decl 不动——
     /// **槽位布局（= 运行时布局）不变**，被解变量仍在原槽位，读点经
     /// force 展开看到解。σ 为空时零开销直通。
+    ///
+    /// 名字表按轨迹改写：现有条目（父链 + 本作用域）逐条换成包了 `VSub`
+    /// 的新条目并记录旧值，`name_mark` 指到轨迹新长度；父上下文下次访问
+    /// 时惰性还原（与 `bind`/`define` 同一机制）。
     pub fn subst_cxt(&self, sub: &Rc<super::Subst>) -> Self {
         if sub.is_empty() {
             return self.clone();
         }
         let wrap = |v: &super::Val| super::Val::VSub(Box::new(v.clone()), sub.clone());
+        let name_mark = {
+            let mut s = self.names.borrow_mut();
+            s.unwind(self.name_mark);
+            let entries: Vec<(String, Rc<(Lvl, VTy)>)> =
+                s.map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            for (k, e) in entries {
+                let new_e = Rc::new((e.0, wrap(&e.1)));
+                let prev = s.map.insert(k.clone(), new_e);
+                s.trail.push((k, prev));
+            }
+            s.trail.len() as u32
+        };
         Cxt {
             env: self.env.map(wrap),
             lvl: self.lvl,
             locals: self.locals.clone(),
             pruning: self.pruning.clone(),
-            src_names: self
-                .src_names
-                .iter()
-                .map(|(k, (l, ty))| (k.clone(), (*l, wrap(ty))))
-                .collect(),
+            names: Rc::clone(&self.names),
+            name_mark,
             decl: self.decl.clone(),
         }
     }

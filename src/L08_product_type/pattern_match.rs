@@ -178,7 +178,7 @@ impl Compiler {
                     // 分支体走**常规转换**检查：spec 不穿参，可解性不再需要
                     // "摘走/放回"的编排（旧 pm_solvable_take/set 已随之删除）。
                     // 上下文先置于精化之下（dpm-nbe `subst sub ctx`）：env 槽
-                    // 与 src_names 类型包 VSub，lvl/locals/pruning 不动——
+                    // 与名字表类型包 VSub，lvl/locals/pruning 不动——
                     // 槽位布局（= 运行时布局）永不漂移，读点 force 展开。
                     let cxt_arm = cxt_arm.subst_cxt(&self.sub);
                     // 期望类型**重锚**到臂上下文：quote → eval 把其中所有
