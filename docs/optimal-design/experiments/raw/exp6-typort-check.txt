@@ -1,0 +1,285 @@
+﻿=== typort check timing (3 examples) ===
+
+##### typort check examples\alu.typort  wall=5212 ms exit=0
+typort.exe : Analyzing: file:///F:/projects/hermes/elaboration-zoo-lsp/examples/alu.typort (719 bytes)
+所在位置 行:1 字符: 532
++ ... Diagnostics.Stopwatch]::StartNew(); $txt = & $T check $f 2>&1 | Out-S ...
++                                                ~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Analyzing: file...ort (719 bytes):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+[LOG log] change: file:///F:/projects/hermes/elaboration-zoo-lsp/examples/alu.typort
+[LOG log] parser 0.0018027
+[LOG log] infer 0.1064768
+note: === Simple ALU (UInt + UInt) ===
+   ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/alu.typort:15:10
+   │
+15 │ println("=== Simple ALU (UInt + UInt) ===")
+   │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+note: module simpleALU (
+  input wire [7:0] a,
+  input wire [7:0] b,
+  output wire [7:0] result
+);
+  assign result = (a + b);
+endmodule
+   ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/alu.typort:16:9
+   │
+16 │ println(moduleTreeVL(mod1.tree))
+   │         ^^^^^^^^^^^^^^^^^^^^^^
+
+note: === UInt + Nat (via Into) ===
+   ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/alu.typort:28:10
+   │
+28 │ println("=== UInt + Nat (via Into) ===")
+   │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+note: module adderNat (
+  input wire [7:0] a,
+  output wire [7:0] result
+);
+  assign result = (a + 42);
+endmodule
+   ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/alu.typort:29:9
+   │
+29 │ println(moduleTreeVL(mod2.tree))
+   │         ^^^^^^^^^^^^^^^^^^^^^^
+
+[LOG log] change 0.110772096
+
+##### typort check examples\adder_proof.typort  wall=5491 ms exit=0
+typort.exe : Analyzing: file:///F:/projects/hermes/elaboration-zoo-lsp/examples/adder_proof.typort (20991 bytes)
+所在位置 行:1 字符: 532
++ ... Diagnostics.Stopwatch]::StartNew(); $txt = & $T check $f 2>&1 | Out-S ...
++                                                ~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Analyzing: file...t (20991 bytes):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+[LOG log] change: file:///F:/projects/hermes/elaboration-zoo-lsp/examples/adder_proof.typort
+[LOG log] parser 0.0041112
+[LOG log] infer 0.3794097
+note: Eq[Nat]::refl(1)
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/adder_proof.typort:365:9
+    │
+365 │ println(vec_adder_correct(true, nil, nil))
+    │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+note: Eq[Nat]::refl(4)
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/adder_proof.typort:369:9
+    │
+369 │ println(vec_add_correct(cons(true, cons(false, nil)), cons(true, cons(true, nil))))
+    │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+note: === adder_proof.typort loaded ===
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/adder_proof.typort:371:10
+    │
+371 │ println("=== adder_proof.typort loaded ===")
+    │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+[LOG log] change 0.3873178
+
+##### typort check examples\typeclass_complex.typort  wall=5220 ms exit=0
+typort.exe : Analyzing: file:///F:/projects/hermes/elaboration-zoo-lsp/examples/typeclass_complex.typort (7513 bytes)
+所在位置 行:1 字符: 532
++ ... Diagnostics.Stopwatch]::StartNew(); $txt = & $T check $f 2>&1 | Out-S ...
++                                                ~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Analyzing: file...rt (7513 bytes):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+[LOG log] change: file:///F:/projects/hermes/elaboration-zoo-lsp/examples/typeclass_complex.typort
+[LOG log] parser 0.0008856
+[LOG log] infer 0.0451294
+note: string_concat {string_concat succ( {"Describable"[Sum("Nat" @ 549,552, [], ["zero" @ 573,577, "succ" @ 612,616], false)].describe 2}} )
+   ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/typeclass_complex.typort:36:9
+   │
+36 │ println(describe_val(3))
+   │         ^^^^^^^^^^^^^^
+
+note: 0
+   ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/typeclass_complex.typort:67:9
+   │
+67 │ println(leaf1.depth)
+   │         ^^^^^^^^^^^
+
+note: 1
+   ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/typeclass_complex.typort:68:9
+   │
+68 │ println(leaf1.tree_size)
+   │         ^^^^^^^^^^^^^^^
+
+note: Option[Nat]::Some(3)
+   ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/typeclass_complex.typort:85:9
+   │
+85 │ println(inc_opt)
+   │         ^^^^^^^
+
+note: 6
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/typeclass_complex.typort:102:9
+    │
+102 │ println(sum_list(numbers))
+    │         ^^^^^^^^^^^^^^^^
+
+note: 6
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/typeclass_complex.typort:103:9
+    │
+103 │ println(product_list(numbers))
+    │         ^^^^^^^^^^^^^^^^^^^^
+
+note: 3
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/typeclass_complex.typort:116:9
+    │
+116 │ println(vec_sum(cons(1, cons(2, nil))))
+    │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+note: 2
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/typeclass_complex.typort:126:9
+    │
+126 │ println(fib2(2))
+    │         ^^^^^^
+
+note: Product[Nat, Nat]::Product.mk(4, 2)
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/typeclass_complex.typort:133:9
+    │
+133 │ println(swap_and_double(my_pair))
+    │         ^^^^^^^^^^^^^^^^^^^^^^^
+
+note: Option[Nat]::Some(1)
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/typeclass_complex.typort:142:9
+    │
+142 │ println(safe_head(numbers))
+    │         ^^^^^^^^^^^^^^^^^
+
+note: zero
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/typeclass_complex.typort:152:9
+    │
+152 │ println(nat_classify(0))
+    │         ^^^^^^^^^^^^^^
+
+note: one
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/typeclass_complex.typort:153:9
+    │
+153 │ println(nat_classify(1))
+    │         ^^^^^^^^^^^^^^
+
+note: many
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/typeclass_complex.typort:154:9
+    │
+154 │ println(nat_classify(2))
+    │         ^^^^^^^^^^^^^^
+
+note: 2
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/typeclass_complex.typort:163:9
+    │
+163 │ println(fact(2))
+    │         ^^^^^^
+
+note: 6
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/typeclass_complex.typort:164:9
+    │
+164 │ println(fact(3))
+    │         ^^^^^^
+
+note: 3
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/typeclass_complex.typort:173:9
+    │
+173 │ println(list_len(numbers))
+    │         ^^^^^^^^^^^^^^^^
+
+note: 4
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/typeclass_complex.typort:177:9
+    │
+177 │ println(list_len(ab))
+    │         ^^^^^^^^^^^
+
+note: 10
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/typeclass_complex.typort:178:9
+    │
+178 │ println(sum_list(ab))
+    │         ^^^^^^^^^^^
+
+note: 2
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/typeclass_complex.typort:191:9
+    │
+191 │ println(nat_sub_safe(3, 1))
+    │         ^^^^^^^^^^^^^^^^^
+
+note: 0
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/typeclass_complex.typort:192:9
+    │
+192 │ println(nat_sub_safe(1, 2))
+    │         ^^^^^^^^^^^^^^^^^
+
+note: 2
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/typeclass_complex.typort:202:9
+    │
+202 │ println(nat_max2(1, 2))
+    │         ^^^^^^^^^^^^^
+
+note: 2
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/typeclass_complex.typort:203:9
+    │
+203 │ println(nat_max2(2, 1))
+    │         ^^^^^^^^^^^^^
+
+note: Boolean::true
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/typeclass_complex.typort:224:9
+    │
+224 │ println(eval_bool_expr(bex))
+    │         ^^^^^^^^^^^^^^^^^^
+
+note: 7
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/typeclass_complex.typort:242:9
+    │
+242 │ println(eval_arith(ae))
+    │         ^^^^^^^^^^^^^
+
+note: 2
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/typeclass_complex.typort:256:9
+    │
+256 │ println(gcd(6, 4))
+    │         ^^^^^^^^
+
+note: 1
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/typeclass_complex.typort:257:9
+    │
+257 │ println(gcd(5, 2))
+    │         ^^^^^^^^
+
+note: Ho Ho Ho 
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/typeclass_complex.typort:266:9
+    │
+266 │ println(repeat_str("Ho ", 3))
+    │         ^^^^^^^^^^^^^^^^^^^
+
+note: Eq[Nat]::refl(5)
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/typeclass_complex.typort:273:9
+    │
+273 │ println(symm_eg)
+    │         ^^^^^^^
+
+note: Eq[Nat]::refl(5)
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/typeclass_complex.typort:280:9
+    │
+280 │ println(trans_eg)
+    │         ^^^^^^^^
+
+note: Eq[Nat]::refl(6)
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/typeclass_complex.typort:286:9
+    │
+286 │ println(cong_eg)
+    │         ^^^^^^^
+
+note: Eq[Nat]::refl(6)
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/typeclass_complex.typort:290:9
+    │
+290 │ println(assoc_eg)
+    │         ^^^^^^^^
+
+note: Eq[Nat]::refl(6)
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/typeclass_complex.typort:294:9
+    │
+294 │ println(eq_congr_eg)
+    │         ^^^^^^^^^^^
+
+[LOG log] change 0.0527136

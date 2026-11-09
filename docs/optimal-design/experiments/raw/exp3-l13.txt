@@ -1,0 +1,35 @@
+﻿
+##### C:\ezl-target\release\l13bench.exe --workload match --max-k 11 --rounds 3
+== workload: match ==
+-- match k=9 (13 decls) nf=6
+   basic          0.186ms   med        0.191ms
+   fast           0.136ms*  med        0.138ms
+   fast_ss        0.139ms   med        0.139ms
+-- match k=10 (14 decls) nf=6
+   basic          0.209ms   med        0.252ms
+   fast           0.147ms   med        0.153ms
+   fast_ss        0.146ms*  med        0.152ms
+-- match k=11 (15 decls) nf=6
+   basic          0.214ms   med        0.216ms
+   fast           0.151ms   med        0.152ms
+   fast_ss        0.149ms*  med        0.154ms
+
+[exit=0]
+
+##### C:\ezl-target\release\l13bench.exe --workload gadt --rounds 3
+== workload: gadt ==
+-- gadt k=9 (10 decls) nf=17
+   basic          0.402ms   med        0.404ms
+   fast           0.212ms   med        0.216ms
+   fast_ss        0.207ms*  med        0.222ms
+
+[exit=0]
+
+##### C:\ezl-target\release\l13bench.exe --workload moduletree --rounds 3
+== workload: moduletree ==
+-- moduletree k=9 (8 decls) nf=11
+   basic          0.198ms   med        0.199ms
+   fast           0.128ms   med        0.129ms
+   fast_ss        0.126ms*  med        0.134ms
+
+[exit=0]

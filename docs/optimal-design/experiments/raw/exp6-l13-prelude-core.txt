@@ -1,0 +1,21 @@
+﻿== workload: prelude-core ==
+   parsed op: 37 decls
+   parsed eq: 15 decls
+   parsed nat: 45 decls
+   parsed calc: 0 decls
+   parsed bool: 34 decls
+   parsed option: 7 decls
+   parsed result: 6 decls
+   parsed order: 6 decls
+   parsed void: 2 decls
+   parsed decidable: 5 decls
+   parsed vec: 8 decls
+   parsed either: 10 decls
+   parsed list: 25 decls
+   parsed string: 3 decls
+   parsed nonempty: 5 decls
+-- prelude-core (208 decls) nf=27
+   basic         55.693ms   med       55.978ms
+   fast          18.822ms*  med       21.392ms
+   fast_ss       20.250ms   med       20.824ms
+

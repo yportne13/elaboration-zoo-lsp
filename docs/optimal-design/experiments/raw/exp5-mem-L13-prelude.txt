@@ -1,0 +1,7 @@
+﻿== L13 prelude-core (15 files, 208 decls, failed=None) ==
+  parse             13238 allocs    5351921 B    5.10MB
+  basic           1046766 allocs  158398139 B  151.06MB (nodes=27)
+  fast(one-shot)   266628 allocs   51702326 B   49.31MB  [arena 5× 16.06MB chunks "[1.0038909912109375,2.0077972412109375,4.0156097412109375,8.031234741210938,1]"] (nodes=27)
+  fast_ss growth   266598 allocs   51484790 B   49.10MB  [arena 5× 16.06MB chunks "[1.0038909912109375,2.0077972412109375,4.0156097412109375,8.031234741210938,1]"] reset 后保留 8.03MB (nodes=27)
+  fast_ss churn    266488 allocs   37988939 B   36.23MB (3 轮均值; 合计 799465 allocs / 113966818 B, 其中 arena 1× 16.06MB)
+

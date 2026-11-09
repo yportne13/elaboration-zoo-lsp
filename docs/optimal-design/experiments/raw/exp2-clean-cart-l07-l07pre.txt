@@ -1,0 +1,13 @@
+﻿pmabbench.exe : == sweep: cart ==  impls: l07 vs l07pre  (rounds=3, 净 = 扣同枚举对照)
+所在位置 行:1 字符: 402
++ ... e ',','-'); & $P --impls $pair[0] --sweep cart --sizes $ws --rounds 3 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (== sweep: cart ...=3, 净 = 扣同枚举对照):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  size    arms         l07(ms)      l07pre(ms)l07pre/l07
+     2       4           0.047           0.026      0.56   raw 0.080/0.105  ctrl 0.033/0.079
+     4      16           0.245           0.141      0.58   raw 0.277/0.227  ctrl 0.032/0.086
+     6      64           1.535           0.812      0.53   raw 1.577/0.906  ctrl 0.042/0.094
+     8     256           9.099           4.423      0.49   raw 9.146/4.527  ctrl 0.047/0.105
+

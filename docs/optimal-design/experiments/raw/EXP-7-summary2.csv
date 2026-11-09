@@ -1,0 +1,9 @@
+﻿name,exit,passed,failed,ignored,secs,result
+lsp-namespace_tests,0,8.6,passed=30 failed=0 ignored=0,
+lsp-hover_tests,0,0.4,passed=20 failed=0 ignored=0,
+lsp-completion_tests,0,1.3,passed=14 failed=0 ignored=0,
+lsp-cross_file_tests,0,0.4,passed=3 failed=0 ignored=0,
+lib-L09,0,0,passed=10 failed=0 ignored=0,
+lib-L10,0,0,passed=25 failed=0 ignored=0,
+lib-L11,0,0.1,passed=33 failed=0 ignored=0,
+lib-L12,0,0,passed=35 failed=0 ignored=0,

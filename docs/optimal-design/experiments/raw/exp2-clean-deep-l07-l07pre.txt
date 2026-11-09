@@ -1,0 +1,12 @@
+﻿pmabbench.exe : == sweep: deep ==  impls: l07 vs l07pre  (rounds=3, 净 = 扣同枚举对照)
+所在位置 行:1 字符: 667
++ ... e ',','-'); & $P --impls $pair[0] --sweep deep --sizes $ds --rounds 3 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (== sweep: deep ...=3, 净 = 扣同枚举对照):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  size    arms         l07(ms)      l07pre(ms)l07pre/l07
+     8       2           0.576           0.157      0.27   raw 0.640/0.291  ctrl 0.065/0.134
+    16       2           1.957           0.395      0.20   raw 2.023/0.532  ctrl 0.066/0.137
+    32       2           7.156           1.187      0.17   raw 7.223/1.326  ctrl 0.066/0.139
+

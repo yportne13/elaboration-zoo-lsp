@@ -1,0 +1,18 @@
+﻿name,exit,passed,failed,ignored,secs,result
+lib-L07,0,70,0,0,8.5,passed=70 failed=0 ignored=0
+lib-L08,0,60,0,0,1.2,passed=60 failed=0 ignored=0
+l07_blackbox,0,48,0,1,0.8,passed=48 failed=0 ignored=1
+l07_blackbox_v2,0,51,0,2,0.2,passed=51 failed=0 ignored=2
+l07_blackbox_v3,0,116,0,1,7.1,passed=116 failed=0 ignored=1
+l07_fast_parity,0,97,0,0,8.4,passed=97 failed=0 ignored=0
+l08_blackbox,0,57,0,1,0.8,passed=57 failed=0 ignored=1
+l08_blackbox_v2,0,51,0,2,0.2,passed=51 failed=0 ignored=2
+l08_fast_parity,0,95,0,0,2.1,passed=95 failed=0 ignored=0
+l09_fast_parity,0,39,0,0,0.1,passed=39 failed=0 ignored=0
+l10_fast_parity,0,46,0,0,0.1,passed=46 failed=0 ignored=0
+l11_fast_parity,0,52,0,0,0.2,passed=52 failed=0 ignored=0
+l12_fast_parity,0,50,0,0,0.1,passed=50 failed=0 ignored=0
+l13_fast_parity,0,629,0,6,129.9,passed=629 failed=0 ignored=6
+lib-L13,0,614,0,6,126,passed=614 failed=0 ignored=6
+known_bug_pins,0,8,0,0,8.4,passed=8 failed=0 ignored=0
+lean_oracle_parity,0,2,0,0,1,passed=2 failed=0 ignored=0

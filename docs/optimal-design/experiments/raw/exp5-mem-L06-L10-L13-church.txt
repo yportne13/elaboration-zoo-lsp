@@ -1,0 +1,46 @@
+﻿== L06 church k=9 n=1024 nf=true ==
+  parse               347 allocs      55105 B    0.05MB
+  basic             37708 allocs    2474919 B    2.36MB
+  fast(one-shot)       39 allocs    1293230 B    1.23MB  [arena 1× 1.00MB chunks "[1.0038909912109375]"]
+  fast_ss growth       37 allocs    1293164 B    1.23MB  [arena 1× 1.00MB chunks "[1.0038909912109375]"] reset 后保留 1.00MB
+  fast_ss churn        12 allocs      33224 B    0.03MB (3 轮均值; 合计 36 allocs / 99672 B, 其中 arena 0× 0.00MB)
+  fast_memo            40 allocs    1294264 B    1.23MB
+  ratio basic/fast = 1.91× bytes, 966.87× allocs
+  small-alloc top (fast):
+    size 4288          6 allocs      25728 B
+    size 4096          1 allocs       4096 B
+    size 1536          2 allocs       3072 B
+    size 2560          1 allocs       2560 B
+    size 768           3 allocs       2304 B
+    size 2048          1 allocs       2048 B
+== L10 church k=9 n=1024 nf=true ==
+  parse               378 allocs      60333 B    0.06MB
+  basic             14773 allocs    1015004 B    0.97MB
+  fast(one-shot)       89 allocs    1293672 B    1.23MB  [arena 1× 1.00MB chunks "[1.0038909912109375]"]
+  fast_ss growth       87 allocs    1293608 B    1.23MB  [arena 1× 1.00MB chunks "[1.0038909912109375]"] reset 后保留 1.00MB
+  fast_ss churn        62 allocs      39120 B    0.04MB (3 轮均值; 合计 186 allocs / 117360 B, 其中 arena 0× 0.00MB)
+  fast_memo            90 allocs    1294836 B    1.23MB
+  ratio basic/fast = 0.78× bytes, 165.99× allocs
+  small-alloc top (fast):
+    size 4288          6 allocs      25728 B
+    size 4096          1 allocs       4096 B
+    size 2560          1 allocs       2560 B
+    size 2048          1 allocs       2048 B
+    size 148          13 allocs       1924 B
+    size 256           6 allocs       1536 B
+== L13 church k=9 n=1024 nf=true ==
+  parse               236 allocs     100798 B    0.10MB
+  basic             18423 allocs    1585409 B    1.51MB
+  fast(one-shot)     2406 allocs    1443837 B    1.38MB  [arena 1× 1.00MB chunks "[1.0038909912109375]"]
+  fast_ss growth     2403 allocs    1443669 B    1.38MB  [arena 1× 1.00MB chunks "[1.0038909912109375]"] reset 后保留 1.00MB
+  fast_ss churn      2374 allocs     176341 B    0.17MB (3 轮均值; 合计 7122 allocs / 529023 B, 其中 arena 0× 0.00MB)
+  fast_memo          2403 allocs    1443669 B    1.38MB
+  ratio basic/fast = 1.10× bytes, 7.66× allocs
+  small-alloc top (fast):
+    size 32         1098 allocs      35136 B
+    size 4288          8 allocs      34304 B
+    size 88          165 allocs      14520 B
+    size 2560          5 allocs      12800 B
+    size 1280          8 allocs      10240 B
+    size 256          32 allocs       8192 B
+

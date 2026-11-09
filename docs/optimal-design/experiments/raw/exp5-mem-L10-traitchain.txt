@@ -1,0 +1,16 @@
+﻿== L10 traitchain k=9 n=1024 nf=true ==
+  parse             19672 allocs    4306849 B    4.11MB
+  basic         122477444 allocs 5555549210 B 5298.18MB
+  fast(one-shot)   250364 allocs   32113975 B   30.63MB  [arena 4× 15.06MB chunks "[1.0038909912109375,2.0077972412109375,4.0156097412109375,8.031234741210938]"]
+  fast_ss growth   250357 allocs   32112919 B   30.63MB  [arena 4× 15.06MB chunks "[1.0038909912109375,2.0077972412109375,4.0156097412109375,8.031234741210938]"] reset 后保留 8.03MB
+  fast_ss churn    250307 allocs   21242916 B   20.26MB (3 轮均值; 合计 750922 allocs / 63728749 B, 其中 arena 1× 16.06MB)
+  fast_memo        250357 allocs   32112919 B   30.63MB
+  ratio basic/fast = 172.99× bytes, 489.20× allocs
+  small-alloc top (fast):
+    size 96        27731 allocs    2662176 B
+    size 256        9216 allocs    2359296 B
+    size 64        21507 allocs    1376448 B
+    size 152        6143 allocs     933736 B
+    size 896        1023 allocs     916608 B
+    size 148        5154 allocs     762792 B
+

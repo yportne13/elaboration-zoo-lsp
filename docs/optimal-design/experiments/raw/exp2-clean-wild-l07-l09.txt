@@ -1,0 +1,109 @@
+﻿pmabbench.exe : == sweep: wild ==  impls: l07 vs l09  (rounds=3, 净 = 扣同枚举对照)
+所在位置 行:1 字符: 753
++ ... e ',','-'); & $P --impls $pair[0] --sweep wild --sizes $ws --rounds 3 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (== sweep: wild ...=3, 净 = 扣同枚举对照):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  size    arms         l07(ms)         l09(ms)   l09/l07
+> Bool
+> Box
+> g
+> Bool
+> Box
+> g
+> Bool
+> Box
+> g
+> Bool
+> Box
+> g
+> Bool
+> Box
+> g
+> Bool
+> Box
+> g
+> Bool
+> Box
+> g
+> Bool
+> Box
+> g
+     2       3           0.024           0.043      1.83   raw 0.050/0.066  ctrl 0.027/0.023
+> Bool
+> Box
+> g
+> Bool
+> Box
+> g
+> Bool
+> Box
+> g
+> Bool
+> Box
+> g
+> Bool
+> Box
+> g
+> Bool
+> Box
+> g
+> Bool
+> Box
+> g
+> Bool
+> Box
+> g
+     4       5           0.049           0.088      1.80   raw 0.082/0.136  ctrl 0.033/0.048
+> Bool
+> Box
+> g
+> Bool
+> Box
+> g
+> Bool
+> Box
+> g
+> Bool
+> Box
+> g
+> Bool
+> Box
+> g
+> Bool
+> Box
+> g
+> Bool
+> Box
+> g
+> Bool
+> Box
+> g
+     6       7           0.095           0.264      2.79   raw 0.134/0.298  ctrl 0.039/0.033
+> Bool
+> Box
+> g
+> Bool
+> Box
+> g
+> Bool
+> Box
+> g
+> Bool
+> Box
+> g
+> Bool
+> Box
+> g
+> Bool
+> Box
+> g
+> Bool
+> Box
+> g
+> Bool
+> Box
+> g
+     8       9           0.164           0.556      3.38   raw 0.212/0.596  ctrl 0.047/0.040
+

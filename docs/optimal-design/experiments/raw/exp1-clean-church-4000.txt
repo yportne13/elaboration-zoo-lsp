@@ -1,0 +1,88 @@
+﻿L01 NBE bench（workload = church）
+rounds per variant = 3, sizes double from 1000
+
+== church_pair(1000) ==
+  variant                min_ms     med_ms
+  naive                   0.177      0.178
+  rc_value                0.180      0.181
+  rc_term                 0.169      0.170
+  bytes_env_list          0.128      0.164
+  bytes_env_arena         0.091      0.092
+  bytes_env_arena_tm      0.090      0.094
+  bytes_flat_value        3.149      3.476
+  rpn_owned               0.129      0.131
+  cek                     0.364      0.364
+  ast_env_arena           0.146      0.150
+  bump_arena              0.063      0.063
+  bump_tree               0.039      0.040
+  compiled                0.050      0.052
+  cek_bump                0.051      0.051
+  bump_iter               0.050      0.051
+  bump_spine              0.015      0.015
+  bump_spine_iter         0.008      0.008
+  bump_spine_iter_ss      0.008      0.008 *
+  bump_spine_slim         0.010      0.010
+  bump_spine_slim_ss      0.009      0.009
+  native_clo              0.016      0.016
+  bump_spine_memo         0.009      0.009
+  bump_spine_memo_inline      0.010      0.010
+  bump_spine_rpn          0.014      0.014
+  env_slice               0.052      0.052
+
+== church_pair(2000) ==
+  variant                min_ms     med_ms
+  naive                   0.372      0.373
+  rc_value                0.365      0.374
+  rc_term                 0.353      0.356
+  bytes_env_list          0.249      0.249
+  bytes_env_arena         0.193      0.201
+  bytes_env_arena_tm      0.197      0.206
+  bytes_flat_value       17.798     18.205
+  rpn_owned               0.299      0.314
+  cek                     0.732      0.734
+  ast_env_arena           0.292      0.332
+  bump_arena              0.127      0.127
+  bump_tree               0.081      0.082
+  compiled                0.105      0.107
+  cek_bump                0.101      0.101
+  bump_iter               0.100      0.101
+  bump_spine              0.030      0.031
+  bump_spine_iter         0.016      0.016
+  bump_spine_iter_ss      0.015      0.015 *
+  bump_spine_slim         0.020      0.021
+  bump_spine_slim_ss      0.018      0.019
+  native_clo              0.029      0.029
+  bump_spine_memo         0.018      0.020
+  bump_spine_memo_inline      0.019      0.021
+  bump_spine_rpn          0.029      0.029
+  env_slice               0.092      0.107
+
+== church_pair(4000) ==
+  variant                min_ms     med_ms
+  naive                   0.761      0.763
+  rc_value                0.747      0.752
+  rc_term                 0.713      0.717
+  bytes_env_list          0.578      0.650
+  bytes_env_arena         0.446      0.457
+  bytes_env_arena_tm      0.451      0.490
+  bytes_flat_value       76.952     77.902
+  rpn_owned               0.732      0.819
+  cek                     1.456      1.468
+  ast_env_arena           0.585      0.639
+  bump_arena              0.263      0.263
+  bump_tree               0.184      0.185
+  compiled                0.210      0.212
+  cek_bump                0.197      0.197
+  bump_iter               0.198      0.200
+  bump_spine              0.086      0.086
+  bump_spine_iter         0.031      0.032
+  bump_spine_iter_ss      0.029      0.030 *
+  bump_spine_slim         0.042      0.042
+  bump_spine_slim_ss      0.037      0.038
+  native_clo              0.080      0.082
+  bump_spine_memo         0.038      0.038
+  bump_spine_memo_inline      0.042      0.043
+  bump_spine_rpn          0.084      0.085
+  env_slice               0.187      0.214
+
+

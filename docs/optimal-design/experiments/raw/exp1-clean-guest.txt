@@ -1,0 +1,52 @@
+﻿L01 NBE bench（workload = guest）
+rounds per variant = 3, sizes double from 1000
+
+== guest-shape benches（负载设计取自 guest0x0/normalization-bench）==
+（口径：import/export 在计时外；表内为 min ms）
+
+== guest/church_mul ==
+  variant                   n=50       n=100       n=200
+  naive                    1.874      17.826     156.471
+  cek                      2.066      17.798     155.499
+  bump_arena               0.072       0.320       1.298
+  bump_tree                0.047       0.191       0.793
+  bump_iter                0.061       0.248       1.113
+  cek_bump                 0.060       0.244       0.987
+  bump_spine               0.017       0.072       0.307
+  bump_spine_iter          0.010       0.038       0.184
+  bump_spine_iter_ss       0.009       0.037       0.146
+  bump_spine_slim          0.013       0.053       0.209
+  bump_spine_memo          0.012       0.049       0.200
+  bump_spine_memo_inline       0.013       0.058       0.288
+
+== guest/parigot_add ==
+  variant                    n=4         n=6         n=8        n=10
+  naive                    0.072       1.129      18.049     300.447
+  cek                      0.168       2.642      42.435     717.565
+  bump_arena               0.019       0.313       5.635      93.332
+  bump_tree                0.014       0.218       3.526      56.852
+  bump_iter                0.046       0.711      11.525     187.749
+  cek_bump                 0.045       0.711      11.542     191.975
+  bump_spine               0.013       0.207       3.492      56.371
+  bump_spine_iter          0.024       0.375       6.031      98.354
+  bump_spine_iter_ss       0.024       0.368       5.890      94.995
+  bump_spine_slim          0.026       0.395       6.556     102.723
+  bump_spine_memo          0.017       0.050       0.105       0.195
+  bump_spine_memo_inline       0.031       0.307       3.320      36.135
+
+== guest/exponential ==
+  variant                   n=10        n=14        n=18        n=20
+  naive                    0.056       0.974      17.093      72.184
+  cek                      0.141       2.266      39.660     163.369
+  bump_arena               0.013       0.228       3.972      16.452
+  bump_tree                0.006       0.088       1.422       5.926
+  bump_iter                0.011       0.167       2.743      10.871
+  cek_bump                 0.011       0.165       2.690      11.112
+  bump_spine               0.005       0.073       1.209       4.956
+  bump_spine_iter          0.010       0.155       2.449      10.014
+  bump_spine_iter_ss       0.010       0.155       2.464      10.374
+  bump_spine_slim          0.014       0.162       2.586      10.556
+  bump_spine_memo          0.001       0.003       0.004       0.005
+  bump_spine_memo_inline       0.001       0.003       0.003       0.005
+
+

@@ -1,0 +1,26 @@
+﻿== workload: examples-hdl ==
+-- examples-hdl[0] (217 decls) BOTH-FAILED (两版都未跑完，与范式一致无关)
+   basic         53.151ms   med       55.986ms
+   fast          19.476ms   med       20.849ms
+   fast_ss       19.332ms*  med       21.339ms
+-- examples-hdl[1] (214 decls) BOTH-FAILED (两版都未跑完，与范式一致无关)
+   basic         56.016ms   med       56.339ms
+   fast          19.433ms   med       20.470ms
+   fast_ss       19.293ms*  med       19.614ms
+-- examples-hdl[2] (220 decls) BOTH-FAILED (两版都未跑完，与范式一致无关)
+   basic         54.704ms   med       60.116ms
+   fast          21.860ms   med       23.144ms
+   fast_ss       19.244ms*  med       22.649ms
+-- examples-hdl[3] (226 decls) BOTH-FAILED (两版都未跑完，与范式一致无关)
+   basic         54.968ms   med       57.740ms
+   fast          20.901ms   med       22.412ms
+   fast_ss       19.229ms*  med       20.193ms
+-- examples-hdl[4] (217 decls) BOTH-FAILED (两版都未跑完，与范式一致无关)
+   basic         56.843ms   med       57.252ms
+   fast          19.220ms   med       20.114ms
+   fast_ss       18.938ms*  med       19.306ms
+-- examples-hdl[5] (217 decls) BOTH-FAILED (两版都未跑完，与范式一致无关)
+   basic         57.215ms   med       57.246ms
+   fast          19.114ms   med       19.850ms
+   fast_ss       18.883ms*  med       21.303ms
+
