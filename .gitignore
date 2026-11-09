@@ -60,3 +60,6 @@ tools/spinalhdl-verify/work/
 # 校验方式：cd lean && lake build（见 lean/README.md）。
 lean/.lake/
 
+
+# Local agent scratch (P1 cleanup, 2026-11-09)
+.commandcode/

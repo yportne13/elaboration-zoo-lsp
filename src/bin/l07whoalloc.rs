@@ -39,14 +39,16 @@ mod parser_lib_resilient;
 #[cfg(feature = "sampler")]
 #[path = "../pmab_gen.rs"]
 mod pmab_gen;
+// P1 清理：原 `src/bench_head/` 冻结快照已删除，L07_head 直接别名当前 L07 模块
+// （不能用 `#[path]` 二次包含同一份源码：L07 源码内有 `crate::L07_sum_type::...`
+// 硬编码，二次实例化会漂到兄弟模块实例）。
 #[cfg(feature = "sampler")]
-#[path = "../bench_head/mod.rs"]
-mod L07_head;
+pub(crate) use crate::L07_sum_type as L07_head;
 #[cfg(feature = "sampler")]
 #[path = "../L07_sum_type/mod.rs"]
 mod L07_sum_type;
 #[cfg(feature = "sampler")]
-#[path = "../bench_pre/L07_sum_type/mod.rs"]
+#[path = "../../tools/bench_snapshots/L07_pre/L07_sum_type/mod.rs"]
 mod L07_pre;
 
 #[cfg(feature = "sampler")]
@@ -143,8 +145,9 @@ mod imp {
         ctrl: bool,
     }
 
-    /// 只留最后 3 段模块路径（丢掉 `l07whoalloc::L07_head` 前缀、泛型实参与
-    /// `impl$N` 匿名块编号），便于聚合。
+    /// 只留最后 3 段模块路径（丢掉 `l07whoalloc::L07_sum_type` 前缀、泛型实参与
+    /// `impl$N` 匿名块编号），便于聚合。`L07_head` 是本模块的别名，符号前缀
+    /// 实际落在 `L07_sum_type`（P1 清理后二者同一实例）。
     fn shorten(name: &str) -> String {
         let name = match name.find("::{{") {
             Some(p) => &name[..p],

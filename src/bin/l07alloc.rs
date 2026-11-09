@@ -1,7 +1,7 @@
 //! L07 显式替换重构的**分配计数**对照器（确定性、无计时噪声）。
 //!
 //! 同一个源文本喂给两个 L07 参考版实现（当前 HEAD 的 `L07_sum_type` 与
-//! 重构前 `b9d54fe` 的 `src/bench_pre/L07_sum_type`），只比对：
+//! 重构前 `b9d54fe` 的 `tools/bench_snapshots/L07_pre/L07_sum_type`），只比对：
 //!
 //! - `allocs` / `bytes`：进程级 `GlobalAlloc` 计数（alloc + realloc 记 1 次，
 //!   bytes 记请求的 size）；
@@ -89,12 +89,18 @@ mod pmab_gen;
 #[path = "../L07_sum_type/mod.rs"]
 mod L07_sum_type;
 
-#[path = "../bench_pre/L07_sum_type/mod.rs"]
+#[path = "../../tools/bench_snapshots/L07_pre/L07_sum_type/mod.rs"]
 mod L07_pre;
 
-/// 已提交的 HEAD（ea01207）——用来把"重构本身"与"工作区在飞的修复轮"分开。
-#[path = "../bench_head/mod.rs"]
-mod L07_head;
+/// 已提交的 HEAD 的 L07 源码。P1 清理：原 `src/bench_head/` 冻结快照已删除，
+/// 这里把 `L07_head` 直接别名到当前 `L07_sum_type` 模块——工作树干净时
+/// head ≡ cur（若有人正在改 L07，则 head 列随工作树变化，不再是冻结对照）。
+/// **head 列自 P1 起不再独立**：head.run 恒等于 cur.run，`--hist` 的 head/pre
+/// 净增桶即 cur/pre；需要历史对照请按 `tools/bench_snapshots/L07_pre/README.md`
+/// 的再生成步骤另建冻结快照。
+/// 注：不能用 `#[path]` 二次包含同一份源码——L07 源码内部硬编码了
+/// `crate::L07_sum_type::...`，二次实例化会漂到兄弟模块实例（E0432/可见性错误）。
+use crate::L07_sum_type as L07_head;
 
 use clap::Parser;
 

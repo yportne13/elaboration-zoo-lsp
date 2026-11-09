@@ -7,7 +7,8 @@
 //!
 //! - `l07`    —— 当前 HEAD 的 L07（逐臂下钻 + 显式替换精化）；
 //! - `l07pre` —— 重构前（`b9d54fe`）的 L07（逐臂下钻 + pm_defs 事实表），
-//!               源码由 `git archive` 抽到 `src/bench_pre/L07_sum_type/`；
+//!               源码由 `git archive` 抽到 `tools/bench_snapshots/L07_pre/L07_sum_type/`
+//!               （P1 清理起移出 `src/`，仅基准工具通过 `#[path]` 引用）；
 //! - `l09`    —— 当前 HEAD 的 L09（决策树矩阵）。
 //!
 //! 口径：
@@ -44,7 +45,7 @@ mod L07_sum_type;
 #[path = "../L09_mltt/mod.rs"]
 mod L09_mltt;
 
-#[path = "../bench_pre/L07_sum_type/mod.rs"]
+#[path = "../../tools/bench_snapshots/L07_pre/L07_sum_type/mod.rs"]
 mod L07_pre;
 
 use clap::Parser;
