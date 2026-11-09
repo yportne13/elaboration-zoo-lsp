@@ -1,4 +1,6 @@
-use std::{collections::HashMap, rc::Rc};
+use std::rc::Rc;
+
+use rustc_hash::FxHashMap;
 
 use crate::{list::List, parser_lib::Span};
 use smol_str::SmolStr;
@@ -31,7 +33,7 @@ use super::{
 pub struct Decls {
     /// crate 内可构造（mod.rs 的 simpl_decl 组装）；常规读写走 Deref(Mut)
     /// 与 `decl_insert`。
-    pub(crate) map: HashMap<SmolStr, Rc<DeclEntry>>,
+    pub(crate) map: FxHashMap<SmolStr, Rc<DeclEntry>>,
     /// 实例代数（见上）：同 ver ⟹ 同实例同内容。crate 内可读
     /// （simpl_decl 缓存键），写入只经 `decl_insert`。
     pub(crate) ver: u64,
@@ -44,14 +46,14 @@ impl Decls {
 }
 
 impl std::ops::Deref for Decls {
-    type Target = HashMap<SmolStr, Rc<DeclEntry>>;
-    fn deref(&self) -> &HashMap<SmolStr, Rc<DeclEntry>> {
+    type Target = FxHashMap<SmolStr, Rc<DeclEntry>>;
+    fn deref(&self) -> &FxHashMap<SmolStr, Rc<DeclEntry>> {
         &self.map
     }
 }
 
 impl std::ops::DerefMut for Decls {
-    fn deref_mut(&mut self) -> &mut HashMap<SmolStr, Rc<DeclEntry>> {
+    fn deref_mut(&mut self) -> &mut FxHashMap<SmolStr, Rc<DeclEntry>> {
         &mut self.map
     }
 }
@@ -81,7 +83,7 @@ pub struct Cxt {
     /// - 表 `Rc<HashMap>`：`new_binder` / `decl_insert` 等不改表的派生是
     ///   O(1) 指针共享；`bind` / `define` 经 `Rc::make_mut` 写时复制——
     ///   Cxt 全程按持久风格派生（无 &mut 改写点），共享不可观测。
-    pub src_names: Rc<HashMap<String, Rc<(Lvl, VTy)>>>,
+    pub src_names: Rc<FxHashMap<String, Rc<(Lvl, VTy)>>>,
     pub decl: Rc<Decls>,
 }
 
@@ -240,7 +242,7 @@ impl Cxt {
             lvl: Lvl(0),
             locals: Locals::Here,
             pruning: List::new(),
-            src_names: Rc::new(HashMap::new()),
+            src_names: Rc::new(FxHashMap::default()),
             decl: Rc::new(Decls::new()),
         }
     }

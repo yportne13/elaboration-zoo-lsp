@@ -11,7 +11,6 @@
 
 use std::{
     cell::RefCell,
-    collections::HashMap,
     ops::{Add, Sub},
     rc::Rc,
     sync::{
@@ -19,6 +18,7 @@ use std::{
         LazyLock,
     },
 };
+use rustc_hash::FxHashMap;
 
 /// `L07_LOOP` 调试开关（进程级，只读一次；热路径零 env 访问）。
 pub(crate) static LOOP_DEBUG: LazyLock<AtomicBool> =
@@ -596,13 +596,13 @@ pub struct Infer {
     meta_undo: Vec<(usize, MetaEntry)>,
     /// 可变全局表（create_global / change_mutable / get_global 族读写；
     /// L06 同款：单线程 RefCell。参考版随 `Infer` 每次调用新建）。
-    pub(crate) mutable_map: RefCell<HashMap<SmolStr, Val>>,
+    pub(crate) mutable_map: RefCell<FxHashMap<SmolStr, Val>>,
     /// simplify decl 表的旁路缓存（性能评审 P1-2）：键 = 源表实例代数
     /// （`Decls::ver`，同 ver ⟹ 同实例同内容；简化表继承源 ver 且 `simpl`
     /// 幂等）。卡住 match 每次消费（quote / rename / unify 的 Match 臂）原
     /// 是 O(#decls) 键克隆 + 逐条 `ty` 深拷贝重建；命中时 O(1) 取共享表。
     /// 每 `Infer` 一份（随运行销毁，条目数 ≈ 处理过的 def 数）。
-    simpl_cache: RefCell<HashMap<u64, Rc<Decls>>>,
+    simpl_cache: RefCell<FxHashMap<u64, Rc<Decls>>>,
     /// unify 递归深度防护（L13 同款做法）。每次外部配置（unify_catch /
     /// pattern 编译入口）充值；递归中递减，归零即 Err——防索引槽互相嵌入
     /// 的构造子值比较（SuccCase 的 typ 含索引、索引又是 SuccCase）无限递归。
@@ -653,8 +653,8 @@ impl Infer {
         Self {
             meta: vec![],
             meta_undo: vec![],
-            mutable_map: RefCell::new(HashMap::new()),
-            simpl_cache: RefCell::new(HashMap::new()),
+            mutable_map: RefCell::new(FxHashMap::default()),
+            simpl_cache: RefCell::new(FxHashMap::default()),
             unify_fuel: std::cell::Cell::new(UNIFY_FUEL),
             match_cmp_budget: std::cell::Cell::new(MATCH_CMP_BUDGET),
             unify_kind: std::cell::Cell::new(UnifyKind::Absurd),
