@@ -18,7 +18,6 @@
 
 use std::{
     cell::RefCell,
-    collections::HashMap,
     ops::{Add, Sub},
     rc::Rc,
     sync::{
@@ -26,6 +25,8 @@ use std::{
         LazyLock,
     },
 };
+
+use rustc_hash::FxHashMap;
 
 /// `L08_LOOP` 调试开关（进程级，只读一次；热路径零 env 访问）。
 pub(crate) static LOOP_DEBUG: LazyLock<AtomicBool> =
@@ -528,7 +529,7 @@ pub struct Infer {
     meta: Vec<MetaEntry>,
     /// 可变全局表（create_global / change_mutable / get_global 族读写；
     /// L06 同款：单线程 RefCell。参考版随 `Infer` 每次调用新建）。
-    pub(crate) mutable_map: RefCell<HashMap<SmolStr, Val>>,
+    pub(crate) mutable_map: RefCell<FxHashMap<SmolStr, Val>>,
     /// unify 递归深度防护（L13 同款做法）。每次外部配置（unify_catch /
     /// pattern 编译入口）充值；递归中递减，归零即 Err——防索引槽互相嵌入
     /// 的构造子值比较（SuccCase 的 typ 含索引、索引又是 SuccCase）无限递归。
@@ -550,7 +551,7 @@ impl Infer {
     pub fn new() -> Self {
         Self {
             meta: vec![],
-            mutable_map: RefCell::new(HashMap::new()),
+            mutable_map: RefCell::new(FxHashMap::default()),
             unify_fuel: std::cell::Cell::new(UNIFY_FUEL),
             match_cmp_budget: std::cell::Cell::new(MATCH_CMP_BUDGET),
         }
@@ -1474,7 +1475,7 @@ pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
         if *L08_DEBUG_ON {
             eprintln!("> {}", parser::syntax::Decl::name(&tm));
         }
-        let (x, _, new_cxt) = infer.infer(&cxt, tm)?;
+        let (x, _, new_cxt) = infer.infer_owned(cxt, tm)?;
         cxt = new_cxt;
         if let DeclTm::Println(x) = x {
             ret += &pretty_tm(0, cxt.names(), &infer.nf(cxt.decl(), &cxt.env, x));
@@ -1586,7 +1587,7 @@ pub(crate) fn bench_check(decls: &[parser::syntax::Decl]) -> bool {
     let mut infer = Infer::new();
     let mut cxt = Cxt::new(&infer);
     for d in decls {
-        match infer.infer(&cxt, d.clone()) {
+        match infer.infer_owned(cxt, d.clone()) {
             Ok((_, _, nc)) => cxt = nc,
             Err(_) => return false,
         }
@@ -1657,7 +1658,7 @@ pub(crate) fn bench_check_nf(decls: &[parser::syntax::Decl]) -> u64 {
         if let parser::syntax::Decl::Def { name, .. } = d {
             last = Some(name.data.clone());
         }
-        match infer.infer(&cxt, d.clone()) {
+        match infer.infer_owned(cxt, d.clone()) {
             Ok((_, _, nc)) => cxt = nc,
             Err(_) => return 0,
         }

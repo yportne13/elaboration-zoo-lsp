@@ -1,4 +1,6 @@
-use std::{collections::HashMap, rc::Rc};
+use std::rc::Rc;
+
+use rustc_hash::FxHashMap;
 
 use crate::{list::List, parser_lib::Span};
 use smol_str::SmolStr;
@@ -18,7 +20,7 @@ use super::{
 /// 条目按 `Rc` 共享（与 L07 同款）：`decl_insert` 的写时复制只需重建哈希桶 +
 /// 逐条 Rc 递增，不再深拷贝 `DeclEntry` 里的值（`Val` 的 clone 对 `Lam`/`Pi`
 /// 是整棵 `Box<Tm>` 闭包树的深拷贝、对 `LiteralIntro` 是 String 分配）。
-pub type Decls = HashMap<SmolStr, Rc<DeclEntry>>;
+pub type Decls = FxHashMap<SmolStr, Rc<DeclEntry>>;
 
 #[derive(Debug, Clone)]
 pub struct DeclEntry {
@@ -32,7 +34,7 @@ pub struct Cxt {
     pub lvl: Lvl, // 下一个 fresh 层级（unify / quote 用）
     pub locals: Locals,
     pub pruning: Pruning, // 与 env 一一对应：Some(icit) = 该槽是待插入的隐式参数
-    pub src_names: HashMap<String, (Lvl, VTy)>,
+    pub src_names: FxHashMap<String, (Lvl, VTy)>,
     pub decl: Rc<Decls>,
 }
 
@@ -74,7 +76,8 @@ impl Cxt {
     /// 注册顺序敏感：`string_to_global_type` 必须先于引用它的 global 族
     /// （其类型的闭包体在 check 期才查表，但防御性保持 L06 顺序）。
     pub fn new(infer: &Infer) -> Self {
-        let cxt = Self::empty().decl_insert(
+        let mut cxt = Self::empty();
+        cxt.decl_insert_mut(
             "String",
             DeclEntry {
                 ty: Val::U,
@@ -154,7 +157,7 @@ impl Cxt {
     /// （只有最外层域被立即求值——恒为 String 常量；引用参数的内层域留在
     /// 闭包里到 check 期才解）；值 = λ 参数链 → `Tm::Prim(name)`，应用满
     /// 元数后由 `force` 的 `prim_reduce` 归约。
-    fn add_builtin(self, infer: &Infer, name: &str, ty_tm: Tm) -> Self {
+    fn add_builtin(mut self, infer: &Infer, name: &str, ty_tm: Tm) -> Self {
         let ty = infer.eval(&self.decl, &List::new(), ty_tm.clone());
         // 值 = λ 参数链 → Prim(name)；参数名从类型的 Π 链取（与域同序）
         let mut names = Vec::new();
@@ -168,7 +171,8 @@ impl Cxt {
             val = Tm::Lam(empty_span(p.clone()), Icit::Expl, Box::new(val));
         }
         let val = infer.eval(&self.decl, &List::new(), val);
-        self.decl_insert(SmolStr::new(name), DeclEntry { ty, val })
+        self.decl_insert_mut(SmolStr::new(name), DeclEntry { ty, val });
+        self
     }
     pub fn empty() -> Self {
         Cxt {
@@ -176,8 +180,8 @@ impl Cxt {
             lvl: Lvl(0),
             locals: Locals::Here,
             pruning: List::new(),
-            src_names: HashMap::new(),
-            decl: Rc::new(HashMap::new()),
+            src_names: FxHashMap::default(),
+            decl: Rc::new(FxHashMap::default()),
         }
     }
 
@@ -189,20 +193,23 @@ impl Cxt {
         self.decl.get(k).map(|e| &**e)
     }
 
-    /// 写入一个 decl。写时复制：Rc 共享时才克隆整表，父上下文不受影响——
-    /// 这正是递归定义需要的"占位只对本定义的检查可见"。表克隆是逐条 `Rc`
-    /// 递增 + 重建哈希桶（条目本身共享，不深拷贝值）。
+    /// 就地写入一个 decl（顺序声明路径专用）：调用方持有 `Cxt` 所有权，
+    /// 表的 `Rc` 强计数为 1，`Rc::make_mut` 原地写，不深拷整表。
+    ///
+    /// 旧 [`Cxt::decl_insert`] 先 `self.decl.clone()` 再 `Rc::make_mut`，
+    /// 强计数恒为 2 ⇒ 每个顶层定义都深拷一次整张 decl 表（strchain/global/
+    /// struct 这类生成 2^(k+1) 个顶层 def 的负载上是 O(D²) 放大器）。
+    pub fn decl_insert_mut(&mut self, k: impl Into<SmolStr>, e: DeclEntry) {
+        Rc::make_mut(&mut self.decl).insert(k.into(), Rc::new(e));
+    }
+
+    /// 持久化插入包装（保持 `&Cxt` 调用方兼容）：浅克隆上下文后就地写。
+    /// 写时复制语义不变：Rc 共享时才克隆整表，父上下文不受影响——这正是
+    /// 递归定义需要的"占位只对本定义的检查可见"。
     pub fn decl_insert(&self, k: impl Into<SmolStr>, e: DeclEntry) -> Self {
-        let mut decl = self.decl.clone();
-        Rc::make_mut(&mut decl).insert(k.into(), Rc::new(e));
-        Cxt {
-            decl,
-            env: self.env.clone(),
-            lvl: self.lvl,
-            locals: self.locals.clone(),
-            pruning: self.pruning.clone(),
-            src_names: self.src_names.clone(),
-        }
+        let mut cxt = self.clone();
+        cxt.decl_insert_mut(k, e);
+        cxt
     }
 
     pub fn names(&self) -> List<String> {
@@ -223,7 +230,7 @@ impl Cxt {
         Cxt {
             env: self.env.prepend(Val::vvar(self.lvl)),
             lvl: self.lvl + 1,
-            locals: Locals::Bind(Box::new(self.locals.clone()), x, a_quote),
+            locals: Locals::Bind(Rc::new(self.locals.clone()), x, a_quote),
             pruning: self.pruning.prepend(Some(Icit::Expl)),
             src_names,
             decl: self.decl.clone(),
@@ -235,7 +242,7 @@ impl Cxt {
         Cxt {
             env: self.env.prepend(Val::vvar(self.lvl)),
             lvl: self.lvl + 1,
-            locals: Locals::Bind(Box::new(self.locals.clone()), x, a_quote),
+            locals: Locals::Bind(Rc::new(self.locals.clone()), x, a_quote),
             pruning: self.pruning.prepend(Some(Icit::Expl)),
             src_names: self.src_names.clone(),
             decl: self.decl.clone(),
@@ -249,7 +256,7 @@ impl Cxt {
         Cxt {
             env: self.env.prepend(vt),
             lvl: self.lvl + 1,
-            locals: Locals::Define(Box::new(self.locals.clone()), x, a, t),
+            locals: Locals::Define(Rc::new(self.locals.clone()), x, a, t),
             pruning: self.pruning.prepend(None),
             src_names,
             decl: self.decl.clone(),
