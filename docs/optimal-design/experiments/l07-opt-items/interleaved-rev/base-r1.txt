@@ -1,0 +1,32 @@
+== workload: church ==
+k=9   n=1024     basic=     0.745ms*/     0.747
+k=10  n=2048     basic=     1.348ms*/     1.408
+k=11  n=4096     basic=     2.717ms*/     2.751
+k=12  n=8192     basic=     5.835ms*/     6.292
+k=13  n=16384    basic=    13.042ms*/    13.135
+== workload: strchain ==
+k=9   n=1024     basic=     2.011ms*/     2.014
+k=10  n=2048     basic=     4.224ms*/     4.286
+k=11  n=4096     basic=     9.250ms*/     9.326
+k=12  n=8192     basic=    24.789ms*/    24.864
+k=13  n=16384    basic=    58.197ms*/    58.366
+== workload: global ==
+k=9   n=1024     basic=     4.449ms*/     4.540
+k=10  n=2048     basic=     8.751ms*/     9.250
+k=11  n=4096     basic=    18.363ms*/    18.642
+k=12  n=8192     basic=    37.750ms*/    38.137
+k=13  n=16384    basic=    78.196ms*/    78.203
+== workload: match ==
+k=9   n=1024     basic=     0.128ms*/     0.130
+k=10  n=2048     basic=     0.135ms*/     0.135
+k=11  n=4096     basic=     0.146ms*/     0.147
+k=12  n=8192     basic=     0.157ms*/     0.157
+k=13  n=16384    basic=     0.169ms*/     0.171
+== workload: enum ==
+k=9   n=1024     basic=     0.278ms*/     0.280
+== workload: natadd ==
+k=9   n=1024     basic=     1.363ms*/     1.363
+k=10  n=2048     basic=     2.612ms*/     2.661
+k=11  n=4096     basic=     5.193ms*/     5.233
+k=12  n=8192     basic=    12.252ms*/    12.995
+k=13  n=16384    basic=    28.928ms*/    30.219
