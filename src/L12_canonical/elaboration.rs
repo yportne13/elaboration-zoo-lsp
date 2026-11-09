@@ -881,8 +881,9 @@ impl Infer {
         let t_span = t.to_span();
         match t {
             // Infer variable types
-            Raw::Var(name) => match cxt.src_names.get(&name.data) {
-                Some((x, a)) => {
+            Raw::Var(name) => match cxt.lookup_src(&name.data) {
+                Some(e) => {
+                    let (x, a) = e.as_ref();
                     self.hover_table.push((t_span, a.0, cxt.clone_without_src_names(), a.1.clone()));
                     Ok((Tm::Var(lvl2ix(cxt.lvl, *x)).into(), a.1.clone()))
                 },
