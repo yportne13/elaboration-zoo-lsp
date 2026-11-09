@@ -290,6 +290,12 @@ impl Machine {
                         // 全实例 `filter` 必空（每实例的 `v_to_ref_val` Rc
                         // 分配与逐参数 val_match 全部可免）。
                         Vec::new()
+                    } else if idxs.iter().any(|&i| i >= instances.len()) {
+                        // Stale head_index（P0 finding，与参考版同根因）：
+                        // 重新声明 trait 名会重置 `class_instances[name]` 而
+                        // `head_index` 里旧下标残留；信任它会越界。
+                        // 回退全量扫：候选集与无索引路径一致，不 panic。
+                        instances.iter().filter_map(filter).collect()
                     } else {
                         idxs.iter().filter_map(|&i| filter(&instances[i])).collect()
                     }

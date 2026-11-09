@@ -750,6 +750,17 @@ impl Infer {
                         }
                         if idxs.is_empty() {
                             instances.iter().filter_map(filter).collect()
+                        } else if idxs.iter().any(|&i| i >= instances.len()) {
+                            // Stale head_index: re-declaring a trait name resets
+                            // `class_instances[name]` (Synth::new_trait) but the
+                            // `(trait, head)` buckets in `head_index` still hold
+                            // indices from the previous incarnation.  Trusting
+                            // them would index out of bounds (P0 finding:
+                            // `tests/trait_system_tests.typort` panicked here).
+                            // Fall back to the full scan — same candidate set as
+                            // the no-index path, no panic, no behaviour change
+                            // for non-stale trees.
+                            instances.iter().filter_map(filter).collect()
                         } else {
                             idxs.iter().filter_map(|&i| filter(&instances[i])).collect()
                         }
