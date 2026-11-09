@@ -1,4 +1,6 @@
-use std::{collections::HashMap, rc::Rc};
+use std::rc::Rc;
+
+use rustc_hash::FxHashMap;
 
 use crate::{list::List, parser_lib::Span};
 use smol_str::SmolStr;
@@ -18,7 +20,7 @@ use super::{
 /// 条目按 `Rc` 共享（与 L07 同款）：`decl_insert` 的写时复制只需重建哈希桶 +
 /// 逐条 Rc 递增，不再深拷贝 `DeclEntry` 里的值（`Val` 的 clone 对 `Lam`/`Pi`
 /// 是整棵 `Box<Tm>` 闭包树的深拷贝、对 `LiteralIntro` 是 String 分配）。
-pub type Decls = HashMap<SmolStr, Rc<DeclEntry>>;
+pub type Decls = FxHashMap<SmolStr, Rc<DeclEntry>>;
 
 #[derive(Debug, Clone)]
 pub struct DeclEntry {
@@ -32,7 +34,7 @@ pub struct Cxt {
     pub lvl: Lvl, // 下一个 fresh 层级（unify / quote 用）
     pub locals: Locals,
     pub pruning: Pruning, // 与 env 一一对应：Some(icit) = 该槽是待插入的隐式参数
-    pub src_names: HashMap<String, (Lvl, VTy)>,
+    pub src_names: FxHashMap<String, (Lvl, VTy)>,
     pub decl: Rc<Decls>,
 }
 
@@ -176,8 +178,8 @@ impl Cxt {
             lvl: Lvl(0),
             locals: Locals::Here,
             pruning: List::new(),
-            src_names: HashMap::new(),
-            decl: Rc::new(HashMap::new()),
+            src_names: FxHashMap::default(),
+            decl: Rc::new(FxHashMap::default()),
         }
     }
 
