@@ -175,17 +175,23 @@ impl Infer {
     /// 上下文里预检余域（与原 Pi 臂同构，域/余域各只检查一次，无额外
     /// meta）。
     fn check_ty(&mut self, cxt: &Cxt, t: Raw) -> Result<Tm, Error> {
-        if let Raw::Pi(x, i, a, b) = &t {
-            self.ty_precheck(cxt, a)?;
-            let a_checked = self.check(cxt, *a.clone(), Val::U)?;
-            let a_eval = self.eval(cxt.decl(), &cxt.env, &a_checked);
-            let cxt2 = cxt.bind(x.clone(), self.quote(cxt.decl(), cxt.lvl, a_eval.clone()), a_eval);
-            self.ty_precheck(&cxt2, b)?;
-            let b_checked = self.check(&cxt2, *b.clone(), Val::U)?;
-            Ok(Tm::Pi(x.clone(), *i, Box::new(a_checked), Box::new(b_checked)))
-        } else {
-            self.ty_precheck(cxt, &t)?;
-            self.check(cxt, t, Val::U)
+        match t {
+            Raw::Pi(x, i, a, b) => {
+                self.ty_precheck(cxt, &a)?;
+                // 按值解构（review 修复）：旧实现 `*a.clone()`/`*b.clone()` 在
+                // 每一层 Π 上都克隆剩余整条 Raw 链，深 Pi 类型注解是 O(n²)。
+                // `t` 已经按值传入，直接 move `a`/`b`，语义不变。
+                let a_checked = self.check(cxt, *a, Val::U)?;
+                let a_eval = self.eval(cxt.decl(), &cxt.env, &a_checked);
+                let cxt2 = cxt.bind(x.clone(), self.quote(cxt.decl(), cxt.lvl, a_eval.clone()), a_eval);
+                self.ty_precheck(&cxt2, &b)?;
+                let b_checked = self.check(&cxt2, *b, Val::U)?;
+                Ok(Tm::Pi(x, i, Box::new(a_checked), Box::new(b_checked)))
+            }
+            t => {
+                self.ty_precheck(cxt, &t)?;
+                self.check(cxt, t, Val::U)
+            }
         }
     }
 
