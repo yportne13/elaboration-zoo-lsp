@@ -5,7 +5,8 @@ use super::{
     parser::syntax::Icit, syntax::Pruning, empty_span, typeclass::Assertion, Raw,
 };
 
-use std::{collections::{HashMap, HashSet}, rc::Rc};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use std::rc::Rc;
 
 
 /// η 展开的可应用性守卫（L06/L09/L11 的 `v_applicable` 同款）：只有
@@ -61,7 +62,7 @@ impl Infer {
         sp: &Spine,
     ) -> Result<(Lvl, HashMap<u32, Lvl>, HashSet<u32>, List<(Lvl, Icit)>), UnifyError> {
         match sp {
-            List { head: None, .. } => Ok((Lvl(0), HashMap::new(), HashSet::new(), List::new())),
+            List { head: None, .. } => Ok((Lvl(0), HashMap::default(), HashSet::default(), List::new())),
             a => {
                 let (dom, mut ren, mut nlvars, fsp) = self.invert_go(&a.tail())?;
                 match self.force_arg(a.head().unwrap().0.clone()).as_ref() {
@@ -146,7 +147,7 @@ impl Infer {
                 occ: None,
                 dom: Lvl(0),
                 cod: Lvl(0),
-                ren: HashMap::new(),
+                ren: HashMap::default(),
             },
             a,
         )
