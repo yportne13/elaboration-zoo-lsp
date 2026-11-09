@@ -21,7 +21,7 @@ mod canonical;
 
 type Rc<T> = std::sync::Arc<T>;
 
-type Decl = HashMap<SmolStr, (Span<()>, Rc<Tm>, Rc<Val>, Rc<Ty>, Rc<VTy>)>;
+type Decl = FxHashMap<SmolStr, (Span<()>, Rc<Tm>, Rc<Val>, Rc<Ty>, Rc<VTy>)>;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MetaVar(u32);
@@ -561,7 +561,8 @@ fn collect_app_args(tm: &Tm) -> Vec<Rc<Tm>> {
 }
 
 use std::ops::{Add, Sub};
-use std::collections::HashMap;
+
+use rustc_hash::FxHashMap;
 
 #[derive(Debug)]
 pub enum UnifyError {
@@ -609,9 +610,9 @@ pub struct Infer {
     meta: Vec<MetaEntry>,
     meta_contrains: Vec<(Rc<Val>, Rc<Val>)>,
     trait_solver: typeclass::Synth,
-    trait_definition: HashMap<SmolStr, (Vec<(Span<SmolStr>, Raw, Icit)>, Vec<bool>, Vec<(Span<SmolStr>, Vec<(Span<SmolStr>, Raw, Icit)>, Raw)>)>,
-    trait_out_param: HashMap<SmolStr, Vec<bool>>,
-    pub mutable_map: Rc<std::sync::RwLock<HashMap<String, Rc<Val>>>>,
+    trait_definition: FxHashMap<SmolStr, (Vec<(Span<SmolStr>, Raw, Icit)>, Vec<bool>, Vec<(Span<SmolStr>, Vec<(Span<SmolStr>, Raw, Icit)>, Raw)>)>,
+    trait_out_param: FxHashMap<SmolStr, Vec<bool>>,
+    pub mutable_map: Rc<std::sync::RwLock<FxHashMap<String, Rc<Val>>>>,
     pub hover_table: Vec<(Span<()>, Span<()>, Cxt, Rc<Val>)>,
     pub completion_table: Vec<(Span<()>, SmolStr)>,
     /// unify/force 共享 fuel 池（L08 同款）：外层入口（`nf`/`unify_catch`/
@@ -1318,7 +1319,7 @@ pub fn run_with_prelude(input: &str) -> Result<String, Error> {
     let mut ret = String::new();
 
     // Accumulate exported macros from prelude files
-    let mut global_macros: std::collections::HashMap<String, Vec<parser::macros::MacroRule>> = Default::default();
+    let mut global_macros: FxHashMap<String, Vec<parser::macros::MacroRule>> = Default::default();
     let mut id = 0;
     for p in prelude {
         if let Some((decls, parse_errs, new_exports, _)) = parser::parser_with_macros(&preprocess(p), id, &global_macros) {

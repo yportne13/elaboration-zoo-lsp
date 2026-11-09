@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{bimap::BiMap, parser_lib::ToSpan};
 
@@ -19,7 +19,7 @@ pub struct Cxt {
     /// 不再克隆整张表。写入仍走写时复制（`fake_bind` / `decl` 里的
     /// `Rc::make_mut`），占位语义不变。
     pub decl: Rc<Decl>,
-    pub namespace: List<(Rc<Val>, HashSet<SmolStr>, Raw)>,
+    pub namespace: List<(Rc<Val>, FxHashSet<SmolStr>, Raw)>,
 }
 
 fn string_concat(_: &Infer, _: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
@@ -211,7 +211,7 @@ impl Cxt {
             locals: Locals::Here,
             pruning: List::new(),
             src_names: BiMap::new(),
-            decl: Rc::new(HashMap::new()),
+            decl: Rc::new(FxHashMap::default()),
             namespace: List::new(),
         }
     }

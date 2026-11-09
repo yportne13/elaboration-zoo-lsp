@@ -2,7 +2,7 @@ use crate::parser_lib::ToSpan;
 use crate::{parser_lib::Span, parser_lib_resilient::Parser};
 
 use super::lex::TokenKind;
-use super::{TokenNode, IError, HashMap, ErrMsg, BaseMsg, extract_base, string, p_raw, p_pi_binder, empty_span, owned_tokens_to_string, ParserExt, kw, MacroState, MacroExpansionInfo};
+use super::{TokenNode, IError, ErrMsg, BaseMsg, extract_base, string, p_raw, p_pi_binder, empty_span, owned_tokens_to_string, ParserExt, kw, MacroState, MacroExpansionInfo};
 
 pub type OwnedToken = Span<(String, TokenKind)>;
 pub type OwnedTokenSlice = [Span<(String, TokenKind)>];
@@ -290,7 +290,7 @@ impl MacroTranscriber {
                         let t = metavars.iter().filter(|y| y.0 == x).collect::<Vec<_>>();
                         (x, t)
                     })
-                    .collect::<std::collections::HashMap<_, _>>();
+                    .collect::<rustc_hash::FxHashMap<_, _>>();
                 let mut ret = vec![];
                 let loop_num = vars.iter()
                     .map(|x| x.1.len())
