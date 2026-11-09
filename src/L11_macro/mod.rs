@@ -455,9 +455,9 @@ fn lvl2ix(l: Lvl, x: Lvl) -> Ix {
 }
 
 use std::ops::{Add, Sub};
-// port L07 72f12101: decl table + hot side maps (trait / mutable / macro)
-// switch to FxHashMap (short string keys; SipHash's per-lookup constant is
-// visible on def-heavy loads with 2^(k+1) declarations).
+// P1/FxHashMap（L07 `72f12101` 同款）：decl 表与 hot side maps（trait /
+// mutable / macro 表）换 FxHash——键全是短字符串，SipHash 的每查常数在
+// def-heavy 负载（macro/struct/strchain 的 2^(k+1) 个 def）上可见。
 use rustc_hash::FxHashMap as HashMap;
 
 #[derive(Debug)]
@@ -497,6 +497,11 @@ pub struct Infer {
     mutable_map: Rc<std::sync::RwLock<HashMap<String, Rc<Val>>>>,
     pub hover_table: Vec<(Span<()>, Span<()>, Cxt, Rc<Val>)>,
     pub completion_table: Vec<(Span<()>, String)>,
+    /// 是否收集 LSP 观察表（hover/completion）。L11 参考版没有 LSP 消费者
+    /// （全仓无 hover_table 读点）；bench/CLI 的 `run` 路径关掉收集——
+    /// hover 条目会 clone `Cxt` 从而钉住 decl 表的 `Rc`，使 `infer_owned`
+    /// 的就地写退化为整表深拷贝（L07 无此表，故其 COW 移植无需处理）。
+    collect_observations: bool,
     /// unify/force 共享 fuel 池（L08 同款）：外层入口（`nf`/`unify_catch`）
     /// 充值；`unify` 递归与 `force` 的 meta 展开各烧 1，耗尽时 unify 按
     /// 不可合一失败、force 停止展开按未解处理。
@@ -513,8 +518,14 @@ impl Infer {
             mutable_map: Default::default(),
             hover_table: vec![],
             completion_table: vec![],
+            collect_observations: true,
             unify_fuel: std::cell::Cell::new(UNIFY_FUEL),
         }
+    }
+    /// 关掉 LSP 观察表收集（见 `collect_observations` 字段注释）：bench/
+    /// 非 LSP 路径用，避免 hover 条目 clone `Cxt` 钉住 decl 表。
+    pub fn set_collect_observations(&mut self, on: bool) {
+        self.collect_observations = on;
     }
     /// 烧 1 格 fuel；池空返回 `false`（调用方按各自失败语义降级）。
     fn burn_fuel(&self) -> bool {
@@ -1089,6 +1100,10 @@ impl Infer {
 #[allow(unused)]
 pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
     let mut infer = Infer::new();
+    // L11 参考版无 LSP 消费者（hover/completion 表全仓无读点）：关闭观察表
+    // 收集后 decl 表在顺序 def 路径上保持独占，`infer_owned` 的 make_mut
+    // 才能原地写（见 Infer::collect_observations）。
+    infer.set_collect_observations(false);
     let ast = parser::parser(&preprocess(input), path_id).unwrap();
     let mut cxt = Cxt::new();
     let mut ret = String::new();
@@ -1109,7 +1124,7 @@ pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
                 println!("> impl");
             }
         }
-        let (x, _, new_cxt) = infer.infer(&cxt, tm.clone())?;
+        let (x, _, new_cxt) = infer.infer_owned(cxt, tm.clone())?;
         cxt = new_cxt;
         if let DeclTm::Println(_, s, _) = x {
             //ret += &format!("{:?}", infer.nf(&cxt.env, x));

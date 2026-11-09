@@ -389,22 +389,37 @@ impl Cxt {
         }
     }
 
-    pub fn fake_bind(&self, x: Span<String>, a_quote: Rc<Tm>, a: Rc<Val>) -> Result<Self, Error> {
-        //println!("{} {x:?} {a:?} at {}", "bind".bright_purple(), self.lvl.0);
-        let mut decl = self.decl.clone();
-        let t = Rc::make_mut(&mut decl).insert(x.data.clone(), (x.to_span(), Tm::Decl(x.clone()).into(), Val::Decl(x.clone(), List::new()).into(), a_quote, a));
-        if let Some((span, _, _, _, _)) = t {
+    /// 递归 def 占位插入（就地版，L07 `c2fffd3f` 同款）：调用方持有 `Cxt`
+    /// 所有权、decl 表 `Rc` 强计数为 1 时 `Rc::make_mut` 原地写；被共享时
+    /// 自动回退深拷贝，隔离语义不变。旧 `&self` 版先 `self.decl.clone()`
+    /// 再 `make_mut` ⇒ 强计数恒为 2、每个顶层 def 深拷整表。
+    pub fn fake_bind_mut(
+        &mut self,
+        x: Span<String>,
+        a_quote: Rc<Tm>,
+        a: Rc<Val>,
+    ) -> Result<(), Error> {
+        if self.decl.contains_key(&x.data) {
             return Err(Error(x.to_span().map(|_| format!("redefine {}", x.data))));
         }
-        Ok(Cxt {
-            env: self.env.clone(),
-            lvl: self.lvl,
-            locals: self.locals.clone(),
-            pruning: self.pruning.clone(),
-            src_names: self.src_names.clone(),
-            decl,
-            namespace: self.namespace.clone(),
-        })
+        Rc::make_mut(&mut self.decl).insert(
+            x.data.clone(),
+            (
+                x.to_span(),
+                Tm::Decl(x.clone()).into(),
+                Val::Decl(x.clone(), List::new()).into(),
+                a_quote,
+                a,
+            ),
+        );
+        Ok(())
+    }
+
+    /// 持久化包装（保持旧 `&self` 接口）：浅克隆上下文后就地写。
+    pub fn fake_bind(&self, x: Span<String>, a_quote: Rc<Tm>, a: Rc<Val>) -> Result<Self, Error> {
+        let mut cxt = self.clone();
+        cxt.fake_bind_mut(x, a_quote, a)?;
+        Ok(cxt)
     }
 
     pub fn new_binder(&self, x: Span<String>, a_quote: Rc<Tm>) -> Self {
@@ -435,22 +450,17 @@ impl Cxt {
         }
     }
 
+    /// 顶层声明登记（就地版，L07 `c2fffd3f` 同款）：撞名静默覆盖（旧
+    /// `decl` 的注释掉的 redefine 检查保持原样）。
+    pub fn decl_mut(&mut self, x: Span<String>, t: Rc<Tm>, vt: Rc<Val>, a: Rc<Ty>, va: Rc<VTy>) {
+        Rc::make_mut(&mut self.decl).insert(x.data.clone(), (x.to_span(), t, vt, a, va));
+    }
+
+    /// 持久化包装（保持旧 `&self` 接口）：浅克隆上下文后就地写。
     pub fn decl(&self, x: Span<String>, t: Rc<Tm>, vt: Rc<Val>, a: Rc<Ty>, va: Rc<VTy>) -> Result<Self, Error> {
-        //println!("{} {}\n{t:?}\n{vt:?}\n{a:?}\n{va:?}", "define".bright_purple(), x.data);
-        let mut decl = self.decl.clone();
-        let t = Rc::make_mut(&mut decl).insert(x.data.clone(), (x.to_span(), t, vt, a, va));
-        /*if let Some((span, _, _, _, _)) = t {
-            return Err(Error(span.map(|_| format!("redefine {}", x.data))));
-        }*/
-        Ok(Cxt {
-            env: self.env.clone(),
-            lvl: self.lvl,
-            locals: self.locals.clone(),
-            pruning: self.pruning.clone(),
-            src_names: self.src_names.clone(),
-            decl,
-            namespace: self.namespace.clone(),
-        })
+        let mut cxt = self.clone();
+        cxt.decl_mut(x, t, vt, a, va);
+        Ok(cxt)
     }
 
     /// 把精化替换 σ 施加到上下文（dpm-nbe `subst sub ctx`）：env 槽与

@@ -301,7 +301,9 @@ impl Infer {
                 let va = self.eval(&cxt.decl, &cxt.env, &a_checked);
                 let t_checked = self.check(cxt, *t, &va)?;
                 let vt = self.eval(&cxt.decl, &cxt.env, &t_checked);
-                self.hover_table.push((x.to_span(), x.to_span(), cxt.clone_without_src_names(), va.clone()));
+                if self.collect_observations {
+            self.hover_table.push((x.to_span(), x.to_span(), cxt.clone_without_src_names(), va.clone()));
+        }
                 let u_checked = self.check(
                     &cxt.define(x.clone(), t_checked.clone(), vt, a_checked.clone(), va),
                     *u,
@@ -342,7 +344,17 @@ impl Infer {
             }
         }
     }
+    /// 持久化入口（保持旧签名／所有 `&Cxt` 调用点不变）：浅克隆上下文后
+    /// 委托 [`Infer::infer_owned`]。
     pub fn infer(&mut self, cxt: &Cxt, t: Decl) -> Result<(DeclTm, Rc<Val>, Cxt), Error> {
+        self.infer_owned(cxt.clone(), t)
+    }
+
+    /// 顺序声明路径入口：接管 `Cxt` 所有权，使 decl 表 `Rc` 强计数为 1，
+    /// `fake_bind_mut` / `decl_mut` 可原地写（L07 `c2fffd3f` 同款移植）。
+    /// 旧实现每个顶层 def 先 clone 整表再 `make_mut`（强计数恒 2 ⇒ 深拷），
+    /// 在 macro/struct/strchain 的 2^(k+1) 个 def 上是 O(D²) 放大器。
+    pub fn infer_owned(&mut self, mut cxt: Cxt, t: Decl) -> Result<(DeclTm, Rc<Val>, Cxt), Error> {
         match t {
             Decl::Def {
                 name,
@@ -350,32 +362,31 @@ impl Infer {
                 ret_type,
                 body,
             } => {
-                let ret_cxt = cxt;
                 let typ = params.iter().rev().fold(ret_type.clone(), |a, b| {
                     Raw::Pi(b.0.clone(), b.2, Box::new(b.1.clone()), Box::new(a))
                 });
                 let bod = params.iter().rev().fold(body.clone(), |a, b| {
                     Raw::Lam(b.0.clone(), Either::Icit(b.2), Box::new(a))
                 });
-                let (ret_cxt, vty, vt, vtyp_pretty, vt_pretty) = {
-                    let (typ_tm, _) = self.check_universe(ret_cxt, typ)?;
-                    /*let typ_nf_tm = self.nf(&ret_cxt.decl, &ret_cxt.env, &typ_tm);
+                let (cxt, vty, vt, vtyp_pretty, vt_pretty) = {
+                    let (typ_tm, _) = self.check_universe(&cxt, typ)?;
+                    /*let typ_nf_tm = self.nf(&cxt.decl, &cxt.env, &typ_tm);
                     if !typ_nf_tm.no_metas() {
-                        return Err(Error(typ.to_span().map(|_| format!("find unsolved meta in {}", pretty_tm(0, ret_cxt.names(), &typ_nf_tm)))));
+                        return Err(Error(typ.to_span().map(|_| format!("find unsolved meta in {}", pretty_tm(0, cxt.names(), &typ_nf_tm)))));
                     }*/
-                    let vtyp = self.eval(&ret_cxt.decl, &ret_cxt.env, &typ_tm);
+                    let vtyp = self.eval(&cxt.decl, &cxt.env, &typ_tm);
                     //println!("------------------->");
                     //println!("{:?}", vtyp);
                     //println!("-------------------<");
-                    let fake_cxt = ret_cxt.fake_bind(name.clone(), typ_tm.clone(), vtyp.clone())?;
-                    let t_tm = self.check(&fake_cxt, bod.clone(), &vtyp)?;
-                    self.solve_multi_trait(&fake_cxt, super::MetaVar(0))
+                    cxt.fake_bind_mut(name.clone(), typ_tm.clone(), vtyp.clone())?;
+                    let t_tm = self.check(&cxt, bod.clone(), &vtyp)?;
+                    self.solve_multi_trait(&cxt, super::MetaVar(0))
                         .map_err(|e| Error(name.to_span().map(|_| format!("{:?}", e))))?;
-                    //let t_tm_nf = self.nf(&ret_cxt.decl, &fake_cxt.env, &t_tm);
+                    //let t_tm_nf = self.nf(&cxt.decl, &cxt.env, &t_tm);
                     if let Some(meta_ty) = t_tm.no_metas(self) {
                         let err_msg = if let Val::Sum(name, params, _, true) = meta_ty.as_ref() {
                             let has_flex = params.iter().any(|(_, val, _, _)| {
-                                matches!(self.force(&ret_cxt.decl, val).as_ref(), Val::Flex(..))
+                                matches!(self.force(&cxt.decl, val).as_ref(), Val::Flex(..))
                             });
                             let instances = self.trait_solver.class_instances.get(&name.data);
                             if has_flex {
@@ -387,7 +398,7 @@ impl Infer {
                                 format!("no instance of typeclass `{}`", name.data)
                             } else {
                                 let pretty_val = |val: &Rc<Val>| {
-                                    super::pretty_tm(0, ret_cxt.names(), &self.quote(&ret_cxt.decl, ret_cxt.lvl, val))
+                                    super::pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, val))
                                 };
                                 let first = pretty_val(&params[0].1);
                                 let rest: Vec<String> = params[1..].iter()
@@ -412,17 +423,18 @@ impl Infer {
                         } else {
                             format!(
                                 "find unsolved meta with type `{}`",
-                                super::pretty_tm(0, ret_cxt.names(), &self.quote(&ret_cxt.decl, ret_cxt.lvl, meta_ty))
+                                super::pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, meta_ty))
                             )
                         };
                         return Err(Error(bod.to_span().map(|_| err_msg.clone())));
                     }
-                    let vtyp_pretty = super::pretty_tm(0, ret_cxt.names(), &self.nf(&ret_cxt.decl, &ret_cxt.env, &typ_tm));
+                    let vtyp_pretty = super::pretty_tm(0, cxt.names(), &self.nf(&cxt.decl, &cxt.env, &typ_tm));
                     let vt_pretty = String::new();//super::pretty_tm(0, fake_cxt.names(), &t_tm_nf);
                     //println!("begin vt {}", "------".green());
-                    let vt = self.eval(&fake_cxt.decl, &fake_cxt.env, &t_tm);
+                    let vt = self.eval(&cxt.decl, &cxt.env, &t_tm);
+                    cxt.decl_mut(name.clone(), t_tm, vt.clone(), typ_tm, vtyp.clone());
                     (
-                        ret_cxt.decl(name.clone(), t_tm, vt.clone(), typ_tm, vtyp.clone())?,
+                        cxt,
                         vtyp,
                         vt,
                         vtyp_pretty,
@@ -439,18 +451,18 @@ impl Infer {
                     },
                     //vt,
                     Val::U(0).into(),
-                    ret_cxt,
+                    cxt,
                 )) //TODO:vt may be wrong
             }
             Decl::Println(t) => Ok((
                 {
                     let span = t.to_span();
-                    let tm = self.infer_expr(cxt, t)?.0;
+                    let tm = self.infer_expr(&cxt, t)?.0;
                     let t_pretty = super::pretty_tm(0, cxt.names(), &self.nf(&cxt.decl, &cxt.env, &tm));
                     DeclTm::Println(tm, t_pretty, span)
                 },
                 Val::U(0).into(),
-                cxt.clone(),
+                cxt,
             )),
             Decl::Enum {
                 is_trait,
@@ -482,7 +494,7 @@ impl Infer {
                     .collect();
                 let mut universe_lvl = 0;
                 for p in params.iter() {
-                    let u = self.infer_expr(cxt, p.1.clone());
+                    let u = self.infer_expr(&cxt, p.1.clone());
                     if let Ok(t) = u {
                         if let Tm::U(lvl) = t.0.as_ref() {
                             universe_lvl = max(*lvl, universe_lvl);
@@ -491,7 +503,7 @@ impl Infer {
                 }
                 for case in cases.iter() {
                     for c in case.1.iter() {
-                        if let Ok((_, lvl)) = self.check_universe(cxt, c.1.clone()) {
+                        if let Ok((_, lvl)) = self.check_universe(&cxt, c.1.clone()) {
                             universe_lvl = max(lvl, universe_lvl);
                         }
                     }
@@ -536,14 +548,14 @@ impl Infer {
                 let bod = params.iter().rev().fold(sum.clone(), |a, b| {
                     Raw::Lam(b.0.clone(), Either::Icit(b.2), Box::new(a))
                 });
-                let mut cxt = {
-                    let (typ_tm, _) = self.check_universe(cxt, typ)?;
+                {
+                    let (typ_tm, _) = self.check_universe(&cxt, typ)?;
                     let vtyp = self.eval(&cxt.decl, &cxt.env, &typ_tm);
-                    let fake_cxt = cxt.fake_bind(name.clone(), typ_tm.clone(), vtyp.clone())?;
-                    let t_tm = self.check(&fake_cxt, bod, &vtyp)?;
-                    let vt = self.eval(&cxt.decl, &fake_cxt.env, &t_tm);
-                    cxt.decl(name.clone(), t_tm, vt, typ_tm, vtyp)?
-                };
+                    cxt.fake_bind_mut(name.clone(), typ_tm.clone(), vtyp.clone())?;
+                    let t_tm = self.check(&cxt, bod, &vtyp)?;
+                    let vt = self.eval(&cxt.decl, &cxt.env, &t_tm);
+                    cxt.decl_mut(name.clone(), t_tm, vt, typ_tm, vtyp);
+                }
                 for (c, typ) in cases.iter().zip(new_cases.clone().into_iter()) {
                     let body_ret_type = Raw::SumCase {
                         is_trait,
@@ -576,7 +588,7 @@ impl Infer {
                                 |a, b| Raw::Lam(b.0.clone(), Either::Icit(b.2), Box::new(a)),
                             );
                     let typ = typ.1;
-                    cxt = {
+                    {
                         let (typ_tm, _) = self.check_universe(&cxt, typ)?;
                         let vtyp = self.eval(&cxt.decl, &cxt.env, &typ_tm);
                         // 构造子良构性（2026-09-18 评审修复，L07 同款）：ret
@@ -585,14 +597,13 @@ impl Infer {
                         self.check_ctor_wf(&cxt, &name.data, &c.0.data, vtyp.clone())?;
                         let t_tm = self.check(&cxt, bod, &vtyp)?;
                         let vt = self.eval(&cxt.decl, &cxt.env, &t_tm);
-                        cxt.decl(c.0.clone(), t_tm, vt, typ_tm, vtyp)?
-                    };
+                        cxt.decl_mut(c.0.clone(), t_tm, vt, typ_tm, vtyp);
+                    }
                 }
                 Ok((DeclTm::Enum {}, Val::U(0).into(), cxt))
             }
             Decl::ImplDecl { name, params, trait_name, trait_params, methods, need_create } => {
                 let span = name.to_span();
-                let mut cxt = cxt.clone();
                 if need_create {
                     let name_raw = params.iter()
                         .rev()
@@ -703,7 +714,7 @@ impl Infer {
                     })?;
                     cxt = c;
                 }
-                Ok((DeclTm::TraitImpl {}, Val::U(0).into(), cxt.clone()))
+                Ok((DeclTm::TraitImpl {}, Val::U(0).into(), cxt))
             },
             Decl::TraitDecl { name, mut params, methods } => {
                 self.trait_solver.new_trait(name.data.clone());
@@ -715,7 +726,6 @@ impl Infer {
                     }).collect::<Vec<_>>();
                 self.trait_definition.insert(name.data.clone(), (param.clone(), out_param.clone(), methods.clone()));
                 self.trait_out_param.insert(name.data.clone(), out_param);
-                let mut cxt = cxt.clone();
                 let (_, _, c) = self.infer(&cxt, Decl::Enum {
                     is_trait: true,
                     name: name.clone(),
@@ -739,7 +749,7 @@ impl Infer {
                     )],
                 })?;
                 cxt = c;
-                Ok((DeclTm::Trait {}, Val::U(0).into(), cxt.clone()))
+                Ok((DeclTm::Trait {}, Val::U(0).into(), cxt))
             },
         }
     }
@@ -815,12 +825,16 @@ impl Infer {
             // Infer variable types
             Raw::Var(name) => match cxt.src_names.get(&name.data) {
                 Some((x, a)) => {
-                    self.hover_table.push((t_span, a.0, cxt.clone_without_src_names(), a.1.clone()));
+                    if self.collect_observations {
+                        self.hover_table.push((t_span, a.0, cxt.clone_without_src_names(), a.1.clone()));
+                    }
                     Ok((Tm::Var(lvl2ix(cxt.lvl, *x)).into(), a.1.clone()))
                 },
                 None => match cxt.decl.get(&name.data) {
                     Some((def, _, _, _, vty)) => {
-                        self.hover_table.push((t_span, *def, cxt.clone_without_src_names(), vty.clone()));
+                        if self.collect_observations {
+                            self.hover_table.push((t_span, *def, cxt.clone_without_src_names(), vty.clone()));
+                        }
                         Ok((Tm::Decl(name).into(), vty.clone()))
                     },
                     None => {
@@ -1032,7 +1046,9 @@ impl Infer {
                 let va = self.eval(&cxt.decl, &cxt.env, &a_checked);
                 let t_checked = self.check(cxt, *t, &va)?;
                 let vt = self.eval(&cxt.decl, &cxt.env, &t_checked);
-                self.hover_table.push((x.to_span(), x.to_span(), cxt.clone_without_src_names(), va.clone()));
+                if self.collect_observations {
+            self.hover_table.push((x.to_span(), x.to_span(), cxt.clone_without_src_names(), va.clone()));
+        }
                 let (u_inferred, b) = self.infer_expr(
                     &cxt.define(
                         x.clone(),
