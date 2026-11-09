@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::ops::Add;
 use std::rc::Rc;
 
@@ -152,15 +152,15 @@ pub struct Infer {
     /// Decl table: name -> (value, type, optional native impl).  Held on
     /// `Infer` because L06's eval / v_app / quote only receive `&Infer`
     /// (L13 threads `&Decl` through them instead).
-    pub(crate) decls: HashMap<String, DeclEntry>,
+    pub(crate) decls: FxHashMap<String, DeclEntry>,
     /// Runtime-global store for the create_global / get_global / ... builtins
     /// (L13 uses a RwLock; single-threaded here, so RefCell).
-    pub(crate) mutable_map: RefCell<HashMap<String, Rc<Val>>>,
+    pub(crate) mutable_map: RefCell<FxHashMap<String, Rc<Val>>>,
 }
 
 impl Infer {
     pub fn new() -> Self {
-        Self { meta: vec![], decls: HashMap::new(), mutable_map: RefCell::new(HashMap::new()) }
+        Self { meta: vec![], decls: FxHashMap::default(), mutable_map: RefCell::new(FxHashMap::default()) }
     }
     /// Insert a builtin entry: head value `Val::Decl(name, [])` (prim fires
     /// on application), declared type, native implementation.
