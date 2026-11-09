@@ -290,7 +290,7 @@ impl MacroTranscriber {
                         let t = metavars.iter().filter(|y| y.0 == x).collect::<Vec<_>>();
                         (x, t)
                     })
-                    .collect::<std::collections::HashMap<_, _>>();
+                    .collect::<HashMap<_, _>>();
                 let mut ret = vec![];
                 let loop_num = vars.iter()
                     .map(|x| x.1.len())
