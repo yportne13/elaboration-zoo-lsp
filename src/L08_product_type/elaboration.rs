@@ -183,8 +183,17 @@ impl Infer {
         }
     }
 
+    /// 持久化入口（保持旧签名/外部调用不变）：浅克隆 `cxt` 后委托给
+    /// [`Infer::infer_owned`]。
     pub fn infer(&mut self, cxt: &Cxt, t: Decl) -> Result<(DeclTm, Val, Cxt), Error> {
-        let decl = cxt.decl();
+        self.infer_owned(cxt.clone(), t)
+    }
+
+    /// 顺序声明路径入口：接管 `Cxt` 所有权，使 decl 表 `Rc` 强计数为 1，
+    /// `decl_insert_mut` 可原地写。旧实现每个顶层定义先 clone 整表再
+    /// make_mut（强计数恒 2 ⇒ 深拷），在 strchain/global/struct 这类生成
+    /// 2^(k+1) 个 def 的负载上是 O(D²) 放大器；改为所有权传递后降至 O(D)。
+    pub fn infer_owned(&mut self, mut cxt: Cxt, t: Decl) -> Result<(DeclTm, Val, Cxt), Error> {
         match t {
             Decl::Def {
                 name,
@@ -208,8 +217,8 @@ impl Infer {
                         Raw::Lam(b.0.clone(), Either::Icit(b.2), Box::new(a))
                     })
                 };
-                let typ_tm = self.check_ty(cxt, typ)?;
-                let vtyp = self.eval(decl, &cxt.env, typ_tm.clone());
+                let typ_tm = self.check_ty(&cxt, typ)?;
+                let vtyp = self.eval(cxt.decl(), &cxt.env, typ_tm.clone());
                 // 重定义检查（L13 `fake_bind` 移植）：名字已登记（builtin /
                 // 先前 def / enum / struct）→ 定向报错，不再静默覆盖。先
                 // 类型后重定义，与 L13 检查顺序一致。
@@ -217,33 +226,35 @@ impl Infer {
                     return Err(Error(format!("redefine {}", name.data)));
                 }
                 // 递归：先把名字登记成指向自身的中性占位，检查体，再用真实值覆盖。
-                // 占位只存在于克隆出来的 decl 表里，不影响外层。
-                let fake_cxt = cxt.decl_insert(
+                // 就地插入（L13 `fake_bind` + `decl` 模式）：cxt 由调用方移交、
+                // Rc 计数=1，make_mut 原地写；旧实现每次先 clone 整表再 make_mut
+                // ⇒ 强计数恒 2 ⇒ 每个顶层 def 深拷整张表。
+                cxt.decl_insert_mut(
                     name.data.clone(),
                     DeclEntry {
                         ty: vtyp.clone(),
                         val: Val::Decl(SmolStr::new(&name.data), List::new()),
                     },
                 );
-                let t_tm = self.check(&fake_cxt, bod, vtyp.clone())?;
+                let t_tm = self.check(&cxt, bod, vtyp.clone())?;
                 // 注册值归约到 WHNF：builtin 副作用（可变全局写 / 文件 IO）
                 // 在声明序上驱动——L06「应用时触发」的等价物（否则
                 // change_mutable 等只在别处 force 到它时才生效）。递归
                 // 自引用由 force 的占位守卫兜住，不会展开。
-                let vt = self.force(fake_cxt.decl(), self.eval(fake_cxt.decl(), &fake_cxt.env, t_tm.clone()));
-                let out_cxt = cxt.decl_insert(
+                let vt = self.force(cxt.decl(), self.eval(cxt.decl(), &cxt.env, t_tm.clone()));
+                cxt.decl_insert_mut(
                     name.data.clone(),
                     DeclEntry {
                         ty: vtyp,
                         val: vt,
                     },
                 );
-                Ok((DeclTm::Def, Val::U, out_cxt))
+                Ok((DeclTm::Def, Val::U, cxt))
             }
             Decl::Println(t) => Ok((
-                DeclTm::Println(self.infer_expr(cxt, t)?.0),
+                DeclTm::Println(self.infer_expr(&cxt, t)?.0),
                 Val::U,
-                cxt.clone(),
+                cxt,
             )),
             Decl::Enum {
                 name,
@@ -318,24 +329,25 @@ impl Infer {
                 let bod = params.iter().rev().fold(sum, |a, b| {
                     Raw::Lam(b.0.clone(), Either::Icit(b.2), Box::new(a))
                 });
-                let typ_tm = self.check_ty(cxt, typ)?;
-                let vtyp = self.eval(decl, &cxt.env, typ_tm.clone());
+                let typ_tm = self.check_ty(&cxt, typ)?;
+                let vtyp = self.eval(cxt.decl(), &cxt.env, typ_tm.clone());
                 // 重定义检查（L13 `fake_bind` 移植）：同名 enum / struct /
                 // def / builtin → 定向报错，不再静默覆盖。
                 if cxt.decl().contains_key(name.data.as_str()) {
                     return Err(Error(format!("redefine {}", name.data)));
                 }
-                // 先占位再检查本体（本体内部引用自身时报"指向自身的中性值"）
-                let fake_cxt = cxt.decl_insert(
+                // 先占位再检查本体（本体内部引用自身时报"指向自身的中性值"）；
+                // 就地插入，避免每个 enum 深拷整表。
+                cxt.decl_insert_mut(
                     name.data.clone(),
                     DeclEntry {
                         ty: vtyp.clone(),
                         val: Val::Decl(SmolStr::new(&name.data), List::new()),
                     },
                 );
-                let t_tm = self.check(&fake_cxt, bod, vtyp.clone())?;
-                let vt = self.eval(fake_cxt.decl(), &fake_cxt.env, t_tm.clone());
-                let mut cxt = cxt.decl_insert(
+                let t_tm = self.check(&cxt, bod, vtyp.clone())?;
+                let vt = self.eval(cxt.decl(), &cxt.env, t_tm.clone());
+                cxt.decl_insert_mut(
                     name.data.clone(),
                     DeclEntry {
                         ty: vtyp,
@@ -376,11 +388,11 @@ impl Infer {
                         val: vt,
                     };
                     // 限定名 `Enum.case` + 裸名别名（后注册者覆盖同名裸名）
-                    cxt = cxt.decl_insert(
+                    cxt.decl_insert_mut(
                         SmolStr::new(format!("{}.{}", name.data, ctor_name.data)),
                         entry.clone(),
                     );
-                    cxt = cxt.decl_insert(ctor_name.data.clone(), entry);
+                    cxt.decl_insert_mut(ctor_name.data.clone(), entry);
                 }
                 Ok((DeclTm::Enum, Val::U, cxt))
             }
