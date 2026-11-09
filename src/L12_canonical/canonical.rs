@@ -59,13 +59,14 @@ impl Infer {
             let names = cxt.names();
             let iterator = names.iter()
                 .map(|t| {
-                    let (l, (_, v)) = &cxt.src_names.get(t).unwrap();
+                    let e = cxt.lookup_src(t).unwrap();
+                    let (l, (_, v)) = e.as_ref();
                     let vtm = cxt.env.iter().nth((cxt.lvl - l.0 - 1).0 as usize).unwrap().clone();
-                    (t.clone(), v, vtm)
+                    (t.clone(), v.clone(), vtm)
                 })
                 .chain(
                     cxt.decl.iter()
-                        .map(|t| (t.0.clone(), &t.1.4, t.1.2.clone()))
+                        .map(|t| (t.0.clone(), t.1.4.clone(), t.1.2.clone()))
                 )
                 .filter(|(t, _, _)| ![
                     "create_global",

@@ -1,5 +1,5 @@
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use smol_str::SmolStr;
 
@@ -84,7 +84,7 @@ pub struct Synth {
     /// A more in-depth explanation can be found in [`Synth::synth`].
     resume_stack: Vec<(ConsumerNode, Assertion)>,
     /// The instances available for a type class.
-    pub class_instances: HashMap<SmolStr, Vec<Instance>>,
+    pub class_instances: FxHashMap<SmolStr, Vec<Instance>>,
     /// Information about each `subgoal` being solved.
     assertion_table: Vec<(Assertion, TableEntry)>,
     /// The "final" answer for the algorithm.
@@ -120,7 +120,7 @@ impl Synth {
 
     /// First-order structural matching: goal (ground) against instance pattern (may have Rigid vars).
     /// Rigid vars in the pattern are bound to the corresponding goal values via substitution.
-    fn val_match(a: &Val, b: &Val, subst: &mut HashMap<u32, Val>) -> bool {
+    fn val_match(a: &Val, b: &Val, subst: &mut FxHashMap<u32, Val>) -> bool {
         //println!("val_match: {:?} {:?}", a, b);
         //println!("------");
         //println!("{:?}", subst.get(&0));
@@ -194,10 +194,10 @@ impl Synth {
 
     /// Structural equality check on two ground Val values (no substitution needed).
     fn vals_eq_ground(a: &Val, b: &Val) -> bool {
-        Self::vals_eq_ground_impl(a, b, &mut HashMap::new())
+        Self::vals_eq_ground_impl(a, b, &mut FxHashMap::default())
     }
 
-    fn vals_eq_ground_impl(a: &Val, b: &Val, visited: &mut HashMap<u32, u32>) -> bool {
+    fn vals_eq_ground_impl(a: &Val, b: &Val, visited: &mut FxHashMap<u32, u32>) -> bool {
         //println!("###### {a:?} ===== {b:?}");
         match (a, b) {
             // Flex（未解 meta）视为等于一切：与 `val_match` 的 Flex 宽放
@@ -274,7 +274,7 @@ impl Synth {
         }
 
         // Match goal arguments (ground) against instance assertion arguments (may have Rigid vars)
-        let mut subst = HashMap::new();
+        let mut subst = FxHashMap::default();
         if !goal.arguments.iter()
             .zip(&instance.assertion.arguments)
             .all(|(g_arg, i_arg)| Self::val_match(g_arg, i_arg, &mut subst))

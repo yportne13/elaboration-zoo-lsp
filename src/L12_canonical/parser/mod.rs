@@ -1,7 +1,7 @@
 use lex::{TokenKind, TokenNode};
 use smol_str::SmolStr;
 use syntax::{Decl, Either, Icit, Pattern, Raw};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::rc::Rc;
 use macros::*;
 use serde::{Serialize, Deserialize};
@@ -133,7 +133,7 @@ type IResult<'a, 'b, O> = Result<(&'b [TokenNode<'a>], O), IError>;
 /// `p_raw`/`p_decl` 递归用 `state.1.clone()` 传快照——Rc 克隆 O(1)，
 /// 取代过去每次展开对整表（含规则匹配器/转写器树）的深克隆；入口
 /// `state.1.get(..).cloned()` 同理降为规则表的 Rc 克隆。
-pub type MacroState = (Vec<IError>, Rc<HashMap<String, Rc<Vec<MacroRule>>>>, Vec<MacroExpansionInfo>);
+pub type MacroState = (Vec<IError>, Rc<FxHashMap<String, Rc<Vec<MacroRule>>>>, Vec<MacroExpansionInfo>);
 
 /// 宏展开重解析的递归深度上限：自递归宏（`macro_rules m { () => { m } }` +
 /// `def x = m`）在展开后再次命中同名宏，若不加限制会无限递归直至栈溢出
@@ -436,11 +436,12 @@ pub fn parser(input: &str, id: u32) -> Option<(Vec<Decl>, Vec<IError>)> {
 /// Parse with a pre-populated macro table (from macros in other files).
 /// Returns (declarations, parse errors, macros to export to other files, macro expansions).
 /// Only macros marked with #[macro_export] are included in the returned table.
-pub fn parser_with_macros(input: &str, id: u32, global_macros: &HashMap<String, Vec<MacroRule>>) -> Option<(Vec<Decl>, Vec<IError>, HashMap<String, Vec<MacroRule>>, Vec<MacroExpansionInfo>)> {
+pub fn parser_with_macros(input: &str, id: u32, global_macros: &FxHashMap<String, Vec<MacroRule>>) -> Option<(Vec<Decl>, Vec<IError>, FxHashMap<String, Vec<MacroRule>>, Vec<MacroExpansionInfo>)> {
     // Strip __exported__ sentinel keys from global macros (they're only for internal tracking)
-    // 边界转换：公开签名保持 `HashMap`（lib.rs / tests 等外部调用方不动），
+    // 边界转换：公开签名同步为 FxHashMap（热查找/插入；L12 内调用方
+    // run_with_prelude 与内部 parser 已改齐，无跨 crate 外部调用方），
     // 内部立即转 Rc 表——此后 parse 期展开只付 Rc 克隆。
-    let clean_global: HashMap<String, Rc<Vec<MacroRule>>> = global_macros.iter()
+    let clean_global: FxHashMap<String, Rc<Vec<MacroRule>>> = global_macros.iter()
         .filter(|(k, _)| !k.starts_with("__exported__"))
         .map(|(k, v)| (k.clone(), Rc::new(v.clone())))
         .collect();
@@ -472,7 +473,7 @@ pub fn parser_with_macros(input: &str, id: u32, global_macros: &HashMap<String, 
             match ret {
                 Ok(ret) => {
                     let expansions = std::mem::take(&mut err_collect.2);
-                    let exported: HashMap<String, Vec<MacroRule>> = err_collect.1.iter()
+                    let exported: FxHashMap<String, Vec<MacroRule>> = err_collect.1.iter()
                         .filter(|(k, _)| !k.starts_with("__exported__") && err_collect.1.contains_key(&format!("__exported__{}", k)))
                         .map(|(k, v)| (k.clone(), v.as_ref().clone()))
                         .collect();
