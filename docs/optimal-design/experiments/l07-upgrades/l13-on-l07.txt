@@ -1,0 +1,16 @@
+church-k11	-- church-k11.typort (14 decls) nf=8196	   basic          2.052ms*  med        2.285ms
+church-k13	-- church-k13.typort (16 decls) nf=32772	   basic          8.814ms*  med        9.762ms
+church-k9	-- church-k9.typort (12 decls) nf=2052	   basic          0.671ms*  med        0.784ms
+enum	-- enum.typort (13 decls) nf=20	   basic          0.447ms*  med        0.453ms
+global-k11	-- global-k11.typort (4304 decls) BOTH-FAILED (两版都未跑完，与范式一致无关)	   basic         55.887ms*  med       58.497ms
+global-k13	-- global-k13.typort (16592 decls) BOTH-FAILED (两版都未跑完，与范式一致无关)	   basic         60.147ms*  med       63.542ms
+global-k9	-- global-k9.typort (1232 decls) BOTH-FAILED (两版都未跑完，与范式一致无关)	   basic         55.759ms*  med       62.394ms
+match-k11	-- match-k11.typort (15 decls) nf=6	   basic          0.209ms*  med        0.225ms
+match-k13	-- match-k13.typort (17 decls) nf=6	   basic          0.325ms*  med        0.485ms
+match-k9	-- match-k9.typort (13 decls) nf=6	   basic          0.178ms*  med        0.181ms
+natadd-k11	-- natadd-k11.typort (14 decls) nf=8194	   basic          2.616ms*  med        2.932ms
+natadd-k13	-- natadd-k13.typort (16 decls) nf=32770	   basic         10.198ms*  med       10.907ms
+natadd-k9	-- natadd-k9.typort (12 decls) nf=2050	   basic          0.792ms*  med        0.818ms
+strchain-k11	-- strchain-k11.typort (4304 decls) nf=1	   basic         79.691ms*  med       82.111ms
+strchain-k13	-- strchain-k13.typort (16592 decls) nf=1	   basic        161.992ms*  med      164.979ms
+strchain-k9	-- strchain-k9.typort (1232 decls) nf=1	   basic         60.797ms*  med       61.697ms
