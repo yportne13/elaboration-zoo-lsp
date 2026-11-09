@@ -111,7 +111,7 @@ C14 `#[inline]`。这三条写清楚比"试了再说"更有价值。
   `clo_chain` 上也无差异 → 机制本身无收益（真判死）；若 `clo_chain` 有差异
   而三个现成负载没有 → 结论应写成"对 L01 现有负载无效，对 elaborator 形状
   待 L02+ 侧量"。**
-- **备注**：`docs/review-continuity/a1-r1.md:45` 把这条登记为"未下沉"，
+- **备注**：`docs/archive/review-continuity/a1-r1.md:45` 把这条登记为"未下沉"，
   `:80` 给出的理由是"改 L01 变体会作废其基准叙事"——即**有机制但从未在 L01
   负载上量过**。若 C1 落地，必须作为**新变体文件**（如
   `bump_spine_iter_ak.rs`）而不是原地改 `bump_spine_iter`，否则 readme 的

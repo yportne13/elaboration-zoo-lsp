@@ -373,4 +373,4 @@ q 的自由变量下标按保留槽位重编号（`remap_free_vars`）。正确�
 - 本仓库 `src/L07_sum_type/README.md`（逐臂下钻与显式替换的原始设计）、
   `docs/l09l13-match-compiler-analysis-2026-09-17.md`（决策树诊断与
   收窄登记）、`docs/bench-matrix-2026-09-18.md`（基准口径与全表）、
-  `docs/review-continuity/a4-r1.md`（跨章连贯性登记）
+  `docs/archive/review-continuity/a4-r1.md`（跨章连贯性登记）

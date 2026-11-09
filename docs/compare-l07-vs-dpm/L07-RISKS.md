@@ -28,7 +28,7 @@
 ## 0.1 修复进展（2026-11-08 收口）
 
 > 历史：2026-10-31 分支 `fix/l07-match-unify` 的修复记录保留在下方；
-> 2026-11-08 独立 review（[`docs/review-l07-hardening-2026-11-08/FINAL.md`](../review-l07-hardening-2026-11-08/FINAL.md)）
+> 2026-11-08 独立 review（[`docs/archive/review-l07-hardening-2026-11-08/FINAL.md`](../archive/review-l07-hardening-2026-11-08/FINAL.md)）
 > 确认 **1 个 S1 接受集回归（R1）+ P1 未闭全（R2）+ 预算不同构（R3）与
 > 工程/诊断/文档项（R4–R16）**，随后进入修复轮；本表与下方
 > 「review 修复轮」小节已按修复轮后的状态重写。
@@ -69,7 +69,7 @@ L07 **双引擎**在 P1 主类 / P2 预算口径上已同构。孪生版
 
 ### 2026-11-08 review 修复轮（R1–R9 处置）
 
-来源：`docs/review-l07-hardening-2026-11-08/`（三份分报告 + `FINAL.md` 终报）。
+来源：`docs/archive/review-l07-hardening-2026-11-08/`（三份分报告 + `FINAL.md` 终报）。
 本轮沿用既有设计方向，只补语义缺口、工程细节与文档口径；逐项处置：
 
 | review 项 | 级别 | 处置 | 落点 / 回归钉 |

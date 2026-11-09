@@ -245,7 +245,7 @@ cargo run --release --bin l11bench -- --workload all --max-k 11
 ```
 
 **口径先于数字**：L11 参考版 `mod.rs` 无 `bench_check_nf`（bench 口径
-缺口，登记于 `docs/review-continuity/a7-r1.md` §4），故 `basic` 行为
+缺口，登记于 `docs/archive/review-continuity/a7-r1.md` §4），故 `basic` 行为
 **全流程 `run`**（含 preprocess + parse）；`fast_run` = 快版全流程
 `run_fast` 与之同轴；`fast`/`fast_ss`/`fast_memo` = 孪生 `Tycker` 的
 bench 口径（解析在计时外）。**`fast_run` 才是与 `basic` 可比的全流程
@@ -339,5 +339,5 @@ declb 缓存的份额。
   `src/L10_typeclass/README.md`（trait 面、值级探测与两段式嵌套覆盖的
   同款机制）、`docs/l09l13-match-compiler-analysis-2026-09-17.md`
   （决策树诊断与收窄登记）、`docs/bench-matrix-2026-09-18.md`（基准口径
-  与全表）、`docs/review-continuity/a4-r1.md`/`a5-r1.md`/`a7-r1.md`
+  与全表）、`docs/archive/review-continuity/a4-r1.md`/`a5-r1.md`/`a7-r1.md`
   （跨章连贯性登记）

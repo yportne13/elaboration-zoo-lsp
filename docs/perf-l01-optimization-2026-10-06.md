@@ -109,7 +109,7 @@ Lead 实测本机 PMU 被拒 EACCES，无确定性硬件计数器可用）。
 - **变体形态冻结**：本轮**没有改动主仓库任何源码**（`src/**`、`Cargo.toml`
   零改动，已多次核实）。所有改源码的实验都在工作区外的影子副本
   `/tmp/l01-exp` 进行。理由：readme 的消融表与实测数字锚定在既有变体形态上，
-  原地改动作废其基准叙事（`docs/review-continuity/a1-r1.md:80` 同结论）。
+  原地改动作废其基准叙事（`docs/archive/review-continuity/a1-r1.md:80` 同结论）。
   若要让改动落地，正确形态是**新增变体文件**（如 `bump_spine_iter_ak.rs`）
   而不是原地改推荐路径。
 

@@ -155,7 +155,7 @@ cargo test --test l08_fast_parity       # 93 passed（33 自有 parity + 60 引�
 ## 9. review 修复轮（2026-11-08）
 
 本 PR 合并（`008f42ed`）后，2026-11-08 的独立 review（三份分报告 + 终报，
-`docs/review-l07-hardening-2026-11-08/`）确认 **1 个 S1 接受集回归 + 若干
+`docs/archive/review-l07-hardening-2026-11-08/`）确认 **1 个 S1 接受集回归 + 若干
 S2/S3/S4 项**（编号 R1–R16）。修复轮在**不改变本 PR 语义方向**的前提下逐项
 处置（明细见 `L07-RISKS.md` §0.1「2026-11-08 review 修复轮」）：
 

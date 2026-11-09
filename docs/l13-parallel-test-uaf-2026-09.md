@@ -25,7 +25,7 @@ cargo test --test l13_fast_parity -- --test-threads=1   # 393 passed
 
 **存量化验证**：在 `d711fde`（L01-L13 连续性评审合并 `66da950` 之前）建
 worktree 复测，同样 `0xC0000005` → **不是评审合并引入的回归**，早在
-`docs/review-cont/a5-r2.md` §3.2（2026-09 初）就已作为主嫌疑记录。
+`docs/archive/review-cont/a5-r2.md` §3.2（2026-09 初）就已作为主嫌疑记录。
 
 ## 2. 现场证据（gdb + llvm-objdump + dumpbin）
 

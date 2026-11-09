@@ -6,7 +6,7 @@ def / enum 的**名字**按大下标哨兵层级进 `Infer.global` 值表，没�
 decl 表；构造子则走 `Cxt::define` 的 env define 槽（§2）。相应地，模式
 编译器取构造子类型走 `infer_expr(Var(名))` 而非 decl 直查——这是与
 L07/L08 及 L10–L13 的关键结构差异。继承面与已知分歧在跨章节连贯性评审
-A4 登记（锚点见 `docs/review-continuity/a4-r1.md`、`a4-r2.md`；其中
+A4 登记（锚点见 `docs/archive/review-continuity/a4-r1.md`、`a4-r2.md`；其中
 部分登记已被后续移植轮取代，以 §2/§6 的现状描述为准）。
 
 2026-09 的两条主线：
@@ -367,7 +367,7 @@ universe 1856×）以这个更慢的参考版为基数，跨层比较应以 L10 
 
 - 本仓库 `src/L07_sum_type/README.md`（显式替换精化与逐臂下钻的蓝本）、
   `src/L08_product_type/README.md`（struct / new / 投影的出处）；
-- 跨章节连贯性评审 A4：`docs/review-continuity/a4-r1.md`、`a4-r2.md`
+- 跨章节连贯性评审 A4：`docs/archive/review-continuity/a4-r1.md`、`a4-r2.md`
   （继承面 / 显示形态 / 时代缺口的登记与裁决）；
 - `docs/l09l13-match-compiler-analysis-2026-09-17.md`（决策树 → 逐臂
   的算法级诊断与五层移植记录）；
