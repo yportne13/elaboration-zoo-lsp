@@ -144,11 +144,10 @@ impl Infer {
         match t {
             Raw::LiteralIntro(_) => Err(Error::new("expected universe, got LiteralType".to_owned())),
             Raw::Var(x) => {
-                // L07 的全局只登记在 decl 表（不 define 进 src_names）——
+                // L07 的全局只登记在 decl 表（不 define 进名字表）——
                 // 与 infer 的 Var 臂解析序一致：局部优先，其次 decl
                 let va = cxt
-                    .src_names
-                    .get(&x.data)
+                    .lookup_src(&x.data)
                     .map(|e| e.1.clone())
                     .or_else(|| cxt.decl_get(&x.data).map(|e| e.ty.clone()));
                 if let Some(va) = va {
@@ -459,9 +458,10 @@ impl Infer {
     pub fn infer_expr(&mut self, cxt: &Cxt, t: Raw) -> Result<(Tm, Val), Error> {
         let decl = cxt.decl();
         match t {
-            // 变量：先局部（src_names），再全局（decl 表）
+            // 变量：先局部（名字表），再全局（decl 表）
             Raw::Var(x) => {
-                if let Some((lvl, ty)) = cxt.src_names.get(&x.data).map(|e| e.as_ref()) {
+                if let Some(e) = cxt.lookup_src(&x.data) {
+                    let (lvl, ty) = e.as_ref();
                     Ok((Tm::Var(lvl2ix(cxt.lvl, *lvl)), ty.clone()))
                 } else if let Some(e) = cxt.decl_get(&x.data) {
                     Ok((Tm::Decl(SmolStr::new(&x.data)), e.ty.clone()))
@@ -477,7 +477,7 @@ impl Infer {
                 // 解析成全局构造子（类型恰巧对上即是错误的 Ok）。
                 // b66f5e4（L08 评审修复）回合：L07 同码潜伏。
                 if let Raw::Var(n) = &*x {
-                    if !cxt.src_names.contains_key(&n.data) {
+                    if !cxt.has_src(&n.data) {
                         let key = format!("{}.{}", n.data, f.data);
                         if let Some(e) = cxt.decl_get(&key) {
                             return Ok((Tm::Decl(SmolStr::new(key)), e.ty.clone()));
