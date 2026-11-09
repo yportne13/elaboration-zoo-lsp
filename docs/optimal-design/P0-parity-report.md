@@ -8,21 +8,21 @@
 
 ## 1. 结论摘要
 
-| 指标 | 数值（2026-11-09，release，本地全量） |
+| 指标 | 数值（2026-11-09，release，报告生成时 HEAD `163eb5f2` = commit `0180cdd7` 修复 + `f8aaf596` harness 之后；本地全量） |
 |---|---|
 | 语料 | **34 个用户文件**（examples 32 = 根 5 + `examples/hdl` 27；`tests/*.typort` 2）+ prelude 35 个 `.typort`（只计基线，不当用户文件） |
-| 引擎归属 | twin-owned **32/34**；fallback **2**：`examples/hdl/18-utils.typort`（`untrusted-error`）、`tests/trait_system_tests.typort`（修复前 panic，修复后见下行） |
+| 引擎归属 | twin-owned **32/34**；fallback **2**：`examples/hdl/18-utils.typort`（`untrusted-error`）、`tests/trait_system_tests.typort`（`untrusted-error (redefine outParam)`；修复前是两引擎 panic） |
 | 判定 parity | **34/34 相等**（Ok/Err 分类） |
-| 诊断逐字节 parity | **33/34 相等**；唯一差异 `examples/typeclass_complex.typort`（twin 错误 span 全零，**文本相同**——已知偏差） |
+| 诊断逐字节 parity | **33/34 相等**；唯一差异 `examples/typeclass_complex.typort`（twin 诊断消息内嵌的 Debug span 为 `@ 0,0`，ref 为真实偏移 `@ 549,552`；severity/range/条数一致——已知 twin 不带源码 span 偏差） |
 | panic | 修复前 **2**（`trait_system_tests.typort`：ref `unification.rs:754` OOB + twin `bump_spine_iter/typeclass.rs:294` OOB）→ 修复后 **0** |
-| 耗时 | 全量 wall **≈69s**（fresh-backend 口径）；单文件 elaboration 合计 ref **39.4s** vs twin **15.5s**（2.54×） |
-| prelude 装载 | 首载 `ref-hdl ≈7.9s` vs `twin-hdl ≈3.8s`（2.1×）；core 模式首载远小（<0.2s） |
-| 与已知结论对账 | `[已知]` "29/30 examples owned、18-utils 唯一回落" 在本扩展语料下成立：examples owned 31/32（唯一回落 18-utils）；tests 侧 `trait_system_tests` 是 P0 新发现的崩溃点 |
+| 耗时 | 全量 wall **73.6s**；单文件 elaboration 合计 ref **42,894ms** vs twin **16,040ms**（2.67×） |
+| prelude 首载 | `ref-hdl` **8.47s** vs `twin-hdl` **4.34s**（1.95×）；core 模式首载 <0.2s |
+| 已知结论对账 | `[已知]` "29/30 examples owned、18-utils 唯一回落" 在扩展语料下成立：examples owned **31/32**（唯一回落 18-utils）；tests 侧 `trait_system_tests` 是新发现（修复前崩溃），修复后双引擎判定/诊断一致但 twin 选择回落 |
 
-**一句话**：语料面上**判定零分歧、诊断一处已知 span 偏差**；真正的 P0 发现是
+**一句话**：语料面上**判定零分歧、诊断一处已知 span 偏差**；P0 的真正发现是
 `trait_system_tests.typort` 在**两个引擎上都会 panic**（CLI `typort check` 可复现），根因是
-trait 重声明后 `head_index` 残留旧下标，已按 Lead 指示修复并加回归钉（§5）。
-
+trait 重声明后 `head_index` 残留旧下标，已按 Lead 指示修复并加回归钉（§5），修复后全量
+parity **panic 归零**且 `l13_fast_parity` 629 例全绿。
 ## 2. Harness 设计（`tests/engine_parity_report.rs`）
 
 - 复用 `tests/twin_engine_tests.rs` 的 `Backend` + `CapturingClient` 模式：
@@ -48,12 +48,12 @@ trait 重声明后 `head_index` 残留旧下标，已按 Lead 指示修复并加
 |---|---:|---:|---|
 | `examples/`（根，5） | 5 | 5 | — |
 | `examples/hdl/`（27） | 27 | 26 | `18-utils.typort`: `untrusted-error` |
-| `tests/*.typort`（2） | 2 | 1（`quick_validate`） | `trait_system_tests.typort`（修复前 panic；修复后由 twin/参考各自正常分析） |
+| `tests/*.typort`（2） | 2 | 1（`quick_validate`） | `trait_system_tests.typort`：修复前两引擎 panic；修复后正常分析并回落 `untrusted-error (redefine outParam)` |
 | **用户文件合计** | **34** | **32（修复前）** | **2** |
 | `src/prelude/**/*.typort` | 35 | —（作为 prelude 基线装载） | — |
 
-fallback 类直方图（修复前）：`untrusted-error` ×1（18-utils）。
-`18-utils` 是**双付**（twin 回落参考版后两引擎各跑一遍）：ref `8195ms` vs twin `8130ms`
+fallback 类直方图（修复后）：`untrusted-error` ×2（18-utils；trait_system_tests）。
+`18-utils` 是**双付**（twin 回落参考版后两引擎各跑一遍）：ref `7085ms` vs twin `8494ms`（twin 侧含回落前尝试成本）
 （两遍成本几乎相同），与 `docs/l13-perf-replace-2026-09-27.md §1.3/§5.1` 的判断一致。
 
 ## 4. 分歧清单（修复前基线，全量）
@@ -64,11 +64,10 @@ fallback 类直方图（修复前）：`untrusted-error` ×1（18-utils）。
 
 | 文件 | 差异 | 性质 |
 |---|---|---|
-| `examples/typeclass_complex.typort` | 1 条 diagnistic（共 32 条，全为 INFORMATION） | twin 的 span 全零，`message` 文本相同；`[已知]` twin 不携带 binder/源码 span（`docs/l13-perf-replace §1.4`、`docs/lsp-twin-wiring §4` 记录的既知偏差），不是本次改动引入 |
+| `examples/typeclass_complex.typort` | 1 条 diagnostic（共 32 条，全为 INFORMATION；severity 计数一致，range 相同为 (35,8)） | 差异在 message **内嵌的 Debug span**：ref 为 `@ 549,552`（真实源码偏移），twin 为 `@ 0,0`；即 `[已知]` 的 "twin 不携带 binder/源码 span"（`docs/l13-perf-replace §1.4`、`docs/lsp-twin-wiring §4`），不是本次改动引入 |
 
 `examples/hdl/18-utils.typort`：两引擎诊断一致（14 条 INFO），但 twin 因 `untrusted-error`
-回落参考版（见 §3）。慢文件：`18-utils` ref 8195ms / twin 8130ms（双付）、
-`20-misc` ref 5482ms / twin 890ms（6.2×，参考版慢）。
+回落参考版（见 §3）。慢文件见 §6.2。
 
 ## 5. P0 findings：trait 重声明导致两引擎 panic（**已修**）
 
@@ -141,41 +140,53 @@ def five = two + three
   "实例表重置"路径补同类不变量（`idxs` 必须可回退）；③ 把本 fixture 加入
   `known_bug_pins` 的正式清单（当前在 `tests/p0_known_bug_pins.rs`）。
 
-## 6. 性能基线（`[实测]`，2026-11-09，同一 release 二进制）
+## 6. 性能基线（`[实测]`，2026-11-09，同一 release 二进制，修复后最终跑）
 
 ### 6.1 prelude 装载（每文件 fresh Backend 口径）
 
 | engine | mode | loads | total ms | mean ms | first ms | files |
 |---|---|---:|---:|---:|---:|---:|
-| reference | core | 4 | 201.4 | 50.3 | 38.2 | 4 |
-| twin | core | 4 | 112.7 | 28.2 | 28.9 | 4 |
-| reference | hdl | 30 | 8295.7 | 276.5 | 7873.8 | 30 |
-| twin | hdl | 30 | 4978.2 | 165.9 | 3831.6 | 30 |
+| reference | core | 4 | 221.0 | 55.3 | 128.5 | 4 |
+| twin | core | 4 | 116.8 | 29.2 | 107.6 | 4 |
+| reference | hdl | 30 | 8607.4 | 286.9 | **8471.6** | 30 |
+| twin | hdl | 30 | 5364.0 | 178.8 | **4340.7** | 30 |
 
-（首载 = PRELUDE_CACHE 首次构建；之后是 clone 定价。ref-hdl 首载 **7.87s** vs twin-hdl
-**3.83s**，与 Lead 的 smoke 读数一致。twin 的内部 prime_resident 见 `entry.rs:898`。）
+首载 = `PRELUDE_CACHE` 首次构建；之后是 clone 定价（twin 侧含 `prime_resident`）。
+ref-hdl 首载 **8.47s** vs twin-hdl **4.34s**，与 Lead 的 smoke 读数（7.87/3.83）同向；
+不同进程间有 ~5–10% 窗口噪声。
 
 ### 6.2 单文件 elaboration（不含 prelude 装载）与 wall
 
-- 合计：ref **39,386ms** / twin **15,500ms**（2.54×，修复前同一二进制；修复后见 §6.3）。
-- 全量 wall ≈ **68.8s**（34 文件 × 2 引擎 × fresh backend；prelude 装载合计 ≈13.6s）。
-- 慢文件：`18-utils` ref 8195 / twin 8130（fallback 双付）；`20-misc` ref 5482 / twin 890。
-- 与 `[已知]` 矩阵一致：twin 在真实 HDL prelude 与 examples 上领先 ~2× 量级
-  （`docs/bench-matrix-2026-09-20.md`、FACTS §5），reference 在大证明/宽文件上更慢。
+- 合计：ref **42,894ms** / twin **16,040ms**（**2.67×**）。
+- 全量 wall = **73.6s**（34 文件 × 2 引擎 × fresh backend；prelude 装载总计 ≈14.3s）。
+- 慢文件（>5s 任一引擎，最终跑）：
 
-### 6.3 修复后复跑（`[实测]`，同一 harness）
+| 文件 | ref ms | twin ms | 备注 |
+|---|---:|---:|---|
+| `examples/hdl/18-utils.typort` | 7084.9 | 8494.1 | fallback 双付：twin 回落 ref 后再跑一遍；twin 侧更贵 |
+| `examples/hdl/20-misc.typort` | 5428.6 | 917.4 | 5.9×，ref 慢 |
+| `examples/hdl/24-verilog-practice.typort` | 7307.7 | 1418.0 | 5.2×，ref 慢 |
 
-- 全量：**panic 0**；verdict parity 34/34；diag exact 33/34（同 §4）；twin-owned 数据与
-  修复前一致（除 `trait_system_tests` 从 panic 变为被正常分析）。
-- `l13_fast_parity` 全绿（629 例，见命令 §8）。
-- 耗时与修复前同量级（修复只影响异常路径）。
+与 `[已知]` 一致：twin 在真实 HDL prelude/examples 上领先 ~2× 量级
+（`docs/bench-matrix-2026-09-20.md`、FACTS §5）；reference 在大证明/宽文件上显著更慢。
 
+### 6.3 修复后复跑（本报告最终数据）
+
+- 全量：**panic 0**；verdict parity **34/34**；diagnostics exact **33/34**（同 §4）；
+  twin-owned 32/34（`trait_system_tests` 从 panic 变为正常分析后选择 `untrusted-error` 回落，
+  与 18-utils 同类双付；该文件 ref 约 3.6s、twin 约 3.4s）。
+- `l13_fast_parity`：**629 passed / 0 failed / 6 ignored**，73.87s（`[实测]`）。
+- `typort check tests/trait_system_tests.typort`：exit **0**，无 panic，输出
+  `ALL_TRAIT_TESTS_PASSED`（同时按 prelude 名字重定义打印 53 条 `error: redefine …` 诊断——
+  该 fixture 故意重定义 `Nat/Bool/List/Add/…`；两引擎在 harness `process_file` 口径下
+  这些诊断逐字节一致（53 E / 16 I））。
+- 耗时与修复前同量级（修复只改 stale-index 异常路径，正常路径多一次 `any()` 边界检查）。
 ## 7. 与 D7 §8 P0 判据对齐
 
 | D7 P0 判据 | 本报告状态 |
 |---|---|
 | 可机器复跑的对拍报告（归属/回落类/诊断/墙钟/RSS 峰） | ✅ JSON+MD；RSS 峰未采集（**局限**，见 §8） |
-| 复现已知结论（29/30 owned、18-utils 回退、examples ~1.78×） | ✅ examples 31/32 owned、18-utils `untrusted-error`；examples 总耗时比 ref 38.35/twin 15.5 且含 fallback 双付，方向一致 |
+| 复现已知结论（29/30 owned、18-utils 回退） | ✅ examples 31/32 owned、18-utils `untrusted-error`；tests 侧 1/2（trait_system_tests 回落），与已知"29/30 examples"结论一致 |
 | 报告中"差异不阻塞、可 triage" | ✅ 判定 0 分歧、诊断 1 处已知 span 偏差 |
 | 发现真实缺陷并登记 | ✅ trait 重声明 panic（已修 + 钉 + P2 根治项） |
 
