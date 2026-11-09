@@ -243,7 +243,7 @@ panic 契约用 `catch_unwind` 而非 `should_panic`（L13 当前 0 个 `should_
 的普通错误路径。目标：**用户可达路径零 panic**（`typo`/IO/搜索失控三类）。
 **G7 CI 门禁清单（P1）**：
 1. `cargo test --lib`（各层）+ 全部 `lXX_fast_parity` + `l07/l08_blackbox*` + L13 LSP 11 套；
-2. `LEAN_ORACLE=1 cargo test --test lean_oracle_parity`（独立 nightly job，需 `lake build engine-oracle`）；
+2. `LEAN_ORACLE=1 cargo test --test lean_oracle_parity`（若接入 CI 必须随 push 触发；当前未接入，需先 `lake build engine-oracle`）；
 3. 并行压力 job：`--test-threads=12` 重复 N 轮（UB 显形面）；
 4. 反 panic 门禁：对已知 panic 点跑 `catch_unwind` 断言"应为 Err 而非 panic"（G6 落地后）；
 5. `grep` 门禁：生产路径新增 `panic!/todo!/eprintln` 白名单化；

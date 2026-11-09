@@ -124,7 +124,8 @@ LSP 两引擎同点位；最小 9 行复现 = 重声明 prelude trait `Add` 并�
 - `head_index` purge 根治 + 覆盖 remove_file/import 重置路径（P0 报告 §5.4）；
 - 19 bench bin → 1 个 `--layer` 参数化（消 118 个 `#[path]` 重编译）；
 - Error 载体统一（为 P/R parity 的 Err 正文逐字节铺路）；
-- 按 `GATE_P0_MAX_FILES` 把 CI parity 控制在 smoke 规模，全量留在本地/夜间 job。
+- 按 `GATE_P0_MAX_FILES` 把 CI parity 控制在 smoke 规模；全量留在本地或发布前手动跑
+  （CI 仍仅由 push 到 master 触发，**不新增定时 job**）。
 
 ## 5. 复现命令
 

@@ -404,8 +404,8 @@ test 装配 = 上述 + `refcore` + `oracle-frozen`。**release 二进制不得�
 | 差分 | 生产引擎 vs 冻结参考 oracle：全语料（examples 32 + tests 语料 + prelude 35 文件）逐文件判定/输出/诊断字段；生成式语料用 `src/pmab_gen.rs` 已有生成器扩展 | 部分已有（`l13_fast_parity`/twin_engine_tests），口径要重定 |
 | 不变量 | §3.2 的 I1–I15：每条至少 1 个回归钉；关键项（I2/I3/I5/I6/I7/I9/I10）进 debug_assert/运行时校验 | 需新建 |
 | 属性测试 | `proptest`/`quickcheck`：subst 组合/occurs/quote∘eval 恒等/rename 往返/pretty∘parse 稳定性 | 需新建 |
-| 模糊测试 | parser/preprocess/macro 展开/elaboration 入口（无 panic 断言 + 内存上限） | 需新建（`cargo-fuzz`，CI nightly 可选） |
-| 内存/UB | 安全核心零 `unsafe`；arena 模块 `Miri`/`ThreadSanitizer` 定期（UAF 事故：`l13-parallel-test-uaf`） | 需新建 |
+| 模糊测试 | parser/preprocess/macro 展开/elaboration 入口（无 panic 断言 + 内存上限） | 需新建（`cargo-fuzz`；若进 CI 仅随 push 触发，当前未接入） |
+| 内存/UB | 安全核心零 `unsafe`；arena 模块 `Miri`/`ThreadSanitizer` 按 push 触发或发布前手动（UAF 事故：`l13-parallel-test-uaf`） | 需新建 |
 | 性能回归 | 同机同窗口成对 A/B（`tools/perf-l01` 的"同批空对照 + 中位数 + keep-alive"三件套），CI 只跑烟测（绝对阈值放宽） | 部分已有 |
 | 快照/soak | LSP 请求级 golden（hover/completion/inlay/diagnostics）；release 前真实编辑序列 soak | 需新建 |
 | CI | `gate_l13.sh`（lib+parity+twin_lsp+hdl042）+ `cargo check --examples --tests` + 全量 `cargo test` + `lake build` + oracle 差分 + 差分语料报告 | 现状 `.github/workflows/ci.yml` 已有前两项与全量；Lean/oracle 未强制 |
