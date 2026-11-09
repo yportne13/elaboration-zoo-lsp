@@ -53,6 +53,21 @@ jobs:
       - name: Check every example and test target builds
         run: cargo check --examples --tests
 
+      # P0 gate（2026-11-09 baseline-cleanup）：仓库度量 --check + 引擎 parity 聚合。
+      # 子件未就绪时（tools/metrics.py / tools/run_engine_parity.sh 尚未合入）
+      # tools/gate_p0.sh 打印 [SKIP] 且不计失败，所以本 step 可以先于 P0-1 落地；
+      # 两脚本一旦就绪，同一 step 自动从 SKIP 转为 PASS/FAIL。
+      - name: Run P0 gate (metrics + parity)
+        run: bash tools/gate_p0.sh
+
+      # Lean oracle 差分：第三方语义裁判（4 例 curated 语料）。CI 目前未 provision
+      # Lean 4 工具链与 ~2GB lake 缓存 ⇒ tools/gate_lean_oracle.sh 明确 SKIP（exit 0）。
+      # 先以 continue-on-error 保持 optional、不阻塞发布；工具链纳入 CI 后删除该行
+      # 即转必需（判据与步骤见 docs/optimal-design/P0-ci-report.md §4）。
+      - name: Lean oracle (optional)
+        run: bash tools/gate_lean_oracle.sh
+        continue-on-error: true
+
   # Full-suite job: the L13 gate only exercises --lib + l13_fast_parity +
   # twin_engine_tests, and the check above never *runs* anything.  Of the
   # repo's 66 test targets (~50 integration tests for parser/HDL/emit/L02-L12
