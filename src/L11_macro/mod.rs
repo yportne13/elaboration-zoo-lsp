@@ -455,7 +455,10 @@ fn lvl2ix(l: Lvl, x: Lvl) -> Ix {
 }
 
 use std::ops::{Add, Sub};
-use std::collections::HashMap;
+// port L07 72f12101: decl table + hot side maps (trait / mutable / macro)
+// switch to FxHashMap (short string keys; SipHash's per-lookup constant is
+// visible on def-heavy loads with 2^(k+1) declarations).
+use rustc_hash::FxHashMap as HashMap;
 
 #[derive(Debug)]
 enum UnifyError {

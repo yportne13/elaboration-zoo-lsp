@@ -1,6 +1,6 @@
 use lex::{TokenKind, TokenNode};
 use syntax::{Decl, Either, Icit, Pattern, Raw};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::rc::Rc;
 use macros::*;
 use serde::{Serialize, Deserialize};

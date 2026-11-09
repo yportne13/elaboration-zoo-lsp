@@ -347,7 +347,7 @@ impl Cxt {
             locals: Locals::Here,
             pruning: List::new(),
             src_names: BiMap::new(),
-            decl: Rc::new(HashMap::new()),
+            decl: Rc::new(Default::default()),
             namespace: List::new(),
         }
     }
