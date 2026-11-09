@@ -44,7 +44,7 @@ use parser::{Either, Icit, Raw};
 use crate::list::List;
 use crate::parser_lib::Span;
 use smol_str::SmolStr;
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::fmt;
 use std::rc::Rc;
 
@@ -249,7 +249,7 @@ struct Cxt {
     lvl: Lvl,
     locals: Locals,
     pruning: Pruning,
-    src_names: HashMap<SmolStr, (Lvl, Rc<VTy>)>,
+    src_names: Rc<FxHashMap<SmolStr, (Lvl, Rc<VTy>)>>,
     pos: Span<()>,
 }
 
@@ -260,15 +260,15 @@ impl Cxt {
             lvl: Lvl(0),
             locals: Locals::Here,
             pruning: List::new(),
-            src_names: HashMap::new(),
+            src_names: Rc::new(FxHashMap::default()),
             pos,
         }
     }
 
     /// 源码 binder：env/lvl/locals/pruning/src_names 全扩展。
     fn bind(&self, x: Name, a_quote: Tm, a: Val) -> Cxt {
-        let mut src_names = self.src_names.clone();
-        src_names.insert(x.data.clone(), (self.lvl, Rc::new(a)));
+        let mut src_names = Rc::clone(&self.src_names);
+        Rc::make_mut(&mut src_names).insert(x.data.clone(), (self.lvl, Rc::new(a)));
         Cxt {
             env: self.env.prepend(Val::vvar(self.lvl)),
             lvl: self.lvl + 1,
@@ -286,15 +286,15 @@ impl Cxt {
             lvl: self.lvl + 1,
             locals: Locals::Bind(Rc::new(self.locals.clone()), x, Rc::new(a_quote)),
             pruning: self.pruning.prepend(Some(Icit::Expl)),
-            src_names: self.src_names.clone(),
+            src_names: Rc::clone(&self.src_names),
             pos: self.pos,
         }
     }
 
     /// 定义：env 收**值**、locals 收类型项与定义项、pruning 记 `None`。
     fn define(&self, x: Name, t: Tm, vt: Val, a: Ty, va: VTy) -> Cxt {
-        let mut src_names = self.src_names.clone();
-        src_names.insert(x.data.clone(), (self.lvl, Rc::new(va)));
+        let mut src_names = Rc::clone(&self.src_names);
+        Rc::make_mut(&mut src_names).insert(x.data.clone(), (self.lvl, Rc::new(va)));
         Cxt {
             env: self.env.prepend(vt),
             lvl: self.lvl + 1,
@@ -336,7 +336,7 @@ struct PartialRenaming {
     occ: Option<MetaVar>,
     dom: Lvl,               // size of Γ（解体所在的域 = spine 长度 + lift）
     cod: Lvl,               // size of Δ（rhs 所在的域）
-    ren: HashMap<u32, Lvl>, // mapping from Δ vars to Γ vars
+    ren: FxHashMap<u32, Lvl>, // mapping from Δ vars to Γ vars
 }
 
 /// Lifting over an extra bound variable（Γ、Δ 各深一层，binder 进映射）。
@@ -602,9 +602,9 @@ impl Infer {
     fn invert_go(
         &self,
         sp: &Spine,
-    ) -> Result<(Lvl, HashMap<u32, Lvl>, HashSet<u32>, List<(Lvl, Icit)>), UnifyError> {
+    ) -> Result<(Lvl, FxHashMap<u32, Lvl>, FxHashSet<u32>, List<(Lvl, Icit)>), UnifyError> {
         match sp.head() {
-            None => Ok((Lvl(0), HashMap::new(), HashSet::new(), List::new())),
+            None => Ok((Lvl(0), FxHashMap::default(), FxHashSet::default(), List::new())),
             Some((t, i)) => {
                 let (dom, mut ren, mut nlvars, fsp) = self.invert_go(&sp.tail())?;
                 match self.force(t) {
@@ -671,7 +671,7 @@ impl Infer {
                 occ: None,
                 dom: Lvl(0),
                 cod: Lvl(0),
-                ren: HashMap::new(),
+                ren: FxHashMap::default(),
             },
             a,
         )
