@@ -23,10 +23,25 @@ use super::{
 /// 是整棵 `Box<Tm>` 闭包树的深拷贝、对 `LiteralIntro` 是 String 分配）。
 pub type Decls = FxHashMap<SmolStr, Rc<DeclEntry>>;
 
+#[derive(Clone)]
+pub struct PrimFunc(pub Rc<dyn Fn(&Infer, &Decls, &[Val]) -> Option<Val>>);
+
+impl std::fmt::Debug for PrimFunc {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "PrimFunc")
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct DeclEntry {
     pub ty: VTy,
     pub val: Val,
+    /// L13 式 prim：归约函数挂在 decl 条目上；force 的 Val::Decl 分支消费。
+    pub prim: Option<PrimFunc>,
+    /// builtin 的 η 展示壳（仅 quote/pretty 用；不求值、不参与应用）。
+    pub eta: Option<Tm>,
+    /// builtin 的 Π 参数名（partial application 的 η 展开显示用）。
+    pub prim_names: Option<Rc<Vec<Span<String>>>>,
 }
 
 /// 源码名表 + 撤销轨迹（L08 孪生 `bump_spine_iter` 的 `name_map` +
@@ -139,7 +154,7 @@ impl Cxt {
         let mut cxt = Self::empty();
         cxt.decl_insert_mut(
             "String",
-            DeclEntry {
+            DeclEntry { prim: None, eta: None, prim_names: None,
                 ty: Val::U,
                 val: Val::LiteralType,
             },
@@ -213,25 +228,40 @@ impl Cxt {
             .add_builtin(infer, "file_delete", str_pi(&["path"], Tm::U))
     }
 
-    /// 注册一个 builtin：类型在 Tm 层描述，经 `infer.eval` 求值成 Π 链值
-    /// （只有最外层域被立即求值——恒为 String 常量；引用参数的内层域留在
-    /// 闭包里到 check 期才解）；值 = λ 参数链 → `Tm::Prim(name)`，应用满
-    /// 元数后由 `force` 的 `prim_reduce` 归约。
+    /// 注册 builtin（L13 式）：类型与 `PrimFunc` 一起挂在 decl 条目上；
+    /// 值是 `Val::Decl(自身名)` 占位，应用实参由 force 的 spine 直接消费。
     fn add_builtin(mut self, infer: &Infer, name: &str, ty_tm: Tm) -> Self {
-        let ty = infer.eval(&self.decl, &List::new(), ty_tm.clone());
-        // 值 = λ 参数链 → Prim(name)；参数名从类型的 Π 链取（与域同序）
+        // Π 链参数名（η 展示壳用）先取出来。
         let mut names = Vec::new();
         let mut cur = &ty_tm;
         while let Tm::Pi(n, _, _, body) = cur {
-            names.push(n.data.clone());
+            names.push(n.clone());
             cur = body.as_ref();
         }
-        let mut val = Tm::Prim(SmolStr::new(name));
-        for p in names.iter().rev() {
-            val = Tm::Lam(empty_span(p.clone()), Icit::Expl, Rc::new(val));
+        let ty = infer.eval(&self.decl, &List::new(), ty_tm);
+        let nm = SmolStr::new(name);
+        let prim_name = nm.clone();
+        let prim = PrimFunc(Rc::new(move |infer: &Infer, decl: &Decls, args: &[Val]| {
+            infer.prim_reduce(decl, &prim_name, args)
+        }));
+        // η 展示壳：`λ p1 … pn. ((Decl 名 p1) … pn)`，仅 quote/pretty 用。
+        let mut eta = Tm::Decl(nm.clone());
+        let n = names.len() as u32;
+        for k in 0..n {
+            eta = Tm::App(
+                Box::new(eta),
+                Box::new(Tm::Var(Ix(n - 1 - k))),
+                Icit::Expl,
+            );
         }
-        let val = infer.eval(&self.decl, &List::new(), val);
-        self.decl_insert_mut(SmolStr::new(name), DeclEntry { ty, val });
+        for p in names.iter().rev() {
+            eta = Tm::Lam(p.clone(), Icit::Expl, Rc::new(eta));
+        }
+        let val = Val::Decl(nm.clone(), List::new());
+        self.decl_insert_mut(
+            nm,
+            DeclEntry { ty, val, prim: Some(prim), eta: Some(eta), prim_names: Some(Rc::new(names)) },
+        );
         self
     }
     pub fn empty() -> Self {

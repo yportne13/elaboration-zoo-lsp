@@ -67,10 +67,26 @@ fn next_decl_version() -> u64 {
     std::sync::atomic::AtomicU64::fetch_add(&DECL_VERSION, 1, std::sync::atomic::Ordering::Relaxed) + 1
 }
 
+#[derive(Clone)]
+pub struct PrimFunc(pub Rc<dyn Fn(&Infer, &Decls, &[Val]) -> Option<Val>>);
+
+impl std::fmt::Debug for PrimFunc {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "PrimFunc")
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct DeclEntry {
     pub ty: VTy,
     pub val: Val,
+    /// L13 式 prim：builtin 的归约函数挂在 decl 条目上，而不是
+    /// `Tm::Prim`/`Val::Prim` 特例。`force` 在 `Val::Decl` 上按 spine 调用。
+    pub prim: Option<PrimFunc>,
+    /// builtin 的 η 展示壳（仅 quote/pretty 用；不求值、不参与应用）。
+    pub eta: Option<Tm>,
+    /// builtin 的 Π 参数名（partial application 的 η 展开显示用）。
+    pub prim_names: Option<Rc<Vec<Span<String>>>>,
 }
 
 /// 源码名表 + 撤销轨迹（L08 孪生 `bump_spine_iter.rs` 的 `name_map` +
@@ -181,7 +197,7 @@ impl Cxt {
         let mut cxt = Self::empty();
         cxt.decl_insert_mut(
             "String",
-            DeclEntry {
+            DeclEntry { prim: None, eta: None, prim_names: None,
                 ty: Val::U,
                 val: Val::LiteralType,
             },
@@ -255,38 +271,42 @@ impl Cxt {
             .add_builtin(infer, "file_delete", str_pi(&["path"], Tm::U))
     }
 
-    /// 注册一个 builtin：类型在 Tm 层描述，经 `infer.eval` 求值成 Π 链值
-    /// （只有最外层域被立即求值——恒为 String 常量；引用参数的内层域留在
-    /// 闭包里到 check 期才解）；值 = λ 参数链 → **App 链**重新应用参数到
-    /// `Tm::Prim(name)` 零元头，应用满元数后由 `force` 的 `prim_reduce`
-    /// 归约。
+    /// 注册一个 builtin（L13 式）：类型求值后挂在 decl 条目上，归约函数
+    /// `PrimFunc` 也挂在同一张表；值只是 `Val::Decl(自身名)` 的中性占位。
+    /// 应用后的实参由 spine 到达 `force`，由 `prim_reduce` 直接消费；
+    /// 不再生成 `Tm::Prim`/`Val::Prim` 特例。
     fn add_builtin(mut self, infer: &Infer, name: &str, ty_tm: Tm) -> Self {
-        let ty = infer.eval(&self.decl, &List::new(), &ty_tm);
-        // 值 = λ 参数链 → ((Prim 名 p1) p2 …)；参数名从类型的 Π 链取（与
-        // 域同序）。实参经 App 显式应用而非 env 隐式收集——`Tm::Prim` 从
-        // 此是零元卡住头，quote → eval 往返在任意 env 下 spine 保真（旧
-        // 形态在非 builtin-λ 环境里重求值会把无关 env 槽拼进 spine）
+        // Π 链参数名（η 展示壳用）先取出来。
         let mut names = Vec::new();
         let mut cur = &ty_tm;
         while let Tm::Pi(n, _, _, body) = cur {
-            names.push(n.data.clone());
-            cur = body;
+            names.push(n.clone());
+            cur = body.as_ref();
         }
+        let ty = infer.eval(&self.decl, &List::new(), &ty_tm);
+        let nm = SmolStr::new(name);
+        let prim_name = nm.clone();
+        let prim = PrimFunc(Rc::new(move |infer: &Infer, decl: &Decls, args: &[Val]| {
+            infer.prim_reduce(decl, &prim_name, args)
+        }));
+        // η 展示壳：`λ p1 … pn. ((Decl 名 p1) … pn)`，仅 quote/pretty 用。
+        let mut eta = Tm::Decl(nm.clone());
         let n = names.len() as u32;
-        let mut val = Tm::Prim(SmolStr::new(name));
         for k in 0..n {
-            // 第 k 个参数（应用序在前）在 λ 链体内的 de Bruijn 索引 = n-1-k
-            val = Tm::App(
-                Box::new(val),
+            eta = Tm::App(
+                Box::new(eta),
                 Box::new(Tm::Var(Ix(n - 1 - k))),
                 Icit::Expl,
             );
         }
         for p in names.iter().rev() {
-            val = Tm::Lam(empty_span(p.clone()), Icit::Expl, Rc::new(val));
+            eta = Tm::Lam(p.clone(), Icit::Expl, Rc::new(eta));
         }
-        let val = infer.eval(&self.decl, &List::new(), &val);
-        self.decl_insert_mut(SmolStr::new(name), DeclEntry { ty, val });
+        let val = Val::Decl(nm.clone(), List::new());
+        self.decl_insert_mut(
+            nm,
+            DeclEntry { ty, val, prim: Some(prim), eta: Some(eta), prim_names: Some(Rc::new(names)) },
+        );
         self
     }
     pub fn empty() -> Self {

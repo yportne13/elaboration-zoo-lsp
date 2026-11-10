@@ -245,7 +245,7 @@ impl Infer {
                 // ⇒ 强计数恒 2 ⇒ 每个顶层 def 深拷整张表。
                 cxt.decl_insert_mut(
                     name.data.clone(),
-                    DeclEntry {
+                    DeclEntry { prim: None, eta: None, prim_names: None,
                         ty: vtyp.clone(),
                         val: Val::Decl(SmolStr::new(&name.data), List::new()),
                     },
@@ -258,7 +258,7 @@ impl Infer {
                 let vt = self.force(cxt.decl(), self.eval(cxt.decl(), &cxt.env, t_tm.clone()));
                 cxt.decl_insert_mut(
                     name.data.clone(),
-                    DeclEntry {
+                    DeclEntry { prim: None, eta: None, prim_names: None,
                         ty: vtyp,
                         val: vt,
                     },
@@ -354,7 +354,7 @@ impl Infer {
                 // 就地插入，避免每个 enum 深拷整表。
                 cxt.decl_insert_mut(
                     name.data.clone(),
-                    DeclEntry {
+                    DeclEntry { prim: None, eta: None, prim_names: None,
                         ty: vtyp.clone(),
                         val: Val::Decl(SmolStr::new(&name.data), List::new()),
                     },
@@ -363,7 +363,7 @@ impl Infer {
                 let vt = self.eval(cxt.decl(), &cxt.env, t_tm.clone());
                 cxt.decl_insert_mut(
                     name.data.clone(),
-                    DeclEntry {
+                    DeclEntry { prim: None, eta: None, prim_names: None,
                         ty: vtyp,
                         val: vt,
                     },
@@ -397,7 +397,7 @@ impl Infer {
                     self.check_ctor_wf(&cxt, &name.data, &ctor_name.data, vtyp.clone())?;
                     let t_tm = self.check(&cxt, bod, vtyp.clone())?;
                     let vt = self.eval(cxt.decl(), &cxt.env, t_tm.clone());
-                    let entry = DeclEntry {
+                    let entry = DeclEntry { prim: None, eta: None, prim_names: None,
                         ty: vtyp,
                         val: vt,
                     };
