@@ -1115,7 +1115,10 @@ impl Infer {
     }
 
     fn closure_apply(&self, decl: &Decls, closure: &Closure, u: Val) -> Val {
-        self.eval(decl, &closure.0.prepend(u), (*closure.1).clone())
+        // 借用 eval：直接读 Rc 闭包体，β 不再深拷贝体（L07 P0-1 第 2 步
+        // 的 L08 对应物）。旧实现 `(*closure.1).clone()` 在 church /
+        // 递归 add 这类高 β 次数负载上每步克隆整条分支体。
+        self.eval_ref(decl, &closure.0.prepend(u), &closure.1)
     }
 
     /// 把 `u` 应用到 `t`。卡住的 match 把实参收进 `pending`（值层保存）——
