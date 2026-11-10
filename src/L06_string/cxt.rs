@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+
 use rustc_hash::FxHashMap;
 
 use super::{
@@ -256,6 +258,46 @@ fn st2g_app(ix: u32) -> Tm {
     )
 }
 
+/// 源码名表 + 撤销轨迹（L08 `a3652630` / L07 `d411debe` 配方的 L06 对应物）。
+///
+/// 旧实现 `Rc<FxHashMap>` 写时复制：父 Cxt 存活时 `Rc::make_mut` 仍整表深拷，
+/// n 个绑定器 ⇒ O(n²)。新实现："单张表 + 撤销轨迹 + 按 mark 惰性回退"，
+/// `bind`/`define` 只做一次插入 + 一条轨迹，O(1)；退出不显式撤销，访问前把
+/// 轨迹裁回本上下文 `name_mark`（语义与持久表一致）。
+#[derive(Debug, Default)]
+struct NameState {
+    map: FxHashMap<String, (Lvl, Rc<VTy>)>,
+    /// (名字, 旧值)；旧值 `None` = 该名字此前不在表里。
+    trail: Vec<(String, Option<(Lvl, Rc<VTy>)>)>,
+}
+
+impl NameState {
+    fn unwind(&mut self, mark: u32) {
+        debug_assert!(
+            mark as usize <= self.trail.len(),
+            "unwind: mark {} 超出轨迹长度 {}",
+            mark,
+            self.trail.len()
+        );
+        while self.trail.len() > mark as usize {
+            let (k, prev) = self.trail.pop().expect("unwind: 轨迹为空");
+            match prev {
+                Some(v) => {
+                    self.map.insert(k, v);
+                }
+                None => {
+                    self.map.remove(&k);
+                }
+            }
+        }
+    }
+
+    fn insert(&mut self, k: String, v: (Lvl, Rc<VTy>)) {
+        let prev = self.map.insert(k.clone(), v);
+        self.trail.push((k, prev));
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Cxt {
     pub env: Env, // Used for evaluation
@@ -268,7 +310,10 @@ pub struct Cxt {
     /// L07/L08 参考版 123/124 ms。表改 `Rc` 后 `new_binder` 与 `Cxt::clone`
     /// 零成本，插入走 `Rc::make_mut`（父 cxt 仍持有时整拷一次，与旧版同价，
     /// 故「占位只对本定义可见」的写时复制语义原样保留、无新增别名可观测）。
-    pub src_names: Rc<FxHashMap<String, (Lvl, Rc<VTy>)>>,
+    /// 源码变量名表（共享可变 + 轨迹惰性回滚，见 [`NameState`]）。
+    names: Rc<RefCell<NameState>>,
+    /// 本上下文的名字表基线（轨迹长度）。
+    name_mark: u32,
 }
 
 impl Cxt {
@@ -353,7 +398,8 @@ impl Cxt {
             lvl: Lvl(0),
             locals: Locals::Here,
             pruning: List::new(),
-            src_names: Rc::new(FxHashMap::default()),
+            names: Rc::new(RefCell::new(NameState::default())),
+            name_mark: 0,
         }
     }
 
@@ -369,15 +415,19 @@ impl Cxt {
     }
 
     pub fn bind(&self, x: Span<String>, a_quote: Tm, a: Rc<Val>) -> Self {
-        //println!("{} {x:?} {a:?} at {}", "bind".bright_purple(), self.lvl.0);
-        let mut src_names = Rc::clone(&self.src_names);
-        Rc::make_mut(&mut src_names).insert(x.data.clone(), (self.lvl, a));
+        let name_mark = {
+            let mut s = self.names.borrow_mut();
+            s.unwind(self.name_mark);
+            s.insert(x.data.clone(), (self.lvl, a));
+            s.trail.len() as u32
+        };
         Cxt {
             env: self.env.prepend(Val::vvar(self.lvl).into()),
             lvl: self.lvl + 1,
             locals: Locals::Bind(Rc::new(self.locals.clone()), x, Rc::new(a_quote)),
             pruning: self.pruning.prepend(Some(Icit::Expl)),
-            src_names,
+            names: Rc::clone(&self.names),
+            name_mark,
         }
     }
 
@@ -388,20 +438,44 @@ impl Cxt {
             lvl: self.lvl + 1,
             locals: Locals::Bind(Rc::new(self.locals.clone()), x, Rc::new(a_quote)),
             pruning: self.pruning.prepend(Some(Icit::Expl)),
-            src_names: Rc::clone(&self.src_names),
+            names: Rc::clone(&self.names),
+            name_mark: self.name_mark,
         }
     }
 
     pub fn define(&self, x: Span<String>, t: Tm, vt: Rc<Val>, a: Ty, va: Rc<VTy>) -> Self {
-        //println!("{} {}\n{t:?}\n{vt:?}\n{a:?}\n{va:?}", "define".bright_purple(), x.data);
-        let mut src_names = Rc::clone(&self.src_names);
-        Rc::make_mut(&mut src_names).insert(x.data.clone(), (self.lvl, va));
+        let name_mark = {
+            let mut s = self.names.borrow_mut();
+            s.unwind(self.name_mark);
+            s.insert(x.data.clone(), (self.lvl, va));
+            s.trail.len() as u32
+        };
         Cxt {
             env: self.env.prepend(vt),
             lvl: self.lvl + 1,
             locals: Locals::Define(Rc::new(self.locals.clone()), x, Rc::new(a), Rc::new(t)),
             pruning: self.pruning.prepend(None),
-            src_names,
+            names: Rc::clone(&self.names),
+            name_mark,
         }
+    }
+
+    /// 名字表访问前统一入口：把共享轨迹裁回本上下文基线（惰性回滚）。
+    #[inline]
+    fn unwind_names(&self) {
+        self.names.borrow_mut().unwind(self.name_mark);
+    }
+
+    /// 查一个源码局部名（返回 `(绑定层级, 类型值)` 的共享条目）。
+    pub fn lookup_src(&self, n: &str) -> Option<(Lvl, Rc<VTy>)> {
+        self.unwind_names();
+        self.names.borrow().map.get(n).cloned()
+    }
+
+    /// 源码名是否已在本作用域绑定。
+    #[allow(dead_code)]
+    pub fn has_src(&self, n: &str) -> bool {
+        self.unwind_names();
+        self.names.borrow().map.contains_key(n)
     }
 }

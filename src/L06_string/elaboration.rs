@@ -126,7 +126,7 @@ impl Infer {
     fn ty_precheck(&self, cxt: &Cxt, t: &Raw) -> Result<(), Error> {
         match t {
             Raw::LiteralIntro(_) => Err(Error("expected universe, got LiteralType".to_owned())),
-            Raw::Var(x) => match cxt.src_names.get(&x.data).map(|(_, va)| va.clone()).or_else(|| self.decls.get(&x.data).map(|e| e.va.clone())) {
+            Raw::Var(x) => match cxt.lookup_src(&x.data).map(|(_, va)| va).or_else(|| self.decls.get(&x.data).map(|e| e.va.clone())) {
                 Some(va) => match self.force(&va).as_ref() {
                     // force 已展开已解 meta；留下的 Flex 必是未解 → 放行
                     Val::U | Val::Flex(_, _) => Ok(()),
@@ -221,8 +221,8 @@ impl Infer {
         match t {
             // Infer variable types
             Raw::Var(x) => {
-                match cxt.src_names.get(&x.data) {
-                    Some((x, a)) => Ok((Tm::Var(lvl2ix(cxt.lvl, *x)), a.clone())),
+                match cxt.lookup_src(&x.data) {
+                    Some((x, a)) => Ok((Tm::Var(lvl2ix(cxt.lvl, x)), a.clone())),
                     // decl 表回退（L13 fake_bind 语义的另一半）：正常程序
                     // 里 src_names 覆盖全部可见名（def/builtin 都 define），
                     // 唯一 miss 而 decl 表命中的是递归 def 体检查期间的
