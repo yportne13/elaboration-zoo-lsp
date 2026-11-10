@@ -3,6 +3,8 @@
 //! `parse`/`SourceDecl` 与 `NO_NAME_MAP` 消融开关。原 bump_spine_iter.rs
 //! 的 "export 与对外入口" 节，逐行搬运（2026-09-23 拆分）。
 
+use std::rc::Rc;
+
 use bumpalo::Bump;
 
 use super::parser::syntax::{Decl, Icit};
@@ -125,12 +127,12 @@ pub(super) fn export(t: &Tm<'_>) -> CTm {
             }
             J::Lam2(x, i) => {
                 let b = done.pop().expect("export 栈：Lam 缺体");
-                done.push(CTm::Lam(name(x), i, Box::new(b)));
+                done.push(CTm::Lam(name(x), i, Rc::new(b)));
             }
             J::Pi2(x, i) => {
                 let cod = done.pop().expect("export 栈：Pi 缺余定义域");
                 let dom = done.pop().expect("export 栈：Pi 缺定义域");
-                done.push(CTm::Pi(name(x), i, Box::new(dom), Box::new(cod)));
+                done.push(CTm::Pi(name(x), i, Rc::new(dom), Rc::new(cod)));
             }
             J::Let2(x) => {
                 let u = done.pop().expect("export 栈：Let 缺体");

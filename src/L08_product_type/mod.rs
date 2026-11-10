@@ -76,11 +76,11 @@ pub enum Tm {
     Decl(SmolStr),
     /// `x.field` 投影。
     Obj(Box<Tm>, Span<String>),
-    Lam(Span<String>, Icit, Box<Tm>),
+    Lam(Span<String>, Icit, Rc<Tm>),
     App(Box<Tm>, Box<Tm>, Icit),
     AppPruning(Box<Tm>, Pruning),
     U,
-    Pi(Span<String>, Icit, Box<Ty>, Box<Ty>),
+    Pi(Span<String>, Icit, Rc<Ty>, Rc<Ty>),
     Let(Span<String>, Box<Ty>, Box<Tm>, Box<Tm>),
     Meta(MetaVar),
     LiteralType,
@@ -1179,8 +1179,8 @@ impl Infer {
                 let u_val = self.eval(decl, env, *u);
                 self.v_app(decl, self.eval(decl, env, *t), u_val, i)
             }
-            Tm::Lam(x, i, t) => Val::Lam(x, i, Closure(env.clone(), Rc::new(*t))),
-            Tm::Pi(x, i, a, b) => Val::Pi(x, i, Box::new(self.eval(decl, env, *a)), Closure(env.clone(), Rc::new(*b))),
+            Tm::Lam(x, i, t) => Val::Lam(x, i, Closure(env.clone(), t)),
+            Tm::Pi(x, i, a, b) => Val::Pi(x, i, Box::new(self.eval(decl, env, (*a).clone())), Closure(env.clone(), b)),
             Tm::Let(_, _, t, u) => {
                 let t_val = self.eval(decl, env, *t);
                 self.eval(decl, &env.prepend(t_val), *u)
@@ -1278,13 +1278,13 @@ impl Infer {
             Val::Lam(x, i, closure) => Tm::Lam(
                 x,
                 i,
-                Box::new(self.quote(decl, l + 1, self.closure_apply(decl, &closure, Val::vvar(l)))),
+                Rc::new(self.quote(decl, l + 1, self.closure_apply(decl, &closure, Val::vvar(l)))),
             ),
             Val::Pi(x, i, a, closure) => Tm::Pi(
                 x,
                 i,
-                Box::new(self.quote(decl, l, *a)),
-                Box::new(self.quote(decl, l + 1, self.closure_apply(decl, &closure, Val::vvar(l)))),
+                Rc::new(self.quote(decl, l, *a)),
+                Rc::new(self.quote(decl, l + 1, self.closure_apply(decl, &closure, Val::vvar(l)))),
             ),
             Val::U => Tm::U,
             Val::LiteralIntro(x) => Tm::LiteralIntro(x),
@@ -1605,7 +1605,7 @@ fn tm_size_ref(t: &Tm) -> u64 {
             Tm::Var(_) | Tm::U | Tm::Meta(_) | Tm::LiteralType | Tm::LiteralIntro(_)
             | Tm::Decl(_) | Tm::Prim(_) => {}
             Tm::Obj(h, _) => stack.push(h),
-            Tm::Lam(_, _, b) => stack.push(b),
+            Tm::Lam(_, _, b) => stack.push(b.as_ref()),
             Tm::App(f, a, _) => {
                 stack.push(f);
                 stack.push(a);
@@ -1615,8 +1615,8 @@ fn tm_size_ref(t: &Tm) -> u64 {
                 n += pr.len() as u64;
             }
             Tm::Pi(_, _, a, b) => {
-                stack.push(a);
-                stack.push(b);
+                stack.push(a.as_ref());
+                stack.push(b.as_ref());
             }
             Tm::Let(_, a, t, u) => {
                 stack.push(a);

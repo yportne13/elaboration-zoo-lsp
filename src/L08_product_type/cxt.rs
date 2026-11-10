@@ -103,8 +103,8 @@ fn tm_pi(name: &str, dom: Tm, cod: Tm) -> Tm {
     Tm::Pi(
         empty_span(name.to_owned()),
         Icit::Expl,
-        Box::new(dom),
-        Box::new(cod),
+        Rc::new(dom),
+        Rc::new(cod),
     )
 }
 
@@ -224,11 +224,11 @@ impl Cxt {
         let mut cur = &ty_tm;
         while let Tm::Pi(n, _, _, body) = cur {
             names.push(n.data.clone());
-            cur = body;
+            cur = body.as_ref();
         }
         let mut val = Tm::Prim(SmolStr::new(name));
         for p in names.iter().rev() {
-            val = Tm::Lam(empty_span(p.clone()), Icit::Expl, Box::new(val));
+            val = Tm::Lam(empty_span(p.clone()), Icit::Expl, Rc::new(val));
         }
         let val = infer.eval(&self.decl, &List::new(), val);
         self.decl_insert_mut(SmolStr::new(name), DeclEntry { ty, val });
