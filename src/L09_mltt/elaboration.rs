@@ -16,7 +16,7 @@ impl Infer {
     fn insert_go(&mut self, cxt: &Cxt, t: Tm, va: Val) -> (Tm, VTy) {
         match self.force(va) {
             Val::Pi(_, Icit::Impl, a, b) => {
-                let m = self.fresh_meta(cxt, *a);
+                let m = self.fresh_meta(cxt, (*a).clone());
                 let mv = self.eval(&cxt.env, m.clone());
                 self.insert_go(
                     cxt,
@@ -48,7 +48,7 @@ impl Infer {
                 if x.data == name.data {
                     Ok((t, Val::Pi(x, Icit::Impl, a, b)))
                 } else {
-                    let m = self.fresh_meta(cxt, *a);
+                    let m = self.fresh_meta(cxt, (*a).clone());
                     let mv = self.eval(&cxt.env, m.clone());
                     self.insert_until_go(
                         cxt,
@@ -302,7 +302,7 @@ impl Infer {
                     || i == Either::Icit(i_t) =>
             {
                 let body = self.check(
-                    &cxt.bind(x.clone(), self.quote(cxt.lvl, *a.clone()), *a),
+                    &cxt.bind(x.clone(), self.quote(cxt.lvl, (*a).clone()), (*a).clone()),
                     *t,
                     self.closure_apply(&b_closure, Val::vvar(cxt.lvl)),
                 )?;
@@ -310,7 +310,7 @@ impl Infer {
             }
             (t, Val::Pi(x, Icit::Impl, a, b_closure)) => {
                 let body = self.check(
-                    &cxt.new_binder(x.clone(), self.quote(cxt.lvl, *a)),
+                    &cxt.new_binder(x.clone(), self.quote(cxt.lvl, (*a).clone())),
                     t,
                     self.closure_apply(&b_closure, Val::vvar(cxt.lvl)),
                 )?;
@@ -682,12 +682,12 @@ impl Infer {
                                                 &cxt.env,
                                                 Tm::Obj(Box::new(tm.clone()), name.clone()),
                                             );
-                                            ret.push((name, *ty));
+                                            ret.push((name, (*ty).clone()));
                                             typ = self.closure_apply(&closure, val);
                                         } else {
                                             let val = param.pop()
                                                 .unwrap_or(Val::U(0));
-                                            ret.push((name, *ty));
+                                            ret.push((name, (*ty).clone()));
                                             typ = self.closure_apply(&closure, val);
                                         }
                                     }
@@ -703,9 +703,9 @@ impl Infer {
                                     .map(|(_, ty)| ty)
                             }).or(
                             params
-                                .into_iter()
-                                .find(|(fields_name, _, _, _)| fields_name == &t)
-                                .map(|(_, _, ty, _)| super::rc_take(ty))
+                                .iter()
+                                .find(|p| &p.0 == &t)
+                                .map(|p| super::rc_take(p.2.clone()))
                             )
                                 .ok_or_else(|| Error(t.map(|t| format!(
                                     "`{}`: {:?} has no object `{}`",
@@ -719,9 +719,9 @@ impl Infer {
                         Ok((
                             Tm::Obj(Box::new(tm.clone()), t.clone()),
                             params
-                                .into_iter()
-                                .find(|(fields_name, _, _)| fields_name == &t)
-                                .map(|(_, ty, _)| super::rc_take(ty))
+                                .iter()
+                                .find(|p| &p.0 == &t)
+                                .map(|p| super::rc_take(p.1.clone()))
                                 .ok_or_else(|| Error(t.map(|t| format!(
                                     "`{}`: {:?} has no object `{}`",
                                     super::pretty_tm(0, cxt.names(), &tm),
@@ -749,7 +749,7 @@ impl Infer {
                 let b_closure = self.close_val(cxt, b);
                 Ok((
                     Tm::Lam(x.clone(), i, Box::new(t_inferred)),
-                    Val::Pi(x, i, Box::new(a), b_closure),
+                    Val::Pi(x, i, Rc::new(a), b_closure),
                 ))
             }
 
@@ -778,7 +778,7 @@ impl Infer {
                 let (a, b_closure) = match self.force(tty) {
                     Val::Pi(_, i_t, a, b_closure) => {
                         if i == i_t {
-                            (*a, b_closure)
+                            ((*a).clone(), b_closure)
                         } else {
                             return Err(Error(t_span.map(|_| format!("icit mismatch {:?} {:?}", i, i_t))));
                         }
@@ -802,7 +802,7 @@ impl Infer {
                             Val::Pi(
                                 empty_span("x".to_string()),
                                 i,
-                                Box::new(a.clone()),
+                                Rc::new(a.clone()),
                                 b_closure.clone(),
                             ),
                             tty,

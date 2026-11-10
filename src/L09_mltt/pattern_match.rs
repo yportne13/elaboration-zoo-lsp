@@ -202,7 +202,7 @@ impl Compiler {
         let typ = infer.force(typ);
         let (constrs, ctor_names): (Vec<Constructor>, Vec<String>) = match typ.clone() {
             Val::Sum(_, _, cases) => (
-                cases.clone(),
+                (*cases).clone(),
                 cases.iter().map(|c| c.data.clone()).collect(),
             ),
             _ => (vec![], vec![]),
@@ -346,7 +346,7 @@ impl Compiler {
             // 长度 l := succ n）在 σ 里，推开后的 Sum 才是探测该用的类型
             let field_sum = infer.force(wrap_sub(&nc.sub, nc.field_sum.clone()));
             let ctor_cases: Vec<Span<String>> = match &field_sum {
-                Val::Sum(_, _, cs) => cs.clone(),
+                Val::Sum(_, _, cs) => (**cs).clone(),
                 _ => continue,
             };
             for ctor in ctor_cases {
