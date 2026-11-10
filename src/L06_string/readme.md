@@ -122,10 +122,12 @@ L06 在 L05（typed metas + pruning）之上加 **String 字面量类型**、
   掩码产**内先序**（`prune_ty_bump` 的 `mask_inner_first` 契约）。
 - 文件 IO builtin 做真实文件系统副作用；测试里写删固定文件名的用例经
   `FILE_IO_LOCK` 串行（Windows 并行线程的句柄竞争会让删除报 os error 5）。
-- **名字表仍写时复制**：`src_names` 插入走 `Rc::make_mut`，父 cxt 仍持有的
-  常态下整表克隆一次（键 `String`，每条目一次 malloc）⇒ `define` 链上仍是
-  O(n)/次（strchain k=11 残差主体）。彻底去掉要平铺共享表 + 撤销轨迹
-  （快版 `name_map`+trail 的口径），属表示变更，未做。
+- **名字表 = 共享表 + 撤销轨迹**（2026-11-10）：`src_names` 改为
+  `NameState{map,trail}` + `Cxt.name_mark`，`bind/define` 只做一次 insert +
+  一次轨迹 push（O(1) 摊还），lookup 前按 mark 惰性回滚；父子 Cxt 不再因
+  `Rc::make_mut` 整表克隆。新增名字读点必须走 `lookup_src`/`has_src`，不要直接
+  borrow map；release 依赖深度优先作用域纪律（debug 有 mark 断言）。
+  快版 `name_map+trail` 与参考版现在是同一设计口径。
 
 ## 怎么跑
 
@@ -165,17 +167,13 @@ k=11  n=4096    fast=9.8ms*          basic=5338ms       (≈540×)
 k=12  n=8192    fast=21.6ms*         basic=35174ms      (≈1630×)
 ```
 
-church/solve 上快版稳定领先 10~20×；**strchain 是 L06 的主展示负载**——
-参考版每次 define 克隆 `src_names`（O(n)/次 → O(n²) 全局）+ prim 触发链
-的求值开销，快版 name_map+trail 与稳态复用把曲线拉回近线性，n=16384 时
-领先 **≈870×**。implicit/prune 的参考版超线性与 L05 readme 的「已知限制」
-同款（telescope 物化），快版保持近线性（implicit n=16384 仅 27ms）。
-（2026-09-20：参考版 `Locals` 脊/载荷与 `src_names` 已 Rc 化（前者消掉
-`bind`/`define`/`Cxt::clone` 的整链深拷、后者消掉 `new_binder`/`Cxt::clone`
-的整表克隆），并对「无 Bind 槽且闭类型不读 env/decl 表」的 `fresh_meta` 走
-等价快捷：strchain k=11 1221 → 180 ms、global k=11 4382 → 318 ms、
-implicit k=9 2350 → 30.7 ms。define 的 `Rc::make_mut` 整表克隆残留仍在
-（键是 `String`，每条目一次 malloc），见「已知限制与偏差」。）
+church/solve 上快版稳定领先 10~20×；**strchain 是 L06 的主展示负载**。
+（2026-09-20：参考版 `Locals` 脊/载荷与 `src_names` 已 Rc 化，并对「无 Bind
+槽且闭类型不读 env/decl 表」的 `fresh_meta` 走等价快捷：strchain k=11
+1221 → 180 ms、global k=11 4382 → 318 ms、implicit k=9 2350 → 30.7 ms。）
+（2026-11-10：`src_names` 升到 `NameState{map,trail}` 后，`define` 的整表 COW
+残差也消掉；同批交错 A/B：strchain k=9 **−60%**、global k=9 **−68%**，
+church 持平；参考版 strchain/global 曲线进一步接近线性。）
 
 ## 负载族（l06bench）
 
