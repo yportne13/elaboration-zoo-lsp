@@ -87,7 +87,7 @@ impl Infer {
                     *t,
                     self.closure_apply(decl, &b_closure, Val::vvar(cxt.lvl)),
                 )?;
-                Ok(Tm::Lam(x, i_t, Box::new(body)))
+                Ok(Tm::Lam(x, i_t, Rc::new(body)))
             }
             // 非 λ 项 against 隐式 Π：插入一个隐式绑定器
             (t, Val::Pi(x, Icit::Impl, a, b_closure)) => {
@@ -96,7 +96,7 @@ impl Infer {
                     t,
                     self.closure_apply(decl, &b_closure, Val::vvar(cxt.lvl)),
                 )?;
-                Ok(Tm::Lam(x, Icit::Impl, Box::new(body)))
+                Ok(Tm::Lam(x, Icit::Impl, Rc::new(body)))
             }
             // let
             (Raw::Let(x, a, t, u), a_prime) => {
@@ -198,7 +198,7 @@ impl Infer {
                 let cxt2 = cxt.bind(x.clone(), self.quote(cxt.decl(), cxt.lvl, a_eval.clone()), a_eval);
                 self.ty_precheck(&cxt2, &b)?;
                 let b_checked = self.check(&cxt2, *b, Val::U)?;
-                Ok(Tm::Pi(x, i, Box::new(a_checked), Box::new(b_checked)))
+                Ok(Tm::Pi(x, i, Rc::new(a_checked), Rc::new(b_checked)))
             }
             t => {
                 self.ty_precheck(cxt, &t)?;
@@ -593,7 +593,7 @@ impl Infer {
                 let (t_inferred, b) = self.insert(&new_cxt, infered)?;
                 let b_closure = self.close_val(decl, cxt, b);
                 Ok((
-                    Tm::Lam(x.clone(), i, Box::new(t_inferred)),
+                    Tm::Lam(x.clone(), i, Rc::new(t_inferred)),
                     Val::Pi(x, i, Box::new(a), b_closure),
                 ))
             }
@@ -672,7 +672,7 @@ impl Infer {
                     *b,
                 )?;
                 Ok((
-                    Tm::Pi(x, i, Box::new(a_checked), Box::new(b_checked)),
+                    Tm::Pi(x, i, Rc::new(a_checked), Rc::new(b_checked)),
                     Val::U,
                 ))
             }
