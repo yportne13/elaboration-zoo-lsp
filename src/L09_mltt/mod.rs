@@ -172,29 +172,29 @@ impl std::fmt::Debug for Closure {
 pub enum Val {
     Flex(MetaVar, Spine),
     Rigid(Lvl, Spine),
-    Obj(Box<Val>, Span<String>, Spine),
+    Obj(Rc<Val>, Span<String>, Spine),
     Lam(Span<String>, Icit, Closure),
-    Pi(Span<String>, Icit, Box<VTy>, Closure),
+    Pi(Span<String>, Icit, Rc<VTy>, Closure),
     U(u32),
     LiteralType,
     LiteralIntro(Span<String>),
     Prim,
     Sum(
         Span<String>,
-        Vec<(Span<String>, Rc<Val>, Rc<VTy>, Icit)>,
-        Vec<Span<String>>
+        Rc<Vec<(Span<String>, Rc<Val>, Rc<VTy>, Icit)>>,
+        Rc<Vec<Span<String>>>,
     ),
     SumCase {
         typ: Rc<Val>,
         case_name: Span<String>,
-        datas: Vec<(Span<String>, Rc<Val>, Icit)>,
+        datas: Rc<Vec<(Span<String>, Rc<Val>, Icit)>>,
     },
-    Match(Box<Val>, Env, Vec<(PatternDetail, Tm)>),
+    Match(Rc<Val>, Env, Rc<Vec<(PatternDetail, Tm)>>),
     /// 显式替换下的值（模式精化，dpm-nbe `VSub`）：特化解不改写既有值，
     /// 只把解包在外面；`force` 在读点把 σ 推进值的结构（[`Infer::frcs`]，
     /// 对齐 dpm-nbe 的 `frcS`）。不变式：`force` 的返回值顶层不会是
     /// VSub（fuel 耗尽的降级点在 frcs 的 lookup 命中处，返回裸 rigid）。
-    VSub(Box<Val>, Rc<Subst>),
+    VSub(Rc<Val>, Rc<Subst>),
 }
 
 /// 模式特化的解：层级 → 值 的**持久化单链**（dpm-nbe 的 explicit
@@ -237,7 +237,7 @@ impl Subst {
                 return Some(if !Self::mentions_level(&e.val, self) {
                     e.val.clone()
                 } else {
-                    Val::VSub(Box::new(e.val.clone()), self.clone())
+                    Val::VSub(Rc::new(e.val.clone()), self.clone())
                 });
             }
             cur = e.next.clone();
@@ -336,7 +336,7 @@ pub(crate) fn wrap_sub(sub: &Rc<Subst>, v: Val) -> Val {
     if sub.is_empty() {
         v
     } else {
-        Val::VSub(Box::new(v), sub.clone())
+        Val::VSub(Rc::new(v), sub.clone())
     }
 }
 
@@ -562,7 +562,7 @@ impl Infer {
             // 不烧 fuel——真正的精化传播只发生在被解变量的读点（frcs 的
             // Rigid 臂 lookup 命中时烧 1）。fuel 耗尽的降级点也在该处
             // （返回裸 rigid）。
-            Val::VSub(v, sub) => self.frcs(&sub, *v),
+            Val::VSub(v, sub) => self.frcs(&sub, (*v).clone()),
             _ => t,
         }
     }
@@ -579,7 +579,7 @@ impl Infer {
             // 内层先应用、外层后应用：组合后一次推进（frcS (subst sb sb') v）
             Val::VSub(v2, sub2) => {
                 let composed = Subst::compose(sub, &sub2);
-                self.frcs(&composed, *v2)
+                self.frcs(&composed, (*v2).clone())
             }
             // 被解变量的读点：lookup 命中（真正的精化传播）烧 1 fuel；fuel
             // 耗尽按未解处理（返回裸 rigid，有界降级）。未命中零成本直通。
@@ -609,7 +609,7 @@ impl Infer {
             // 交回 force 重走既有解链臂。
             Val::Flex(m, sp) => self.force(Val::Flex(m, self.wrap_sp(sub, sp))),
             Val::Obj(o, name, sp) => self.force(Val::Obj(
-                Box::new(self.frcs(sub, *o)),
+                Rc::new(self.frcs(sub, (*o).clone())),
                 name,
                 self.wrap_sp(sub, sp),
             )),
@@ -618,23 +618,25 @@ impl Infer {
             Val::Pi(x, i, a, cl) => Val::Pi(
                 x,
                 i,
-                Box::new(self.frcs(sub, *a)),
+                Rc::new(self.frcs(sub, (*a).clone())),
                 Closure(self.frcs_env(sub, &cl.0), cl.1),
             ),
             // Sum/SumCase 的槽位同样只包裹
             Val::Sum(name, params, cases) => Val::Sum(
                 name,
-                params
-                    .into_iter()
-                    .map(|(n, v, t, i)| {
-                        (
-                            n,
-                            Rc::new(wrap_sub(sub, rc_take(v))),
-                            Rc::new(wrap_sub(sub, rc_take(t))),
-                            i,
-                        )
-                    })
-                    .collect(),
+                Rc::new(
+                    params
+                        .iter()
+                        .map(|(n, v, t, i)| {
+                            (
+                                n.clone(),
+                                Rc::new(wrap_sub(sub, rc_take(v.clone()))),
+                                Rc::new(wrap_sub(sub, rc_take(t.clone()))),
+                                *i,
+                            )
+                        })
+                        .collect::<Vec<_>>(),
+                ),
                 cases,
             ),
             Val::SumCase {
@@ -644,17 +646,19 @@ impl Infer {
             } => Val::SumCase {
                 typ: Rc::new(wrap_sub(sub, rc_take(typ))),
                 case_name,
-                datas: datas
-                    .into_iter()
-                    .map(|(n, v, i)| (n, Rc::new(wrap_sub(sub, rc_take(v))), i))
-                    .collect(),
+                datas: Rc::new(
+                    datas
+                        .iter()
+                        .map(|(n, v, i)| (n.clone(), Rc::new(wrap_sub(sub, rc_take(v.clone()))), *i))
+                        .collect::<Vec<_>>(),
+                ),
             },
             // scrutinee **推进**（重选分支需要解出的构造子值——L09 的
             // eval/force 无 Match 重选臂，分支重选发生在 eval 的 Tm::Match
             // 臂：scrutinee 经 force 推开 σ 后若是构造子值即选分支）；捕获
             // env 只包裹。
             Val::Match(s, env, cases) => Val::Match(
-                Box::new(self.frcs(sub, *s)),
+                Rc::new(self.frcs(sub, (*s).clone())),
                 self.frcs_env(sub, &env),
                 cases,
             ),
@@ -674,7 +678,7 @@ impl Infer {
         if sub.is_empty() {
             return env.clone();
         }
-        env.map(|v| Val::VSub(Box::new(v.clone()), sub.clone()))
+        env.map(|v| Val::VSub(Rc::new(v.clone()), sub.clone()))
     }
 
     /// 合一器**参数视角**的 WHNF：与 force 相同，但不推开 VSub 精化包裹、
@@ -761,7 +765,7 @@ impl Infer {
             Tm::Pi(x, i, a, b) => Val::Pi(
                 x,
                 i,
-                Box::new(self.eval(env, *a)),
+                Rc::new(self.eval(env, *a)),
                 Closure(env.clone(), Rc::new(*b)),
             ),
             // 拥有 cases 的入口：选中臂借用求值（不拷分支体），卡住时 cases
@@ -773,7 +777,7 @@ impl Infer {
                         let (body, env2) = Compiler::eval_aux(self, &val, env, &cases).unwrap();
                         self.eval_ref(&env2, body)
                     }
-                    neutral => Val::Match(Box::new(neutral), env.clone(), cases),
+                    neutral => Val::Match(Rc::new(neutral), env.clone(), Rc::new(cases)),
                 }
             }
             tm => self.eval_ref(env, &tm),
@@ -807,9 +811,9 @@ impl Infer {
                 };
                 match recv {
                     Val::Sum(_, params, _) => {
-                        params.into_iter()
-                            .find(|(f_name, _, _, _)| f_name == name)
-                            .map(|x| rc_take(x.1))
+                        params.iter()
+                            .find(|p| &p.0 == name)
+                            .map(|p| rc_take(p.1.clone()))
                             .unwrap()
                     },
                     Val::SumCase { datas, typ, .. } => {
@@ -818,16 +822,15 @@ impl Infer {
                         (match self.force(rc_take(typ)) {
                             Val::Sum(_, params, _) => params,
                             t => panic!("impossible {t:?}"),
-                        }).into_iter()
-                            .map(|x| (x.0, x.1, x.3))
-                            .chain(datas)
-                        //datas.into_iter()
+                        }).iter()
+                            .map(|x| (x.0.clone(), x.1.clone(), x.3))
+                            .chain(datas.iter().cloned())
                             .find(|(f_name, _, _)| f_name == name)
                             .map(|x| rc_take(x.1))
                             .unwrap()
                     },
                     x @ Val::Rigid(_, _) => {
-                        Val::Obj(Box::new(x), name.clone(), List::new())
+                        Val::Obj(Rc::new(x), name.clone(), List::new())
                     }
                     x => panic!("impossible {x:?}"),
                 }
@@ -841,7 +844,7 @@ impl Infer {
             Tm::Pi(x, i, a, b) => Val::Pi(
                 x.clone(),
                 *i,
-                Box::new(self.eval_ref(env, a)),
+                Rc::new(self.eval_ref(env, a)),
                 Closure(env.clone(), Rc::new((**b).clone())),
             ),
             Tm::Let(_, _, t, u) => {
@@ -876,7 +879,7 @@ impl Infer {
                         )
                     })
                     .collect();
-                Val::Sum(name.clone(), new_params, cases.clone())
+                Val::Sum(name.clone(), Rc::new(new_params), Rc::new(cases.clone()))
             }
             Tm::SumCase {
                 typ,
@@ -891,7 +894,7 @@ impl Infer {
                 Val::SumCase {
                     typ: Rc::new(typ),
                     case_name: case_name.clone(),
-                    datas,
+                    datas: Rc::new(datas),
                 }
             }
             Tm::Match(tm, cases) => {
@@ -899,13 +902,13 @@ impl Infer {
                 let val = self.force(val);
                 match val {
                     val @ Val::SumCase { .. } => {
-                        let (body, env2) = Compiler::eval_aux(self, &val, env, cases).unwrap();
+                        let (body, env2) = Compiler::eval_aux(self, &val, env, &cases[..]).unwrap();
                         self.eval_ref(&env2, body)
                     }
                     neutral => {
                         // 借用路径下卡住值必须持有 owned cases：深拷只发生在
                         // "match 卡住"这一枝（选中臂热路径不再拷分支体）。
-                        Val::Match(Box::new(neutral), env.clone(), cases.clone())
+                        Val::Match(Rc::new(neutral), env.clone(), Rc::new(cases.clone()))
                     }
                 }
             }
@@ -942,10 +945,10 @@ impl Infer {
         match t {
             // 正常路径 force 后顶层不会是 VSub；fuel 耗尽时 force 原样返回
             // VSub——解包打印内层（σ 未推开，保真度同旧版"打印未展开 rigid"）。
-            Val::VSub(v, _) => self.quote(l, *v),
+            Val::VSub(v, _) => self.quote(l, (*v).clone()),
             Val::Flex(m, sp) => self.quote_sp(l, Tm::Meta(m), sp),
             Val::Rigid(x, sp) => self.quote_sp(l, Tm::Var(lvl2ix(l, x)), sp),
-            Val::Obj(x, name, sp) => self.quote_sp(l, Tm::Obj(Box::new(self.quote(l, *x)), name), sp),
+            Val::Obj(x, name, sp) => self.quote_sp(l, Tm::Obj(Box::new(self.quote(l, (*x).clone())), name), sp),
             Val::Lam(x, i, closure) => Tm::Lam(
                 x,
                 i,
@@ -954,7 +957,7 @@ impl Infer {
             Val::Pi(x, i, a, closure) => Tm::Pi(
                 x,
                 i,
-                Box::new(self.quote(l, *a)),
+                Box::new(self.quote(l, (*a).clone())),
                 Box::new(self.quote(l + 1, self.closure_apply(&closure, Val::vvar(l)))),
             ),
             Val::U(x) => Tm::U(x),
@@ -962,12 +965,12 @@ impl Infer {
             Val::LiteralType => Tm::LiteralType,
             Val::Prim => Tm::Prim,
             Val::Sum(name, params, cases) => {
-                let new_params = params.into_iter()
+                let new_params = params.iter()
                     .map(|x| {
-                        (x.0, self.quote(l, rc_take(x.1)), self.quote(l, rc_take(x.2)), x.3)
+                        (x.0.clone(), self.quote(l, rc_take(x.1.clone())), self.quote(l, rc_take(x.2.clone())), x.3)
                     })
                     .collect();
-                Tm::Sum(name, new_params, cases)
+                Tm::Sum(name, new_params, (*cases).clone())
             }
             Val::SumCase {
                 typ,
@@ -975,9 +978,9 @@ impl Infer {
                 datas,
             } => {
                 let datas = datas
-                    .into_iter()
+                    .iter()
                     .map(|p| {
-                        (p.0, self.quote(l, rc_take(p.1)), p.2)
+                        (p.0.clone(), self.quote(l, rc_take(p.1.clone())), p.2)
                     })
                     .collect();
                 Tm::SumCase {
@@ -996,7 +999,7 @@ impl Infer {
                     })
                     .collect();*/
                 let tm_cases = cases
-                    .into_iter()
+                    .iter()
                     .map(|x| (
                         x.0.clone(),
                         {
@@ -1004,12 +1007,12 @@ impl Infer {
                                 .fold(env.clone(), |env, x| env.prepend(Val::vvar(l + x)));
                             // 分支体在中性全局视图下重求值（全局名字不再展开，
                             // 免递归）——`eval_neutral` 取代旧的整机克隆
-                            let tm = self.eval_neutral(&env, x.1);
+                            let tm = self.eval_neutral(&env, x.1.clone());
                             self.quote(l+x.0.bind_count(), tm)
                         }
                     ))
                     .collect();
-                Tm::Match(Box::new(self.quote(l, *val)), tm_cases)
+                Tm::Match(Box::new(self.quote(l, (*val).clone())), tm_cases)
             }
         }
     }

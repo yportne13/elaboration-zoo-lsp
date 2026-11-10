@@ -77,7 +77,7 @@ impl Cxt {
                 Val::Pi(
                     empty_span("x".to_owned()),
                     Icit::Expl,
-                    Box::new(Val::LiteralType),
+                    Rc::new(Val::LiteralType),
                     Closure(
                         List::new().prepend(Val::LiteralType),
                         Rc::new(Tm::Pi(
@@ -168,7 +168,7 @@ impl Cxt {
         if sub.is_empty() {
             return self.clone();
         }
-        let wrap = |v: &Val| Val::VSub(Box::new(v.clone()), sub.clone());
+        let wrap = |v: &Val| Val::VSub(Rc::new(v.clone()), sub.clone());
         let mut src_names = BiMap::new();
         for (k, l, ty) in self.src_names.iter_all() {
             src_names.insert(k.clone(), (*l, Rc::new(wrap(&**ty))));

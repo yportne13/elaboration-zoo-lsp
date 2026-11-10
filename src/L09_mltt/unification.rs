@@ -123,7 +123,7 @@ impl Infer {
         match (rev.split_first(), self.force(a)) {
             (None, a) => self.rename(pren, a),
             (Some((Some(_), rest)), Val::Pi(x, i, a, b)) => {
-                let a = self.rename(pren, *a)?;
+                let a = self.rename(pren, (*a).clone())?;
                 let b = self.closure_apply(&b, Val::vvar(pren.cod));
                 let b = self.prune_ty_go(rest, &lift(pren), b)?;
                 Ok(Tm::Pi(x, i, Box::new(a), Box::new(b)))
@@ -284,7 +284,7 @@ impl Infer {
                 }
             },
             Val::Obj(x, name, sp) => {
-                let t = self.rename(pren, *x)?;
+                let t = self.rename(pren, (*x).clone())?;
                 let t = Tm::Obj(Box::new(t), name.clone());
                 self.rename_sp(pren, t, &sp)
             },
@@ -296,7 +296,7 @@ impl Infer {
                 Ok(Tm::Lam(x, i, Box::new(t)))
             }
             Val::Pi(x, i, a, closure) => {
-                let a = self.rename(pren, *a)?;
+                let a = self.rename(pren, (*a).clone())?;
                 let b = self.rename(
                     &lift(pren),
                     self.closure_apply(&closure, Val::vvar(pren.cod)),
@@ -309,18 +309,18 @@ impl Infer {
             Val::Prim => Ok(Tm::Prim),
             Val::Sum(x, params, cases) => {
                 let new_params = params
-                    .into_iter()
+                    .iter()
                     .map(|x| {
                         match (
-                            self.rename(pren, super::rc_take(x.1)),
-                            self.rename(pren, super::rc_take(x.2)),
+                            self.rename(pren, super::rc_take(x.1.clone())),
+                            self.rename(pren, super::rc_take(x.2.clone())),
                         ) {
-                            (Ok(a), Ok(b)) => Ok((x.0, a, b, x.3)),
+                            (Ok(a), Ok(b)) => Ok((x.0.clone(), a, b, x.3)),
                             (Err(x), _) | (_, Err(x)) => Err(x),
                         }
                     })
                     .collect::<Result<_, _>>()?;
-                Ok(Tm::Sum(x, new_params, cases))
+                Ok(Tm::Sum(x, new_params, cases.to_vec()))
             }
             Val::SumCase {
                 typ,
@@ -329,10 +329,10 @@ impl Infer {
             } => {
                 let typ = self.rename(pren, super::rc_take(typ))?;
                 let params = params
-                    .into_iter()
+                    .iter()
                     .map(|p| {
-                        let z = self.rename(pren, super::rc_take(p.1))?;
-                        Ok((p.0, z, p.2))
+                        let z = self.rename(pren, super::rc_take(p.1.clone()))?;
+                        Ok((p.0.clone(), z, p.2))
                     })
                     .collect::<Result<_, _>>()?;
                 Ok(Tm::SumCase {
@@ -342,9 +342,9 @@ impl Infer {
                 })
             }
             Val::Match(val, env, cases) => {
-                let val = self.rename(pren, *val)?;
+                let val = self.rename(pren, (*val).clone())?;
                 let cases = cases
-                    .into_iter()
+                    .iter()
                     .map(|(pat, tm)| {
                         let (env, pren) = (0..pat.bind_count())
                             .fold((env.clone(), pren.clone()), |(env, pren), _| (
@@ -355,9 +355,9 @@ impl Infer {
                         // 递归）——取代旧的整机克隆 + 就地改写 global 表
                         let body = self.rename(
                             &pren,
-                            self.eval_neutral(&env, tm),
+                            self.eval_neutral(&env, tm.clone()),
                         )?;
-                        Ok((pat, body))
+                        Ok((pat.clone(), body))
                     })
                     .collect::<Result<_, _>>()?;
                 Ok(Tm::Match(Box::new(val), cases))
@@ -568,7 +568,7 @@ impl Infer {
         match (&t, &u) {
             (Val::U(x), Val::U(y)) if x == y => Ok(()),
             (Val::Pi(x, i, a, b), Val::Pi(_, i_prime, a_prime, b_prime)) if i == i_prime => {
-                self.unify(l, cxt, *a.clone(), *a_prime.clone(), spec.as_deref_mut())?;
+                self.unify(l, cxt, (**a).clone(), (**a_prime).clone(), spec.as_deref_mut())?;
                 self.unify(
                     l + 1,
                     // quote 用**当前层级 l**而不是 cxt.lvl：Lam 的 η 递归臂
@@ -576,7 +576,7 @@ impl Infer {
                     // 的不变式在那里就会破——用 cxt.lvl quote 会把 `Rigid(l)`
                     // 打越界（lvl2ix 下溢）。cxt 只服务显示名字表，名字对不上
                     // 时 go_ix 有 `@i` 兜底。（L08 评审修复回移，见其 README §5。）
-                    &cxt.bind(x.clone(), self.quote(l, *a.clone()), *a.clone()),
+                    &cxt.bind(x.clone(), self.quote(l, (**a).clone()), (**a).clone()),
                     self.closure_apply(b, Val::vvar(l)),
                     self.closure_apply(b_prime, Val::vvar(l)),
                     spec.as_deref_mut(),
@@ -694,7 +694,7 @@ impl Infer {
             }
             (Val::Match(s1, env1, cases1), Val::Match(s2, env2, cases2)) => {
                 // 1. 合一 scrutinees
-                self.unify(l, cxt, *s1.clone(), *s2.clone(), spec.as_deref_mut())?;
+                self.unify(l, cxt, (**s1).clone(), (**s2).clone(), spec.as_deref_mut())?;
 
                 // 2. 检查分支数量是否相同
                 if cases1.len() != cases2.len() {
