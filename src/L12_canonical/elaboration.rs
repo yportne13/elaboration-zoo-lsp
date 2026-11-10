@@ -301,7 +301,9 @@ impl Infer {
                 let va = self.eval(&cxt.decl, &cxt.env, &a_checked);
                 let t_checked = self.check::<CANONICAL>(cxt, *t, &va)?;
                 let vt = self.eval(&cxt.decl, &cxt.env, &t_checked);
-                self.hover_table.push((x.to_span(), x.to_span(), cxt.clone_without_src_names(), va.clone()));
+                if self.collect_observations {
+                    self.hover_table.push((x.to_span(), x.to_span(), cxt.clone_without_src_names(), va.clone()));
+                }
                 let u_checked = self.check::<CANONICAL>(
                     &cxt.define(x.clone(), t_checked.clone(), vt, a_checked.clone(), va.clone()),
                     *u,
@@ -884,12 +886,16 @@ impl Infer {
             Raw::Var(name) => match cxt.lookup_src(&name.data) {
                 Some(e) => {
                     let (x, a) = e.as_ref();
-                    self.hover_table.push((t_span, a.0, cxt.clone_without_src_names(), a.1.clone()));
+                    if self.collect_observations {
+                        self.hover_table.push((t_span, a.0, cxt.clone_without_src_names(), a.1.clone()));
+                    }
                     Ok((Tm::Var(lvl2ix(cxt.lvl, *x)).into(), a.1.clone()))
                 },
                 None => match cxt.decl.get(&name.data) {
                     Some((def, _, _, _, vty)) => {
-                        self.hover_table.push((t_span, *def, cxt.clone_without_src_names(), vty.clone()));
+                        if self.collect_observations {
+                            self.hover_table.push((t_span, *def, cxt.clone_without_src_names(), vty.clone()));
+                        }
                         Ok((Tm::Decl(name).into(), vty.clone()))
                     },
                     None => {
@@ -938,7 +944,7 @@ impl Infer {
                                 }
                             }
                         }
-                        if t.data.is_empty() {
+                        if t.data.is_empty() && self.collect_observations {
                             c.iter()
                                 .flatten()
                                 .map(|x| (t_span, x.0.data.clone()))
@@ -1093,7 +1099,9 @@ impl Infer {
                 let va = self.eval(&cxt.decl, &cxt.env, &a_checked);
                 let t_checked = self.check::<false>(cxt, *t, &va)?;
                 let vt = self.eval(&cxt.decl, &cxt.env, &t_checked);
-                self.hover_table.push((x.to_span(), x.to_span(), cxt.clone_without_src_names(), va.clone()));
+                if self.collect_observations {
+                    self.hover_table.push((x.to_span(), x.to_span(), cxt.clone_without_src_names(), va.clone()));
+                }
                 let (u_inferred, b) = self.infer_expr(
                     &cxt.define(
                         x.clone(),
@@ -1172,7 +1180,7 @@ impl Infer {
         // Wildcard Val: Flex metavariables match anything in val_eq
         let wildcard_val: Rc<Val> = Val::Flex(MetaVar(u32::MAX), List::new()).into();
 
-        if t.data.is_empty() {
+        if t.data.is_empty() && self.collect_observations {
             // Collect completions: find traits whose first non-out param could match typ_raw
             let trait_defs = self.trait_definition.clone();
             let completions: Vec<_> = trait_defs.iter()
