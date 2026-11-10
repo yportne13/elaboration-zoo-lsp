@@ -8,7 +8,7 @@
 
 | 层 | 改动 | 备注 |
 |---|---|---|
-| L07 | `deef97f7` `check_ty` 按值 move Pi Raw；`87924b00` 无注解 let 直接推导 binder 类型（免 fresh_meta/close_ty） | 深 let n=1000 **168→2.4ms**（近线性）；深 λ 仍剩 eval body 深 clone，见 §3 |
+| L07 | `deef97f7` `check_ty` 按值 move Pi Raw；`87924b00` 无注解 let 直接推导 binder 类型；`2d4eb32c` `Tm::Lam/Pi` body 改 `Rc<Tm>`（消 eval 深拷） | 深 let n=1000 **168→2.4ms**；深 λ n=1000 **~223→3.0ms**（均近线性） |
 | L08 | Locals `Box→Rc`、FxHashMap、decl 表就地 COW、`src_names` NameState+trail | 4 项，累计 strchain 13.2×/global 7.8×/struct 7.8× |
 | L09/L10 | FxHashMap（global/PartialRenaming/Trait/Synth 等）+ 穷尽 match 跳过覆盖探测（U2） | L09 match −7~−9%；L10 match k11 −8.9% |
 | L11 | FxHashMap、decl COW、name_map+trail | macro 14.9×、struct 16.2×；`hover_table` 观察表加 `collect_observations` 门控 |
@@ -60,10 +60,11 @@ deep 探针 check-only 仍 4.1–4.6×/翻倍；计数排除名字表（unwind O
 2. **无注解 let 的 `fresh_meta`/`close_ty`**：`87924b00` 直接 `infer_expr` 推导
    binder 类型，不再为每个 hole 造闭合 meta；深 let n=250/500/1000 =
    0.42/0.85/2.44ms（原 ~10.3/40.6/168.5ms），**该 O(n²) 已消**。
-3. **剩余（未修）**：显式 hole/其它 fresh_meta 仍走 `close_ty`；深 λ 的
-   `eval(Tm::Lam/Pi)` 仍把剩余 body `Rc::new((**t).clone())` 深拷（O(n²)），
-   `check_nf` 在 n=1000 仍约 220–290ms（4×/翻倍）；`eval(Tm::Var)` 的
-   `env.iter().nth` 是潜在 O(depth)/变量。
+3. **深 λ 的 `eval(Tm::Lam/Pi)` body 深拷**：`2d4eb32c` 把 `Tm::Lam` body 与
+   `Tm::Pi` 域/余域改为 `Rc<Tm>`，eval 的 Closure 直接共享；深 λ
+   n=250/500/1000 = **0.80/1.54/3.03ms**（原 ~12/54/223ms，近线性）。
+   仍剩：显式 hole/其它 `fresh_meta` 仍走 `close_ty`（非深 λ/let 主链）；
+   `eval(Tm::Var)` 的 `env.iter().nth` 是潜在 O(depth)/变量。
 4. **错误修法（已回滚，不落本分支）**：fresh_meta 若 quote 类型无自由局部变量
    就跳过 close_ty → L07 lib **26 failed**，说明 close_ty 的 telescope 语义不能
    跳过；剩余项需要 lazy/open meta 类型或共享上下文 telescope 的设计。
