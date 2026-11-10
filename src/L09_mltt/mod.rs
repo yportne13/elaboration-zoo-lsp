@@ -764,6 +764,18 @@ impl Infer {
                 Box::new(self.eval(env, *a)),
                 Closure(env.clone(), Rc::new(*b)),
             ),
+            // 拥有 cases 的入口：选中臂借用求值（不拷分支体），卡住时 cases
+            // 直接 move 进 Val::Match（借用路径才需要 clone，见 eval_ref）。
+            Tm::Match(tm, cases) => {
+                let val = self.force(self.eval(env, *tm));
+                match val {
+                    val @ Val::SumCase { .. } => {
+                        let (body, env2) = Compiler::eval_aux(self, &val, env, &cases).unwrap();
+                        self.eval_ref(&env2, body)
+                    }
+                    neutral => Val::Match(Box::new(neutral), env.clone(), cases),
+                }
+            }
             tm => self.eval_ref(env, &tm),
         }
     }
@@ -887,10 +899,12 @@ impl Infer {
                 let val = self.force(val);
                 match val {
                     val @ Val::SumCase { .. } => {
-                        let (tm, env) = Compiler::eval_aux(self, &val, env, cases).unwrap();
-                        self.eval(&env, tm)
+                        let (body, env2) = Compiler::eval_aux(self, &val, env, cases).unwrap();
+                        self.eval_ref(&env2, body)
                     }
                     neutral => {
+                        // 借用路径下卡住值必须持有 owned cases：深拷只发生在
+                        // "match 卡住"这一枝（选中臂热路径不再拷分支体）。
                         Val::Match(Box::new(neutral), env.clone(), cases.clone())
                     }
                 }
