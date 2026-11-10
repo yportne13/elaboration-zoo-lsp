@@ -671,7 +671,7 @@ impl Infer {
                             // 分支选中：先在值层应用卡住期累积的实参（值无需
                             // quote，作用域天然正确；项层 splice 会把实参的
                             // 自由变量引到错误上下文）。
-                            let mut v = self.eval(decl, &env2, tm);
+                            let mut v = self.eval_ref(decl, &env2, tm);
                             for (u, i) in pending.iter().cloned() {
                                 v = self.v_app(decl, v, u, i);
                             }
@@ -1171,91 +1171,110 @@ impl Infer {
     }
 
     fn eval(&self, decl: &Decls, env: &Env, tm: Tm) -> Val {
+        self.eval_ref(decl, env, &tm)
+    }
+
+    fn eval_ref(&self, decl: &Decls, env: &Env, tm: &Tm) -> Val {
         match tm {
             Tm::Var(x) => match env.iter().nth(x.0 as usize) {
                 Some(v) => v.clone(),
                 None => panic!("unbound de Bruijn index {x:?}"),
             },
-            Tm::Decl(name) => match decl.get(&name) {
+            Tm::Decl(name) => match decl.get(name) {
                 Some(e) if e.prim.is_some() => Val::Decl(name.clone(), List::new()),
                 Some(e) => e.val.clone(),
                 None => panic!("unbound global {name}"),
             },
             Tm::Obj(tm, name) => {
-                let v = self.eval(decl, env, *tm);
-                match project(&v, &name) {
+                let v = self.eval_ref(decl, env, tm);
+                match project(&v, name) {
                     Some(p) => p,
-                    None => Val::Obj(Box::new(v), name, List::new()),
+                    None => Val::Obj(Box::new(v), name.clone(), List::new()),
                 }
             }
             Tm::App(t, u, i) => {
-                let u_val = self.eval(decl, env, *u);
-                self.v_app(decl, self.eval(decl, env, *t), u_val, i)
+                let u_val = self.eval_ref(decl, env, u);
+                self.v_app(decl, self.eval_ref(decl, env, t), u_val, *i)
             }
-            Tm::Lam(x, i, t) => Val::Lam(x, i, Closure(env.clone(), t)),
-            Tm::Pi(x, i, a, b) => Val::Pi(x, i, Box::new(self.eval(decl, env, (*a).clone())), Closure(env.clone(), b)),
+            Tm::Lam(x, i, t) => {
+                // body 已是 Rc：closure 直接共享，不再深拷剩余 λ 链（O(n²)）。
+                Val::Lam(x.clone(), *i, Closure(env.clone(), t.clone()))
+            }
+            Tm::Pi(x, i, a, b) => Val::Pi(
+                x.clone(),
+                *i,
+                Box::new(self.eval_ref(decl, env, a)),
+                Closure(env.clone(), b.clone()),
+            ),
             Tm::Let(_, _, t, u) => {
-                let t_val = self.eval(decl, env, *t);
-                self.eval(decl, &env.prepend(t_val), *u)
+                let t_val = self.eval_ref(decl, env, t);
+                self.eval_ref(decl, &env.prepend(t_val), u)
             }
             Tm::U => Val::U,
-            Tm::Meta(m) => self.v_meta(m),
-            Tm::AppPruning(t, pr) => self.v_app_pruning(decl, env, self.eval(decl, env, *t), &pr),
-            Tm::LiteralIntro(x) => Val::LiteralIntro(x),
+            Tm::Meta(m) => self.v_meta(*m),
+            Tm::AppPruning(t, pr) => self.v_app_pruning(decl, env, self.eval_ref(decl, env, t), pr),
+            Tm::LiteralIntro(x) => Val::LiteralIntro(x.clone()),
             Tm::LiteralType => Val::LiteralType,
             Tm::Prim(name) => {
-                // 实参经 Lam 链进 env（最内 = 最后应用）：卡成带名字与实参
-                // spine 的 Prim。归约统一在 force（不在求值点按 env 触发——
-                // quote → eval 往返时项已改成 `Prim 实参` 的应用形态，按
-                // 现场 env 触发会把无关的字面量拼进来）。
-                let mut args: Vec<(Val, Icit)> =
-                    env.iter().map(|v| (v.clone(), Icit::Expl)).collect();
-                args.reverse(); // 应用序 → spine 头 = 最后应用
-                Val::Prim(
-                    name,
-                    args.into_iter().fold(List::new(), |acc, e| acc.prepend(e)),
-                )
+                // 零元卡住头：实参一律经 App 到达（builtin 值的 λ 链体是
+                // App 链，quote 产物也是 `Prim 实参` 应用形态）。**不读现场
+                // env**——旧实现把 env 全槽收集进 spine，只在"builtin λ 链
+                // 体"的正典路径下正确；quoted Prim 在其它 env 下重求值
+                // （fresh_meta 的 close_ty 闭包体、solve 的 lams、prune 的
+                // 类型重求值）会捕获无关 env 槽、spine 长度失真，unify_sp
+                // 长度失配即误报。归约统一在 force（prim_reduce）。
+                Val::Prim(name.clone(), List::new())
             }
             Tm::Sum(name, params, cases) => {
                 let new_params = params
-                    .into_iter()
+                    .iter()
                     .map(|(n, v, t, i)| {
                         (
-                            n,
-                            Rc::new(self.eval(decl, env, v)),
-                            Rc::new(self.eval(decl, env, t)),
-                            i,
+                            n.clone(),
+                            Rc::new(self.eval_ref(decl, env, v)),
+                            Rc::new(self.eval_ref(decl, env, t)),
+                            *i,
                         )
                     })
                     .collect();
-                Val::Sum(name, new_params, cases)
+                Val::Sum(name.clone(), new_params, cases.clone())
             }
             Tm::SumCase {
                 typ,
                 case_name,
                 datas,
             } => {
-                let typ = self.eval(decl, env, *typ);
+                let typ = self.eval_ref(decl, env, typ);
                 let datas = datas
-                    .into_iter()
-                    .map(|(n, v, i)| (n, Rc::new(self.eval(decl, env, v)), i))
+                    .iter()
+                    .map(|(n, v, i)| (n.clone(), Rc::new(self.eval_ref(decl, env, v)), *i))
                     .collect();
                 Val::SumCase {
                     typ: Rc::new(typ),
-                    case_name,
+                    case_name: case_name.clone(),
                     datas,
                 }
             }
             Tm::Match(tm, cases) => {
-                let val = self.force(decl, self.eval(decl, env, *tm));
+                let val = self.force(decl, self.eval_ref(decl, env, tm));
                 match val {
                     Val::SumCase { .. } => {
-                        match Compiler::eval_aux(self, decl, &val, env, &cases) {
-                            Some((body, env)) => self.eval(decl, &env, body),
-                            None => Val::Match(Box::new(val), env.clone(), cases, Vec::new()),
+                        match Compiler::eval_aux(self, decl, &val, env, cases) {
+                            Some((body, env)) => self.eval_ref(decl, &env, body),
+                            None => Val::Match(
+                                Box::new(val),
+                                env.clone(),
+                                cases.clone(),
+                                Vec::new(),
+                            ),
                         }
                     }
-                    neutral => Val::Match(Box::new(neutral), env.clone(), cases, Vec::new()),
+                    neutral => Val::Match(
+                        Box::new(neutral),
+                        env.clone(),
+                        cases.clone(),
+                        Vec::new(),
+                    ),
                 }
             }
         }
