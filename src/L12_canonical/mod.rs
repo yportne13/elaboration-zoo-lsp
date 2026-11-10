@@ -615,6 +615,12 @@ pub struct Infer {
     pub mutable_map: Rc<std::sync::RwLock<FxHashMap<String, Rc<Val>>>>,
     pub hover_table: Vec<(Span<()>, Span<()>, Cxt, Rc<Val>)>,
     pub completion_table: Vec<(Span<()>, SmolStr)>,
+    /// 是否收集 LSP 观察表（hover/completion）。L12 参考版没有 LSP 消费者
+    /// （全仓无 hover_table 读点；LSP 只接 L13）；bench/CLI 的 `run` 路径
+    /// 关掉收集——hover 条目 clone `Cxt` 从而**钉住 decl 表的 `Rc`**，使
+    /// `infer_owned` 的就地写退化为整表深拷贝（L07 无此表，故其 COW 移植
+    /// 无需处理；L11 的硬化 port 同样加了此闸，见 L11 mod.rs 同字段）。
+    collect_observations: bool,
     /// unify/force 共享 fuel 池（L08 同款）：外层入口（`nf`/`unify_catch`/
     /// canonical 探测点）充值；`unify` 递归与 `force` 的 meta 展开各烧 1，
     /// 耗尽时 unify 按不可合一失败、force 停止展开按未解处理。
@@ -632,8 +638,14 @@ impl Infer {
             mutable_map: Default::default(),
             hover_table: vec![],
             completion_table: vec![],
+            collect_observations: true,
             unify_fuel: std::cell::Cell::new(UNIFY_FUEL),
         }
+    }
+    /// 关掉 LSP 观察表收集（见 `collect_observations` 字段注释）：bench/
+    /// 非 LSP 路径用，避免 hover 条目 clone `Cxt` 钉住 decl 表 `Rc`。
+    pub fn set_collect_observations(&mut self, on: bool) {
+        self.collect_observations = on;
     }
     /// 烧 1 格 fuel；池空返回 `false`（调用方按各自失败语义降级）。
     fn burn_fuel(&self) -> bool {
@@ -1249,6 +1261,10 @@ impl Infer {
 #[allow(unused)]
 pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
     let mut infer = Infer::new();
+    // bench/非 LSP 全流程路径：不收集观察表（hover 条目 clone Cxt 会钉住
+    // decl 表 Rc，使 infer_owned 的就地写退化整表深拷贝；语义见
+    // Infer.collect_observations）。
+    infer.set_collect_observations(false);
     let ast = parser::parser(&preprocess(input), path_id).unwrap();
     let mut cxt = Cxt::new(&infer);
     let mut ret = String::new();
@@ -1290,6 +1306,8 @@ pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
 #[allow(unused)]
 pub fn run_with_prelude(input: &str) -> Result<String, Error> {
     let mut infer = Infer::new();
+    // 同 run：非 LSP 全流程入口不收集观察表（避免 hover 钉住 decl 表 Rc）。
+    infer.set_collect_observations(false);
     let prelude = &[
         include_str!("../prelude/core/op.typort"),
         include_str!("../prelude/core/eq.typort"),
