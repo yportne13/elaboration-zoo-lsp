@@ -14,7 +14,7 @@
 | L11 | FxHashMap、decl COW、name_map+trail | macro 14.9×、struct 16.2×；`hover_table` 观察表加 `collect_observations` 门控 |
 | L12 | decl COW、FxHashMap、name_map+trail | strchain k13 −17.8%（0.822×）、natadd k11 −11.6%（0.884×） |
 | L13 | `55f2d42e`：`lsp_collect` 观察面总闸（prelude/bench 期死渲染）、U2、12 张 lookup-only 表 FxHash | prelude-core −22.7%、prelude-hdl −7.0%、match k11 −28.1%、enum −52.5%、church k11 −10.7% |
-| L01–L06 | `dce5c61c`（L05 src_names `Rc<FxHashMap>` COW + unify FxHash）、`df2fde54`（L06 6 处 Fx）、`dd10d59b`/`0cd81a42`（L03/L04 invert/PartialRenaming Fx） | L05 chain **−50.8%**、implicit **−33.1%**；L03/L04/L06 中性；L01/L02 审计无适用项 |
+| L01–L06 | `dce5c61c`（L05 src_names `Rc<FxHashMap>` COW + unify FxHash）、`df2fde54`（L06 6 处 Fx）、`dd10d59b`/`0cd81a42`（L03/L04 invert/PartialRenaming Fx）、**`a4520491`/`dfd7ca92`（L05/L06 src_names → NameState+trail）** | L05 chain **−50.8%→−25%（trail 后再测）**、implicit −33%/−27%；**L06 strchain −60%、global −68%**；L03/L04/L06 其余中性；L01/L02 审计无适用项 |
 
 ## 1. 各层门禁（本分支集成后统一复跑，全部 EXIT=0）
 
@@ -31,7 +31,7 @@
 | L03 lib / blackbox | 28；136 / 81 |
 | L04 lib / blackbox | 30；75 / 73 |
 | L05 lib / blackbox | 23；41 / 54 / 62 |
-| L06 lib / blackbox | 13；41 / 23 / 81（需 `RUST_MIN_STACK=67108864`，基线同样溢出；已加 CI `test-full` env） |
+| L06 lib / blackbox | 13；41 / 23 / 81（需 `RUST_MIN_STACK=67108864`，基线同样溢出；已加 CI `test-full` env）；**L05/L06 NameState 后 lib/blackbox 仍全绿** |
 | L07 lib/blackbox/parity | 70；48+1 / 51+2 / 116+1；parity **97** |
 
 > 加跑 L08 debug lib（60 passed）验证 NameState 的 `mark <= trail.len()` debug_assert；
