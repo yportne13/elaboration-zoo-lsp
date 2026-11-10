@@ -223,3 +223,16 @@ C:\ezl-src-bench-l08\l08bench-item4.exe    --workload all --max-k 11 --rounds 3 
   church k10 **0.616x**, match k13 0.964x, natadd k11 **0.873x**
   (lambda-heavy church/natadd benefit from no deep closure body copies).
 - Gates: lib 60, blackbox 57(+1)/51(+2), parity 95, check all-targets 0 error.
+
+
+### 9.2 2026-11-10 follow-up: U1/U2 (port L07 a78daec7)
+
+- Commit `cdd19e73`: skip the head-Sum coverage probe when all constructors are
+  already covered (U2), and borrow `cxt.decl()` inside probe_accessible instead
+  of cloning the whole Decls per (match x constructor) (U1).
+- L08 A/B (interleaved min): match k13 **0.134 -> 0.117 ms (0.873x)**,
+  enum k10 **0.204 -> 0.182 ms (0.892x)**; strchain/struct/church neutral.
+- Gates: lib 60, blackbox 57(+1)/51(+2), parity 95, check all-targets 0 error.
+- With this commit L08 has mirrored all performance commits that were on
+  `feat/all-layers-hardening` for L07 (core Cxt 4 items + check_ty + let + Rc
+  Lam/Pi + U1/U2); no remaining L07 perf commit is unported.
