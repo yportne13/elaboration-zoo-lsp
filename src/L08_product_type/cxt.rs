@@ -403,7 +403,7 @@ impl Cxt {
         if sub.is_empty() {
             return self.clone();
         }
-        let wrap = |v: &super::Val| super::Val::VSub(Box::new(v.clone()), sub.clone());
+        let wrap = |v: &super::Val| super::Val::VSub(Rc::new(v.clone()), sub.clone());
         let name_mark = {
             let mut s = self.names.borrow_mut();
             s.unwind(self.name_mark);
@@ -441,7 +441,7 @@ impl Cxt {
             .filter_map(|(i, v)| {
                 let mut raw = v;
                 while let Val::VSub(inner, _) = raw {
-                    raw = inner;
+                    raw = &**inner;
                 }
                 match raw {
                     Val::Rigid(l, sp) if sp.is_empty() && l.0 + (i as u32) + 1 == n => Some(*l),
