@@ -8,7 +8,7 @@
 
 | 层 | 改动 | 备注 |
 |---|---|---|
-| L07 | `deef97f7` `check_ty` 按值 move Pi Raw（去掉每层 `*b.clone()` 的 O(n²)） | 语义保持；深 λ 单因子数字受共享机噪声影响未取到可信值 |
+| L07 | `deef97f7` `check_ty` 按值 move Pi Raw；`87924b00` 无注解 let 直接推导 binder 类型（免 fresh_meta/close_ty） | 深 let n=1000 **168→2.4ms**（近线性）；深 λ 仍剩 eval body 深 clone，见 §3 |
 | L08 | Locals `Box→Rc`、FxHashMap、decl 表就地 COW、`src_names` NameState+trail | 4 项，累计 strchain 13.2×/global 7.8×/struct 7.8× |
 | L09/L10 | FxHashMap（global/PartialRenaming/Trait/Synth 等）+ 穷尽 match 跳过覆盖探测（U2） | L09 match −7~−9%；L10 match k11 −8.9% |
 | L11 | FxHashMap、decl COW、name_map+trail | macro 14.9×、struct 16.2×；`hover_table` 观察表加 `collect_observations` 门控 |
@@ -50,19 +50,23 @@
 - **L12**：natadd k11 0.884×、strchain k11 0.900×、strchain k13 0.822×
   （77.8s→64.0s）；macro 持平；twin fast 列 0.93–0.98 无回归迹象。
 
-## 3. 剩余 O(n²)（L07 深作用域）结论
+## 3. L07 深作用域 O(n²)：进展与剩余
 
 deep 探针 check-only 仍 4.1–4.6×/翻倍；计数排除名字表（unwind O(n)）与
-`Cxt::define`（n=1000 约 2ms）。**主项是 `fresh_meta` 的
-`close_ty(cxt.locals, quote(a))`**：每个 hole/fresh meta 都把整条 Locals 链重建成
-Pi/Let 类型（n 层 hole ⇒ O(n²)）。另两条：`check_ty` 的 Pi Raw clone（已修）、
-`eval(Tm::Lam/Pi)` 闭包 body 深 clone（未修）、`eval(Tm::Var)` 的
-`env.iter().nth`（潜在 O(depth)）。
+`Cxt::define`（n=1000 约 2ms）。已定位并处理：
 
-**尝试过的错误修法（已回滚，不落本分支）**：fresh_meta 若 quote 类型无自由局部变量
-就跳过 close_ty → L07 lib **26 failed**，说明 close_ty 的 telescope 语义不能跳过；
-正确修法需要 lazy/open meta 类型或共享上下文 telescope 的设计，不能局部小改。
-建议 P2 单独立项（先 profile 确认 close_ty 占比，再设计）。
+1. **`check_ty` 的 Pi Raw clone**：`deef97f7` 按值解构 `Raw::Pi`，去掉每层
+   `*a.clone()`/`*b.clone()`。
+2. **无注解 let 的 `fresh_meta`/`close_ty`**：`87924b00` 直接 `infer_expr` 推导
+   binder 类型，不再为每个 hole 造闭合 meta；深 let n=250/500/1000 =
+   0.42/0.85/2.44ms（原 ~10.3/40.6/168.5ms），**该 O(n²) 已消**。
+3. **剩余（未修）**：显式 hole/其它 fresh_meta 仍走 `close_ty`；深 λ 的
+   `eval(Tm::Lam/Pi)` 仍把剩余 body `Rc::new((**t).clone())` 深拷（O(n²)），
+   `check_nf` 在 n=1000 仍约 220–290ms（4×/翻倍）；`eval(Tm::Var)` 的
+   `env.iter().nth` 是潜在 O(depth)/变量。
+4. **错误修法（已回滚，不落本分支）**：fresh_meta 若 quote 类型无自由局部变量
+   就跳过 close_ty → L07 lib **26 failed**，说明 close_ty 的 telescope 语义不能
+   跳过；剩余项需要 lazy/open meta 类型或共享上下文 telescope 的设计。
 
 ## 4. 风险与已知限制
 
