@@ -15,16 +15,44 @@ use super::force::vapp1;
 use super::spine::{MetaEntry, Spine};
 use super::syntax::{V, XCell, v_tag, v_u, v_xcell, v_xcell_of};
 
-// decl 表与 builtin prim（L07：值 = λ 链 → Prim 标记；归约在 force）
+// decl 表与 builtin prim（L07：PrimFunc 化的 decl 条目；归约在 force）
 // --------------------------------------------------------------------------------
 
 /// decl 表条目（参考版 `DeclEntry` 的快版）：定义的类型值与 WHNF 值。
-/// builtin 无需 prim 标志——其值就是 λ 链求值出的闭包，应用满元数后环境里
-/// 出现 `Tm::Prim` 体，force 时按名触发 [`prim_reduce`]。
+/// L13 式 prim：builtin 的归约标记挂在条目上（`prim`/`prim_names`），
+/// `force` 在 Decl 链头按 spine 调 [`prim_reduce`]；值本身只是中性的
+/// `XCell::Decl(自身名)`，不再借 `Tm::Prim`/`XCell::Prim` 特例。
 #[derive(Clone, Copy)]
 pub(crate) struct DeclEntryF {
     pub(crate) ty: V,
     pub(crate) val: V,
+    /// `Some(name)` = builtin 归约标记（名字交给 prim_reduce）。
+    pub(crate) prim: Option<&'static str>,
+    /// builtin 的 η 展示参数名（partial application 的 quote 展开用）。
+    pub(crate) prim_names: Option<&'static [&'static str]>,
+}
+
+/// builtin 的 η 展示参数名表（与 `Machine::prime_round` 的类型 Π 链同名同序；
+/// 参考版 `DeclEntry.prim_names` 的快版对应物）。
+pub(crate) fn prim_names_static(name: &str) -> Option<&'static [&'static str]> {
+    Some(match name {
+        "string_concat" => &["x", "y"],
+        "str_eq" => &["x", "y"],
+        "str_indent2" => &["x"],
+        "report_check_issue" => &["code", "module", "signal", "message"],
+        "string_to_global_type" => &["x"],
+        "create_global" => &["x", "y"],
+        "change_mutable" => &["x", "f"],
+        "get_global" => &["x"],
+        "get_global_default" => &["x", "z"],
+        "change_mutable_default" => &["x", "f", "z"],
+        "file_read_all_text" => &["path"],
+        "file_write_all_text" => &["path", "content"],
+        "file_append_all_text" => &["path", "content"],
+        "file_exists" => &["path"],
+        "file_delete" => &["path"],
+        _ => return None,
+    })
 }
 
 /// 可变全局表（参考版 `Infer.mutable_map`；单线程 RefCell）。
