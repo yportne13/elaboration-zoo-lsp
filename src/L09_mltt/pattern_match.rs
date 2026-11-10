@@ -370,56 +370,69 @@ impl Compiler {
         Ok(out)
     }
 
-    pub fn eval_aux(
+    pub fn eval_aux<'a>(
         infer: &Infer,
         heads: &Val,
         cxt: &Env,
-        arms: &[(PatternDetail, Tm)],
-    ) -> Option<(Tm, Env)> {
-        let (case_name, params, constrs_name) = match infer.force(heads.clone()) {
-            Val::SumCase {
-                typ,
-                case_name,
-                datas: params,
-            } => (case_name, params, match infer.force((*typ).clone()) {
-                Val::Sum(_, _, cases) => cases.clone(),
-                _ => panic!("by now only can match a sum type, but get {:?}", heads),
-            }),
-            //_ => panic!("by now only can match a sum type, but get {:?}", heads),
-            _ => (empty_span("$unknown$".to_owned()), vec![], vec![])
-        };
-
+        arms: &'a [(PatternDetail, Tm)],
+    ) -> Option<(&'a Tm, Env)> {
         arms.iter()
-            .filter_map(|(pattern, body)| match pattern {
-                PatternDetail::Any(_) => Some((body.clone(), cxt.prepend(heads.clone()))),
-                PatternDetail::Bind(_) => {
-                    Some((body.clone(), cxt.prepend(heads.clone())))
-                }
-                PatternDetail::Con(constr_, item_pats) if !constrs_name.contains(&constr_) => {
-                    /*if cxt.src_names.contains_key(&constr_.data) {
-                        //return Err(Error(format!("match fail: {:?}", constr_)))
-                        todo!()
-                    } else */
-                    {
-                        //TODO: item_pats should be zero
-                        Some((body.clone(), cxt.prepend(heads.clone())))
-                    }
-                }
-                PatternDetail::Con(constr_, item_pats) if constr_ == &case_name => {
-                    params.iter()
-                        //.filter(|x| x.2 == Icit::Expl)
-                        .map(|x| x.1.as_ref())
-                        .zip(item_pats.iter())
-                        .try_fold(
-                            (body.clone(), cxt.clone()),
-                            |(body, cxt), (param, pat): (&Val, &PatternDetail)| {
-                                Self::eval_aux(infer, param, &cxt, &[(pat.clone(), body)])
-                            },
-                        )
-                }
-                _ => None,
+            .find_map(|(pattern, body)| {
+                Self::eval_aux_arm(infer, heads, cxt, pattern).map(|env| (body, env))
             })
-            .next()
+    }
+
+    /// 单臂判定的借用版核心：命中返回臂上下文 `Env`，未命中返回 `None`
+    /// （旧实现 `eval_aux` 每层递归都要 clone `body`/`pat`——L08 bc929dcc
+    /// 的 L09 对应物；此处 body 由调用方借用返回，pat 全程只借用）。
+    fn eval_aux_arm(
+        infer: &Infer,
+        heads: &Val,
+        cxt: &Env,
+        pattern: &PatternDetail,
+    ) -> Option<Env> {
+        match pattern {
+            PatternDetail::Any(_) | PatternDetail::Bind(_) => {
+                Some(cxt.prepend(heads.clone()))
+            }
+            PatternDetail::Con(constr_, item_pats) => {
+                let forced = infer.force(heads.clone());
+                let (case_name, params, constrs_name) = match forced {
+                    Val::SumCase {
+                        typ,
+                        case_name,
+                        datas: params,
+                    } => (
+                        case_name,
+                        params,
+                        match infer.force((*typ).clone()) {
+                            Val::Sum(_, _, cases) => cases,
+                            _ => panic!(
+                                "by now only can match a sum type, but get {:?}",
+                                heads
+                            ),
+                        },
+                    ),
+                    // 非 SumCase 头：旧实现把 constrs_name 置空，于是任意 Con
+                    // 模式都按变量模式绑定整个头（保守兼容），这里保持一致。
+                    _ => return Some(cxt.prepend(heads.clone())),
+                };
+                if !constrs_name.contains(constr_) {
+                    // 不是该类型的构造子名 → 变量模式（保守兼容）
+                    return Some(cxt.prepend(heads.clone()));
+                }
+                if constr_ != &case_name {
+                    return None;
+                }
+                // Con 本身不占槽：字段按声明序逐个 prepend（与旧 zip/try_fold
+                // 完全同序；长度不齐时 zip 截断的旧行为也保持不变）。
+                let mut cur = cxt.clone();
+                for (param, sub) in params.iter().map(|x| x.1.as_ref()).zip(item_pats.iter()) {
+                    cur = Self::eval_aux_arm(infer, param, &cur, sub)?;
+                }
+                Some(cur)
+            }
+        }
     }
 
     /// 模式走查（L07 `walk_con` 口径；L10 `walk_pat` 的 L09 版）：绑定模式变量槽
