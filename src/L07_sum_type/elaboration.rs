@@ -15,7 +15,7 @@ impl Infer {
     fn insert_go(&mut self, cxt: &Cxt, t: Tm, va: Val) -> Result<(Tm, Val), Error> {
         match self.force(cxt.decl(), va) {
             Val::Pi(_, Icit::Impl, a, b) => {
-                let m = self.fresh_meta(cxt.decl(), cxt, *a);
+                let m = self.fresh_meta(cxt.decl(), cxt, (*a).clone());
                 let mv = self.eval(cxt.decl(), &cxt.env, &m);
                 self.insert_go(
                     cxt,
@@ -51,7 +51,7 @@ impl Infer {
                 if x.data == name.data {
                     Ok((t, Val::Pi(x, Icit::Impl, a, b)))
                 } else {
-                    let m = self.fresh_meta(cxt.decl(), cxt, *a);
+                    let m = self.fresh_meta(cxt.decl(), cxt, (*a).clone());
                     let mv = self.eval(cxt.decl(), &cxt.env, &m);
                     self.insert_until_go(
                         cxt,
@@ -83,7 +83,7 @@ impl Infer {
                     || i == Either::Icit(i_t) =>
             {
                 let body = self.check(
-                    &cxt.bind(x.clone(), self.quote(decl, cxt.lvl, *a.clone()), *a),
+                    &cxt.bind(x.clone(), self.quote(decl, cxt.lvl, (*a).clone()), (*a).clone()),
                     *t,
                     self.closure_apply(decl, &b_closure, Val::vvar(cxt.lvl)),
                 )?;
@@ -92,7 +92,7 @@ impl Infer {
             // 非 λ 项 against 隐式 Π：插入一个隐式绑定器
             (t, Val::Pi(x, Icit::Impl, a, b_closure)) => {
                 let body = self.check(
-                    &cxt.new_binder(x.clone(), self.quote(decl, cxt.lvl, *a)),
+                    &cxt.new_binder(x.clone(), self.quote(decl, cxt.lvl, (*a).clone())),
                     t,
                     self.closure_apply(decl, &b_closure, Val::vvar(cxt.lvl)),
                 )?;
@@ -550,7 +550,7 @@ impl Infer {
                                     if bname.data == f.data {
                                         return Ok((
                                             Tm::Obj(Box::new(tm), f.clone()),
-                                            *bdom,
+                                            (*bdom).clone(),
                                         ));
                                     }
                                     let u = if impl_idx < impl_vals.len() {
@@ -594,7 +594,7 @@ impl Infer {
                 let b_closure = self.close_val(decl, cxt, b);
                 Ok((
                     Tm::Lam(x.clone(), i, Rc::new(t_inferred)),
-                    Val::Pi(x, i, Box::new(a), b_closure),
+                    Val::Pi(x, i, Rc::new(a), b_closure),
                 ))
             }
 
@@ -621,7 +621,7 @@ impl Infer {
                 let (a, b_closure) = match self.force(decl, tty) {
                     Val::Pi(_, i_t, a, b_closure) => {
                         if i == i_t {
-                            (*a, b_closure)
+                            ((*a).clone(), b_closure)
                         } else {
                             return Err(Error::new(format!("icit mismatch {i:?} {i_t:?}")));
                         }
@@ -647,7 +647,7 @@ impl Infer {
                             Val::Pi(
                                 empty_span("x".to_string()),
                                 i,
-                                Box::new(a.clone()),
+                                Rc::new(a.clone()),
                                 b_closure.clone(),
                             ),
                             tty,
