@@ -193,3 +193,19 @@ C:\ezl-src-bench-l08\l08bench-item4.exe    --workload all --max-k 11 --rounds 3 
 
 产物：`C:\ezl-src-bench-l08\`（`l08bench-{baseline,final,item1,item3,item2,item4}.exe`、
 `i*/i3/i4*/fin-*.txt` 原始日志、`*-tests.txt` 门禁日志）。
+
+
+## 9. 2026-11-10 follow-up: L07 check_ty + unannotated-let ports
+
+- Commit `2a1f378f`: port L07 `deef97f7` (check_ty destructure Raw::Pi by value,
+  no `*a.clone()`/`*b.clone()` per level) and `87924b00` (unannotated let infers
+  the binder type via `infer_expr` instead of creating a closed hole meta).
+- Standard L08 workloads are neutral (same-window interleaved A/B):
+  strchain k11 1.009x, struct k10 1.014x, church k10 1.004x, match k13 1.014x,
+  natadd k11 0.996x.
+- Deep-scope probe (n=1000, check_nf, interleaved A/B min):
+  deep lambda **310.7 -> 246.2 ms (0.792x, -20.8%)**;
+  deep let **171.2 -> 1.283 ms (0.007x, -99.3%)**.
+- Gates after the port: lib 60, blackbox 57(+1)/51(+2), parity 95; check all-targets 0 error.
+- Remaining L07-only item not ported: `Tm::Lam/Pi` body `Rc<Tm>` (L08 still has
+  `Box`; mechanical but touches Obj arms) and any L07 hardening not yet mirrored.
