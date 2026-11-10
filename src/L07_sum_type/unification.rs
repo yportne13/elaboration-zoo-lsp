@@ -175,7 +175,7 @@ impl Infer {
         match (rev.split_first(), self.force(decl, a)) {
             (None, a) => self.rename(decl, &mut pren, a),
             (Some((Some(_), rest)), Val::Pi(x, i, a, b)) => {
-                let a = self.rename(decl, &mut pren, *a)?;
+                let a = self.rename(decl, &mut pren, (*a).clone())?;
                 let b = self.closure_apply(decl, &b, Val::vvar(pren.cod));
                 let b = self.prune_ty_go(decl, rest, lift(pren), b)?;
                 Ok(Tm::Pi(x, i, Rc::new(a), Rc::new(b)))
@@ -409,16 +409,16 @@ impl Infer {
                 Val::Sum(name, params, cases) => {
                     let mut pending = Vec::with_capacity(params.len() * 2);
                     let mut metas = Vec::with_capacity(params.len());
-                    for (n, v, t, i) in params {
-                        pending.push(super::rc_take(v));
-                        pending.push(super::rc_take(t));
-                        metas.push((n, i));
+                    for (n, v, t, i) in params.iter() {
+                        pending.push(super::rc_take(v.clone()));
+                        pending.push(super::rc_take(t.clone()));
+                        metas.push((n.clone(), *i));
                     }
                     let n_all = pending.len();
                     Frame {
                         pending,
                         icits: Vec::new(),
-                        kind: FrameKind::Sum { name, cases, metas },
+                        kind: FrameKind::Sum { name, cases: (*cases).clone(), metas },
                         done: Vec::with_capacity(n_all),
                         idx: 0,
                     }
@@ -431,9 +431,9 @@ impl Infer {
                     let mut pending = Vec::with_capacity(datas.len() + 1);
                     pending.push(super::rc_take(typ));
                     let mut datas_metas = Vec::with_capacity(datas.len());
-                    for (n, v, i) in datas {
-                        pending.push(super::rc_take(v));
-                        datas_metas.push((n, i));
+                    for (n, v, i) in datas.iter() {
+                        pending.push(super::rc_take(v.clone()));
+                        datas_metas.push((n.clone(), *i));
                     }
                     let n_all = pending.len();
                     Frame {
@@ -451,7 +451,7 @@ impl Infer {
                     // pending = [被投影者, spine 实参…]；实参按 List 头→尾序
                     // 入列（头 = 最外层 App），组装时逆序折叠 = rename_sp 的
                     // 应用序（List 尾的实参最先应用）
-                    let mut pending = vec![*x];
+                    let mut pending = vec![(*x).clone()];
                     let mut icits = Vec::new();
                     for (u, i) in sp.iter() {
                         pending.push(u.clone());
@@ -605,7 +605,7 @@ impl Infer {
                 Ok(Tm::Lam(x, i, Rc::new(t)))
             }
             Val::Pi(x, i, a, closure) => {
-                let a = self.rename(decl, pren, *a)?;
+                let a = self.rename(decl, pren, (*a).clone())?;
                 let body_v = self.closure_apply(decl, &closure, Val::vvar(pren.cod));
                 // lift 原位 + 回滚（同 Lam 臂）
                 let key = pren.cod.0;
@@ -633,7 +633,7 @@ impl Infer {
             Val::Match(val, env, cases, pending) => {
                 // 分支体是裸 Tm：先在"捕获 env + fresh rigid 槽"下重新求值
                 // （简化 decl 表防重展开），再在 lift 过的 renaming 下 rename
-                let val = self.rename(decl, pren, *val)?;
+                let val = self.rename(decl, pren, (*val).clone())?;
                 // P1-2：简化表旁路缓存（同实例只构建一次）
                 let declb = self.simpl_decl_cached(decl);
                 let cases = cases
@@ -1268,11 +1268,11 @@ mod deep_rename_tests {
         fn nat_sum() -> Val {
             Val::Sum(
                 super::super::empty_span("Nat".to_string()),
-                vec![],
-                vec![
+                std::rc::Rc::new(vec![]),
+                std::rc::Rc::new(vec![
                     super::super::empty_span("zero".to_string()),
                     super::super::empty_span("succ".to_string()),
-                ],
+                ]),
             )
         }
         let nat = std::rc::Rc::new(nat_sum());
@@ -1280,7 +1280,7 @@ mod deep_rename_tests {
         let mut v = Val::SumCase {
             typ: std::rc::Rc::clone(&nat),
             case_name: super::super::empty_span("zero".to_string()),
-            datas: vec![],
+            datas: std::rc::Rc::new(vec![]),
         };
         for _ in 0..N {
             let inner = std::rc::Rc::new(v);
@@ -1288,7 +1288,7 @@ mod deep_rename_tests {
             v = Val::SumCase {
                 typ: std::rc::Rc::clone(&nat),
                 case_name: super::super::empty_span("succ".to_string()),
-                datas: vec![(super::super::empty_span("x".to_string()), inner, Icit::Expl)],
+                datas: std::rc::Rc::new(vec![(super::super::empty_span("x".to_string()), inner, Icit::Expl)]),
             };
         }
         let mut infer = Infer::new();

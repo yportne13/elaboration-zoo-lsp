@@ -112,7 +112,7 @@ fn test_occurs_transitive_vsub_nested_is_documented_limitation() {
     );
 
     // 对照：同一 σ 直接包裹一层 ⇒ 0 ↦ 7 ↦ 9 的两跳链被检出
-    let single = Val::VSub(Box::new(Val::vvar(Lvl(0))), sigma.clone());
+    let single = Val::VSub(Rc::new(Val::vvar(Lvl(0))), sigma.clone());
     assert!(
         sigma.occurs_transitive(&single, Lvl(9)),
         "单层 VSub 下 σ 的两跳链应被检出（occurs_transitive 返回 true）"
@@ -120,8 +120,8 @@ fn test_occurs_transitive_vsub_nested_is_documented_limitation() {
 
     // 已知限制：嵌套 VSub 的外层 σ 在 VSub 臂被丢弃 ⇒ 漏检（当前期望 false）
     let nested = Val::VSub(
-        Box::new(Val::VSub(
-            Box::new(Val::vvar(Lvl(0))),
+        Rc::new(Val::VSub(
+            Rc::new(Val::vvar(Lvl(0))),
             empty.clone(),
         )),
         sigma.clone(),
@@ -1785,8 +1785,8 @@ fn force_arg_unwraps_nested_vsub() {
     let outer = Subst::extend(&inner, Lvl(9), Val::U);
     // 两层包裹、内层是未解的裸 rigid 槽 ⇒ 解包到裸形态（pm_defs 不参与
     // invert 的旧行为等价）
-    let slot = Val::VSub(Box::new(Val::vvar(Lvl(7))), outer.clone());
-    let slot = Val::VSub(Box::new(slot), outer);
+    let slot = Val::VSub(Rc::new(Val::vvar(Lvl(7))), outer.clone());
+    let slot = Val::VSub(Rc::new(slot), outer);
     match infer.force_arg(&decl, slot) {
         Val::Rigid(x, sp) => {
             assert!(sp.is_empty());
@@ -1797,7 +1797,7 @@ fn force_arg_unwraps_nested_vsub() {
     // 内层是已解引用：invert 视角同样**不**推开 σ（旧"pm_defs 不参与
     // invert"等价——槽位是作用域事实，解的可见性属 force 全量视角）
     let mapped = Subst::extend(&inner, Lvl(7), Val::U);
-    let slot2 = Val::VSub(Box::new(Val::vvar(Lvl(7))), mapped);
+    let slot2 = Val::VSub(Rc::new(Val::vvar(Lvl(7))), mapped);
     match infer.force_arg(&decl, slot2) {
         Val::Rigid(x, sp) => {
             assert!(sp.is_empty());
@@ -1806,7 +1806,7 @@ fn force_arg_unwraps_nested_vsub() {
         other => panic!("expected bare rigid slot, got {other:?}"),
     }
     // 对照：全量 force 视角才推开为解值
-    let slot3 = Val::VSub(Box::new(Val::vvar(Lvl(7))), Subst::extend(&inner, Lvl(7), Val::U));
+    let slot3 = Val::VSub(Rc::new(Val::vvar(Lvl(7))), Subst::extend(&inner, Lvl(7), Val::U));
     assert!(matches!(infer.force(&decl, slot3), Val::U));
 }
 
@@ -1815,11 +1815,11 @@ fn force_arg_unwraps_nested_vsub() {
 #[test]
 fn struct_eq_vsub_pointer_identity() {
     let sub: std::rc::Rc<Subst> = std::rc::Rc::new(Subst::default());
-    let a = Val::VSub(Box::new(Val::U), sub.clone());
-    let b = Val::VSub(Box::new(Val::U), sub.clone());
+    let a = Val::VSub(Rc::new(Val::U), sub.clone());
+    let b = Val::VSub(Rc::new(Val::U), sub.clone());
     assert!(struct_eq::val_eq(&a, &b));
     let other = Subst::extend(&sub, Lvl(1), Val::U);
-    let c = Val::VSub(Box::new(Val::U), other);
+    let c = Val::VSub(Rc::new(Val::U), other);
     assert!(!struct_eq::val_eq(&a, &c));
 }
 
@@ -1917,25 +1917,25 @@ fn deep_value_iterative_under_default_stack() {
     fn nat_sum() -> Val {
         Val::Sum(
             empty_span("Nat".to_string()),
-            vec![],
-            vec![
+            Rc::new(vec![]),
+            Rc::new(vec![
                 empty_span("zero".to_string()),
                 empty_span("succ".to_string()),
-            ],
+            ]),
         )
     }
     fn succ_of(typ: &std::rc::Rc<Val>, prev: Val) -> Val {
         Val::SumCase {
             typ: std::rc::Rc::clone(typ),
             case_name: empty_span("succ".to_string()),
-            datas: vec![(empty_span("x".to_string()), std::rc::Rc::new(prev), Icit::Expl)],
+            datas: Rc::new(vec![(empty_span("x".to_string()), std::rc::Rc::new(prev), Icit::Expl)]),
         }
     }
     fn chain(nat: &std::rc::Rc<Val>, n: usize) -> Val {
         let mut v = Val::SumCase {
             typ: std::rc::Rc::clone(nat),
             case_name: empty_span("zero".to_string()),
-            datas: vec![],
+            datas: Rc::new(vec![]),
         };
         for _ in 0..n {
             v = succ_of(nat, v);
@@ -2280,12 +2280,12 @@ fn visibility_boundary_decl_value_is_not_refined() {
     let sub = Subst::extend(&std::rc::Rc::new(Subst::default()), Lvl(0), Val::U);
 
     // ① 直接包裹的 rigid：σ 在 force 读点推开 ⇒ 精化可见
-    let direct = infer.force(&decls.clone(), Val::VSub(Box::new(Val::vvar(Lvl(0))), sub.clone()));
+    let direct = infer.force(&decls.clone(), Val::VSub(Rc::new(Val::vvar(Lvl(0))), sub.clone()));
     assert!(matches!(direct, Val::U), "被包裹的 rigid 应按 σ 展开为 U，got {direct:?}");
 
     // ② decl 条目里的同名引用：σ 不进入 decl 缓存值 ⇒ 精化不可见
     let d = Val::Decl("d".into(), List::new());
-    let via_decl = infer.force(decls, Val::VSub(Box::new(d), sub));
+    let via_decl = infer.force(decls, Val::VSub(Rc::new(d), sub));
     match via_decl {
         Val::Rigid(l, ref sp) => {
             assert_eq!(l, Lvl(0), "decl 缓存值应原样（未被 σ 推开）");

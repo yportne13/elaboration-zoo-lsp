@@ -454,7 +454,7 @@ impl Cxt {
         if sub.is_empty() {
             return self.clone();
         }
-        let wrap = |v: &super::Val| super::Val::VSub(Box::new(v.clone()), sub.clone());
+        let wrap = |v: &super::Val| super::Val::VSub(Rc::new(v.clone()), sub.clone());
         let name_mark = {
             let mut s = self.names.borrow_mut();
             s.unwind(self.name_mark);

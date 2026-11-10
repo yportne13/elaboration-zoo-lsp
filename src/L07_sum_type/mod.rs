@@ -187,9 +187,9 @@ pub enum Val {
     /// 未展开的全局引用（递归定义的占位 / simplify 后的 decl 表）。
     Decl(SmolStr, Spine),
     /// 卡住的投影（被投影者还不是构造子值 / Sum 类型）。
-    Obj(Box<Val>, Span<String>, Spine),
+    Obj(Rc<Val>, Span<String>, Spine),
     Lam(Span<String>, Icit, Closure),
-    Pi(Span<String>, Icit, Box<VTy>, Closure),
+    Pi(Span<String>, Icit, Rc<VTy>, Closure),
     U,
     LiteralType,
     LiteralIntro(Span<String>),
@@ -200,23 +200,23 @@ pub enum Val {
     Prim(SmolStr, Spine),
     Sum(
         Span<String>,
-        Vec<(Span<String>, Rc<Val>, Rc<VTy>, Icit)>, // (参数名, 实参值, 实参的类型, icit)
-        Vec<Span<String>>,
+        Rc<Vec<(Span<String>, Rc<Val>, Rc<VTy>, Icit)>>, // (参数名, 实参值, 实参的类型, icit)
+        Rc<Vec<Span<String>>>,
     ),
     SumCase {
         typ: Rc<Val>,
         case_name: Span<String>,
-        datas: Vec<(Span<String>, Rc<Val>, Icit)>,
+        datas: Rc<Vec<(Span<String>, Rc<Val>, Icit)>>,
     },
     /// 卡住的 match：scrutinee 不是构造子值，等待 scrutinee 归约后再选分支。
     /// `pending` = 卡住期间累积的应用实参（值层保存，分支选中后在值层应用
     /// ——项层 splice 把实参 quote 进分支体时，实参的自由变量会引用到
     /// 错误的上下文，见 `v_app` 的 Match 臂）。
-    Match(Box<Val>, Env, Vec<(PatternDetail, Tm)>, Vec<(Val, Icit)>),
+    Match(Rc<Val>, Env, Rc<Vec<(PatternDetail, Tm)>>, Vec<(Val, Icit)>),
     /// 显式替换下的值（模式精化，dpm-nbe `VSub`）：特化解不改写既有值，
     /// 只把解包在外面；`force` 在读点把 σ 推进值的结构（`frcs`，对齐
     /// dpm-nbe 的 `frcS`）。不变式：`force` 的返回值顶层不会是 VSub。
-    VSub(Box<Val>, Rc<Subst>),
+    VSub(Rc<Val>, Rc<Subst>),
 }
 
 type VTy = Val;
@@ -264,7 +264,7 @@ impl Subst {
                 return Some(if !Self::mentions_level(&e.val, self) {
                     e.val.clone()
                 } else {
-                    Val::VSub(Box::new(e.val.clone()), self.clone())
+                    Val::VSub(Rc::new(e.val.clone()), self.clone())
                 });
             }
             cur = e.next.clone();
@@ -458,7 +458,7 @@ pub(crate) fn wrap_sub(sub: &Rc<Subst>, v: Val) -> Val {
     if sub.is_empty() {
         v
     } else {
-        Val::VSub(Box::new(v), sub.clone())
+        Val::VSub(Rc::new(v), sub.clone())
     }
 }
 
@@ -829,7 +829,7 @@ impl Infer {
             // Rigid 臂 lookup 命中时烧 1），对齐旧 pm_defs 时代
             // "force(Rigid) 查表展开烧 1"的燃烧剖面；包裹/组合的机械开销
             // 免费。fuel 耗尽的降级点也在 lookup 命中处（返回裸 rigid）。
-            Val::VSub(v, sub) => self.frcs(decl, &sub, *v),
+            Val::VSub(v, sub) => self.frcs(decl, &sub, (*v).clone()),
             // 卡住的 match：scrutinee 是在 match 创建之后才被特化/解出时，
             // 这里重新尝试选分支。没有这一步，精化无法传播进"卡住 match
             // 里面"（期望类型 `Eq (add a zero) a` 的 `add a zero` 就是它）。
@@ -897,12 +897,12 @@ impl Infer {
                 Val::Prim(name, sp)
             }
             Val::Obj(v, name, sp) => {
-                let v = self.force(decl, *v);
+                let v = self.force(decl, (*v).clone());
                 match project(&v, &name) {
                     Some(p) if burn(&self.unify_fuel) => {
                         self.force(decl, self.v_app_sp(decl, p, sp))
                     }
-                    _ => Val::Obj(Box::new(v), name, sp),
+                    _ => Val::Obj(Rc::new(v), name, sp),
                 }
             }
             t => t,
@@ -922,7 +922,7 @@ impl Infer {
             // 内层先应用、外层后应用：组合后一次推进（frcS (subst sb sb') v）
             Val::VSub(v2, sub2) => {
                 let composed = Subst::compose(sub, &sub2);
-                self.frcs(decl, &composed, *v2)
+                self.frcs(decl, &composed, (*v2).clone())
             }
             // 被解变量的读点：lookup 命中（真正的精化传播）烧 1 fuel——
             // 对齐旧 pm_defs 的 force(Rigid) 查表展开烧 1 剖面；fuel 耗尽
@@ -966,7 +966,7 @@ impl Infer {
             Val::Decl(name, sp) => self.force(decl, Val::Decl(name, self.wrap_sp(sub, sp))),
             Val::Prim(name, sp) => self.force(decl, Val::Prim(name, self.wrap_sp(sub, sp))),
             Val::Obj(o, name, sp) => self.force(decl, Val::Obj(
-                Box::new(self.frcs(decl, sub, *o)),
+                Rc::new(self.frcs(decl, sub, (*o).clone())),
                 name,
                 self.wrap_sp(sub, sp),
             )),
@@ -975,24 +975,26 @@ impl Infer {
             Val::Pi(x, i, a, cl) => Val::Pi(
                 x,
                 i,
-                Box::new(self.frcs(decl, sub, *a)),
+                Rc::new(self.frcs(decl, sub, (*a).clone())),
                 Closure(self.frcs_env(sub, &cl.0), cl.1),
             ),
             // Sum/SumCase 的槽位同样只包裹（旧 force 不进入这些结构）
             Val::Sum(name, params, cases) => Val::Sum(
                 name,
-                params
-                    .into_iter()
-                    .map(|(n, v, t, i)| {
-                        (
-                            n,
-                            Rc::new(wrap_sub(sub, rc_take(v))),
-                            Rc::new(wrap_sub(sub, rc_take(t))),
-                            i,
-                        )
-                    })
-                    .collect(),
-                cases,
+                Rc::new(
+                    params
+                        .iter()
+                        .map(|(n, v, t, i)| {
+                            (
+                                n.clone(),
+                                Rc::new(wrap_sub(sub, rc_take(v.clone()))),
+                                Rc::new(wrap_sub(sub, rc_take(t.clone()))),
+                                *i,
+                            )
+                        })
+                        .collect::<Vec<_>>(),
+                ),
+                Rc::new((*cases).clone()),
             ),
             Val::SumCase {
                 typ,
@@ -1001,10 +1003,14 @@ impl Infer {
             } => Val::SumCase {
                 typ: Rc::new(wrap_sub(sub, rc_take(typ))),
                 case_name,
-                datas: datas
-                    .into_iter()
-                    .map(|(n, v, i)| (n, Rc::new(wrap_sub(sub, rc_take(v))), i))
-                    .collect(),
+                datas: Rc::new(
+                    datas
+                        .iter()
+                        .map(|(n, v, i)| {
+                            (n.clone(), Rc::new(wrap_sub(sub, rc_take(v.clone()))), *i)
+                        })
+                        .collect::<Vec<_>>(),
+                ),
             },
             // scrutinee **推进**（重选分支需要解出的构造子值）；捕获 env 与
             // pending 只包裹。交回 force：scrutinee 若已是构造子值，force 的
@@ -1012,7 +1018,7 @@ impl Infer {
             Val::Match(s, env, cases, pending) => self.force(
                 decl,
                 Val::Match(
-                    Box::new(self.frcs(decl, sub, *s)),
+                    Rc::new(self.frcs(decl, sub, (*s).clone())),
                     self.frcs_env(sub, &env),
                     cases,
                     pending
@@ -1036,7 +1042,7 @@ impl Infer {
         if sub.is_empty() {
             return env.clone();
         }
-        env.map(|v| Val::VSub(Box::new(v.clone()), sub.clone()))
+        env.map(|v| Val::VSub(Rc::new(v.clone()), sub.clone()))
     }
 
     /// 卡住内建的归约体（L06 builtin 注册表的逐句移植，force 时触发）。
@@ -1353,7 +1359,7 @@ impl Infer {
                 let v = self.eval(decl, env, tm);
                 match project(&v, name) {
                     Some(p) => p,
-                    None => Val::Obj(Box::new(v), name.clone(), List::new()),
+                    None => Val::Obj(Rc::new(v), name.clone(), List::new()),
                 }
             }
             Tm::App(t, u, i) => {
@@ -1367,7 +1373,7 @@ impl Infer {
             Tm::Pi(x, i, a, b) => Val::Pi(
                 x.clone(),
                 *i,
-                Box::new(self.eval(decl, env, a)),
+                Rc::new(self.eval(decl, env, a)),
                 Closure(env.clone(), b.clone()),
             ),
             Tm::Let(_, _, t, u) => {
@@ -1401,7 +1407,7 @@ impl Infer {
                         )
                     })
                     .collect();
-                Val::Sum(name.clone(), new_params, cases.clone())
+                Val::Sum(name.clone(), Rc::new(new_params), Rc::new(cases.clone()))
             }
             Tm::SumCase {
                 typ,
@@ -1416,7 +1422,7 @@ impl Infer {
                 Val::SumCase {
                     typ: Rc::new(typ),
                     case_name: case_name.clone(),
-                    datas,
+                    datas: Rc::new(datas),
                 }
             }
             Tm::Match(tm, cases) => {
@@ -1426,17 +1432,17 @@ impl Infer {
                         match Compiler::eval_aux(self, decl, &val, env, cases) {
                             Some((body, env)) => self.eval(decl, &env, body),
                             None => Val::Match(
-                                Box::new(val),
+                                Rc::new(val),
                                 env.clone(),
-                                cases.clone(),
+                                Rc::new(cases.clone()),
                                 Vec::new(),
                             ),
                         }
                     }
                     neutral => Val::Match(
-                        Box::new(neutral),
+                        Rc::new(neutral),
                         env.clone(),
-                        cases.clone(),
+                        Rc::new(cases.clone()),
                         Vec::new(),
                     ),
                 }
@@ -1469,7 +1475,7 @@ impl Infer {
                 // force 后顶层不应是 VSub；fuel 耗尽时会。解包继续（同旧版）。
                 // 必须 **move**（不能 clone）：深 Box 链的 clone 是递归深拷贝，
                 // 与 quote_deep 的 move 纪律一致（review R11）。
-                self.quote(decl, l, *v)
+                self.quote(decl, l, (*v).clone())
             }
             _ => self.quote_arm(decl, l, t),
         }
@@ -1505,16 +1511,16 @@ impl Infer {
                 Val::Sum(name, params, cases) => {
                     let mut pending = Vec::with_capacity(params.len() * 2);
                     let mut metas = Vec::with_capacity(params.len());
-                    for (n, v, t, i) in params {
-                        pending.push(rc_take(v));
-                        pending.push(rc_take(t));
-                        metas.push((n, i));
+                    for (n, v, t, i) in params.iter() {
+                        pending.push(rc_take(v.clone()));
+                        pending.push(rc_take(t.clone()));
+                        metas.push((n.clone(), *i));
                     }
                     let n_all = pending.len();
                     Frame {
                         pending,
                         icits: Vec::new(),
-                        kind: FrameKind::Sum { name, cases, metas },
+                        kind: FrameKind::Sum { name, cases: (*cases).clone(), metas },
                         done: Vec::with_capacity(n_all),
                         idx: 0,
                     }
@@ -1527,9 +1533,9 @@ impl Infer {
                     let mut pending = Vec::with_capacity(datas.len() + 1);
                     pending.push(rc_take(typ));
                     let mut datas_metas = Vec::with_capacity(datas.len());
-                    for (n, v, i) in datas {
-                        pending.push(rc_take(v));
-                        datas_metas.push((n, i));
+                    for (n, v, i) in datas.iter() {
+                        pending.push(rc_take(v.clone()));
+                        datas_metas.push((n.clone(), *i));
                     }
                     let n_all = pending.len();
                     Frame {
@@ -1545,7 +1551,7 @@ impl Infer {
                 }
                 Val::Obj(x, name, sp) => {
                     // pending = [被投影者, spine 实参…]；实参按 List 头→尾序入列
-                    let mut pending = vec![*x];
+                    let mut pending = vec![(*x).clone()];
                     let mut icits = Vec::new();
                     for (u, i) in sp.iter() {
                         pending.push(u.clone());
@@ -1630,7 +1636,7 @@ impl Infer {
                 // fuel 耗尽窗口：force 原样返回 VSub——解包后原地重试
                 Val::VSub(v, _) => {
                     let frame = frames.last_mut().unwrap();
-                    frame.pending[frame.idx] = *v;
+                    frame.pending[frame.idx] = (*v).clone();
                 }
                 Val::Sum(..) | Val::SumCase { .. } | Val::Obj(..) => {
                     frames.push(frame_new(w));
@@ -1652,7 +1658,7 @@ impl Infer {
             // 正常路径 force 后顶层不会是 VSub；fuel 耗尽时 force 原样返回
             // VSub——解包打印内层（σ 未推开，保真度同旧版"打印未展开 rigid"），
             // 链式 VSub 由递归消化，不会产生 Tm::U 垃圾
-            Val::VSub(v, _) => self.quote(decl, l, *v),
+            Val::VSub(v, _) => self.quote(decl, l, (*v).clone()),
             Val::Flex(m, sp) => self.quote_sp(decl, l, Tm::Meta(m), sp),
             Val::Rigid(x, sp) => self.quote_sp(decl, l, Tm::Var(lvl2ix(l, x)), sp),
             Val::Decl(name, sp) => {
@@ -1681,7 +1687,7 @@ impl Infer {
                 self.quote_sp(decl, l, Tm::Decl(name), sp)
             }
             Val::Obj(v, name, sp) => {
-                self.quote_sp(decl, l, Tm::Obj(Box::new(self.quote(decl, l, *v)), name), sp)
+                self.quote_sp(decl, l, Tm::Obj(Box::new(self.quote(decl, l, (*v).clone())), name), sp)
             }
             Val::Lam(x, i, closure) => Tm::Lam(
                 x,
@@ -1691,7 +1697,7 @@ impl Infer {
             Val::Pi(x, i, a, closure) => Tm::Pi(
                 x,
                 i,
-                Rc::new(self.quote(decl, l, *a)),
+                Rc::new(self.quote(decl, l, (*a).clone())),
                 Rc::new(self.quote(decl, l + 1, self.closure_apply(decl, &closure, Val::vvar(l)))),
             ),
             Val::U => Tm::U,
@@ -1701,17 +1707,17 @@ impl Infer {
             Val::Sum(name, params, cases) => Tm::Sum(
                 name,
                 params
-                    .into_iter()
+                    .iter()
                     .map(|(n, v, t, i)| {
                         (
-                            n,
-                            self.quote(decl, l, rc_take(v)),
-                            self.quote(decl, l, rc_take(t)),
-                            i,
+                            n.clone(),
+                            self.quote(decl, l, rc_take(v.clone())),
+                            self.quote(decl, l, rc_take(t.clone())),
+                            *i,
                         )
                     })
                     .collect(),
-                cases,
+                (*cases).clone(),
             ),
             Val::SumCase {
                 typ,
@@ -1721,8 +1727,10 @@ impl Infer {
                 typ: Box::new(self.quote(decl, l, rc_take(typ))),
                 case_name,
                 datas: datas
-                    .into_iter()
-                    .map(|(n, v, i)| (n, self.quote(decl, l, rc_take(v)), i))
+                    .iter()
+                    .map(|(n, v, i)| {
+                        (n.clone(), self.quote(decl, l, rc_take(v.clone())), *i)
+                    })
                     .collect(),
             },
             Val::Match(val, env, cases, pending) => {
@@ -1733,22 +1741,22 @@ impl Infer {
                 // + 性能；P1-2：旁表缓存，同实例只构建一次）。
                 let declb = self.simpl_decl_cached(decl);
                 let tm_cases = cases
-                    .into_iter()
+                    .iter()
                     .map(|(p, b)| {
                         let count = p.bind_count();
                         let env = (0..count).fold(env.clone(), |env, i| env.prepend(Val::vvar(l + i)));
-                        let tm = self.eval(&declb, &env, &b);
+                        let tm = self.eval(&declb, &env, b);
                         // 分支体的 quote 也要用简化表：eval 产生的中性
                         // Decl(f, spine)（递归调用占位）若用真实表 quote，
                         // 入口 force 会再展开一层——每层 quote 多展开一层，
                         // 递归函数的卡住 match 直接发散。
-                        (p, self.quote(&declb, l + count, tm))
+                        (p.clone(), self.quote(&declb, l + count, tm))
                     })
                     .collect();
                 // 卡住期累积的实参按应用序包在 Match 外（值层应用在
                 // force/eval 的分支选中后做；quote → eval 往返由此保持）。
                 // 实参的自由层级属当前上下文，quote 在调用方的 l 下正确。
-                let m = Tm::Match(Box::new(self.quote(decl, l, *val)), tm_cases);
+                let m = Tm::Match(Box::new(self.quote(decl, l, (*val).clone())), tm_cases);
                 pending.into_iter().fold(m, |acc, (u, i)| {
                     Tm::App(Box::new(acc), Box::new(self.quote(decl, l, u)), i)
                 })
