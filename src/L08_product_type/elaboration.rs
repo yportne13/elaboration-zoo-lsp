@@ -99,10 +99,20 @@ impl Infer {
             }
             // let
             (Raw::Let(x, a, t, u), a_prime) => {
-                let a_checked = self.check_ty(cxt, *a)?;
-                let va = self.eval(decl, &cxt.env, a_checked.clone());
-                let t_checked = self.check(cxt, *t, va.clone())?;
-                let vt = self.eval(decl, &cxt.env, t_checked.clone());
+                // port L07 87924b00：无注解 let 直接推导 binder 类型，避免为
+                // 每个 hole 造 fresh meta（其 close_ty 在 n 层 let 链上是 O(n²)）。
+                let (a_checked, va, t_checked, vt) = if matches!(a.as_ref(), Raw::Hole) {
+                    let (t_checked, ty) = self.infer_expr(cxt, *t)?;
+                    let a_checked = self.quote(decl, cxt.lvl, ty.clone());
+                    let vt = self.eval(decl, &cxt.env, t_checked.clone());
+                    (a_checked, ty, t_checked, vt)
+                } else {
+                    let a_checked = self.check_ty(cxt, *a)?;
+                    let va = self.eval(decl, &cxt.env, a_checked.clone());
+                    let t_checked = self.check(cxt, *t, va.clone())?;
+                    let vt = self.eval(decl, &cxt.env, t_checked.clone());
+                    (a_checked, va, t_checked, vt)
+                };
                 let u_checked = self.check(
                     &cxt.define(x.clone(), t_checked.clone(), vt, a_checked.clone(), va),
                     *u,
@@ -168,17 +178,22 @@ impl Infer {
     /// 绑定上下文里预检余域（与原 Pi 臂同构，域/余域各只检查一次，无额外
     /// meta）。
     fn check_ty(&mut self, cxt: &Cxt, t: Raw) -> Result<Tm, Error> {
-        if let Raw::Pi(x, i, a, b) = &t {
-            self.ty_precheck(cxt, a)?;
-            let a_checked = self.check(cxt, *a.clone(), Val::U)?;
-            let a_eval = self.eval(cxt.decl(), &cxt.env, a_checked.clone());
-            let cxt2 = cxt.bind(x.clone(), self.quote(cxt.decl(), cxt.lvl, a_eval.clone()), a_eval);
-            self.ty_precheck(&cxt2, b)?;
-            let b_checked = self.check(&cxt2, *b.clone(), Val::U)?;
-            Ok(Tm::Pi(x.clone(), *i, Box::new(a_checked), Box::new(b_checked)))
-        } else {
-            self.ty_precheck(cxt, &t)?;
-            self.check(cxt, t, Val::U)
+        match t {
+            Raw::Pi(x, i, a, b) => {
+                self.ty_precheck(cxt, &a)?;
+                // port L07 deef97f7：t 已按值传入，直接 move Pi 的域/余域，
+                // 不再每层 `*a.clone()`/`*b.clone()`（深 Pi 注解的 O(n²) Raw 克隆）。
+                let a_checked = self.check(cxt, *a, Val::U)?;
+                let a_eval = self.eval(cxt.decl(), &cxt.env, a_checked.clone());
+                let cxt2 = cxt.bind(x.clone(), self.quote(cxt.decl(), cxt.lvl, a_eval.clone()), a_eval);
+                self.ty_precheck(&cxt2, &b)?;
+                let b_checked = self.check(&cxt2, *b, Val::U)?;
+                Ok(Tm::Pi(x, i, Box::new(a_checked), Box::new(b_checked)))
+            }
+            t => {
+                self.ty_precheck(cxt, &t)?;
+                self.check(cxt, t, Val::U)
+            }
         }
     }
 
