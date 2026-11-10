@@ -26,7 +26,7 @@ use parser::{Either, Icit, Raw};
 use crate::list::List;
 use crate::parser_lib::Span;
 use smol_str::SmolStr;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::fmt;
 
 // metacontext
@@ -323,9 +323,9 @@ impl Infer {
 
     /// 把 spine 反演成 partial renaming（Γ 变量 → 解域位置）。spine 必须
     /// 由**互不相同的** rigid 变量构成（icit 不参与——上游 invert 丢弃之）。
-    fn invert_go(&self, sp: &Spine) -> Result<(Lvl, HashMap<u32, Lvl>), UnifyError> {
+    fn invert_go(&self, sp: &Spine) -> Result<(Lvl, FxHashMap<u32, Lvl>), UnifyError> {
         match sp.head() {
-            None => Ok((Lvl(0), HashMap::new())),
+            None => Ok((Lvl(0), FxHashMap::default())),
             Some((t, _)) => {
                 let (dom, mut ren) = self.invert_go(&sp.tail())?;
                 match self.force(t) {
@@ -838,7 +838,7 @@ impl Cxt {
 struct PartialRenaming {
     dom: Lvl,               // size of Γ（解体所在的域 = spine 长度 + lift）
     cod: Lvl,               // size of Δ（rhs 所在的域）
-    ren: HashMap<u32, Lvl>, // mapping from Δ vars to Γ vars
+    ren: FxHashMap<u32, Lvl>, // mapping from Δ vars to Γ vars
 }
 
 /// Lifting a partial renaming over an extra bound variable.

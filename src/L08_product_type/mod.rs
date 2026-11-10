@@ -18,7 +18,6 @@
 
 use std::{
     cell::RefCell,
-    collections::HashMap,
     ops::{Add, Sub},
     rc::Rc,
     sync::{
@@ -26,6 +25,8 @@ use std::{
         LazyLock,
     },
 };
+
+use rustc_hash::FxHashMap;
 
 /// `L08_LOOP` 调试开关（进程级，只读一次；热路径零 env 访问）。
 pub(crate) static LOOP_DEBUG: LazyLock<AtomicBool> =
@@ -75,11 +76,11 @@ pub enum Tm {
     Decl(SmolStr),
     /// `x.field` 投影。
     Obj(Box<Tm>, Span<String>),
-    Lam(Span<String>, Icit, Box<Tm>),
+    Lam(Span<String>, Icit, Rc<Tm>),
     App(Box<Tm>, Box<Tm>, Icit),
     AppPruning(Box<Tm>, Pruning),
     U,
-    Pi(Span<String>, Icit, Box<Ty>, Box<Ty>),
+    Pi(Span<String>, Icit, Rc<Ty>, Rc<Ty>),
     Let(Span<String>, Box<Ty>, Box<Tm>, Box<Tm>),
     Meta(MetaVar),
     LiteralType,
@@ -528,7 +529,7 @@ pub struct Infer {
     meta: Vec<MetaEntry>,
     /// 可变全局表（create_global / change_mutable / get_global 族读写；
     /// L06 同款：单线程 RefCell。参考版随 `Infer` 每次调用新建）。
-    pub(crate) mutable_map: RefCell<HashMap<SmolStr, Val>>,
+    pub(crate) mutable_map: RefCell<FxHashMap<SmolStr, Val>>,
     /// unify 递归深度防护（L13 同款做法）。每次外部配置（unify_catch /
     /// pattern 编译入口）充值；递归中递减，归零即 Err——防索引槽互相嵌入
     /// 的构造子值比较（SuccCase 的 typ 含索引、索引又是 SuccCase）无限递归。
@@ -550,7 +551,7 @@ impl Infer {
     pub fn new() -> Self {
         Self {
             meta: vec![],
-            mutable_map: RefCell::new(HashMap::new()),
+            mutable_map: RefCell::new(FxHashMap::default()),
             unify_fuel: std::cell::Cell::new(UNIFY_FUEL),
             match_cmp_budget: std::cell::Cell::new(MATCH_CMP_BUDGET),
         }
@@ -670,7 +671,7 @@ impl Infer {
                             // 分支选中：先在值层应用卡住期累积的实参（值无需
                             // quote，作用域天然正确；项层 splice 会把实参的
                             // 自由变量引到错误上下文）。
-                            let mut v = self.eval(decl, &env2, tm);
+                            let mut v = self.eval_ref(decl, &env2, tm);
                             for (u, i) in pending.iter().cloned() {
                                 v = self.v_app(decl, v, u, i);
                             }
@@ -681,6 +682,18 @@ impl Infer {
                 Val::Match(s, env, cases, pending)
             }
             Val::Decl(name, sp) => match decl.get(&name) {
+                // L13 式 prim：归约函数挂在 decl 条目上；spine 是应用实参。
+                Some(e) if e.prim.is_some() => {
+                    if burn(&self.unify_fuel) {
+                        let mut args: Vec<Val> =
+                            sp.iter().map(|(v, _)| self.force(decl, v.clone())).collect();
+                        args.reverse();
+                        if let Some(v) = (e.prim.as_ref().unwrap().0)(self, decl, &args) {
+                            return self.force(decl, v);
+                        }
+                    }
+                    Val::Decl(name, sp)
+                }
                 // unfold 前先检查自引用占位（递归 def 的占位值与 simpl_decl
                 // 的中性条目都是 `Decl(自身名, [])`）：v_app_sp 后仍是原值，
                 // unfold 永无进展，只会自旋烧光 fuel 池。直接按中性返回。
@@ -853,7 +866,7 @@ impl Infer {
     /// `args` 自然序（最先应用在前）；元数 / 字面量检查与 L06 的
     /// `PrimFunc` 逐条对应，不满足即 None 保持卡住。文件族失败 panic
     /// （两版一致）。
-    fn prim_reduce(&self, decl: &Decls, name: &str, args: &[Val]) -> Option<Val> {
+    pub(crate) fn prim_reduce(&self, decl: &Decls, name: &str, args: &[Val]) -> Option<Val> {
         let lit = |v: &Val| match v {
             Val::LiteralIntro(s) => Some(s.data.clone()),
             _ => None,
@@ -1102,7 +1115,10 @@ impl Infer {
     }
 
     fn closure_apply(&self, decl: &Decls, closure: &Closure, u: Val) -> Val {
-        self.eval(decl, &closure.0.prepend(u), (*closure.1).clone())
+        // 借用 eval：直接读 Rc 闭包体，β 不再深拷贝体（L07 P0-1 第 2 步
+        // 的 L08 对应物）。旧实现 `(*closure.1).clone()` 在 church /
+        // 递归 add 这类高 β 次数负载上每步克隆整条分支体。
+        self.eval_ref(decl, &closure.0.prepend(u), &closure.1)
     }
 
     /// 把 `u` 应用到 `t`。卡住的 match 把实参收进 `pending`（值层保存）——
@@ -1158,90 +1174,110 @@ impl Infer {
     }
 
     fn eval(&self, decl: &Decls, env: &Env, tm: Tm) -> Val {
+        self.eval_ref(decl, env, &tm)
+    }
+
+    fn eval_ref(&self, decl: &Decls, env: &Env, tm: &Tm) -> Val {
         match tm {
             Tm::Var(x) => match env.iter().nth(x.0 as usize) {
                 Some(v) => v.clone(),
                 None => panic!("unbound de Bruijn index {x:?}"),
             },
-            Tm::Decl(name) => match decl.get(&name) {
+            Tm::Decl(name) => match decl.get(name) {
+                Some(e) if e.prim.is_some() => Val::Decl(name.clone(), List::new()),
                 Some(e) => e.val.clone(),
                 None => panic!("unbound global {name}"),
             },
             Tm::Obj(tm, name) => {
-                let v = self.eval(decl, env, *tm);
-                match project(&v, &name) {
+                let v = self.eval_ref(decl, env, tm);
+                match project(&v, name) {
                     Some(p) => p,
-                    None => Val::Obj(Box::new(v), name, List::new()),
+                    None => Val::Obj(Box::new(v), name.clone(), List::new()),
                 }
             }
             Tm::App(t, u, i) => {
-                let u_val = self.eval(decl, env, *u);
-                self.v_app(decl, self.eval(decl, env, *t), u_val, i)
+                let u_val = self.eval_ref(decl, env, u);
+                self.v_app(decl, self.eval_ref(decl, env, t), u_val, *i)
             }
-            Tm::Lam(x, i, t) => Val::Lam(x, i, Closure(env.clone(), Rc::new(*t))),
-            Tm::Pi(x, i, a, b) => Val::Pi(x, i, Box::new(self.eval(decl, env, *a)), Closure(env.clone(), Rc::new(*b))),
+            Tm::Lam(x, i, t) => {
+                // body 已是 Rc：closure 直接共享，不再深拷剩余 λ 链（O(n²)）。
+                Val::Lam(x.clone(), *i, Closure(env.clone(), t.clone()))
+            }
+            Tm::Pi(x, i, a, b) => Val::Pi(
+                x.clone(),
+                *i,
+                Box::new(self.eval_ref(decl, env, a)),
+                Closure(env.clone(), b.clone()),
+            ),
             Tm::Let(_, _, t, u) => {
-                let t_val = self.eval(decl, env, *t);
-                self.eval(decl, &env.prepend(t_val), *u)
+                let t_val = self.eval_ref(decl, env, t);
+                self.eval_ref(decl, &env.prepend(t_val), u)
             }
             Tm::U => Val::U,
-            Tm::Meta(m) => self.v_meta(m),
-            Tm::AppPruning(t, pr) => self.v_app_pruning(decl, env, self.eval(decl, env, *t), &pr),
-            Tm::LiteralIntro(x) => Val::LiteralIntro(x),
+            Tm::Meta(m) => self.v_meta(*m),
+            Tm::AppPruning(t, pr) => self.v_app_pruning(decl, env, self.eval_ref(decl, env, t), pr),
+            Tm::LiteralIntro(x) => Val::LiteralIntro(x.clone()),
             Tm::LiteralType => Val::LiteralType,
             Tm::Prim(name) => {
-                // 实参经 Lam 链进 env（最内 = 最后应用）：卡成带名字与实参
-                // spine 的 Prim。归约统一在 force（不在求值点按 env 触发——
-                // quote → eval 往返时项已改成 `Prim 实参` 的应用形态，按
-                // 现场 env 触发会把无关的字面量拼进来）。
-                let mut args: Vec<(Val, Icit)> =
-                    env.iter().map(|v| (v.clone(), Icit::Expl)).collect();
-                args.reverse(); // 应用序 → spine 头 = 最后应用
-                Val::Prim(
-                    name,
-                    args.into_iter().fold(List::new(), |acc, e| acc.prepend(e)),
-                )
+                // 零元卡住头：实参一律经 App 到达（builtin 值的 λ 链体是
+                // App 链，quote 产物也是 `Prim 实参` 应用形态）。**不读现场
+                // env**——旧实现把 env 全槽收集进 spine，只在"builtin λ 链
+                // 体"的正典路径下正确；quoted Prim 在其它 env 下重求值
+                // （fresh_meta 的 close_ty 闭包体、solve 的 lams、prune 的
+                // 类型重求值）会捕获无关 env 槽、spine 长度失真，unify_sp
+                // 长度失配即误报。归约统一在 force（prim_reduce）。
+                Val::Prim(name.clone(), List::new())
             }
             Tm::Sum(name, params, cases) => {
                 let new_params = params
-                    .into_iter()
+                    .iter()
                     .map(|(n, v, t, i)| {
                         (
-                            n,
-                            Rc::new(self.eval(decl, env, v)),
-                            Rc::new(self.eval(decl, env, t)),
-                            i,
+                            n.clone(),
+                            Rc::new(self.eval_ref(decl, env, v)),
+                            Rc::new(self.eval_ref(decl, env, t)),
+                            *i,
                         )
                     })
                     .collect();
-                Val::Sum(name, new_params, cases)
+                Val::Sum(name.clone(), new_params, cases.clone())
             }
             Tm::SumCase {
                 typ,
                 case_name,
                 datas,
             } => {
-                let typ = self.eval(decl, env, *typ);
+                let typ = self.eval_ref(decl, env, typ);
                 let datas = datas
-                    .into_iter()
-                    .map(|(n, v, i)| (n, Rc::new(self.eval(decl, env, v)), i))
+                    .iter()
+                    .map(|(n, v, i)| (n.clone(), Rc::new(self.eval_ref(decl, env, v)), *i))
                     .collect();
                 Val::SumCase {
                     typ: Rc::new(typ),
-                    case_name,
+                    case_name: case_name.clone(),
                     datas,
                 }
             }
             Tm::Match(tm, cases) => {
-                let val = self.force(decl, self.eval(decl, env, *tm));
+                let val = self.force(decl, self.eval_ref(decl, env, tm));
                 match val {
                     Val::SumCase { .. } => {
-                        match Compiler::eval_aux(self, decl, &val, env, &cases) {
-                            Some((body, env)) => self.eval(decl, &env, body),
-                            None => Val::Match(Box::new(val), env.clone(), cases, Vec::new()),
+                        match Compiler::eval_aux(self, decl, &val, env, cases) {
+                            Some((body, env)) => self.eval_ref(decl, &env, body),
+                            None => Val::Match(
+                                Box::new(val),
+                                env.clone(),
+                                cases.clone(),
+                                Vec::new(),
+                            ),
                         }
                     }
-                    neutral => Val::Match(Box::new(neutral), env.clone(), cases, Vec::new()),
+                    neutral => Val::Match(
+                        Box::new(neutral),
+                        env.clone(),
+                        cases.clone(),
+                        Vec::new(),
+                    ),
                 }
             }
         }
@@ -1270,20 +1306,44 @@ impl Infer {
             Val::VSub(v, _) => self.quote(decl, l, *v),
             Val::Flex(m, sp) => self.quote_sp(decl, l, Tm::Meta(m), sp),
             Val::Rigid(x, sp) => self.quote_sp(decl, l, Tm::Var(lvl2ix(l, x)), sp),
-            Val::Decl(name, sp) => self.quote_sp(decl, l, Tm::Decl(name), sp),
+            Val::Decl(name, sp) => {
+                if let Some(e) = decl.get(&name) {
+                    if let Some(names) = &e.prim_names {
+                        let have = sp.len();
+                        let arity = names.len();
+                        if have < arity {
+                            let base = self.quote_sp(decl, l, Tm::Decl(name), sp);
+                            let rem = (arity - have) as u32;
+                            let mut tm = shift_tm(base, rem, 0);
+                            for i in 0..rem {
+                                tm = Tm::App(
+                                    Box::new(tm),
+                                    Box::new(Tm::Var(Ix(rem - 1 - i))),
+                                    Icit::Expl,
+                                );
+                            }
+                            for n in names[have..].iter().rev() {
+                                tm = Tm::Lam(n.clone(), Icit::Expl, Rc::new(tm));
+                            }
+                            return tm;
+                        }
+                    }
+                }
+                self.quote_sp(decl, l, Tm::Decl(name), sp)
+            }
             Val::Obj(v, name, sp) => {
                 self.quote_sp(decl, l, Tm::Obj(Box::new(self.quote(decl, l, *v)), name), sp)
             }
             Val::Lam(x, i, closure) => Tm::Lam(
                 x,
                 i,
-                Box::new(self.quote(decl, l + 1, self.closure_apply(decl, &closure, Val::vvar(l)))),
+                Rc::new(self.quote(decl, l + 1, self.closure_apply(decl, &closure, Val::vvar(l)))),
             ),
             Val::Pi(x, i, a, closure) => Tm::Pi(
                 x,
                 i,
-                Box::new(self.quote(decl, l, *a)),
-                Box::new(self.quote(decl, l + 1, self.closure_apply(decl, &closure, Val::vvar(l)))),
+                Rc::new(self.quote(decl, l, *a)),
+                Rc::new(self.quote(decl, l + 1, self.closure_apply(decl, &closure, Val::vvar(l)))),
             ),
             Val::U => Tm::U,
             Val::LiteralIntro(x) => Tm::LiteralIntro(x),
@@ -1451,7 +1511,7 @@ fn simpl_decl(decl: &Decls) -> Decls {
                 Val::Sum(..) => e.val.clone(),
                 _ => Val::Decl(k.clone(), List::new()),
             };
-            (k.clone(), Rc::new(DeclEntry { ty: e.ty.clone(), val }))
+            (k.clone(), Rc::new(DeclEntry { prim: None, eta: None, prim_names: None, ty: e.ty.clone(), val }))
         })
         .collect()
 }
@@ -1474,7 +1534,7 @@ pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
         if *L08_DEBUG_ON {
             eprintln!("> {}", parser::syntax::Decl::name(&tm));
         }
-        let (x, _, new_cxt) = infer.infer(&cxt, tm)?;
+        let (x, _, new_cxt) = infer.infer_owned(cxt, tm)?;
         cxt = new_cxt;
         if let DeclTm::Println(x) = x {
             ret += &pretty_tm(0, cxt.names(), &infer.nf(cxt.decl(), &cxt.env, x));
@@ -1586,7 +1646,7 @@ pub(crate) fn bench_check(decls: &[parser::syntax::Decl]) -> bool {
     let mut infer = Infer::new();
     let mut cxt = Cxt::new(&infer);
     for d in decls {
-        match infer.infer(&cxt, d.clone()) {
+        match infer.infer_owned(cxt, d.clone()) {
             Ok((_, _, nc)) => cxt = nc,
             Err(_) => return false,
         }
@@ -1604,7 +1664,7 @@ fn tm_size_ref(t: &Tm) -> u64 {
             Tm::Var(_) | Tm::U | Tm::Meta(_) | Tm::LiteralType | Tm::LiteralIntro(_)
             | Tm::Decl(_) | Tm::Prim(_) => {}
             Tm::Obj(h, _) => stack.push(h),
-            Tm::Lam(_, _, b) => stack.push(b),
+            Tm::Lam(_, _, b) => stack.push(b.as_ref()),
             Tm::App(f, a, _) => {
                 stack.push(f);
                 stack.push(a);
@@ -1614,8 +1674,8 @@ fn tm_size_ref(t: &Tm) -> u64 {
                 n += pr.len() as u64;
             }
             Tm::Pi(_, _, a, b) => {
-                stack.push(a);
-                stack.push(b);
+                stack.push(a.as_ref());
+                stack.push(b.as_ref());
             }
             Tm::Let(_, a, t, u) => {
                 stack.push(a);
@@ -1657,7 +1717,7 @@ pub(crate) fn bench_check_nf(decls: &[parser::syntax::Decl]) -> u64 {
         if let parser::syntax::Decl::Def { name, .. } = d {
             last = Some(name.data.clone());
         }
-        match infer.infer(&cxt, d.clone()) {
+        match infer.infer_owned(cxt, d.clone()) {
             Ok((_, _, nc)) => cxt = nc,
             Err(_) => return 0,
         }
@@ -1741,3 +1801,59 @@ use parser::syntax::Icit;
 
 #[cfg(test)]
 mod tests;
+
+
+fn shift_tm(t: Tm, amount: u32, depth: u32) -> Tm {
+    match t {
+        Tm::Var(Ix(i)) => Tm::Var(Ix(if i >= depth { i + amount } else { i })),
+        Tm::Decl(n) => Tm::Decl(n),
+        Tm::U => Tm::U,
+        Tm::Meta(m) => Tm::Meta(m),
+        Tm::LiteralType => Tm::LiteralType,
+        Tm::LiteralIntro(x) => Tm::LiteralIntro(x),
+        Tm::Prim(name) => Tm::Prim(name),
+        Tm::Obj(h, n) => Tm::Obj(Box::new(shift_tm(*h, amount, depth)), n),
+        Tm::App(f, a, i) => Tm::App(
+            Box::new(shift_tm(*f, amount, depth)),
+            Box::new(shift_tm(*a, amount, depth)),
+            i,
+        ),
+        Tm::AppPruning(h, pr) => Tm::AppPruning(Box::new(shift_tm(*h, amount, depth)), pr),
+        Tm::Lam(x, i, b) => Tm::Lam(x, i, Rc::new(shift_tm((*b).clone(), amount, depth + 1))),
+        Tm::Pi(x, i, a, b) => Tm::Pi(
+            x,
+            i,
+            Rc::new(shift_tm((*a).clone(), amount, depth)),
+            Rc::new(shift_tm((*b).clone(), amount, depth + 1)),
+        ),
+        Tm::Let(x, a, t, u) => Tm::Let(
+            x,
+            Box::new(shift_tm(*a, amount, depth)),
+            Box::new(shift_tm(*t, amount, depth)),
+            Box::new(shift_tm(*u, amount, depth + 1)),
+        ),
+        Tm::Sum(name, params, cases) => Tm::Sum(
+            name,
+            params
+                .into_iter()
+                .map(|(n, v, ty, i)| (n, shift_tm(v, amount, depth), shift_tm(ty, amount, depth), i))
+                .collect(),
+            cases,
+        ),
+        Tm::SumCase { typ, case_name, datas } => Tm::SumCase {
+            typ: Box::new(shift_tm(*typ, amount, depth)),
+            case_name,
+            datas: datas.into_iter().map(|(n, v, i)| (n, shift_tm(v, amount, depth), i)).collect(),
+        },
+        Tm::Match(s, cases) => Tm::Match(
+            Box::new(shift_tm(*s, amount, depth)),
+            cases
+                .into_iter()
+                .map(|(p, b)| {
+                    let d = depth + p.bind_count();
+                    (p, shift_tm(b, amount, d))
+                })
+                .collect(),
+        ),
+    }
+}

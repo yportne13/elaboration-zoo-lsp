@@ -68,11 +68,11 @@ pub enum Tm {
     Decl(SmolStr),
     /// `x.field` 投影。
     Obj(Box<Tm>, Span<String>),
-    Lam(Span<String>, Icit, Box<Tm>),
+    Lam(Span<String>, Icit, Rc<Tm>),
     App(Box<Tm>, Box<Tm>, Icit),
     AppPruning(Box<Tm>, Pruning),
     U,
-    Pi(Span<String>, Icit, Box<Ty>, Box<Ty>),
+    Pi(Span<String>, Icit, Rc<Ty>, Rc<Ty>),
     Let(Span<String>, Box<Ty>, Box<Tm>, Box<Tm>),
     Meta(MetaVar),
     LiteralType,
@@ -854,6 +854,18 @@ impl Infer {
                 Val::Match(s, env, cases, pending)
             }
             Val::Decl(name, sp) => match decl.get(&name) {
+                // L13 式 prim：归约函数挂在 decl 条目上；spine 是应用实参。
+                Some(e) if e.prim.is_some() => {
+                    if burn(&self.unify_fuel) {
+                        let mut args: Vec<Val> =
+                            sp.iter().map(|(v, _)| self.force(decl, v.clone())).collect();
+                        args.reverse();
+                        if let Some(v) = (e.prim.as_ref().unwrap().0)(self, decl, &args) {
+                            return self.force(decl, v);
+                        }
+                    }
+                    Val::Decl(name, sp)
+                }
                 // unfold 前先检查自引用占位（递归 def 的占位值与 simpl_decl
                 // 的中性条目都是 `Decl(自身名, [])`）：v_app_sp 后仍是原值，
                 // unfold 永无进展，只会自旋烧光 fuel 池。直接按中性返回。
@@ -1031,7 +1043,7 @@ impl Infer {
     /// `args` 自然序（最先应用在前）；元数 / 字面量检查与 L06 的
     /// `PrimFunc` 逐条对应，不满足即 None 保持卡住。文件族 IO 失败同样
     /// 保持卡住（None，与实参非字面量同口径）——源码可达路径不 panic。
-    fn prim_reduce(&self, decl: &Decls, name: &str, args: &[Val]) -> Option<Val> {
+    pub(crate) fn prim_reduce(&self, decl: &Decls, name: &str, args: &[Val]) -> Option<Val> {
         let lit = |v: &Val| match v {
             Val::LiteralIntro(s) => Some(s.data.clone()),
             _ => None,
@@ -1333,6 +1345,7 @@ impl Infer {
                 None => panic!("unbound de Bruijn index {x:?}"),
             },
             Tm::Decl(name) => match decl.get(name) {
+                Some(e) if e.prim.is_some() => Val::Decl(name.clone(), List::new()),
                 Some(e) => e.val.clone(),
                 None => panic!("unbound global {name}"),
             },
@@ -1348,13 +1361,14 @@ impl Infer {
                 self.v_app(decl, self.eval(decl, env, t), u_val, *i)
             }
             Tm::Lam(x, i, t) => {
-                Val::Lam(x.clone(), *i, Closure(env.clone(), Rc::new((**t).clone())))
+                // body 已是 Rc：closure 直接共享，不再深拷剩余 λ 链（O(n²)）。
+                Val::Lam(x.clone(), *i, Closure(env.clone(), t.clone()))
             }
             Tm::Pi(x, i, a, b) => Val::Pi(
                 x.clone(),
                 *i,
                 Box::new(self.eval(decl, env, a)),
-                Closure(env.clone(), Rc::new((**b).clone())),
+                Closure(env.clone(), b.clone()),
             ),
             Tm::Let(_, _, t, u) => {
                 let t_val = self.eval(decl, env, t);
@@ -1641,20 +1655,44 @@ impl Infer {
             Val::VSub(v, _) => self.quote(decl, l, *v),
             Val::Flex(m, sp) => self.quote_sp(decl, l, Tm::Meta(m), sp),
             Val::Rigid(x, sp) => self.quote_sp(decl, l, Tm::Var(lvl2ix(l, x)), sp),
-            Val::Decl(name, sp) => self.quote_sp(decl, l, Tm::Decl(name), sp),
+            Val::Decl(name, sp) => {
+                if let Some(e) = decl.get(&name) {
+                    if let Some(names) = &e.prim_names {
+                        let have = sp.len();
+                        let arity = names.len();
+                        if have < arity {
+                            let base = self.quote_sp(decl, l, Tm::Decl(name), sp);
+                            let rem = (arity - have) as u32;
+                            let mut tm = shift_tm(base, rem, 0);
+                            for i in 0..rem {
+                                tm = Tm::App(
+                                    Box::new(tm),
+                                    Box::new(Tm::Var(Ix(rem - 1 - i))),
+                                    Icit::Expl,
+                                );
+                            }
+                            for n in names[have..].iter().rev() {
+                                tm = Tm::Lam(n.clone(), Icit::Expl, Rc::new(tm));
+                            }
+                            return tm;
+                        }
+                    }
+                }
+                self.quote_sp(decl, l, Tm::Decl(name), sp)
+            }
             Val::Obj(v, name, sp) => {
                 self.quote_sp(decl, l, Tm::Obj(Box::new(self.quote(decl, l, *v)), name), sp)
             }
             Val::Lam(x, i, closure) => Tm::Lam(
                 x,
                 i,
-                Box::new(self.quote(decl, l + 1, self.closure_apply(decl, &closure, Val::vvar(l)))),
+                Rc::new(self.quote(decl, l + 1, self.closure_apply(decl, &closure, Val::vvar(l)))),
             ),
             Val::Pi(x, i, a, closure) => Tm::Pi(
                 x,
                 i,
-                Box::new(self.quote(decl, l, *a)),
-                Box::new(self.quote(decl, l + 1, self.closure_apply(decl, &closure, Val::vvar(l)))),
+                Rc::new(self.quote(decl, l, *a)),
+                Rc::new(self.quote(decl, l + 1, self.closure_apply(decl, &closure, Val::vvar(l)))),
             ),
             Val::U => Tm::U,
             Val::LiteralIntro(x) => Tm::LiteralIntro(x),
@@ -1896,7 +1934,7 @@ fn simpl_decl(decl: &Decls) -> Decls {
                 Val::Sum(..) => e.val.clone(),
                 _ => Val::Decl(k.clone(), List::new()),
             };
-            (k.clone(), Rc::new(DeclEntry { ty: e.ty.clone(), val }))
+            (k.clone(), Rc::new(DeclEntry { prim: None, eta: None, prim_names: None, ty: e.ty.clone(), val }))
         })
         .collect();
     Decls {
@@ -2201,3 +2239,59 @@ use pattern_match::Compiler;
 use parser::syntax::Icit;
 #[cfg(test)]
 mod tests;
+
+
+fn shift_tm(t: Tm, amount: u32, depth: u32) -> Tm {
+    match t {
+        Tm::Var(Ix(i)) => Tm::Var(Ix(if i >= depth { i + amount } else { i })),
+        Tm::Decl(n) => Tm::Decl(n),
+        Tm::U => Tm::U,
+        Tm::Meta(m) => Tm::Meta(m),
+        Tm::LiteralType => Tm::LiteralType,
+        Tm::LiteralIntro(x) => Tm::LiteralIntro(x),
+        Tm::Prim(name) => Tm::Prim(name),
+        Tm::Obj(h, n) => Tm::Obj(Box::new(shift_tm(*h, amount, depth)), n),
+        Tm::App(f, a, i) => Tm::App(
+            Box::new(shift_tm(*f, amount, depth)),
+            Box::new(shift_tm(*a, amount, depth)),
+            i,
+        ),
+        Tm::AppPruning(h, pr) => Tm::AppPruning(Box::new(shift_tm(*h, amount, depth)), pr),
+        Tm::Lam(x, i, b) => Tm::Lam(x, i, Rc::new(shift_tm((*b).clone(), amount, depth + 1))),
+        Tm::Pi(x, i, a, b) => Tm::Pi(
+            x,
+            i,
+            Rc::new(shift_tm((*a).clone(), amount, depth)),
+            Rc::new(shift_tm((*b).clone(), amount, depth + 1)),
+        ),
+        Tm::Let(x, a, t, u) => Tm::Let(
+            x,
+            Box::new(shift_tm(*a, amount, depth)),
+            Box::new(shift_tm(*t, amount, depth)),
+            Box::new(shift_tm(*u, amount, depth + 1)),
+        ),
+        Tm::Sum(name, params, cases) => Tm::Sum(
+            name,
+            params
+                .into_iter()
+                .map(|(n, v, ty, i)| (n, shift_tm(v, amount, depth), shift_tm(ty, amount, depth), i))
+                .collect(),
+            cases,
+        ),
+        Tm::SumCase { typ, case_name, datas } => Tm::SumCase {
+            typ: Box::new(shift_tm(*typ, amount, depth)),
+            case_name,
+            datas: datas.into_iter().map(|(n, v, i)| (n, shift_tm(v, amount, depth), i)).collect(),
+        },
+        Tm::Match(s, cases) => Tm::Match(
+            Box::new(shift_tm(*s, amount, depth)),
+            cases
+                .into_iter()
+                .map(|(p, b)| {
+                    let d = depth + p.bind_count();
+                    (p, shift_tm(b, amount, d))
+                })
+                .collect(),
+        ),
+    }
+}

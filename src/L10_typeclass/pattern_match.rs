@@ -1,7 +1,5 @@
-use std::{
-    collections::{BTreeSet, HashMap, HashSet},
-    rc::Rc,
-};
+use rustc_hash::FxHashSet as HashSet;
+use std::rc::Rc;
 
 use crate::parser_lib::{Span, ToSpan};
 
@@ -209,18 +207,30 @@ impl Compiler {
         // 覆盖检查：可达且无臂覆盖 → Unmatched（fill_context(Outermost, ·)
         // 的形态就是「构造子 + 999 通配」）。不可达（如 `Vec[A] zero` 上的
         // `cons`）不报——索引方程不可解即结构上不可能出现。
-        let empty_sub: Rc<Subst> = Rc::new(Subst::default());
-        for ctor in &constrs {
-            if Self::probe_accessible(infer, cxt, cxt.lvl, &typ, &ctor.data, &empty_sub)
-                && !arms
-                    .iter()
-                    .any(|(pat, _)| covers(pat, ctor.data.as_str(), &ctor_names))
-            {
-                self.warnings.push(Warning::Unmatched(Pattern::Con(
-                    ctor.clone(),
-                    vec![Pattern::Any(empty_span(true), Icit::Expl); 999],
-                    Icit::Expl,
-                )));
+        //
+        // 性能（移植 L07 `a78daec7` 的 U2）：`probe_accessible` 的结果**只**用于
+        // "缺构造子"告警；若头部和类型的每个构造子均已被某个臂覆盖（穷尽 match
+        // 的常态），下面的循环不可能产生任何告警，整轮探测（每 ctor 一次 meta
+        // 快照 + 索引特化方程）纯属浪费，直接跳过。判据与循环体同源（同一个
+        // `covers`），不改变判定。
+        let fully_covered = !constrs.is_empty()
+            && constrs
+                .iter()
+                .all(|c| arms.iter().any(|(pat, _)| covers(pat, c.data.as_str(), &ctor_names)));
+        if !fully_covered {
+            let empty_sub: Rc<Subst> = Rc::new(Subst::default());
+            for ctor in &constrs {
+                if Self::probe_accessible(infer, cxt, cxt.lvl, &typ, &ctor.data, &empty_sub)
+                    && !arms
+                        .iter()
+                        .any(|(pat, _)| covers(pat, ctor.data.as_str(), &ctor_names))
+                {
+                    self.warnings.push(Warning::Unmatched(Pattern::Con(
+                        ctor.clone(),
+                        vec![Pattern::Any(empty_span(true), Icit::Expl); 999],
+                        Icit::Expl,
+                    )));
+                }
             }
         }
         let mut unreachable: Vec<Warning> = Vec::new();
@@ -318,7 +328,7 @@ impl Compiler {
         // 献其末端构造子）。可达集取各记账臂探测的并集（保守：任一臂实例化
         // 下可达的构造子都要求被覆盖）。荒谬臂 / 被遮蔽臂不在 pats 里，天然
         // 不贡献覆盖——与运行时首匹配结构语义一致。
-        let mut reported = HashSet::new();
+        let mut reported = HashSet::default();
         for nc in std::mem::take(&mut self.nested_checks) {
             // 字段 Sum 置于记录臂的终态 σ 之下再 force：索引精化（如尾部
             // 长度 l := succ n）在 σ 里，推开后的 Sum 才是探测该用的类型

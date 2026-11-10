@@ -2271,7 +2271,7 @@ fn visibility_boundary_decl_value_is_not_refined() {
     // def d := x（缓存值直接引用槽位 Lvl(0)）
     let cxt = cxt.decl_insert(
         "d",
-        cxt::DeclEntry {
+        cxt::DeclEntry { prim: None, eta: None, prim_names: None,
             ty: Val::U,
             val: Val::vvar(Lvl(0)),
         },

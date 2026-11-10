@@ -76,6 +76,10 @@ jobs:
     name: Full test suite (all targets)
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    env:
+      # L06 blackbox 的 deep workload 在 libtest 默认线程栈溢出（基线已存在）；
+      # 显式抬到 64MiB，避免 CI 上出现平台相关的 STATUS_STACK_OVERFLOW。
+      RUST_MIN_STACK: "67108864"
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

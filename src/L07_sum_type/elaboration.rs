@@ -87,7 +87,7 @@ impl Infer {
                     *t,
                     self.closure_apply(decl, &b_closure, Val::vvar(cxt.lvl)),
                 )?;
-                Ok(Tm::Lam(x, i_t, Box::new(body)))
+                Ok(Tm::Lam(x, i_t, Rc::new(body)))
             }
             // 非 λ 项 against 隐式 Π：插入一个隐式绑定器
             (t, Val::Pi(x, Icit::Impl, a, b_closure)) => {
@@ -96,14 +96,26 @@ impl Infer {
                     t,
                     self.closure_apply(decl, &b_closure, Val::vvar(cxt.lvl)),
                 )?;
-                Ok(Tm::Lam(x, Icit::Impl, Box::new(body)))
+                Ok(Tm::Lam(x, Icit::Impl, Rc::new(body)))
             }
             // let
             (Raw::Let(x, a, t, u), a_prime) => {
-                let a_checked = self.check_ty(cxt, *a)?;
-                let va = self.eval(decl, &cxt.env, &a_checked);
-                let t_checked = self.check(cxt, *t, va.clone())?;
-                let vt = self.eval(decl, &cxt.env, &t_checked);
+                let (a_checked, va, t_checked, vt) = if matches!(a.as_ref(), Raw::Hole) {
+                    // 无类型注解的 let：直接推导 t 的类型，避免为 binder 造一个
+                    // 闭合 meta。fresh_meta 的 close_ty 在 n 层嵌套 let 的 hole
+                    // 链上是 O(n²)（每层都重建整条 Locals 的 Pi/Let 类型）；
+                    // 深 let 探针 n=1000 从 ~168ms 降到 ~2.4ms。
+                    let (t_checked, ty) = self.infer_expr(cxt, *t)?;
+                    let a_checked = self.quote(decl, cxt.lvl, ty.clone());
+                    let vt = self.eval(decl, &cxt.env, &t_checked);
+                    (a_checked, ty, t_checked, vt)
+                } else {
+                    let a_checked = self.check_ty(cxt, *a)?;
+                    let va = self.eval(decl, &cxt.env, &a_checked);
+                    let t_checked = self.check(cxt, *t, va.clone())?;
+                    let vt = self.eval(decl, &cxt.env, &t_checked);
+                    (a_checked, va, t_checked, vt)
+                };
                 let u_checked = self.check(
                     &cxt.define(x.clone(), t_checked.clone(), vt, a_checked.clone(), va),
                     *u,
@@ -175,17 +187,23 @@ impl Infer {
     /// 上下文里预检余域（与原 Pi 臂同构，域/余域各只检查一次，无额外
     /// meta）。
     fn check_ty(&mut self, cxt: &Cxt, t: Raw) -> Result<Tm, Error> {
-        if let Raw::Pi(x, i, a, b) = &t {
-            self.ty_precheck(cxt, a)?;
-            let a_checked = self.check(cxt, *a.clone(), Val::U)?;
-            let a_eval = self.eval(cxt.decl(), &cxt.env, &a_checked);
-            let cxt2 = cxt.bind(x.clone(), self.quote(cxt.decl(), cxt.lvl, a_eval.clone()), a_eval);
-            self.ty_precheck(&cxt2, b)?;
-            let b_checked = self.check(&cxt2, *b.clone(), Val::U)?;
-            Ok(Tm::Pi(x.clone(), *i, Box::new(a_checked), Box::new(b_checked)))
-        } else {
-            self.ty_precheck(cxt, &t)?;
-            self.check(cxt, t, Val::U)
+        match t {
+            Raw::Pi(x, i, a, b) => {
+                self.ty_precheck(cxt, &a)?;
+                // 按值解构（review 修复）：旧实现 `*a.clone()`/`*b.clone()` 在
+                // 每一层 Π 上都克隆剩余整条 Raw 链，深 Pi 类型注解是 O(n²)。
+                // `t` 已经按值传入，直接 move `a`/`b`，语义不变。
+                let a_checked = self.check(cxt, *a, Val::U)?;
+                let a_eval = self.eval(cxt.decl(), &cxt.env, &a_checked);
+                let cxt2 = cxt.bind(x.clone(), self.quote(cxt.decl(), cxt.lvl, a_eval.clone()), a_eval);
+                self.ty_precheck(&cxt2, &b)?;
+                let b_checked = self.check(&cxt2, *b, Val::U)?;
+                Ok(Tm::Pi(x, i, Rc::new(a_checked), Rc::new(b_checked)))
+            }
+            t => {
+                self.ty_precheck(cxt, &t)?;
+                self.check(cxt, t, Val::U)
+            }
         }
     }
 
@@ -229,7 +247,7 @@ impl Infer {
                 // O(D²) 放大器）。
                 cxt.decl_insert_mut(
                     name.data.clone(),
-                    DeclEntry {
+                    DeclEntry { prim: None, eta: None, prim_names: None,
                         ty: vtyp.clone(),
                         val: Val::Decl(SmolStr::new(&name.data), List::new()),
                     },
@@ -242,7 +260,7 @@ impl Infer {
                 let vt = self.force(cxt.decl(), self.eval(cxt.decl(), &cxt.env, &t_tm));
                 cxt.decl_insert_mut(
                     name.data.clone(),
-                    DeclEntry {
+                    DeclEntry { prim: None, eta: None, prim_names: None,
                         ty: vtyp,
                         val: vt,
                     },
@@ -334,7 +352,7 @@ impl Infer {
                 // 就地插入，避免每个 enum 深拷整表。
                 cxt.decl_insert_mut(
                     name.data.clone(),
-                    DeclEntry {
+                    DeclEntry { prim: None, eta: None, prim_names: None,
                         ty: vtyp.clone(),
                         val: Val::Decl(SmolStr::new(&name.data), List::new()),
                     },
@@ -343,7 +361,7 @@ impl Infer {
                 let vt = self.eval(cxt.decl(), &cxt.env, &t_tm);
                 cxt.decl_insert_mut(
                     name.data.clone(),
-                    DeclEntry {
+                    DeclEntry { prim: None, eta: None, prim_names: None,
                         ty: vtyp,
                         val: vt,
                     },
@@ -377,7 +395,7 @@ impl Infer {
                     self.check_ctor_wf(&cxt, &name.data, &ctor_name.data, &vtyp)?;
                     let t_tm = self.check(&cxt, bod, vtyp.clone())?;
                     let vt = self.eval(cxt.decl(), &cxt.env, &t_tm);
-                    let entry = DeclEntry {
+                    let entry = DeclEntry { prim: None, eta: None, prim_names: None,
                         ty: vtyp,
                         val: vt,
                     };
@@ -575,7 +593,7 @@ impl Infer {
                 let (t_inferred, b) = self.insert(&new_cxt, infered)?;
                 let b_closure = self.close_val(decl, cxt, b);
                 Ok((
-                    Tm::Lam(x.clone(), i, Box::new(t_inferred)),
+                    Tm::Lam(x.clone(), i, Rc::new(t_inferred)),
                     Val::Pi(x, i, Box::new(a), b_closure),
                 ))
             }
@@ -654,7 +672,7 @@ impl Infer {
                     *b,
                 )?;
                 Ok((
-                    Tm::Pi(x, i, Box::new(a_checked), Box::new(b_checked)),
+                    Tm::Pi(x, i, Rc::new(a_checked), Rc::new(b_checked)),
                     Val::U,
                 ))
             }

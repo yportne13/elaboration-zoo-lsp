@@ -5,7 +5,8 @@ use super::{
     parser::syntax::Icit, syntax::Pruning, empty_span, pretty::pretty_tm, typeclass::Assertion, Raw, Rc, Decl,
 };
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
+use rustc_hash::FxHashMap as HashMap;
 
 /// η 展开的可应用性守卫：只有中性值（Flex/Rigid/Decl/Obj 头）能被 η 新变量
 /// 应用——这正是 `Infer::v_app` 能处理的全部形态（其余会命中
@@ -64,7 +65,7 @@ impl Infer {
         sp: &Spine,
     ) -> Result<(Lvl, HashMap<u32, Lvl>, HashSet<u32>, List<(Lvl, Icit)>), UnifyError> {
         match sp {
-            List { head: None, .. } => Ok((Lvl(0), HashMap::new(), HashSet::new(), List::new())),
+            List { head: None, .. } => Ok((Lvl(0), HashMap::default(), HashSet::new(), List::new())),
             a => {
                 let (dom, mut ren, mut nlvars, fsp) = self.invert_go(decl, &a.tail())?;
                 match self.force_arg(decl, a.head().unwrap().0.clone()).as_ref() {
@@ -152,7 +153,7 @@ impl Infer {
                 occ: None,
                 dom: Lvl(0),
                 cod: Lvl(0),
-                ren: HashMap::new(),
+                ren: HashMap::default(),
             },
             a,
         )

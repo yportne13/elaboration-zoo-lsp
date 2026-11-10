@@ -137,14 +137,25 @@ impl Compiler {
         // 覆盖检查：每个可达构造子必须被某个臂覆盖（通配臂覆盖全部）。
         // 可达性 = 在（meta + σ + 本地可解集）快照回滚下跑一次特化方程
         // （与臂内走查同一套判定）。
-        for ctor in head_sum.sum_cases() {
-            if Self::probe_accessible(infer, cxt, cxt.lvl, &head_sum, &ctor, &self.sub, &self.solvable)
-                && !arms
-                    .iter()
-                    .any(|(pat, _)| covers(pat, &ctor.data, &ctor_names))
-            {
-                self.errors
-                    .push(format!("match 不完整：缺少构造子 {}", ctor.data));
+        // 性能（U2，port L07 a78daec7）：probe_accessible 只用于"缺构造子"
+        // 报错；若所有构造子都已被某个臂覆盖（穷尽 match 的常态），整轮探测
+        // （每 ctor 一次 decl/meta 快照 + 特化方程）纯属浪费，直接跳过。
+        // 判据与循环体同源（同一个 covers），不改变判定。
+        let ctors = head_sum.sum_cases();
+        let fully_covered = !ctors.is_empty()
+            && ctors
+                .iter()
+                .all(|c| arms.iter().any(|(pat, _)| covers(pat, &c.data, &ctor_names)));
+        if !fully_covered {
+            for ctor in ctors {
+                if Self::probe_accessible(infer, cxt, cxt.lvl, &head_sum, &ctor, &self.sub, &self.solvable)
+                    && !arms
+                        .iter()
+                        .any(|(pat, _)| covers(pat, &ctor.data, &ctor_names))
+                {
+                    self.errors
+                        .push(format!("match 不完整：缺少构造子 {}", ctor.data));
+                }
             }
         }
         // 逐臂下钻。一旦出现通配臂（覆盖所有取值），后续臂运行时永远不会被
@@ -178,7 +189,7 @@ impl Compiler {
                     // 分支体走**常规转换**检查：spec 不穿参，可解性不再需要
                     // "摘走/放回"的编排（旧 pm_solvable_take/set 已随之删除）。
                     // 上下文先置于精化之下（dpm-nbe `subst sub ctx`）：env 槽
-                    // 与 src_names 类型包 VSub，lvl/locals/pruning 不动——
+                    // 与名字表类型包 VSub，lvl/locals/pruning 不动——
                     // 槽位布局（= 运行时布局）永不漂移，读点 force 展开。
                     let cxt_arm = cxt_arm.subst_cxt(&self.sub);
                     // 期望类型**重锚**到臂上下文：quote → eval 把其中所有
@@ -302,14 +313,15 @@ impl Compiler {
         // 会假 absurd，与臂内方程的判定不同步）。孪生版同点充值。
         infer.meta_refuel();
         let snap = infer.meta_snapshot();
-        let decl = cxt.decl().clone();
+        // 性能（U1，port L07 a78daec7）：探测只读 decl 表，借用即可；旧实现
+        // 每个 (match × 构造子) 深拷整张 Decls。
         let mut solvable = base_solvable.to_vec();
         let sub = init_sub.clone();
         let mut ty = entry.ty.clone();
         let mut impl_idx = 0;
         let mut scratch = 0u32;
         let ok = loop {
-            match infer.force(&decl, wrap_sub(&sub, ty.clone())) {
+            match infer.force(cxt.decl(), wrap_sub(&sub, ty.clone())) {
                 Val::Pi(_, _, _, closure) => {
                     let u = if impl_idx < impl_vals.len() {
                         let v = impl_vals[impl_idx].clone();
@@ -321,10 +333,10 @@ impl Compiler {
                         solvable.push(l);
                         Val::vvar(l)
                     };
-                    ty = infer.closure_apply(&decl, &closure, u);
+                    ty = infer.closure_apply(cxt.decl(), &closure, u);
                 }
                 ret => {
-                    let ret_sum = match infer.force(&decl, wrap_sub(&sub, ret)) {
+                    let ret_sum = match infer.force(cxt.decl(), wrap_sub(&sub, ret)) {
                         s @ Val::Sum(..) => s,
                         _ => break false,
                     };
@@ -675,69 +687,70 @@ impl Compiler {
     /// 任何 head 都不会 panic——不命中就返回 None，由调用方停成 `Val::Match`。
     /// head 借用传入：构造子值迁 Rc 后 clone 是 O(1)（typ/datas 均为引用
     /// 计数），字段下钻直接透传借用，不再按值深拷贝剩余链。
-    pub fn eval_aux(
+    pub fn eval_aux<'a>(
         infer: &Infer,
         decl: &Decls,
         head: &Val,
         env: &Env,
-        cases: &[(PatternDetail, Tm)],
-    ) -> Option<(Tm, Env)> {
+        cases: &'a [(PatternDetail, Tm)],
+    ) -> Option<(&'a Tm, Env)> {
         let head = infer.force(decl, head.clone());
         for (pat, body) in cases {
-            match pat {
-                PatternDetail::Any(_) | PatternDetail::Bind(_) => {
-                    return Some((body.clone(), env.prepend(head.clone())));
-                }
-                PatternDetail::Con(name, subs) => {
-                    let Val::SumCase {
-                        typ,
-                        case_name,
-                        datas,
-                    } = &head
-                    else {
-                        continue;
-                    };
-                    let Val::Sum(_, _, ctor_names) = typ.as_ref() else {
-                        continue;
-                    };
-                    let in_type = ctor_names.iter().any(|c| c.data == name.data);
-                    if in_type && case_name.data == name.data {
-                        if subs.len() != datas.len() {
-                            continue;
-                        }
-                        // datas 与子模式按声明序 zip，逐个下钻；先 prepend 被
-                        // 匹配值本身（head 槽，编译期 walk_con 入口同序绑定），
-                        // 再逐字段 prepend 子模式槽值（编译期字段槽在后）
-                        let mut cur = (body.clone(), env.prepend(head.clone()));
-                        let mut ok = true;
-                        for ((_, v, _), sub) in datas.iter().zip(subs.iter()) {
-                            match Compiler::eval_aux(
-                                infer,
-                                decl,
-                                v,
-                                &cur.1,
-                                &[(sub.clone(), cur.0.clone())],
-                            ) {
-                                Some((b, e)) => cur = (b, e),
-                                None => {
-                                    ok = false;
-                                    break;
-                                }
-                            }
-                        }
-                        if ok {
-                            return Some(cur);
-                        }
-                    } else if !in_type {
-                        // 不是该类型的构造子名 → 变量模式（保守兼容）
-                        return Some((body.clone(), env.prepend(head.clone())));
-                    }
-                    // 同类型不同构造子 → 试下一个分支
-                }
+            if let Some(env) = Self::eval_aux_arm(infer, decl, &head, env, pat) {
+                return Some((body, env));
             }
         }
         None
     }
+
+fn eval_aux_arm(
+        infer: &Infer,
+        decl: &Decls,
+        head: &Val,
+        env: &Env,
+        pat: &PatternDetail,
+    ) -> Option<Env> {
+        match pat {
+            PatternDetail::Any(_) | PatternDetail::Bind(_) => Some(env.prepend(head.clone())),
+            PatternDetail::Con(name, subs) => {
+                let Val::SumCase {
+                    typ,
+                    case_name,
+                    datas,
+                } = head
+                else {
+                    return None;
+                };
+                let Val::Sum(_, _, ctor_names) = typ.as_ref() else {
+                    return None;
+                };
+                let in_type = ctor_names.iter().any(|c| c.data == name.data);
+                if in_type && case_name.data == name.data {
+                    if subs.len() != datas.len() {
+                        return None;
+                    }
+                    // datas 与子模式按声明序 zip，逐个下钻；先 prepend 被
+                    // 匹配值本身（head 槽，编译期 walk_con 入口同序绑定），
+                    // 再逐字段 prepend 子模式槽值（编译期字段槽在后）
+                    let mut cur = env.prepend(head.clone());
+                    for ((_, v, _), sub) in datas.iter().zip(subs.iter()) {
+                        // 对齐旧递归入口：字段值 force 前按值传入（ Rc 槽
+                        // 与 head 共享，此处深拷贝一次后 force）
+                        let v = infer.force(decl, (**v).clone());
+                        cur = Self::eval_aux_arm(infer, decl, &v, &cur, sub)?;
+                    }
+                    Some(cur)
+                } else if !in_type {
+                    // 不是该类型的构造子名 → 变量模式（保守兼容）
+                    Some(env.prepend(head.clone()))
+                } else {
+                    // 同类型不同构造子 → 本臂不命中
+                    None
+                }
+            }
+        }
+    }
+
 }
 
 /// 顶层覆盖判定：通配 / 变量模式覆盖一切；Con 只覆盖同名构造子。

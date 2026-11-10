@@ -44,7 +44,8 @@ use parser::{Either, Icit, Raw};
 use crate::list::List;
 use crate::parser_lib::Span;
 use smol_str::SmolStr;
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
+use std::cell::RefCell;
 use std::fmt;
 use std::rc::Rc;
 
@@ -235,6 +236,49 @@ fn lvl2ix(l: Lvl, x: Lvl) -> Ix {
 // context
 // --------------------------------------------------------------------------------
 
+/// 源码名表 + 撤销轨迹（L08 `a3652630` / L07 `d411debe` 配方的 L05 对应物）。
+///
+/// 旧实现是 `Rc<FxHashMap>` 写时复制：父 Cxt 存活时 `Rc::make_mut` 仍整表深拷
+/// （逐键 + 逐条目），n 个嵌套 binder ⇒ O(n²)。新实现是"单张表 + 撤销轨迹 +
+/// 按 mark 惰性回退"：`bind`/`define` 只做一次哈希插入 + 追加一条 (名字, 旧值)
+/// 轨迹，O(1)；上下文退出不显式撤销，而是在下一次访问名字表前把轨迹裁回本
+/// 上下文的 `name_mark`——语义与持久表一致（每个 Cxt 看到创建时的快照）。
+#[derive(Debug, Default)]
+struct NameState {
+    map: FxHashMap<SmolStr, (Lvl, Rc<VTy>)>,
+    /// (名字, 旧值)；旧值 `None` = 该名字此前不在表里。
+    trail: Vec<(SmolStr, Option<(Lvl, Rc<VTy>)>)>,
+}
+
+impl NameState {
+    /// 把轨迹裁回 `mark`：逆序还原被覆盖/删除的条目。调用方保证
+    /// `mark <= trail.len()`（深度优先下成立，见 `Cxt::unwind_names` 断言）。
+    fn unwind(&mut self, mark: u32) {
+        debug_assert!(
+            mark as usize <= self.trail.len(),
+            "unwind: mark {} 超出轨迹长度 {}",
+            mark,
+            self.trail.len()
+        );
+        while self.trail.len() > mark as usize {
+            let (k, prev) = self.trail.pop().expect("unwind: 轨迹为空");
+            match prev {
+                Some(v) => {
+                    self.map.insert(k, v);
+                }
+                None => {
+                    self.map.remove(&k);
+                }
+            }
+        }
+    }
+
+    fn insert(&mut self, k: SmolStr, v: (Lvl, Rc<VTy>)) {
+        let prev = self.map.insert(k.clone(), v);
+        self.trail.push((k, prev));
+    }
+}
+
 /// Elaboration 上下文（上游 Cxt.hs）：`src_names` 只收**源码 binder**
 /// （bind/define），`new_binder` 补的隐式 binder 不入表——对源码名不可见。
 /// `pruning` 与 env 平行（bind/newBinder → Some(Expl)，define → None）。
@@ -249,7 +293,10 @@ struct Cxt {
     lvl: Lvl,
     locals: Locals,
     pruning: Pruning,
-    src_names: HashMap<SmolStr, (Lvl, Rc<VTy>)>,
+    /// 源码变量名表（共享可变 + 轨迹惰性回滚，见 [`NameState`]）。
+    names: Rc<RefCell<NameState>>,
+    /// 本上下文的名字表基线（轨迹长度）。
+    name_mark: u32,
     pos: Span<()>,
 }
 
@@ -260,21 +307,27 @@ impl Cxt {
             lvl: Lvl(0),
             locals: Locals::Here,
             pruning: List::new(),
-            src_names: HashMap::new(),
+            names: Rc::new(RefCell::new(NameState::default())),
+            name_mark: 0,
             pos,
         }
     }
 
     /// 源码 binder：env/lvl/locals/pruning/src_names 全扩展。
     fn bind(&self, x: Name, a_quote: Tm, a: Val) -> Cxt {
-        let mut src_names = self.src_names.clone();
-        src_names.insert(x.data.clone(), (self.lvl, Rc::new(a)));
+        let name_mark = {
+            let mut s = self.names.borrow_mut();
+            s.unwind(self.name_mark);
+            s.insert(x.data.clone(), (self.lvl, Rc::new(a)));
+            s.trail.len() as u32
+        };
         Cxt {
             env: self.env.prepend(Val::vvar(self.lvl)),
             lvl: self.lvl + 1,
             locals: Locals::Bind(Rc::new(self.locals.clone()), x, Rc::new(a_quote)),
             pruning: self.pruning.prepend(Some(Icit::Expl)),
-            src_names,
+            names: Rc::clone(&self.names),
+            name_mark,
             pos: self.pos,
         }
     }
@@ -286,23 +339,48 @@ impl Cxt {
             lvl: self.lvl + 1,
             locals: Locals::Bind(Rc::new(self.locals.clone()), x, Rc::new(a_quote)),
             pruning: self.pruning.prepend(Some(Icit::Expl)),
-            src_names: self.src_names.clone(),
+            names: Rc::clone(&self.names),
+            name_mark: self.name_mark,
             pos: self.pos,
         }
     }
 
     /// 定义：env 收**值**、locals 收类型项与定义项、pruning 记 `None`。
     fn define(&self, x: Name, t: Tm, vt: Val, a: Ty, va: VTy) -> Cxt {
-        let mut src_names = self.src_names.clone();
-        src_names.insert(x.data.clone(), (self.lvl, Rc::new(va)));
+        let name_mark = {
+            let mut s = self.names.borrow_mut();
+            s.unwind(self.name_mark);
+            s.insert(x.data.clone(), (self.lvl, Rc::new(va)));
+            s.trail.len() as u32
+        };
         Cxt {
             env: self.env.prepend(vt),
             lvl: self.lvl + 1,
             locals: Locals::Define(Rc::new(self.locals.clone()), x, Rc::new(a), Rc::new(t)),
             pruning: self.pruning.prepend(None),
-            src_names,
+            names: Rc::clone(&self.names),
+            name_mark,
             pos: self.pos,
         }
+    }
+
+    /// 名字表访问前统一入口：把共享轨迹裁回本上下文基线（惰性回滚）。
+    #[inline]
+    fn unwind_names(&self) {
+        self.names.borrow_mut().unwind(self.name_mark);
+    }
+
+    /// 查一个源码局部名：返回 `(绑定层级, 类型值)`（条目值共享 Rc）。
+    fn lookup_src(&self, n: &str) -> Option<(Lvl, Rc<VTy>)> {
+        self.unwind_names();
+        self.names.borrow().map.get(n).cloned()
+    }
+
+    /// 源码名是否已在本作用域绑定。
+    #[allow(dead_code)]
+    fn has_src(&self, n: &str) -> bool {
+        self.unwind_names();
+        self.names.borrow().map.contains_key(n)
     }
 
     /// pretty 用名字表：locals 头 = 最内层（与 `Tm::Var` 的 Ix 同序）。
@@ -336,7 +414,7 @@ struct PartialRenaming {
     occ: Option<MetaVar>,
     dom: Lvl,               // size of Γ（解体所在的域 = spine 长度 + lift）
     cod: Lvl,               // size of Δ（rhs 所在的域）
-    ren: HashMap<u32, Lvl>, // mapping from Δ vars to Γ vars
+    ren: FxHashMap<u32, Lvl>, // mapping from Δ vars to Γ vars
 }
 
 /// Lifting over an extra bound variable（Γ、Δ 各深一层，binder 进映射）。
@@ -602,9 +680,9 @@ impl Infer {
     fn invert_go(
         &self,
         sp: &Spine,
-    ) -> Result<(Lvl, HashMap<u32, Lvl>, HashSet<u32>, List<(Lvl, Icit)>), UnifyError> {
+    ) -> Result<(Lvl, FxHashMap<u32, Lvl>, FxHashSet<u32>, List<(Lvl, Icit)>), UnifyError> {
         match sp.head() {
-            None => Ok((Lvl(0), HashMap::new(), HashSet::new(), List::new())),
+            None => Ok((Lvl(0), FxHashMap::default(), FxHashSet::default(), List::new())),
             Some((t, i)) => {
                 let (dom, mut ren, mut nlvars, fsp) = self.invert_go(&sp.tail())?;
                 match self.force(t) {
@@ -671,7 +749,7 @@ impl Infer {
                 occ: None,
                 dom: Lvl(0),
                 cod: Lvl(0),
-                ren: HashMap::new(),
+                ren: FxHashMap::default(),
             },
             a,
         )
@@ -1169,8 +1247,8 @@ impl Infer {
                 self.infer(&cxt, t)
             }
 
-            Raw::Var(x) => match cxt.src_names.get(&x.data) {
-                Some((x2, a)) => Ok((Tm::Var(lvl2ix(cxt.lvl, *x2)), (**a).clone())),
+            Raw::Var(x) => match cxt.lookup_src(&x.data) {
+                Some((x2, a)) => Ok((Tm::Var(lvl2ix(cxt.lvl, x2)), (*a).clone())),
                 None => Err(report_at(
                     cxt.pos,
                     format!("Name not in scope: {}", x.data),

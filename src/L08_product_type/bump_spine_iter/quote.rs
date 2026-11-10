@@ -12,7 +12,7 @@ use super::env::{Env, env_ext, PiCell};
 use super::eval::{eval_iter, W};
 use super::force::force;
 use super::prim::{DeclEntryF, Fuel, MutableMap};
-use super::spine::{MetaEntry, Spine};
+use super::spine::{HK_DECL, MetaEntry, Spine};
 use super::subst::simpl_decl;
 use super::syntax::{SumDataT, SumDataV, SumParamT, SumParamV, Tm, V, v_clo_of, v_lvl, v_lvl_of, v_meta_of, v_pi_of, v_spine_of, v_tag, v_xcell_of, XCell};
 
@@ -27,6 +27,9 @@ use super::syntax::{SumDataT, SumDataV, SumParamT, SumParamV, Tm, V, v_clo_of, v
 pub(super) enum QJob<'a> {
     /// 引一个值（先 force）。
     Q(V, u32),
+    /// 同 `Q`，但禁止 builtin 的 η 展开：只用于「链装配的函数部分」
+    /// （参考版 quote_sp 的结构性 App 拼接从不 η 中间部分）。
+    QNoEta(V, u32),
     /// done 栈顶是体，包一层 Lam（名字与 icit 随闭包携带）。
     Lam1(&'a str, Icit),
     /// done 栈顶两个（先 cod 后 dom），合一个 Pi（icit 在 PiCell 里）。
@@ -70,6 +73,158 @@ pub(super) enum QJob<'a> {
 /// 起见对新增值形态保持无记忆化口径）。
 pub(super) type QuoteMemo<'a> = FxHashMap<(u64, u32), &'a Tm<'a>>;
 
+/// 把 bump 项的自由变量索引整体 +`amount`（cutoff=`depth`），分配进 bump
+/// （参考版 `shift_tm` 的 arena 版；只服务 builtin 的 η 展开）。
+fn shift_tm_bump<'a>(bump: &'a Bump, t: &'a Tm<'a>, amount: u32, depth: u32) -> &'a Tm<'a> {
+    match t {
+        Tm::Var(i) => bump.alloc(Tm::Var(if *i >= depth { i + amount } else { *i })),
+        Tm::Lam(n, i, b) => bump.alloc(Tm::Lam(
+            n,
+            *i,
+            shift_tm_bump(bump, b, amount, depth + 1),
+        )),
+        Tm::App(f, a, i) => bump.alloc(Tm::App(
+            shift_tm_bump(bump, f, amount, depth),
+            shift_tm_bump(bump, a, amount, depth),
+            *i,
+        )),
+        Tm::AppPruning(h, pr) => {
+            bump.alloc(Tm::AppPruning(shift_tm_bump(bump, h, amount, depth), *pr))
+        }
+        Tm::Pi(n, i, d, c) => bump.alloc(Tm::Pi(
+            n,
+            *i,
+            shift_tm_bump(bump, d, amount, depth),
+            shift_tm_bump(bump, c, amount, depth + 1),
+        )),
+        Tm::Let(n, a, t2, u) => bump.alloc(Tm::Let(
+            n,
+            shift_tm_bump(bump, a, amount, depth),
+            shift_tm_bump(bump, t2, amount, depth),
+            shift_tm_bump(bump, u, amount, depth + 1),
+        )),
+        Tm::Sum(name, params, cases) => bump.alloc(Tm::Sum(
+            name,
+            bump.alloc_slice_fill_iter(params.iter().map(|p| SumParamT {
+                name: p.name,
+                val: shift_tm_bump(bump, p.val, amount, depth),
+                ty: shift_tm_bump(bump, p.ty, amount, depth),
+                icit: p.icit,
+            })),
+            *cases,
+        )),
+        Tm::SumCase {
+            typ,
+            case_name,
+            datas,
+        } => bump.alloc(Tm::SumCase {
+            typ: shift_tm_bump(bump, typ, amount, depth),
+            case_name,
+            datas: bump.alloc_slice_fill_iter(datas.iter().map(|d| SumDataT {
+                name: d.name,
+                val: shift_tm_bump(bump, d.val, amount, depth),
+                icit: d.icit,
+            })),
+        }),
+        Tm::Match(s, cases) => bump.alloc(Tm::Match(
+            shift_tm_bump(bump, s, amount, depth),
+            bump.alloc_slice_fill_iter(cases.iter().map(|(p, b)| {
+                let d = depth + p.bind_count();
+                (p.clone(), shift_tm_bump(bump, b, amount, d))
+            })),
+        )),
+        Tm::U | Tm::Meta(_) | Tm::LiteralType | Tm::LiteralIntro(_) | Tm::Decl(_) | Tm::Prim(_) => t,
+        Tm::Obj(h, n) => bump.alloc(Tm::Obj(shift_tm_bump(bump, h, amount, depth), n)),
+    }
+}
+
+/// 参考版 `quote` 的 builtin η 展开（`Decl`+`prim_names` 且应用不足）：
+/// `λ 剩余参数. (Decl 名 已有实参…)`。
+#[allow(clippy::too_many_arguments)]
+fn prim_eta_quote<'a>(
+    bump: &'a Bump,
+    spine: &mut Spine,
+    metas: &[MetaEntry],
+    decls: &FxHashMap<String, DeclEntryF>,
+    mmap: &MutableMap,
+    fuel: &Fuel,
+    level: u32,
+    v: V,
+) -> Option<&'a Tm<'a>> {
+    let mut args: Vec<(V, Icit)> = Vec::new();
+    let name: &'a str = if v_tag(v) == 2 {
+        let h = v_spine_of(v);
+        let hd = spine.spine_head(h);
+        if v_tag(hd) != 7 || spine.stack[h].hk != HK_DECL {
+            return None;
+        }
+        let n = match v_xcell_of(hd) {
+            XCell::Decl(n) => *n,
+            _ => return None,
+        };
+        spine.collect_args(h, &mut args);
+        n
+    } else if v_tag(v) == 7 {
+        match v_xcell_of(v) {
+            XCell::Decl(n) => *n,
+            _ => return None,
+        }
+    } else {
+        return None;
+    };
+    let e = decls.get(name)?;
+    let names = e.prim_names?;
+    let have = args.len();
+    let arity = names.len();
+    if have >= arity {
+        return None;
+    }
+    // collect_args 是逆应用序（内层在前）；反转成自然应用序。
+    args.reverse();
+    let mut base: &'a Tm<'a> = bump.alloc(Tm::Decl(bump.alloc_str(name)));
+    for &(a, i) in args.iter() {
+        let at = quote_arg(bump, spine, metas, decls, mmap, fuel, level, a);
+        base = bump.alloc(Tm::App(base, at, i));
+    }
+    let rem = (arity - have) as u32;
+    let mut tm = shift_tm_bump(bump, base, rem, 0);
+    for k in 0..rem {
+        tm = bump.alloc(Tm::App(
+            tm,
+            bump.alloc(Tm::Var(rem - 1 - k)),
+            Icit::Expl,
+        ));
+    }
+    for n in names[have..].iter().rev() {
+        tm = bump.alloc(Tm::Lam(bump.alloc_str(n), Icit::Expl, tm));
+    }
+    Some(tm)
+}
+
+/// 递归 quote 一个实参值（私有 scratch 缓冲）。
+#[allow(clippy::too_many_arguments)]
+fn quote_arg<'a>(
+    bump: &'a Bump,
+    spine: &mut Spine,
+    metas: &[MetaEntry],
+    decls: &FxHashMap<String, DeclEntryF>,
+    mmap: &MutableMap,
+    fuel: &Fuel,
+    level: u32,
+    v: V,
+) -> &'a Tm<'a> {
+    let mut tasks: Vec<QJob<'a>> = Vec::new();
+    let mut done: Vec<&'a Tm<'a>> = Vec::new();
+    let mut work: Vec<W<'a>> = Vec::new();
+    let mut vals: Vec<V> = Vec::new();
+    let mut icits: Vec<Icit> = Vec::new();
+    let mut defs: Vec<V> = Vec::new();
+    quote_iter(
+        bump, spine, &mut tasks, &mut done, &mut work, &mut vals, &mut icits, &mut defs, metas,
+        decls, mmap, fuel, level, v, None,
+    )
+}
+
 /// 任务栈 quote（L06 版 + LiteralType/LiteralIntro/Decl/Prim/Obj/Sum/
 /// SumCase/Match 臂）。
 #[allow(clippy::too_many_arguments)]
@@ -95,11 +250,23 @@ pub(super) fn quote_iter<'a>(
     tasks.push(QJob::Q(v0, level0));
     while let Some(job) = tasks.pop() {
         match job {
-            QJob::Q(v0, level) => {
+            job @ (QJob::Q(v0, level) | QJob::QNoEta(v0, level)) => {
+                let no_eta = matches!(job, QJob::QNoEta(..));
                 // 先 force（metacontext / 精化在 quote 期间冻结，同键同结果）
                 let v = force(
                     bump, spine, defs, metas, decls, mmap, fuel, v0,
                 );
+                // L13 式 prim 的 η 展开：partially applied builtin 的 quote
+                // 与参考版 quote_arm 的 prim 分支同形（λ 补齐剩余参数）。
+                // 链装配的函数部分用 `QNoEta`：参考版 quote_sp 是结构性
+                // App 拼接，不对中间部分 η（否则印成 `(y => f y) arg`）。
+                if !no_eta
+                    && let Some(t) =
+                        prim_eta_quote(bump, spine, metas, decls, mmap, fuel, level, v)
+                {
+                    done.push(t);
+                    continue;
+                }
                 match v_tag(v) {
                     0 => done.push(bump.alloc(Tm::Var(level - v_lvl_of(v) - 1))),
                     1 => {
@@ -311,7 +478,7 @@ pub(super) fn quote_iter<'a>(
                                 idx_node,
                                 prev: None,
                             });
-                            tasks.push(QJob::Q(base_v, level));
+                            tasks.push(QJob::QNoEta(base_v, level));
                         } else {
                             // 函数部分可能是「陈旧应用链」：建链后其头 meta
                             // 被解成 λ（值里的位模式不随后续求解更新）。force
@@ -336,7 +503,7 @@ pub(super) fn quote_iter<'a>(
                             } else {
                                 tasks.push(QJob::App1(top_icit));
                                 tasks.push(QJob::Q(ea, level));
-                                tasks.push(QJob::Q(fval, level));
+                                tasks.push(QJob::QNoEta(fval, level));
                             }
                         }
                     }
@@ -485,7 +652,7 @@ pub(super) fn quote_iter<'a>(
                                     idx_node,
                                     prev: Some(prev),
                                 });
-                                tasks.push(QJob::Q(fi, level));
+                                tasks.push(QJob::QNoEta(fi, level));
                             }
                             break;
                         }

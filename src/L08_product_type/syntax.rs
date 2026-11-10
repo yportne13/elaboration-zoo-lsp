@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use crate::{list::List, parser_lib::Span};
 
 use super::{Ty, parser::syntax::Icit};
@@ -9,8 +11,8 @@ pub type Pruning = List<Option<Icit>>;
 #[derive(Debug, Clone)]
 pub enum Locals {
     Here,
-    Define(Box<Locals>, Span<String>, Ty, Tm),
-    Bind(Box<Locals>, Span<String>, Ty),
+    Define(Rc<Locals>, Span<String>, Ty, Tm),
+    Bind(Rc<Locals>, Span<String>, Ty),
 }
 
 use super::Tm;
@@ -18,9 +20,12 @@ use super::Tm;
 pub fn close_ty(mcl: Locals, b: Ty) -> Ty {
     match mcl {
         Locals::Here => b,
-        Locals::Bind(mcl, x, a) => close_ty(*mcl, Tm::Pi(x, Icit::Expl, Box::new(a), Box::new(b))),
-        Locals::Define(mcl, x, a, t) => {
-            close_ty(*mcl, Tm::Let(x, Box::new(a), Box::new(t), Box::new(b)))
+        Locals::Bind(mcl, x, a) => {
+            close_ty(mcl.as_ref().clone(), Tm::Pi(x, Icit::Expl, Rc::new(a), Rc::new(b)))
         }
+        Locals::Define(mcl, x, a, t) => close_ty(
+            mcl.as_ref().clone(),
+            Tm::Let(x, Box::new(a), Box::new(t), Box::new(b)),
+        ),
     }
 }

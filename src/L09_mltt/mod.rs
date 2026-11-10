@@ -409,7 +409,6 @@ fn lvl2ix(l: Lvl, x: Lvl) -> Ix {
 
 use std::{
     cell::Cell,
-    collections::HashMap,
     ops::{Add, Sub},
     rc::Rc,
 };
@@ -442,7 +441,7 @@ pub struct Error(pub Span<String>);
 #[derive(Clone)]
 pub struct Infer {
     meta: Vec<MetaEntry>,
-    global: HashMap<Lvl, VTy>,
+    global: FxHashMap<Lvl, VTy>,
     /// 顶层名字表（名字 → (层级, 类型值)）：**append-only，随 Infer 存续、
     /// 不随 Cxt 克隆**——顶层 def/enum/构造子的真名与 `fake_bind` 的递归
     /// 占位都记在这里（L10 的 `Cxt::define` 同源迁移，2026-09-20 参考版
@@ -479,7 +478,7 @@ impl Infer {
     pub fn new() -> Self {
         Self {
             meta: vec![],
-            global: HashMap::new(),
+            global: FxHashMap::default(),
             global_names: FxHashMap::default(),
             neutral_globals: Cell::new(false),
             unify_fuel: Cell::new(UNIFY_FUEL),
@@ -704,7 +703,9 @@ impl Infer {
 
     fn closure_apply(&self, closure: &Closure, u: Val) -> Val {
         //println!("{} {:?} {:?}", "closure apply".yellow(), closure, u);
-        self.eval(&closure.0.prepend(u), (*closure.1).clone())
+        // 借用 eval：直接读 Rc 闭包体，β 不再深拷贝体（L07 P0-1 第 2 步 /
+        // L08 fd5a3a95 的 L09 对应物）。
+        self.eval_ref(&closure.0.prepend(u), &closure.1)
     }
 
     fn v_app(&self, t: Val, u: Val, i: Icit) -> Val {
@@ -752,8 +753,38 @@ impl Infer {
         }
     }
 
+    /// 拥有版 eval（入口）：顶层 `Lam`/`Pi` 直接把 Box 体 move 进 `Closure`
+    /// （零克隆）；其余形态委托 [`Self::eval_ref`] 只读遍历。
     fn eval(&self, env: &Env, tm: Tm) -> Val {
-        //println!("{} {:?}", "eval".yellow(), tm);
+        match tm {
+            Tm::Lam(x, i, t) => Val::Lam(x, i, Closure(env.clone(), Rc::new(*t))),
+            Tm::Pi(x, i, a, b) => Val::Pi(
+                x,
+                i,
+                Box::new(self.eval(env, *a)),
+                Closure(env.clone(), Rc::new(*b)),
+            ),
+            // 拥有 cases 的入口：选中臂借用求值（不拷分支体），卡住时 cases
+            // 直接 move 进 Val::Match（借用路径才需要 clone，见 eval_ref）。
+            Tm::Match(tm, cases) => {
+                let val = self.force(self.eval(env, *tm));
+                match val {
+                    val @ Val::SumCase { .. } => {
+                        let (body, env2) = Compiler::eval_aux(self, &val, env, &cases).unwrap();
+                        self.eval_ref(&env2, body)
+                    }
+                    neutral => Val::Match(Box::new(neutral), env.clone(), cases),
+                }
+            }
+            tm => self.eval_ref(env, &tm),
+        }
+    }
+
+    /// 借用版 eval：只读遍历 `&Tm`，闭包体 / match 分支体不再深拷（L07 P0-1
+    /// 与 L08 bc929dcc/fd5a3a95 的 L09 对应物）。需要把 λ 体存进
+    /// `Closure(Rc<Tm>)` 时只能克隆 Box 内容——只发生在"分支体/闭包体内部
+    /// 再出现 λ 字面量"的形态，不是每步 β 的热路径。
+    fn eval_ref(&self, env: &Env, tm: &Tm) -> Val {
         match tm {
             Tm::Var(x) => match env.iter().nth(x.0 as usize) {
                 Some(v) => v.clone(),
@@ -767,7 +798,7 @@ impl Infer {
                 }
             },
             Tm::Obj(tm, name) => {
-                let recv = self.eval(env, *tm);
+                let recv = self.eval_ref(env, tm);
                 // 精化包裹的接收者（subst_cxt 包裹的 env 槽会以 VSub 流出）
                 // 先推开 σ 再判形态；force 对非 VSub/Flex 是恒等，旧行为不变。
                 let recv = match recv {
@@ -777,7 +808,7 @@ impl Infer {
                 match recv {
                     Val::Sum(_, params, _) => {
                         params.into_iter()
-                            .find(|(f_name, _, _, _)| f_name == &name)
+                            .find(|(f_name, _, _, _)| f_name == name)
                             .map(|x| rc_take(x.1))
                             .unwrap()
                     },
@@ -791,29 +822,36 @@ impl Infer {
                             .map(|x| (x.0, x.1, x.3))
                             .chain(datas)
                         //datas.into_iter()
-                            .find(|(f_name, _, _)| f_name == &name)
+                            .find(|(f_name, _, _)| f_name == name)
                             .map(|x| rc_take(x.1))
                             .unwrap()
                     },
                     x @ Val::Rigid(_, _) => {
-                        Val::Obj(Box::new(x), name, List::new())
+                        Val::Obj(Box::new(x), name.clone(), List::new())
                     }
                     x => panic!("impossible {x:?}"),
                 }
             }
-            Tm::App(t, u, i) => self.v_app(self.eval(env, *t), self.eval(env, *u), i),
-            Tm::Lam(x, i, t) => Val::Lam(x, i, Closure(env.clone(), Rc::new(*t))),
-            Tm::Pi(x, i, a, b) => {
-                Val::Pi(x, i, Box::new(self.eval(env, *a)), Closure(env.clone(), Rc::new(*b)))
-            }
+            Tm::App(t, u, i) => self.v_app(self.eval_ref(env, t), self.eval_ref(env, u), *i),
+            Tm::Lam(x, i, t) => Val::Lam(
+                x.clone(),
+                *i,
+                Closure(env.clone(), Rc::new((**t).clone())),
+            ),
+            Tm::Pi(x, i, a, b) => Val::Pi(
+                x.clone(),
+                *i,
+                Box::new(self.eval_ref(env, a)),
+                Closure(env.clone(), Rc::new((**b).clone())),
+            ),
             Tm::Let(_, _, t, u) => {
-                let t_val = self.eval(env, *t);
-                self.eval(&env.prepend(t_val), *u)
+                let t_val = self.eval_ref(env, t);
+                self.eval_ref(&env.prepend(t_val), u)
             }
-            Tm::U(x) => Val::U(x),
-            Tm::Meta(m) => self.v_meta(m),
-            Tm::AppPruning(t, pr) => self.v_app_pruning(env, self.eval(env, *t), &pr),
-            Tm::LiteralIntro(x) => Val::LiteralIntro(x),
+            Tm::U(x) => Val::U(*x),
+            Tm::Meta(m) => self.v_meta(*m),
+            Tm::AppPruning(t, pr) => self.v_app_pruning(env, self.eval_ref(env, t), pr),
+            Tm::LiteralIntro(x) => Val::LiteralIntro(x.clone()),
             Tm::LiteralType => Val::LiteralType,
             Tm::Prim => {
                 // 实参槽可能被 subst_cxt 包成 VSub——先 force 推开再判字面量
@@ -828,17 +866,17 @@ impl Infer {
             }
             Tm::Sum(name, params, cases) => {
                 let new_params = params
-                    .into_iter()
+                    .iter()
                     .map(|x| {
                         (
-                            x.0,
-                            Rc::new(self.eval(env, x.1)),
-                            Rc::new(self.eval(env, x.2)),
+                            x.0.clone(),
+                            Rc::new(self.eval_ref(env, &x.1)),
+                            Rc::new(self.eval_ref(env, &x.2)),
                             x.3,
                         )
                     })
                     .collect();
-                Val::Sum(name, new_params, cases)
+                Val::Sum(name.clone(), new_params, cases.clone())
             }
             Tm::SumCase {
                 typ,
@@ -846,26 +884,28 @@ impl Infer {
                 datas,
             } => {
                 let datas = datas
-                    .into_iter()
-                    .map(|p| (p.0, Rc::new(self.eval(env, p.1)), p.2))
+                    .iter()
+                    .map(|p| (p.0.clone(), Rc::new(self.eval_ref(env, &p.1)), p.2))
                     .collect();
-                let typ = self.eval(env, *typ);
+                let typ = self.eval_ref(env, typ);
                 Val::SumCase {
                     typ: Rc::new(typ),
-                    case_name,
+                    case_name: case_name.clone(),
                     datas,
                 }
             }
             Tm::Match(tm, cases) => {
-                let val = self.eval(env, *tm);
+                let val = self.eval_ref(env, tm);
                 let val = self.force(val);
                 match val {
                     val @ Val::SumCase { .. } => {
-                        let (tm, env) = Compiler::eval_aux(self, &val, env, &cases).unwrap();
-                        self.eval(&env, tm)
+                        let (body, env2) = Compiler::eval_aux(self, &val, env, cases).unwrap();
+                        self.eval_ref(&env2, body)
                     }
                     neutral => {
-                        Val::Match(Box::new(neutral), env.clone(), cases)
+                        // 借用路径下卡住值必须持有 owned cases：深拷只发生在
+                        // "match 卡住"这一枝（选中臂热路径不再拷分支体）。
+                        Val::Match(Box::new(neutral), env.clone(), cases.clone())
                     }
                 }
             }

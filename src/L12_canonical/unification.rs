@@ -7,7 +7,7 @@ use super::{
     parser::syntax::Icit, syntax::Pruning, empty_span, pretty::pretty_tm, typeclass::Assertion, Raw, Rc, Decl,
 };
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// η 展开的可应用性守卫：只有中性值（Flex/Rigid/Decl/Obj 头，以及可内联的
 /// `Call`）能被 η 新变量应用——这正是 `Infer::v_app` 能处理的全部形态
@@ -27,7 +27,7 @@ pub struct PartialRenaming {
     pub occ: Option<MetaVar>,
     pub dom: Lvl,               // size of Γ
     pub cod: Lvl,               // size of Δ
-    pub ren: HashMap<u32, Lvl>, // mapping from Δ vars to Γ vars
+    pub ren: FxHashMap<u32, Lvl>, // mapping from Δ vars to Γ vars
 }
 
 fn lift(pr: &PartialRenaming) -> PartialRenaming {
@@ -63,9 +63,9 @@ impl Infer {
         &self,
         decl: &Decl,
         sp: &Spine,
-    ) -> Result<(Lvl, HashMap<u32, Lvl>, HashSet<u32>, List<(Lvl, Icit)>), UnifyError> {
+    ) -> Result<(Lvl, FxHashMap<u32, Lvl>, FxHashSet<u32>, List<(Lvl, Icit)>), UnifyError> {
         match sp {
-            List { head: None, .. } => Ok((Lvl(0), HashMap::new(), HashSet::new(), List::new())),
+            List { head: None, .. } => Ok((Lvl(0), FxHashMap::default(), FxHashSet::default(), List::new())),
             a => {
                 let (dom, mut ren, mut nlvars, fsp) = self.invert_go(decl, &a.tail())?;
                 match self.force_arg(decl, &a.head().unwrap().0).as_ref() {
@@ -154,7 +154,7 @@ impl Infer {
                 occ: None,
                 dom: Lvl(0),
                 cod: Lvl(0),
-                ren: HashMap::new(),
+                ren: FxHashMap::default(),
             },
             a,
         )

@@ -34,7 +34,7 @@
 //!
 //! - **全局 = decl 表（名字键）+ `Tm::Decl`/`Val::Decl`**：没有
 //!   `Infer.global` 表与 1919810 哨兵。顶层 def/enum/构造子/内建全部登记
-//!   在 `Cxt.decl: HashMap<SmolStr, (Span, Tm, Val, Ty, VTy)>`（快版 =
+//!   在 `Cxt.decl: FxHashMap<SmolStr, (Span, Tm, Val, Ty, VTy)>`（快版 =
 //!   `Rc<Decls>` 写时复制，方法与参考版逐 cxt 克隆语义一致）；项层引用是
 //!   `Tm::Decl(name)`（bump str）。eval 的 Decl 臂查表取登记值，未登记
 //!   → 卡 `Val::Decl(name, [])`（递归自引用 = fake_bind 插桩的存根）。
