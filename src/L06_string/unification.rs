@@ -5,7 +5,8 @@ use super::{
     parser::syntax::Icit, syntax::Pruning,
 };
 
-use std::{collections::{HashMap, HashSet}, rc::Rc};
+use std::rc::Rc;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// η 展开的可应用性守卫：只有中性值（Flex/Rigid/Decl 头）能吃 η 新变量。
 /// `string_to_global_type` 把 def 的登记值（可以是 λ）当"动态类型"返回后，
@@ -22,7 +23,7 @@ struct PartialRenaming {
     occ: Option<MetaVar>,
     dom: Lvl,               // size of Γ
     cod: Lvl,               // size of Δ
-    ren: HashMap<u32, Lvl>, // mapping from Δ vars to Γ vars
+    ren: FxHashMap<u32, Lvl>, // mapping from Δ vars to Γ vars
 }
 
 fn lift(pr: &PartialRenaming) -> PartialRenaming {
@@ -57,9 +58,9 @@ impl Infer {
     fn invert_go(
         &self,
         sp: Spine,
-    ) -> Result<(Lvl, HashMap<u32, Lvl>, HashSet<u32>, List<(Lvl, Icit)>), UnifyError> {
+    ) -> Result<(Lvl, FxHashMap<u32, Lvl>, FxHashSet<u32>, List<(Lvl, Icit)>), UnifyError> {
         match sp {
-            List { head: None, .. } => Ok((Lvl(0), HashMap::new(), HashSet::new(), List::new())),
+            List { head: None, .. } => Ok((Lvl(0), FxHashMap::default(), FxHashSet::default(), List::new())),
             a => {
                 let (dom, mut ren, mut nlvars, fsp) = self.invert_go(a.tail())?;
                 match self.force(&a.head().unwrap().0).as_ref() {
@@ -140,7 +141,7 @@ impl Infer {
                 occ: None,
                 dom: Lvl(0),
                 cod: Lvl(0),
-                ren: HashMap::new(),
+                ren: FxHashMap::default(),
             },
             a,
         )
