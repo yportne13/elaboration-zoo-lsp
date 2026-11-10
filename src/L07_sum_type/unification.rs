@@ -178,7 +178,7 @@ impl Infer {
                 let a = self.rename(decl, &mut pren, *a)?;
                 let b = self.closure_apply(decl, &b, Val::vvar(pren.cod));
                 let b = self.prune_ty_go(decl, rest, lift(pren), b)?;
-                Ok(Tm::Pi(x, i, Box::new(a), Box::new(b)))
+                Ok(Tm::Pi(x, i, Rc::new(a), Rc::new(b)))
             }
             (Some((None, rest)), Val::Pi(_, _, _, b)) => {
                 let b = self.closure_apply(decl, &b, Val::vvar(pren.cod));
@@ -602,7 +602,7 @@ impl Infer {
                 unlift(pren, key, prev);
                 pren.dom = pren.dom - 1;
                 pren.cod = pren.cod - 1;
-                Ok(Tm::Lam(x, i, Box::new(t)))
+                Ok(Tm::Lam(x, i, Rc::new(t)))
             }
             Val::Pi(x, i, a, closure) => {
                 let a = self.rename(decl, pren, *a)?;
@@ -624,7 +624,7 @@ impl Infer {
                 unlift(pren, key, prev);
                 pren.dom = pren.dom - 1;
                 pren.cod = pren.cod - 1;
-                Ok(Tm::Pi(x, i, Box::new(a), Box::new(b)))
+                Ok(Tm::Pi(x, i, Rc::new(a), Rc::new(b)))
             }
             Val::U => Ok(Tm::U),
             Val::LiteralType => Ok(Tm::LiteralType),
@@ -673,7 +673,7 @@ impl Infer {
                 Val::Pi(span, icit, _, closure) => Tm::Lam(
                     span,
                     icit,
-                    Box::new(self.lams_go(
+                    Rc::new(self.lams_go(
                         decl,
                         l,
                         t,

@@ -68,11 +68,11 @@ pub enum Tm {
     Decl(SmolStr),
     /// `x.field` 投影。
     Obj(Box<Tm>, Span<String>),
-    Lam(Span<String>, Icit, Box<Tm>),
+    Lam(Span<String>, Icit, Rc<Tm>),
     App(Box<Tm>, Box<Tm>, Icit),
     AppPruning(Box<Tm>, Pruning),
     U,
-    Pi(Span<String>, Icit, Box<Ty>, Box<Ty>),
+    Pi(Span<String>, Icit, Rc<Ty>, Rc<Ty>),
     Let(Span<String>, Box<Ty>, Box<Tm>, Box<Tm>),
     Meta(MetaVar),
     LiteralType,
@@ -1348,13 +1348,14 @@ impl Infer {
                 self.v_app(decl, self.eval(decl, env, t), u_val, *i)
             }
             Tm::Lam(x, i, t) => {
-                Val::Lam(x.clone(), *i, Closure(env.clone(), Rc::new((**t).clone())))
+                // body 已是 Rc：closure 直接共享，不再深拷剩余 λ 链（O(n²)）。
+                Val::Lam(x.clone(), *i, Closure(env.clone(), t.clone()))
             }
             Tm::Pi(x, i, a, b) => Val::Pi(
                 x.clone(),
                 *i,
                 Box::new(self.eval(decl, env, a)),
-                Closure(env.clone(), Rc::new((**b).clone())),
+                Closure(env.clone(), b.clone()),
             ),
             Tm::Let(_, _, t, u) => {
                 let t_val = self.eval(decl, env, t);
@@ -1648,13 +1649,13 @@ impl Infer {
             Val::Lam(x, i, closure) => Tm::Lam(
                 x,
                 i,
-                Box::new(self.quote(decl, l + 1, self.closure_apply(decl, &closure, Val::vvar(l)))),
+                Rc::new(self.quote(decl, l + 1, self.closure_apply(decl, &closure, Val::vvar(l)))),
             ),
             Val::Pi(x, i, a, closure) => Tm::Pi(
                 x,
                 i,
-                Box::new(self.quote(decl, l, *a)),
-                Box::new(self.quote(decl, l + 1, self.closure_apply(decl, &closure, Val::vvar(l)))),
+                Rc::new(self.quote(decl, l, *a)),
+                Rc::new(self.quote(decl, l + 1, self.closure_apply(decl, &closure, Val::vvar(l)))),
             ),
             Val::U => Tm::U,
             Val::LiteralIntro(x) => Tm::LiteralIntro(x),
