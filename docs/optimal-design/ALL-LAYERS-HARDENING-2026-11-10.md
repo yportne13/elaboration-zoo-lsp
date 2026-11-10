@@ -9,7 +9,7 @@
 | 层 | 改动 | 备注 |
 |---|---|---|
 | L07 | `deef97f7` `check_ty` 按值 move Pi Raw；`87924b00` 无注解 let 直接推导 binder 类型；`2d4eb32c` `Tm::Lam/Pi` body 改 `Rc<Tm>`（消 eval 深拷） | 深 let n=1000 **168→2.4ms**；深 λ n=1000 **~223→3.0ms**（均近线性） |
-| L08 | Locals `Box→Rc`、FxHashMap、decl 表就地 COW、`src_names` NameState+trail；`2a1f378f` 再 port L07 的 `check_ty` move Pi Raw + 无注解 let 推导 | 4 项累计 strchain 13.2×/global 7.8×/struct 7.8×；新增两笔：deep let **179→1.8ms**、deep λ **343.7→259.1ms**，标准负载中性 |
+| L08 | Locals `Box→Rc`、FxHashMap、decl 表就地 COW、`src_names` NameState+trail；`2a1f378f` 再 port `check_ty` move + 无注解 let；`6175987e` `Tm::Lam/Pi` Rc | 4 项累计 strchain 13.2×/global 7.8×/struct 7.8×；新增：deep let 179ms→1.8ms、deep λ 343ms→**2.6ms**（`6175987e`，~81×）、church −38%、natadd −13% |
 | L09/L10 | FxHashMap（global/PartialRenaming/Trait/Synth 等）+ 穷尽 match 跳过覆盖探测（U2） | L09 match −7~−9%；L10 match k11 −8.9% |
 | L11 | FxHashMap、decl COW、name_map+trail | macro 14.9×、struct 16.2×；`hover_table` 观察表加 `collect_observations` 门控 |
 | L12 | decl COW、FxHashMap、name_map+trail | strchain k13 −17.8%（0.822×）、natadd k11 −11.6%（0.884×） |

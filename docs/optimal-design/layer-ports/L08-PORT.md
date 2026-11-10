@@ -209,3 +209,17 @@ C:\ezl-src-bench-l08\l08bench-item4.exe    --workload all --max-k 11 --rounds 3 
 - Gates after the port: lib 60, blackbox 57(+1)/51(+2), parity 95; check all-targets 0 error.
 - Remaining L07-only item not ported: `Tm::Lam/Pi` body `Rc<Tm>` (L08 still has
   `Box`; mechanical but touches Obj arms) and any L07 hardening not yet mirrored.
+
+
+### 9.1 2026-11-10 follow-up: Rc-backed Lam/Pi (port L07 2d4eb32c)
+
+- Commit `6175987e`: `Tm::Lam` body and `Tm::Pi` domain/codomain are `Rc<Tm>`;
+  eval shares the body with the closure instead of `Rc::new((**t).clone())`;
+  L08's Obj arms are unchanged.
+- Deep lambda probe (n=1000, check_nf, interleaved A/B min):
+  **210.918 -> 2.598 ms (0.0123x, ~81x, -98.8%)**.
+  Deep let: 1.188 -> 1.727 ms (absolute <2ms, treated as noise).
+- Standard A/B after Rc: strchain k11 0.988x, struct k10 0.950x,
+  church k10 **0.616x**, match k13 0.964x, natadd k11 **0.873x**
+  (lambda-heavy church/natadd benefit from no deep closure body copies).
+- Gates: lib 60, blackbox 57(+1)/51(+2), parity 95, check all-targets 0 error.
