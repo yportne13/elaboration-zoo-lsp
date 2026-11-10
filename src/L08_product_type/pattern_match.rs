@@ -687,69 +687,70 @@ impl Compiler {
     /// 任何 head 都不会 panic——不命中就返回 None，由调用方停成 `Val::Match`。
     /// head 借用传入：构造子值迁 Rc 后 clone 是 O(1)（typ/datas 均为引用
     /// 计数），字段下钻直接透传借用，不再按值深拷贝剩余链。
-    pub fn eval_aux(
+    pub fn eval_aux<'a>(
         infer: &Infer,
         decl: &Decls,
         head: &Val,
         env: &Env,
-        cases: &[(PatternDetail, Tm)],
-    ) -> Option<(Tm, Env)> {
+        cases: &'a [(PatternDetail, Tm)],
+    ) -> Option<(&'a Tm, Env)> {
         let head = infer.force(decl, head.clone());
         for (pat, body) in cases {
-            match pat {
-                PatternDetail::Any(_) | PatternDetail::Bind(_) => {
-                    return Some((body.clone(), env.prepend(head.clone())));
-                }
-                PatternDetail::Con(name, subs) => {
-                    let Val::SumCase {
-                        typ,
-                        case_name,
-                        datas,
-                    } = &head
-                    else {
-                        continue;
-                    };
-                    let Val::Sum(_, _, ctor_names) = typ.as_ref() else {
-                        continue;
-                    };
-                    let in_type = ctor_names.iter().any(|c| c.data == name.data);
-                    if in_type && case_name.data == name.data {
-                        if subs.len() != datas.len() {
-                            continue;
-                        }
-                        // datas 与子模式按声明序 zip，逐个下钻；先 prepend 被
-                        // 匹配值本身（head 槽，编译期 walk_con 入口同序绑定），
-                        // 再逐字段 prepend 子模式槽值（编译期字段槽在后）
-                        let mut cur = (body.clone(), env.prepend(head.clone()));
-                        let mut ok = true;
-                        for ((_, v, _), sub) in datas.iter().zip(subs.iter()) {
-                            match Compiler::eval_aux(
-                                infer,
-                                decl,
-                                v,
-                                &cur.1,
-                                &[(sub.clone(), cur.0.clone())],
-                            ) {
-                                Some((b, e)) => cur = (b, e),
-                                None => {
-                                    ok = false;
-                                    break;
-                                }
-                            }
-                        }
-                        if ok {
-                            return Some(cur);
-                        }
-                    } else if !in_type {
-                        // 不是该类型的构造子名 → 变量模式（保守兼容）
-                        return Some((body.clone(), env.prepend(head.clone())));
-                    }
-                    // 同类型不同构造子 → 试下一个分支
-                }
+            if let Some(env) = Self::eval_aux_arm(infer, decl, &head, env, pat) {
+                return Some((body, env));
             }
         }
         None
     }
+
+fn eval_aux_arm(
+        infer: &Infer,
+        decl: &Decls,
+        head: &Val,
+        env: &Env,
+        pat: &PatternDetail,
+    ) -> Option<Env> {
+        match pat {
+            PatternDetail::Any(_) | PatternDetail::Bind(_) => Some(env.prepend(head.clone())),
+            PatternDetail::Con(name, subs) => {
+                let Val::SumCase {
+                    typ,
+                    case_name,
+                    datas,
+                } = head
+                else {
+                    return None;
+                };
+                let Val::Sum(_, _, ctor_names) = typ.as_ref() else {
+                    return None;
+                };
+                let in_type = ctor_names.iter().any(|c| c.data == name.data);
+                if in_type && case_name.data == name.data {
+                    if subs.len() != datas.len() {
+                        return None;
+                    }
+                    // datas 与子模式按声明序 zip，逐个下钻；先 prepend 被
+                    // 匹配值本身（head 槽，编译期 walk_con 入口同序绑定），
+                    // 再逐字段 prepend 子模式槽值（编译期字段槽在后）
+                    let mut cur = env.prepend(head.clone());
+                    for ((_, v, _), sub) in datas.iter().zip(subs.iter()) {
+                        // 对齐旧递归入口：字段值 force 前按值传入（ Rc 槽
+                        // 与 head 共享，此处深拷贝一次后 force）
+                        let v = infer.force(decl, (**v).clone());
+                        cur = Self::eval_aux_arm(infer, decl, &v, &cur, sub)?;
+                    }
+                    Some(cur)
+                } else if !in_type {
+                    // 不是该类型的构造子名 → 变量模式（保守兼容）
+                    Some(env.prepend(head.clone()))
+                } else {
+                    // 同类型不同构造子 → 本臂不命中
+                    None
+                }
+            }
+        }
+    }
+
 }
 
 /// 顶层覆盖判定：通配 / 变量模式覆盖一切；Con 只覆盖同名构造子。
