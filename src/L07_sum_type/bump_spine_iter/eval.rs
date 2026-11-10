@@ -210,8 +210,12 @@ pub(super) fn eval_iter<'a>(
             W::Tm(Tm::LiteralType, _) => vals.push(v_lit_ty()),
             W::Tm(Tm::LiteralIntro(s), _) => vals.push(v_xcell(bump.alloc(XCell::Lit(s)))),
             // 按名查 decl 表：命中给登记值；miss panic（"unbound global"，
-            // 参考版 eval 的 Tm::Decl 臂同款——良型项不可达）
+            // 参考版 eval 的 Tm::Decl 臂同款——良型项不可达）。
+            // L13 式 prim：builtin 条目求值成中性的 `Decl(自身名)` 头，
+            // 应用实参经 spine 累积，归约统一在 force 的 Decl 链头（不再
+            // 构造 `Tm::Prim`/`XCell::Prim`，参考版 eval 同款）。
             W::Tm(Tm::Decl(name), _) => vals.push(match decls.get(*name) {
+                Some(e) if e.prim.is_some() => v_xcell(bump.alloc(XCell::Decl(*name))),
                 Some(e) => e.val,
                 None => panic!("unbound global {}", name),
             }),

@@ -331,6 +331,30 @@ pub(super) fn force<'a>(
                         HK_DECL => {
                             let name = xcell_head_name(spine, hd);
                             match decls.get(name) {
+                                // L13 式 prim：归约函数挂在 decl 条目；spine
+                                // 是应用实参。实参先逐个 force（spine 槽可能
+                                // 是未归约的嵌套 prim），再交给 prim_reduce；
+                                // 元数不足/实参不合保持卡住。
+                                Some(e) if e.prim.is_some() => {
+                                    if !burn(fuel) {
+                                        return v;
+                                    }
+                                    args.clear();
+                                    spine.collect_args(h, &mut args);
+                                    for i in 0..args.len() {
+                                        let a = args[i].0;
+                                        args[i].0 = force(
+                                            bump, spine, defs, metas, decls, mmap, fuel, a,
+                                        );
+                                    }
+                                    match prim_reduce(
+                                        bump, spine, &mut work, &mut vals, &mut icits, defs,
+                                        metas, decls, mmap, fuel, name, &args,
+                                    ) {
+                                        Some(r) => v = r,
+                                        None => return v,
+                                    }
+                                }
                                 Some(e) if !is_selfref_val(e.val, name) && burn(fuel) => {
                                     args.clear();
                                     spine.collect_args(h, &mut args);
@@ -429,6 +453,12 @@ pub(super) fn force<'a>(
                     v = frcs(bump, spine, defs, metas, decls, mmap, fuel, sub, *val);
                 }
                 XCell::Decl(n) => match decls.get(*n) {
+                    // L13 式 prim：空 spine 的 builtin 头，元数必不足 ⇒
+                    // 与参考版一致只烧 1 fuel 后保持卡住（不展开 λ 链）。
+                    Some(e) if e.prim.is_some() => {
+                        let _ = burn(fuel);
+                        return v;
+                    }
                     Some(e) if !is_selfref_val(e.val, n) && burn(fuel) => {
                         v = e.val; // 空实参：直接继续 force 展开值
                     }

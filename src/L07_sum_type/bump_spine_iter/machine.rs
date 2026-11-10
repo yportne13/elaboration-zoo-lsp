@@ -1405,6 +1405,8 @@ impl Machine {
                     DeclEntryF {
                         ty: vtyp,
                         val: v_xcell(bump.alloc(XCell::Decl(bump.alloc_str(&name.data)))),
+                        prim: None,
+                        prim_names: None,
                     },
                 );
                 // decls_f 块化：Ref 带 Drop（作用域尾释放），必须在
@@ -1418,7 +1420,7 @@ impl Machine {
                     let v = self.eval(bump, &decls_f, fake.env, t_tm);
                     self.force_v(bump, &decls_f, v)
                 };
-                let out = decl_insert(cxt, &name.data, DeclEntryF { ty: vtyp, val: vt });
+                let out = decl_insert(cxt, &name.data, DeclEntryF { ty: vtyp, val: vt, prim: None, prim_names: None });
                 Ok((DeclOut::Def { name: bump.alloc_str(&name.data) }, out))
             }
             Decl::Println(t) => {
@@ -1513,6 +1515,8 @@ impl Machine {
                     DeclEntryF {
                         ty: vtyp,
                         val: v_xcell(bump.alloc(XCell::Decl(bump.alloc_str(&name.data)))),
+                        prim: None,
+                        prim_names: None,
                     },
                 );
                 // decls_f 块化（同 Def 臂：Ref 作用域尾释放）
@@ -1521,7 +1525,7 @@ impl Machine {
                     let t_tm = self.check(bump, &fake, &bod, vtyp)?;
                     self.eval(bump, &decls_f, fake.env, t_tm)
                 };
-                let mut cxt = decl_insert(cxt, &name.data, DeclEntryF { ty: vtyp, val: vt });
+                let mut cxt = decl_insert(cxt, &name.data, DeclEntryF { ty: vtyp, val: vt, prim: None, prim_names: None });
                 // 逐构造子注册：体 = λ(隐式参数, 字段) → SumCase{typ: ret, datas: 字段自身}
                 for ((case_name, binders, ret), (ctor_name, ctor_ty)) in
                     cases.iter().zip(new_cases.iter())
@@ -1554,7 +1558,7 @@ impl Machine {
                         self.check_ctor_wf(bump, &cxt, &name.data, &ctor_name.data, vtyp)?;
                         let t_tm = self.check(bump, &cxt, &bod, vtyp)?;
                         let vt = self.eval(bump, &decls_c, cxt.env, t_tm);
-                        DeclEntryF { ty: vtyp, val: vt }
+                        DeclEntryF { ty: vtyp, val: vt, prim: None, prim_names: None }
                     };
                     // 限定名 `Enum.case` + 裸名别名（后注册者覆盖同名裸名）
                     cxt = decl_insert(
@@ -1880,11 +1884,13 @@ impl Machine {
             DeclEntryF {
                 ty: v_u(),
                 val: v_lit_ty(),
+                prim: None,
+                prim_names: None,
             },
         );
         let lit_ty: &'a Tm<'a> = bump.alloc(Tm::LiteralType);
         let u_t: &'a Tm<'a> = bump.alloc(Tm::U);
-        let builtins: Vec<(&str, &'a Tm<'a>)> = vec![
+        let builtins: Vec<(&'static str, &'a Tm<'a>)> = vec![
             ("string_concat", str_pi(bump, &["x", "y"], lit_ty)),
             ("str_eq", str_pi(bump, &["x", "y"], lit_ty)),
             ("str_indent2", str_pi(bump, &["x"], lit_ty)),
@@ -1952,30 +1958,20 @@ impl Machine {
         let mut cxt = cxt;
         for (name, ty) in builtins {
             let va = self.eval(bump, &cxt.decl.borrow(), EMPTY_ENV, ty);
-            // 值 = λ 参数链 → Prim(name)；参数名从类型的 Π 链取（与域同序）
-            let mut names: Vec<&str> = Vec::new();
-            let mut cur = ty;
-            while let Tm::Pi(n, _, _, body) = cur {
-                names.push(n);
-                cur = body;
-            }
-            // 值 = λ 参数链 → ((Prim 名 p1) p2 …)：实参经 App 显式应用而非
-            // env 隐式收集——`Tm::Prim` 从此是零元卡住头，quote → eval
-            // 往返在任意 env 下 spine 保真（参考版 add_builtin 同步修改）
-            let n = names.len() as u32;
-            let mut val: &'a Tm<'a> = bump.alloc(Tm::Prim(bump.alloc_str(name)));
-            for k in 0..n {
-                val = bump.alloc(Tm::App(
-                    val,
-                    bump.alloc(Tm::Var(n - 1 - k)),
-                    Icit::Expl,
-                ));
-            }
-            for p in names.iter().rev() {
-                val = bump.alloc(Tm::Lam(bump.alloc_str(p), Icit::Expl, val));
-            }
-            let head = self.eval(bump, &cxt.decl.borrow(), EMPTY_ENV, val);
-            cxt = decl_insert(&cxt, name, DeclEntryF { ty: va, val: head });
+            // L13 式：值 = 中性 `Decl(自身名)` 空 spine 占位；归约函数
+            // （prim 标记 + η 参数名）挂在 decl 条目上，应用实参经 spine
+            // 到达 force 的 Decl 链头。不再构造 `Tm::Prim`/`XCell::Prim`。
+            let head = v_xcell(bump.alloc(XCell::Decl(bump.alloc_str(name))));
+            cxt = decl_insert(
+                &cxt,
+                name,
+                DeclEntryF {
+                    ty: va,
+                    val: head,
+                    prim: Some(name),
+                    prim_names: super::prim::prim_names_static(name),
+                },
+            );
         }
         cxt
     }
