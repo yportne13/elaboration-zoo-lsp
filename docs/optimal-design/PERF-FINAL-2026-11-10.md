@@ -10,16 +10,16 @@
 
 | 层 | workload | master | branch | 比值 |
 |---|---|---:|---:|---:|
-| L07 | church k10 | 1.309 ms | 0.723 ms | **0.552×** |
-| L07 | strchain k11 | 8.903 ms | 8.026 ms | 0.901× |
-| L07 | match k13 | 0.134 ms | 0.126 ms | 0.940× |
-| L07 | natadd k10 | 2.507 ms | 2.165 ms | 0.864× |
-| L08 | church k10 | 1.577 ms | 0.699 ms | **0.443×** |
-| L08 | strchain k11 | 123.856 ms | 8.038 ms | **0.065×（15.4×）** |
-| L08 | global k10 | 37.225 ms | 6.187 ms | **0.166×（6.0×）** |
-| L08 | struct k10 | 37.362 ms | 6.987 ms | **0.187×（5.35×）** |
-| L08 | match k13 | 0.162 ms | 0.117 ms | 0.722× |
-| L08 | natadd k10 | 3.791 ms | 1.952 ms | **0.515×（1.94×）** |
+| L07 | church k10 | 1.333 ms | 0.719 ms | **0.539×** |
+| L07 | strchain k11 | 9.012 ms | 8.049 ms | 0.893× |
+| L07 | match k13 | 0.133 ms | 0.109 ms | 0.820× |
+| L07 | natadd k10 | 2.544 ms | 1.688 ms | **0.664×（1.51×）** |
+| L08 | church k10 | 1.584 ms | 0.723 ms | **0.456×** |
+| L08 | strchain k11 | 124.612 ms | 7.845 ms | **0.063×（15.9×）** |
+| L08 | global k10 | 37.145 ms | 6.342 ms | **0.171×（5.9×）** |
+| L08 | struct k10 | 37.182 ms | 5.385 ms | **0.145×（6.9×）** |
+| L08 | match k13 | 0.162 ms | 0.099 ms | 0.611× |
+| L08 | natadd k10 | 3.779 ms | 1.478 ms | **0.391×（2.56×）** |
 | L09 | church k10 | 1.565 ms | 1.227 ms | 0.784× |
 | L09 | strchain k10 | 16.406 ms | 15.837 ms | 0.965× |
 | L09 | match k13 | 0.166 ms | 0.127 ms | 0.765× |
@@ -63,11 +63,12 @@
 
 ## 3. 结论
 
-- **L08 是最大赢家**：strchain **15.4×**、global **6.0×**、struct **5.35×**、
-  church **2.26×**、natadd **1.94×**、match 1.38×。
+- **L08 是最大赢家**：strchain **15.9×**、struct **6.9×**、global **5.9×**、
+  natadd **2.56×**、church 2.19×、match 1.64×。
 - **L11**：macro 13.6×、struct 11.4×、strchain 14.2×；其他负载小幅。
-- **L07**：church 1.81×、natadd 1.16×、strchain 1.11×（浅语料；深作用域收益另见 deep 报告）。
-- **L09**：Rc 值层后 natadd **2.02×**、match 1.31×、church 1.28×、enum 1.08×；strchain/universe 小增益。
+- **L07**：Val Rc 后 church 1.85×、natadd 1.51×、match 1.22×、strchain 1.12×（浅语料；深作用域收益另见 deep 报告）。
+- **L09**：Val Rc 后 natadd **2.02×**、match 1.31×、church 1.28×、enum 1.08×；strchain/universe 小增益。
+  （L09 Tm Rc 尝试为负结果：natadd/church 变快但 strchain +24%，已整笔回退，见 L09-TM-RC 报告。）
 - **L10**：本轮没有实质改动，全部在 ±2% 内（符合预期）。
 - **L12**：修复 hover/completion 观察表钉住 decl Rc 后，strchain **14.0×**、macro **13.2×**、natadd 1.13×、church 1.03×；此前“k10 没有收益”是漏搬观察表闸造成的 O(D²) 回归假象。
 - **L13**：prelude-core 1.28×、match 1.41×、enum 1.45×、church 1.13×、
