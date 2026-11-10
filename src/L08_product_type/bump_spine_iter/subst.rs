@@ -415,7 +415,7 @@ pub(super) fn simpl_decl(bump: &Bump, decls: &FxHashMap<String, DeclEntryF>) -> 
             } else {
                 v_xcell(bump.alloc(XCell::Decl(bump.alloc_str(k))))
             };
-            (k.clone(), DeclEntryF { ty: e.ty, val })
+            (k.clone(), DeclEntryF { ty: e.ty, val, prim: e.prim, prim_names: e.prim_names })
         })
         .collect()
 }

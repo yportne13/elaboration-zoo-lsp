@@ -136,3 +136,20 @@ cargo build --release --bin l07bench --bin l08bench
 
 - 分支 `feat/twin-primfunc`：`77be5d06`（L07 twin）+ 本报告 commit；未 push；工作树除 scratch 外干净。
 - 主工作树/其它层/reference：未改。
+
+
+## 11. L08 fast twin 移植完成（2026-11-10）
+
+- Commit `ba29f718`：把同一套 PrimFunc-on-decl 机制机械移植到
+  `src/L08_product_type/bump_spine_iter`（6 文件 +261/−27）。
+- 与 L07 twin 同形：`DeclEntryF` 的 `prim`/`prim_names`、builtin 中性
+  `XCell::Decl` 头、`force` 的 Decl/hk 路径按 spine 调 `prim_reduce`、
+  partial builtin 的 η quote（`shift_tm_bump` + `prim_eta_quote` +
+  `QJob::QNoEta`）、`simpl_decl` 保留 prim 标记。
+- 门禁：L08 lib 60、blackbox 57+1 / 51+2、parity 95；
+  `twin_engine_tests` 28；`cargo check --all-targets` 0 error。
+- A/B（vs c384bf20，`--only fast,fast_ss`，k=9，交错 min）：
+  fast_ss church 0.972×、strchain 1.029×、global 1.017×、natadd 1.025×；
+  fast 列 0.986/1.022/1.017/1.014× —— 中性，无 >5% 回归。
+- Prim 兼容面仍保留（`Tm::Prim`/`XCell::Prim` 只读 legacy，正常不可达）；
+  彻底删除需要 reference/twin/parser 一次性清理，属独立任务。
