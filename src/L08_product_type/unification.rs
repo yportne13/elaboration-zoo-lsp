@@ -150,7 +150,7 @@ impl Infer {
         match (rev.split_first(), self.force(decl, a)) {
             (None, a) => self.rename(decl, pren, a),
             (Some((Some(_), rest)), Val::Pi(x, i, a, b)) => {
-                let a = self.rename(decl, pren, *a)?;
+                let a = self.rename(decl, pren, (*a).clone())?;
                 let b = self.closure_apply(decl, &b, Val::vvar(pren.cod));
                 let b = self.prune_ty_go(decl, rest, &lift(pren), b)?;
                 Ok(Tm::Pi(x, i, Rc::new(a), Rc::new(b)))
@@ -326,7 +326,7 @@ impl Infer {
             },
             Val::Decl(name, sp) => self.rename_sp(decl, pren, Tm::Decl(name), &sp),
             Val::Obj(x, name, sp) => {
-                let t = Tm::Obj(Box::new(self.rename(decl, pren, *x)?), name);
+                let t = Tm::Obj(Box::new(self.rename(decl, pren, (*x).clone())?), name);
                 self.rename_sp(decl, pren, t, &sp)
             }
             Val::Lam(x, i, closure) => {
@@ -338,7 +338,7 @@ impl Infer {
                 Ok(Tm::Lam(x, i, Rc::new(t)))
             }
             Val::Pi(x, i, a, closure) => {
-                let a = self.rename(decl, pren, *a)?;
+                let a = self.rename(decl, pren, (*a).clone())?;
                 let b = self.rename(
                     decl,
                     &lift(pren),
@@ -352,17 +352,17 @@ impl Infer {
             Val::Prim(name, sp) => self.rename_sp(decl, pren, Tm::Prim(name), &sp),
             Val::Sum(name, params, cases) => {
                 let new_params = params
-                    .into_iter()
+                    .iter()
                     .map(|(n, v, t, i)| {
                         Ok((
-                            n,
-                            self.rename(decl, pren, super::rc_take(v))?,
-                            self.rename(decl, pren, super::rc_take(t))?,
-                            i,
+                            n.clone(),
+                            self.rename(decl, pren, super::rc_take(v.clone()))?,
+                            self.rename(decl, pren, super::rc_take(t.clone()))?,
+                            *i,
                         ))
                     })
-                    .collect::<Result<_, UnifyError>>()?;
-                Ok(Tm::Sum(name, new_params, cases))
+                    .collect::<Result<Vec<_>, UnifyError>>()?;
+                Ok(Tm::Sum(name, new_params, (*cases).clone()))
             }
             Val::SumCase {
                 typ,
@@ -371,9 +371,9 @@ impl Infer {
             } => {
                 let typ = self.rename(decl, pren, super::rc_take(typ))?;
                 let datas = datas
-                    .into_iter()
-                    .map(|(n, v, i)| Ok((n, self.rename(decl, pren, super::rc_take(v))?, i)))
-                    .collect::<Result<_, UnifyError>>()?;
+                    .iter()
+                    .map(|(n, v, i)| Ok((n.clone(), self.rename(decl, pren, super::rc_take(v.clone()))?, *i)))
+                    .collect::<Result<Vec<_>, UnifyError>>()?;
                 Ok(Tm::SumCase {
                     typ: Box::new(typ),
                     case_name,
@@ -383,7 +383,7 @@ impl Infer {
             Val::Match(val, env, cases, pending) => {
                 // 分支体是裸 Tm：先在"捕获 env + fresh rigid 槽"下重新求值
                 // （简化 decl 表防重展开），再在 lift 过的 renaming 下 rename
-                let val = self.rename(decl, pren, *val)?;
+                let val = self.rename(decl, pren, (*val).clone())?;
                 let declb = super::simpl_decl(decl);
                 let cases = cases
                     .iter()
@@ -398,12 +398,12 @@ impl Infer {
                         let body = self.rename(&declb, &pren, self.eval(&declb, &env, tm.clone()))?;
                         Ok((pat.clone(), body))
                     })
-                    .collect::<Result<_, UnifyError>>()?;
+                    .collect::<Result<Vec<_>, UnifyError>>()?;
                 // 卡住期累积的实参：同 quote，包在 Match 外的 App 链里
                 let m = Tm::Match(Box::new(val), cases);
-                pending.into_iter().fold(Ok(m), |acc: Result<Tm, UnifyError>, (u, i)| {
-                    let u = self.rename(decl, pren, u)?;
-                    Ok(Tm::App(Box::new(acc?), Box::new(u), i))
+                pending.iter().fold(Ok(m), |acc: Result<Tm, UnifyError>, (u, i)| {
+                    let u = self.rename(decl, pren, u.clone())?;
+                    Ok(Tm::App(Box::new(acc?), Box::new(u), *i))
                 })
             }
         }

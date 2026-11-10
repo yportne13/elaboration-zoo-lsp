@@ -521,7 +521,7 @@ impl Compiler {
         let ret = loop {
             match infer.force(cxt.decl(), wrap_sub(&self.sub, ty)) {
                 Val::Pi(bname, bicit, dom, closure) => {
-                    let dom = *dom;
+                    let dom = (*dom).clone();
                     if impl_idx < impl_vals.len() {
                         // 枚举隐式参数：不产生模式槽
                         let u = impl_vals[impl_idx].clone();
@@ -672,7 +672,7 @@ impl Compiler {
                 let ctor_val = Val::SumCase {
                     typ: Rc::new(head_sum.clone()),
                     case_name: name.clone(),
-                    datas: ctor_datas,
+                    datas: Rc::new(ctor_datas),
                 };
                 // 环守卫（浅 occurs）失败时跳过精化，不阻断分支检查
                 if !val_mentions_lvl(&ctor_val, *x) {
@@ -772,7 +772,7 @@ fn is_catch_all(pat: &Pattern, ctor_names: &[String]) -> bool {
 impl Val {
     fn sum_cases(&self) -> Vec<Span<String>> {
         match self {
-            Val::Sum(_, _, cases) => cases.clone(),
+            Val::Sum(_, _, cases) => (**cases).clone(),
             _ => vec![],
         }
     }
