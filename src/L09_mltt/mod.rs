@@ -345,6 +345,30 @@ pub(crate) fn v_applicable(v: &Val) -> bool {
     )
 }
 
+/// 深链候选探测（零分配、不 force）：沿"第一个子值"链下探至多 8 层。
+/// 只有可能深的值才走帧式收集器（quote_deep / rename_deep）——浅结构
+/// （绝大多数 Sum / SumCase / Obj 值）保持直接递归臂，省掉每层帧的 Vec
+/// 分配（微基准回归修复：match 负载每层一个 Sum 值，帧分配占可见比例）。
+pub(crate) fn deep_chain(v: &Val) -> bool {
+    let mut cur: &Val = v;
+    for _ in 0..8 {
+        cur = match cur {
+            Val::SumCase { datas, .. } => match datas.first() {
+                Some((_, next, _)) => next,
+                None => return false,
+            },
+            Val::Obj(x, _, _) => x,
+            Val::Sum(_, params, _) => match params.first() {
+                Some((_, next, _, _)) => next,
+                None => return false,
+            },
+            Val::VSub(x, _) => x,
+            _ => return false,
+        };
+    }
+    true
+}
+
 /// "解前构建、解后消费"的值的读点纪律：用当前精化替换包裹（O(1) Rc，
 /// force 在消费点惰性推开）。σ 为空时零开销直通。
 pub(crate) fn wrap_sub(sub: &Rc<Subst>, v: Val) -> Val {
@@ -1150,15 +1174,18 @@ impl Infer {
         }
     }
 
-    /// quote 入口：先 force 到 WHNF，再按形态分派——深链形态
-    /// （Sum/SumCase/Obj 可按值深度自嵌，如 `succ^N zero`）交给帧式收集器
-    /// [`Self::quote_deep`]；其余形态（Lam/Pi/Match/spine 头，结构嵌套浅）
-    /// 回落 [`Self::quote_arm`]（L07 README §7.6 同款路线）。
+    /// quote 入口：先 force 到 WHNF，再按形态分派——**可能深**的
+    /// Sum/SumCase/Obj 链（如 `succ^N zero`）交给帧式收集器
+    /// [`Self::quote_deep`]；其余形态（Lam/Pi/Match/spine 头，结构嵌套浅，
+    /// 以及浅的 Sum/SumCase/Obj）回落 [`Self::quote_arm`] 的直接递归臂
+    /// （L07 README §7.6 路线；浅值探测避免每层多付帧分配的代价）。
     fn quote(&self, l: Lvl, t: Val) -> Tm {
         //println!("{} {:?}", "quote".green(), t);
         let t = self.force(t);
         match t {
-            Val::Sum(..) | Val::SumCase { .. } | Val::Obj(..) => self.quote_deep(l, t),
+            Val::Sum(..) | Val::SumCase { .. } | Val::Obj(..) if deep_chain(&t) => {
+                self.quote_deep(l, t)
+            }
             // 正常路径 force 后顶层不会是 VSub；fuel 耗尽时 force 原样返回
             // VSub——解包打印内层（σ 未推开，保真度同旧版"打印未展开 rigid"）。
             // 必须 **move**（不能 clone）：深 Box 链的 clone 是递归深拷贝。
@@ -1349,9 +1376,38 @@ impl Infer {
     /// quote 的浅结构臂（入口已 force、已分派掉深链形态）。
     fn quote_arm(&self, l: Lvl, t: Val) -> Tm {
         match t {
-            // 深链形态已在入口分派给 quote_deep；此臂保留为防御性回落
-            Val::Sum(..) | Val::SumCase { .. } | Val::Obj(..) => self.quote(l, t),
             Val::VSub(v, _) => self.quote(l, (*v).clone()),
+            Val::Obj(x, name, sp) => self
+                .quote_sp(l, Tm::Obj(Box::new(self.quote(l, (*x).clone())), name), sp),
+            Val::Sum(name, params, cases) => {
+                let new_params = params
+                    .iter()
+                    .map(|x| {
+                        (
+                            x.0.clone(),
+                            self.quote(l, rc_take(x.1.clone())),
+                            self.quote(l, rc_take(x.2.clone())),
+                            x.3,
+                        )
+                    })
+                    .collect();
+                Tm::Sum(name, new_params, (*cases).clone())
+            }
+            Val::SumCase {
+                typ,
+                case_name,
+                datas,
+            } => {
+                let datas = datas
+                    .iter()
+                    .map(|p| (p.0.clone(), self.quote(l, rc_take(p.1.clone())), p.2))
+                    .collect();
+                Tm::SumCase {
+                    typ: Box::new(self.quote(l, rc_take(typ))),
+                    case_name,
+                    datas,
+                }
+            }
             Val::Flex(m, sp) => self.quote_sp(l, Tm::Meta(m), sp),
             Val::Rigid(x, sp) => self.quote_sp(l, Tm::Var(lvl2ix(l, x)), sp),
             Val::Lam(x, i, closure) => Tm::Lam(
