@@ -7,6 +7,26 @@ use super::Tm;
 
 type ShowS = Box<dyn FnOnce(&mut String)>;
 
+/// 显示层递归深度上限（移植 L07 P11/2026-09-18 深值轮的"定深截断"路线）。
+///
+/// `pretty_tm` 对 `Tm` 结构递归；深值（`succ^N zero` 经 quote 得到 10^5 层
+/// `Tm::SumCase`）在默认栈下会爆栈。显示层不需要完整性：超过上限输出
+/// `…` 截断即可（不 panic、不改变类型检查结果）。1024 帧在默认 2 MB 栈下
+/// 留足余量（L07 实测 256/1024 均通过，2000 偏高）。
+const MAX_DEPTH: u32 = 1_024;
+
+thread_local! {
+    static DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+struct DepthGuard;
+
+impl Drop for DepthGuard {
+    fn drop(&mut self) {
+        DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+    }
+}
+
 const ATP: i32 = 3;  // atomp
 const APPP: i32 = 2; // appp
 const PIP: i32 = 1;  // pip
@@ -115,6 +135,17 @@ fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &P
 }
 
 pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {
+    // 显示层定深截断：深值不爆栈（见 `MAX_DEPTH`）
+    let depth = DEPTH.with(|d| d.get());
+    if depth >= MAX_DEPTH {
+        return "…".to_string();
+    }
+    DEPTH.with(|d| d.set(depth + 1));
+    let _guard = DepthGuard;
+    pretty_tm_inner(prec, ns, tm)
+}
+
+fn pretty_tm_inner(prec: i32, ns: List<String>, tm: &Tm) -> String {
     match tm {
         Tm::Var(ix) => if ix.0 >= 1919810 {format!("recursive_{}", ix.0 - 1919810)} else {go_ix(ns, ix.0)},
         Tm::Obj(x, name) => format!("{}.{}", pretty_tm(prec, ns, x), name.data),
