@@ -1,0 +1,17 @@
+
+def outParam[A](a: A): A = a
+
+enum Bool {
+    true
+    false
+}
+
+trait Show {
+    def show: String = "default"
+}
+
+impl Show for Bool {
+    def show: String = "override"
+}
+
+println (true.show)

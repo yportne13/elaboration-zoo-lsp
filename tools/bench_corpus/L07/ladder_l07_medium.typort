@@ -1,0 +1,233 @@
+// 规模阶梯（同形态，small/medium/large）：解释器前端流水线。
+// 每个阶段新增一个表达式定义 + 一个累计求值定义；阶段数即规模轴。
+// 覆盖：enum Expr + 多层 match 求值 + 递归 Nat 算术 + 累积值。
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Name {
+    vx
+    vy
+    vz
+}
+
+enum Expr {
+    Lit(n: Nat)
+    Lookup(v: Name)
+    Add(lhs: Expr, rhs: Expr)
+}
+
+def add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def eval(e: Expr, env: Name -> Nat): Nat =
+    match e {
+        case Lit(n) => n
+        case Lookup(v) => env v
+        case Add(lhs, rhs) => add (eval lhs env) (eval rhs env)
+    }
+
+def env0(v: Name): Nat =
+    match v {
+        case vx => succ (succ zero)
+        case vy => succ zero
+        case vz => zero
+    }
+
+def e0 : Expr = Lit (succ zero)
+def acc0 : Nat = eval e0 env0
+def total0 : Nat = acc0
+def e1 : Expr = Add (Lookup vy) (Lit (succ (succ zero)))
+def acc1 : Nat = eval e1 env0
+def total1 : Nat = add total0 acc1
+def e2 : Expr = Add (Add (Lit (succ zero)) (Lit (succ zero))) (Lookup vz)
+def acc2 : Nat = eval e2 env0
+def total2 : Nat = add total1 acc2
+def e3 : Expr = Add (Lit (succ zero)) (Lookup vx)
+def acc3 : Nat = eval e3 env0
+def total3 : Nat = add total2 acc3
+def e4 : Expr = Add (Lookup vy) (Lit (succ (succ zero)))
+def acc4 : Nat = eval e4 env0
+def total4 : Nat = add total3 acc4
+def e5 : Expr = Add (Add (Lit (succ zero)) (Lit (succ zero))) (Lookup vz)
+def acc5 : Nat = eval e5 env0
+def total5 : Nat = add total4 acc5
+def e6 : Expr = Add (Lit (succ zero)) (Lookup vx)
+def acc6 : Nat = eval e6 env0
+def total6 : Nat = add total5 acc6
+def e7 : Expr = Add (Lookup vy) (Lit (succ (succ zero)))
+def acc7 : Nat = eval e7 env0
+def total7 : Nat = add total6 acc7
+def e8 : Expr = Add (Add (Lit (succ zero)) (Lit (succ zero))) (Lookup vz)
+def acc8 : Nat = eval e8 env0
+def total8 : Nat = add total7 acc8
+def e9 : Expr = Add (Lit (succ zero)) (Lookup vx)
+def acc9 : Nat = eval e9 env0
+def total9 : Nat = add total8 acc9
+def e10 : Expr = Add (Lookup vy) (Lit (succ (succ zero)))
+def acc10 : Nat = eval e10 env0
+def total10 : Nat = add total9 acc10
+def e11 : Expr = Add (Add (Lit (succ zero)) (Lit (succ zero))) (Lookup vz)
+def acc11 : Nat = eval e11 env0
+def total11 : Nat = add total10 acc11
+def e12 : Expr = Add (Lit (succ zero)) (Lookup vx)
+def acc12 : Nat = eval e12 env0
+def total12 : Nat = add total11 acc12
+def e13 : Expr = Add (Lookup vy) (Lit (succ (succ zero)))
+def acc13 : Nat = eval e13 env0
+def total13 : Nat = add total12 acc13
+def e14 : Expr = Add (Add (Lit (succ zero)) (Lit (succ zero))) (Lookup vz)
+def acc14 : Nat = eval e14 env0
+def total14 : Nat = add total13 acc14
+def e15 : Expr = Add (Lit (succ zero)) (Lookup vx)
+def acc15 : Nat = eval e15 env0
+def total15 : Nat = add total14 acc15
+def e16 : Expr = Add (Lookup vy) (Lit (succ (succ zero)))
+def acc16 : Nat = eval e16 env0
+def total16 : Nat = add total15 acc16
+def e17 : Expr = Add (Add (Lit (succ zero)) (Lit (succ zero))) (Lookup vz)
+def acc17 : Nat = eval e17 env0
+def total17 : Nat = add total16 acc17
+def e18 : Expr = Add (Lit (succ zero)) (Lookup vx)
+def acc18 : Nat = eval e18 env0
+def total18 : Nat = add total17 acc18
+def e19 : Expr = Add (Lookup vy) (Lit (succ (succ zero)))
+def acc19 : Nat = eval e19 env0
+def total19 : Nat = add total18 acc19
+def e20 : Expr = Add (Add (Lit (succ zero)) (Lit (succ zero))) (Lookup vz)
+def acc20 : Nat = eval e20 env0
+def total20 : Nat = add total19 acc20
+def e21 : Expr = Add (Lit (succ zero)) (Lookup vx)
+def acc21 : Nat = eval e21 env0
+def total21 : Nat = add total20 acc21
+def e22 : Expr = Add (Lookup vy) (Lit (succ (succ zero)))
+def acc22 : Nat = eval e22 env0
+def total22 : Nat = add total21 acc22
+def e23 : Expr = Add (Add (Lit (succ zero)) (Lit (succ zero))) (Lookup vz)
+def acc23 : Nat = eval e23 env0
+def total23 : Nat = add total22 acc23
+def e24 : Expr = Add (Lit (succ zero)) (Lookup vx)
+def acc24 : Nat = eval e24 env0
+def total24 : Nat = add total23 acc24
+def e25 : Expr = Add (Lookup vy) (Lit (succ (succ zero)))
+def acc25 : Nat = eval e25 env0
+def total25 : Nat = add total24 acc25
+def e26 : Expr = Add (Add (Lit (succ zero)) (Lit (succ zero))) (Lookup vz)
+def acc26 : Nat = eval e26 env0
+def total26 : Nat = add total25 acc26
+def e27 : Expr = Add (Lit (succ zero)) (Lookup vx)
+def acc27 : Nat = eval e27 env0
+def total27 : Nat = add total26 acc27
+def e28 : Expr = Add (Lookup vy) (Lit (succ (succ zero)))
+def acc28 : Nat = eval e28 env0
+def total28 : Nat = add total27 acc28
+def e29 : Expr = Add (Add (Lit (succ zero)) (Lit (succ zero))) (Lookup vz)
+def acc29 : Nat = eval e29 env0
+def total29 : Nat = add total28 acc29
+def e30 : Expr = Add (Lit (succ zero)) (Lookup vx)
+def acc30 : Nat = eval e30 env0
+def total30 : Nat = add total29 acc30
+def e31 : Expr = Add (Lookup vy) (Lit (succ (succ zero)))
+def acc31 : Nat = eval e31 env0
+def total31 : Nat = add total30 acc31
+def e32 : Expr = Add (Add (Lit (succ zero)) (Lit (succ zero))) (Lookup vz)
+def acc32 : Nat = eval e32 env0
+def total32 : Nat = add total31 acc32
+def e33 : Expr = Add (Lit (succ zero)) (Lookup vx)
+def acc33 : Nat = eval e33 env0
+def total33 : Nat = add total32 acc33
+def e34 : Expr = Add (Lookup vy) (Lit (succ (succ zero)))
+def acc34 : Nat = eval e34 env0
+def total34 : Nat = add total33 acc34
+def e35 : Expr = Add (Add (Lit (succ zero)) (Lit (succ zero))) (Lookup vz)
+def acc35 : Nat = eval e35 env0
+def total35 : Nat = add total34 acc35
+def e36 : Expr = Add (Lit (succ zero)) (Lookup vx)
+def acc36 : Nat = eval e36 env0
+def total36 : Nat = add total35 acc36
+def e37 : Expr = Add (Lookup vy) (Lit (succ (succ zero)))
+def acc37 : Nat = eval e37 env0
+def total37 : Nat = add total36 acc37
+def e38 : Expr = Add (Add (Lit (succ zero)) (Lit (succ zero))) (Lookup vz)
+def acc38 : Nat = eval e38 env0
+def total38 : Nat = add total37 acc38
+def e39 : Expr = Add (Lit (succ zero)) (Lookup vx)
+def acc39 : Nat = eval e39 env0
+def total39 : Nat = add total38 acc39
+def e40 : Expr = Add (Lookup vy) (Lit (succ (succ zero)))
+def acc40 : Nat = eval e40 env0
+def total40 : Nat = add total39 acc40
+def e41 : Expr = Add (Add (Lit (succ zero)) (Lit (succ zero))) (Lookup vz)
+def acc41 : Nat = eval e41 env0
+def total41 : Nat = add total40 acc41
+def e42 : Expr = Add (Lit (succ zero)) (Lookup vx)
+def acc42 : Nat = eval e42 env0
+def total42 : Nat = add total41 acc42
+def e43 : Expr = Add (Lookup vy) (Lit (succ (succ zero)))
+def acc43 : Nat = eval e43 env0
+def total43 : Nat = add total42 acc43
+def e44 : Expr = Add (Add (Lit (succ zero)) (Lit (succ zero))) (Lookup vz)
+def acc44 : Nat = eval e44 env0
+def total44 : Nat = add total43 acc44
+def e45 : Expr = Add (Lit (succ zero)) (Lookup vx)
+def acc45 : Nat = eval e45 env0
+def total45 : Nat = add total44 acc45
+def e46 : Expr = Add (Lookup vy) (Lit (succ (succ zero)))
+def acc46 : Nat = eval e46 env0
+def total46 : Nat = add total45 acc46
+def e47 : Expr = Add (Add (Lit (succ zero)) (Lit (succ zero))) (Lookup vz)
+def acc47 : Nat = eval e47 env0
+def total47 : Nat = add total46 acc47
+def e48 : Expr = Add (Lit (succ zero)) (Lookup vx)
+def acc48 : Nat = eval e48 env0
+def total48 : Nat = add total47 acc48
+def e49 : Expr = Add (Lookup vy) (Lit (succ (succ zero)))
+def acc49 : Nat = eval e49 env0
+def total49 : Nat = add total48 acc49
+def e50 : Expr = Add (Add (Lit (succ zero)) (Lit (succ zero))) (Lookup vz)
+def acc50 : Nat = eval e50 env0
+def total50 : Nat = add total49 acc50
+def e51 : Expr = Add (Lit (succ zero)) (Lookup vx)
+def acc51 : Nat = eval e51 env0
+def total51 : Nat = add total50 acc51
+def e52 : Expr = Add (Lookup vy) (Lit (succ (succ zero)))
+def acc52 : Nat = eval e52 env0
+def total52 : Nat = add total51 acc52
+def e53 : Expr = Add (Add (Lit (succ zero)) (Lit (succ zero))) (Lookup vz)
+def acc53 : Nat = eval e53 env0
+def total53 : Nat = add total52 acc53
+def e54 : Expr = Add (Lit (succ zero)) (Lookup vx)
+def acc54 : Nat = eval e54 env0
+def total54 : Nat = add total53 acc54
+def e55 : Expr = Add (Lookup vy) (Lit (succ (succ zero)))
+def acc55 : Nat = eval e55 env0
+def total55 : Nat = add total54 acc55
+def e56 : Expr = Add (Add (Lit (succ zero)) (Lit (succ zero))) (Lookup vz)
+def acc56 : Nat = eval e56 env0
+def total56 : Nat = add total55 acc56
+def e57 : Expr = Add (Lit (succ zero)) (Lookup vx)
+def acc57 : Nat = eval e57 env0
+def total57 : Nat = add total56 acc57
+def e58 : Expr = Add (Lookup vy) (Lit (succ (succ zero)))
+def acc58 : Nat = eval e58 env0
+def total58 : Nat = add total57 acc58
+def e59 : Expr = Add (Add (Lit (succ zero)) (Lit (succ zero))) (Lookup vz)
+def acc59 : Nat = eval e59 env0
+def total59 : Nat = add total58 acc59
+def e60 : Expr = Add (Lit (succ zero)) (Lookup vx)
+def acc60 : Nat = eval e60 env0
+def total60 : Nat = add total59 acc60
+def e61 : Expr = Add (Lookup vy) (Lit (succ (succ zero)))
+def acc61 : Nat = eval e61 env0
+def total61 : Nat = add total60 acc61
+def e62 : Expr = Add (Add (Lit (succ zero)) (Lit (succ zero))) (Lookup vz)
+def acc62 : Nat = eval e62 env0
+def total62 : Nat = add total61 acc62
+def e63 : Expr = Add (Lit (succ zero)) (Lookup vx)
+def acc63 : Nat = eval e63 env0
+def total63 : Nat = add total62 acc63

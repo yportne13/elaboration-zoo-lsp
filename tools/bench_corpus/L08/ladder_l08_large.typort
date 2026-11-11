@@ -1,0 +1,2812 @@
+// 规模阶梯（同形态，small/medium/large）：分层记录 schema。
+// 每层新增一个 struct 类型 + 一个嵌套记录值；层数即规模轴。
+// 末尾用一条与层数等长的投影链贯穿整条记录链。
+// 覆盖：struct 声明 / new 构造 / 类型级投影链 / 嵌套记录值。
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+struct R0 {
+    v: Nat
+}
+
+def val0 : R0 = new R0(zero)
+struct R1 {
+    v: Nat
+    inner: R0
+}
+
+def val1 : R1 = new R1(zero, val0)
+
+struct R2 {
+    v: Nat
+    inner: R1
+}
+
+def val2 : R2 = new R2(zero, val1)
+
+struct R3 {
+    v: Nat
+    inner: R2
+}
+
+def val3 : R3 = new R3(zero, val2)
+
+struct R4 {
+    v: Nat
+    inner: R3
+}
+
+def val4 : R4 = new R4(zero, val3)
+
+struct R5 {
+    v: Nat
+    inner: R4
+}
+
+def val5 : R5 = new R5(zero, val4)
+
+struct R6 {
+    v: Nat
+    inner: R5
+}
+
+def val6 : R6 = new R6(zero, val5)
+
+struct R7 {
+    v: Nat
+    inner: R6
+}
+
+def val7 : R7 = new R7(zero, val6)
+
+struct R8 {
+    v: Nat
+    inner: R7
+}
+
+def val8 : R8 = new R8(zero, val7)
+
+struct R9 {
+    v: Nat
+    inner: R8
+}
+
+def val9 : R9 = new R9(zero, val8)
+
+struct R10 {
+    v: Nat
+    inner: R9
+}
+
+def val10 : R10 = new R10(zero, val9)
+
+struct R11 {
+    v: Nat
+    inner: R10
+}
+
+def val11 : R11 = new R11(zero, val10)
+
+struct R12 {
+    v: Nat
+    inner: R11
+}
+
+def val12 : R12 = new R12(zero, val11)
+
+struct R13 {
+    v: Nat
+    inner: R12
+}
+
+def val13 : R13 = new R13(zero, val12)
+
+struct R14 {
+    v: Nat
+    inner: R13
+}
+
+def val14 : R14 = new R14(zero, val13)
+
+struct R15 {
+    v: Nat
+    inner: R14
+}
+
+def val15 : R15 = new R15(zero, val14)
+
+struct R16 {
+    v: Nat
+    inner: R15
+}
+
+def val16 : R16 = new R16(zero, val15)
+
+struct R17 {
+    v: Nat
+    inner: R16
+}
+
+def val17 : R17 = new R17(zero, val16)
+
+struct R18 {
+    v: Nat
+    inner: R17
+}
+
+def val18 : R18 = new R18(zero, val17)
+
+struct R19 {
+    v: Nat
+    inner: R18
+}
+
+def val19 : R19 = new R19(zero, val18)
+
+struct R20 {
+    v: Nat
+    inner: R19
+}
+
+def val20 : R20 = new R20(zero, val19)
+
+struct R21 {
+    v: Nat
+    inner: R20
+}
+
+def val21 : R21 = new R21(zero, val20)
+
+struct R22 {
+    v: Nat
+    inner: R21
+}
+
+def val22 : R22 = new R22(zero, val21)
+
+struct R23 {
+    v: Nat
+    inner: R22
+}
+
+def val23 : R23 = new R23(zero, val22)
+
+struct R24 {
+    v: Nat
+    inner: R23
+}
+
+def val24 : R24 = new R24(zero, val23)
+
+struct R25 {
+    v: Nat
+    inner: R24
+}
+
+def val25 : R25 = new R25(zero, val24)
+
+struct R26 {
+    v: Nat
+    inner: R25
+}
+
+def val26 : R26 = new R26(zero, val25)
+
+struct R27 {
+    v: Nat
+    inner: R26
+}
+
+def val27 : R27 = new R27(zero, val26)
+
+struct R28 {
+    v: Nat
+    inner: R27
+}
+
+def val28 : R28 = new R28(zero, val27)
+
+struct R29 {
+    v: Nat
+    inner: R28
+}
+
+def val29 : R29 = new R29(zero, val28)
+
+struct R30 {
+    v: Nat
+    inner: R29
+}
+
+def val30 : R30 = new R30(zero, val29)
+
+struct R31 {
+    v: Nat
+    inner: R30
+}
+
+def val31 : R31 = new R31(zero, val30)
+
+struct R32 {
+    v: Nat
+    inner: R31
+}
+
+def val32 : R32 = new R32(zero, val31)
+
+struct R33 {
+    v: Nat
+    inner: R32
+}
+
+def val33 : R33 = new R33(zero, val32)
+
+struct R34 {
+    v: Nat
+    inner: R33
+}
+
+def val34 : R34 = new R34(zero, val33)
+
+struct R35 {
+    v: Nat
+    inner: R34
+}
+
+def val35 : R35 = new R35(zero, val34)
+
+struct R36 {
+    v: Nat
+    inner: R35
+}
+
+def val36 : R36 = new R36(zero, val35)
+
+struct R37 {
+    v: Nat
+    inner: R36
+}
+
+def val37 : R37 = new R37(zero, val36)
+
+struct R38 {
+    v: Nat
+    inner: R37
+}
+
+def val38 : R38 = new R38(zero, val37)
+
+struct R39 {
+    v: Nat
+    inner: R38
+}
+
+def val39 : R39 = new R39(zero, val38)
+
+struct R40 {
+    v: Nat
+    inner: R39
+}
+
+def val40 : R40 = new R40(zero, val39)
+
+struct R41 {
+    v: Nat
+    inner: R40
+}
+
+def val41 : R41 = new R41(zero, val40)
+
+struct R42 {
+    v: Nat
+    inner: R41
+}
+
+def val42 : R42 = new R42(zero, val41)
+
+struct R43 {
+    v: Nat
+    inner: R42
+}
+
+def val43 : R43 = new R43(zero, val42)
+
+struct R44 {
+    v: Nat
+    inner: R43
+}
+
+def val44 : R44 = new R44(zero, val43)
+
+struct R45 {
+    v: Nat
+    inner: R44
+}
+
+def val45 : R45 = new R45(zero, val44)
+
+struct R46 {
+    v: Nat
+    inner: R45
+}
+
+def val46 : R46 = new R46(zero, val45)
+
+struct R47 {
+    v: Nat
+    inner: R46
+}
+
+def val47 : R47 = new R47(zero, val46)
+
+struct R48 {
+    v: Nat
+    inner: R47
+}
+
+def val48 : R48 = new R48(zero, val47)
+
+struct R49 {
+    v: Nat
+    inner: R48
+}
+
+def val49 : R49 = new R49(zero, val48)
+
+struct R50 {
+    v: Nat
+    inner: R49
+}
+
+def val50 : R50 = new R50(zero, val49)
+
+struct R51 {
+    v: Nat
+    inner: R50
+}
+
+def val51 : R51 = new R51(zero, val50)
+
+struct R52 {
+    v: Nat
+    inner: R51
+}
+
+def val52 : R52 = new R52(zero, val51)
+
+struct R53 {
+    v: Nat
+    inner: R52
+}
+
+def val53 : R53 = new R53(zero, val52)
+
+struct R54 {
+    v: Nat
+    inner: R53
+}
+
+def val54 : R54 = new R54(zero, val53)
+
+struct R55 {
+    v: Nat
+    inner: R54
+}
+
+def val55 : R55 = new R55(zero, val54)
+
+struct R56 {
+    v: Nat
+    inner: R55
+}
+
+def val56 : R56 = new R56(zero, val55)
+
+struct R57 {
+    v: Nat
+    inner: R56
+}
+
+def val57 : R57 = new R57(zero, val56)
+
+struct R58 {
+    v: Nat
+    inner: R57
+}
+
+def val58 : R58 = new R58(zero, val57)
+
+struct R59 {
+    v: Nat
+    inner: R58
+}
+
+def val59 : R59 = new R59(zero, val58)
+
+struct R60 {
+    v: Nat
+    inner: R59
+}
+
+def val60 : R60 = new R60(zero, val59)
+
+struct R61 {
+    v: Nat
+    inner: R60
+}
+
+def val61 : R61 = new R61(zero, val60)
+
+struct R62 {
+    v: Nat
+    inner: R61
+}
+
+def val62 : R62 = new R62(zero, val61)
+
+struct R63 {
+    v: Nat
+    inner: R62
+}
+
+def val63 : R63 = new R63(zero, val62)
+
+struct R64 {
+    v: Nat
+    inner: R63
+}
+
+def val64 : R64 = new R64(zero, val63)
+
+struct R65 {
+    v: Nat
+    inner: R64
+}
+
+def val65 : R65 = new R65(zero, val64)
+
+struct R66 {
+    v: Nat
+    inner: R65
+}
+
+def val66 : R66 = new R66(zero, val65)
+
+struct R67 {
+    v: Nat
+    inner: R66
+}
+
+def val67 : R67 = new R67(zero, val66)
+
+struct R68 {
+    v: Nat
+    inner: R67
+}
+
+def val68 : R68 = new R68(zero, val67)
+
+struct R69 {
+    v: Nat
+    inner: R68
+}
+
+def val69 : R69 = new R69(zero, val68)
+
+struct R70 {
+    v: Nat
+    inner: R69
+}
+
+def val70 : R70 = new R70(zero, val69)
+
+struct R71 {
+    v: Nat
+    inner: R70
+}
+
+def val71 : R71 = new R71(zero, val70)
+
+struct R72 {
+    v: Nat
+    inner: R71
+}
+
+def val72 : R72 = new R72(zero, val71)
+
+struct R73 {
+    v: Nat
+    inner: R72
+}
+
+def val73 : R73 = new R73(zero, val72)
+
+struct R74 {
+    v: Nat
+    inner: R73
+}
+
+def val74 : R74 = new R74(zero, val73)
+
+struct R75 {
+    v: Nat
+    inner: R74
+}
+
+def val75 : R75 = new R75(zero, val74)
+
+struct R76 {
+    v: Nat
+    inner: R75
+}
+
+def val76 : R76 = new R76(zero, val75)
+
+struct R77 {
+    v: Nat
+    inner: R76
+}
+
+def val77 : R77 = new R77(zero, val76)
+
+struct R78 {
+    v: Nat
+    inner: R77
+}
+
+def val78 : R78 = new R78(zero, val77)
+
+struct R79 {
+    v: Nat
+    inner: R78
+}
+
+def val79 : R79 = new R79(zero, val78)
+
+struct R80 {
+    v: Nat
+    inner: R79
+}
+
+def val80 : R80 = new R80(zero, val79)
+
+struct R81 {
+    v: Nat
+    inner: R80
+}
+
+def val81 : R81 = new R81(zero, val80)
+
+struct R82 {
+    v: Nat
+    inner: R81
+}
+
+def val82 : R82 = new R82(zero, val81)
+
+struct R83 {
+    v: Nat
+    inner: R82
+}
+
+def val83 : R83 = new R83(zero, val82)
+
+struct R84 {
+    v: Nat
+    inner: R83
+}
+
+def val84 : R84 = new R84(zero, val83)
+
+struct R85 {
+    v: Nat
+    inner: R84
+}
+
+def val85 : R85 = new R85(zero, val84)
+
+struct R86 {
+    v: Nat
+    inner: R85
+}
+
+def val86 : R86 = new R86(zero, val85)
+
+struct R87 {
+    v: Nat
+    inner: R86
+}
+
+def val87 : R87 = new R87(zero, val86)
+
+struct R88 {
+    v: Nat
+    inner: R87
+}
+
+def val88 : R88 = new R88(zero, val87)
+
+struct R89 {
+    v: Nat
+    inner: R88
+}
+
+def val89 : R89 = new R89(zero, val88)
+
+struct R90 {
+    v: Nat
+    inner: R89
+}
+
+def val90 : R90 = new R90(zero, val89)
+
+struct R91 {
+    v: Nat
+    inner: R90
+}
+
+def val91 : R91 = new R91(zero, val90)
+
+struct R92 {
+    v: Nat
+    inner: R91
+}
+
+def val92 : R92 = new R92(zero, val91)
+
+struct R93 {
+    v: Nat
+    inner: R92
+}
+
+def val93 : R93 = new R93(zero, val92)
+
+struct R94 {
+    v: Nat
+    inner: R93
+}
+
+def val94 : R94 = new R94(zero, val93)
+
+struct R95 {
+    v: Nat
+    inner: R94
+}
+
+def val95 : R95 = new R95(zero, val94)
+
+struct R96 {
+    v: Nat
+    inner: R95
+}
+
+def val96 : R96 = new R96(zero, val95)
+
+struct R97 {
+    v: Nat
+    inner: R96
+}
+
+def val97 : R97 = new R97(zero, val96)
+
+struct R98 {
+    v: Nat
+    inner: R97
+}
+
+def val98 : R98 = new R98(zero, val97)
+
+struct R99 {
+    v: Nat
+    inner: R98
+}
+
+def val99 : R99 = new R99(zero, val98)
+
+struct R100 {
+    v: Nat
+    inner: R99
+}
+
+def val100 : R100 = new R100(zero, val99)
+
+struct R101 {
+    v: Nat
+    inner: R100
+}
+
+def val101 : R101 = new R101(zero, val100)
+
+struct R102 {
+    v: Nat
+    inner: R101
+}
+
+def val102 : R102 = new R102(zero, val101)
+
+struct R103 {
+    v: Nat
+    inner: R102
+}
+
+def val103 : R103 = new R103(zero, val102)
+
+struct R104 {
+    v: Nat
+    inner: R103
+}
+
+def val104 : R104 = new R104(zero, val103)
+
+struct R105 {
+    v: Nat
+    inner: R104
+}
+
+def val105 : R105 = new R105(zero, val104)
+
+struct R106 {
+    v: Nat
+    inner: R105
+}
+
+def val106 : R106 = new R106(zero, val105)
+
+struct R107 {
+    v: Nat
+    inner: R106
+}
+
+def val107 : R107 = new R107(zero, val106)
+
+struct R108 {
+    v: Nat
+    inner: R107
+}
+
+def val108 : R108 = new R108(zero, val107)
+
+struct R109 {
+    v: Nat
+    inner: R108
+}
+
+def val109 : R109 = new R109(zero, val108)
+
+struct R110 {
+    v: Nat
+    inner: R109
+}
+
+def val110 : R110 = new R110(zero, val109)
+
+struct R111 {
+    v: Nat
+    inner: R110
+}
+
+def val111 : R111 = new R111(zero, val110)
+
+struct R112 {
+    v: Nat
+    inner: R111
+}
+
+def val112 : R112 = new R112(zero, val111)
+
+struct R113 {
+    v: Nat
+    inner: R112
+}
+
+def val113 : R113 = new R113(zero, val112)
+
+struct R114 {
+    v: Nat
+    inner: R113
+}
+
+def val114 : R114 = new R114(zero, val113)
+
+struct R115 {
+    v: Nat
+    inner: R114
+}
+
+def val115 : R115 = new R115(zero, val114)
+
+struct R116 {
+    v: Nat
+    inner: R115
+}
+
+def val116 : R116 = new R116(zero, val115)
+
+struct R117 {
+    v: Nat
+    inner: R116
+}
+
+def val117 : R117 = new R117(zero, val116)
+
+struct R118 {
+    v: Nat
+    inner: R117
+}
+
+def val118 : R118 = new R118(zero, val117)
+
+struct R119 {
+    v: Nat
+    inner: R118
+}
+
+def val119 : R119 = new R119(zero, val118)
+
+struct R120 {
+    v: Nat
+    inner: R119
+}
+
+def val120 : R120 = new R120(zero, val119)
+
+struct R121 {
+    v: Nat
+    inner: R120
+}
+
+def val121 : R121 = new R121(zero, val120)
+
+struct R122 {
+    v: Nat
+    inner: R121
+}
+
+def val122 : R122 = new R122(zero, val121)
+
+struct R123 {
+    v: Nat
+    inner: R122
+}
+
+def val123 : R123 = new R123(zero, val122)
+
+struct R124 {
+    v: Nat
+    inner: R123
+}
+
+def val124 : R124 = new R124(zero, val123)
+
+struct R125 {
+    v: Nat
+    inner: R124
+}
+
+def val125 : R125 = new R125(zero, val124)
+
+struct R126 {
+    v: Nat
+    inner: R125
+}
+
+def val126 : R126 = new R126(zero, val125)
+
+struct R127 {
+    v: Nat
+    inner: R126
+}
+
+def val127 : R127 = new R127(zero, val126)
+
+struct R128 {
+    v: Nat
+    inner: R127
+}
+
+def val128 : R128 = new R128(zero, val127)
+
+struct R129 {
+    v: Nat
+    inner: R128
+}
+
+def val129 : R129 = new R129(zero, val128)
+
+struct R130 {
+    v: Nat
+    inner: R129
+}
+
+def val130 : R130 = new R130(zero, val129)
+
+struct R131 {
+    v: Nat
+    inner: R130
+}
+
+def val131 : R131 = new R131(zero, val130)
+
+struct R132 {
+    v: Nat
+    inner: R131
+}
+
+def val132 : R132 = new R132(zero, val131)
+
+struct R133 {
+    v: Nat
+    inner: R132
+}
+
+def val133 : R133 = new R133(zero, val132)
+
+struct R134 {
+    v: Nat
+    inner: R133
+}
+
+def val134 : R134 = new R134(zero, val133)
+
+struct R135 {
+    v: Nat
+    inner: R134
+}
+
+def val135 : R135 = new R135(zero, val134)
+
+struct R136 {
+    v: Nat
+    inner: R135
+}
+
+def val136 : R136 = new R136(zero, val135)
+
+struct R137 {
+    v: Nat
+    inner: R136
+}
+
+def val137 : R137 = new R137(zero, val136)
+
+struct R138 {
+    v: Nat
+    inner: R137
+}
+
+def val138 : R138 = new R138(zero, val137)
+
+struct R139 {
+    v: Nat
+    inner: R138
+}
+
+def val139 : R139 = new R139(zero, val138)
+
+struct R140 {
+    v: Nat
+    inner: R139
+}
+
+def val140 : R140 = new R140(zero, val139)
+
+struct R141 {
+    v: Nat
+    inner: R140
+}
+
+def val141 : R141 = new R141(zero, val140)
+
+struct R142 {
+    v: Nat
+    inner: R141
+}
+
+def val142 : R142 = new R142(zero, val141)
+
+struct R143 {
+    v: Nat
+    inner: R142
+}
+
+def val143 : R143 = new R143(zero, val142)
+
+struct R144 {
+    v: Nat
+    inner: R143
+}
+
+def val144 : R144 = new R144(zero, val143)
+
+struct R145 {
+    v: Nat
+    inner: R144
+}
+
+def val145 : R145 = new R145(zero, val144)
+
+struct R146 {
+    v: Nat
+    inner: R145
+}
+
+def val146 : R146 = new R146(zero, val145)
+
+struct R147 {
+    v: Nat
+    inner: R146
+}
+
+def val147 : R147 = new R147(zero, val146)
+
+struct R148 {
+    v: Nat
+    inner: R147
+}
+
+def val148 : R148 = new R148(zero, val147)
+
+struct R149 {
+    v: Nat
+    inner: R148
+}
+
+def val149 : R149 = new R149(zero, val148)
+
+struct R150 {
+    v: Nat
+    inner: R149
+}
+
+def val150 : R150 = new R150(zero, val149)
+
+struct R151 {
+    v: Nat
+    inner: R150
+}
+
+def val151 : R151 = new R151(zero, val150)
+
+struct R152 {
+    v: Nat
+    inner: R151
+}
+
+def val152 : R152 = new R152(zero, val151)
+
+struct R153 {
+    v: Nat
+    inner: R152
+}
+
+def val153 : R153 = new R153(zero, val152)
+
+struct R154 {
+    v: Nat
+    inner: R153
+}
+
+def val154 : R154 = new R154(zero, val153)
+
+struct R155 {
+    v: Nat
+    inner: R154
+}
+
+def val155 : R155 = new R155(zero, val154)
+
+struct R156 {
+    v: Nat
+    inner: R155
+}
+
+def val156 : R156 = new R156(zero, val155)
+
+struct R157 {
+    v: Nat
+    inner: R156
+}
+
+def val157 : R157 = new R157(zero, val156)
+
+struct R158 {
+    v: Nat
+    inner: R157
+}
+
+def val158 : R158 = new R158(zero, val157)
+
+struct R159 {
+    v: Nat
+    inner: R158
+}
+
+def val159 : R159 = new R159(zero, val158)
+
+struct R160 {
+    v: Nat
+    inner: R159
+}
+
+def val160 : R160 = new R160(zero, val159)
+
+struct R161 {
+    v: Nat
+    inner: R160
+}
+
+def val161 : R161 = new R161(zero, val160)
+
+struct R162 {
+    v: Nat
+    inner: R161
+}
+
+def val162 : R162 = new R162(zero, val161)
+
+struct R163 {
+    v: Nat
+    inner: R162
+}
+
+def val163 : R163 = new R163(zero, val162)
+
+struct R164 {
+    v: Nat
+    inner: R163
+}
+
+def val164 : R164 = new R164(zero, val163)
+
+struct R165 {
+    v: Nat
+    inner: R164
+}
+
+def val165 : R165 = new R165(zero, val164)
+
+struct R166 {
+    v: Nat
+    inner: R165
+}
+
+def val166 : R166 = new R166(zero, val165)
+
+struct R167 {
+    v: Nat
+    inner: R166
+}
+
+def val167 : R167 = new R167(zero, val166)
+
+struct R168 {
+    v: Nat
+    inner: R167
+}
+
+def val168 : R168 = new R168(zero, val167)
+
+struct R169 {
+    v: Nat
+    inner: R168
+}
+
+def val169 : R169 = new R169(zero, val168)
+
+struct R170 {
+    v: Nat
+    inner: R169
+}
+
+def val170 : R170 = new R170(zero, val169)
+
+struct R171 {
+    v: Nat
+    inner: R170
+}
+
+def val171 : R171 = new R171(zero, val170)
+
+struct R172 {
+    v: Nat
+    inner: R171
+}
+
+def val172 : R172 = new R172(zero, val171)
+
+struct R173 {
+    v: Nat
+    inner: R172
+}
+
+def val173 : R173 = new R173(zero, val172)
+
+struct R174 {
+    v: Nat
+    inner: R173
+}
+
+def val174 : R174 = new R174(zero, val173)
+
+struct R175 {
+    v: Nat
+    inner: R174
+}
+
+def val175 : R175 = new R175(zero, val174)
+
+struct R176 {
+    v: Nat
+    inner: R175
+}
+
+def val176 : R176 = new R176(zero, val175)
+
+struct R177 {
+    v: Nat
+    inner: R176
+}
+
+def val177 : R177 = new R177(zero, val176)
+
+struct R178 {
+    v: Nat
+    inner: R177
+}
+
+def val178 : R178 = new R178(zero, val177)
+
+struct R179 {
+    v: Nat
+    inner: R178
+}
+
+def val179 : R179 = new R179(zero, val178)
+
+struct R180 {
+    v: Nat
+    inner: R179
+}
+
+def val180 : R180 = new R180(zero, val179)
+
+struct R181 {
+    v: Nat
+    inner: R180
+}
+
+def val181 : R181 = new R181(zero, val180)
+
+struct R182 {
+    v: Nat
+    inner: R181
+}
+
+def val182 : R182 = new R182(zero, val181)
+
+struct R183 {
+    v: Nat
+    inner: R182
+}
+
+def val183 : R183 = new R183(zero, val182)
+
+struct R184 {
+    v: Nat
+    inner: R183
+}
+
+def val184 : R184 = new R184(zero, val183)
+
+struct R185 {
+    v: Nat
+    inner: R184
+}
+
+def val185 : R185 = new R185(zero, val184)
+
+struct R186 {
+    v: Nat
+    inner: R185
+}
+
+def val186 : R186 = new R186(zero, val185)
+
+struct R187 {
+    v: Nat
+    inner: R186
+}
+
+def val187 : R187 = new R187(zero, val186)
+
+struct R188 {
+    v: Nat
+    inner: R187
+}
+
+def val188 : R188 = new R188(zero, val187)
+
+struct R189 {
+    v: Nat
+    inner: R188
+}
+
+def val189 : R189 = new R189(zero, val188)
+
+struct R190 {
+    v: Nat
+    inner: R189
+}
+
+def val190 : R190 = new R190(zero, val189)
+
+struct R191 {
+    v: Nat
+    inner: R190
+}
+
+def val191 : R191 = new R191(zero, val190)
+
+struct R192 {
+    v: Nat
+    inner: R191
+}
+
+def val192 : R192 = new R192(zero, val191)
+
+struct R193 {
+    v: Nat
+    inner: R192
+}
+
+def val193 : R193 = new R193(zero, val192)
+
+struct R194 {
+    v: Nat
+    inner: R193
+}
+
+def val194 : R194 = new R194(zero, val193)
+
+struct R195 {
+    v: Nat
+    inner: R194
+}
+
+def val195 : R195 = new R195(zero, val194)
+
+struct R196 {
+    v: Nat
+    inner: R195
+}
+
+def val196 : R196 = new R196(zero, val195)
+
+struct R197 {
+    v: Nat
+    inner: R196
+}
+
+def val197 : R197 = new R197(zero, val196)
+
+struct R198 {
+    v: Nat
+    inner: R197
+}
+
+def val198 : R198 = new R198(zero, val197)
+
+struct R199 {
+    v: Nat
+    inner: R198
+}
+
+def val199 : R199 = new R199(zero, val198)
+
+struct R200 {
+    v: Nat
+    inner: R199
+}
+
+def val200 : R200 = new R200(zero, val199)
+
+struct R201 {
+    v: Nat
+    inner: R200
+}
+
+def val201 : R201 = new R201(zero, val200)
+
+struct R202 {
+    v: Nat
+    inner: R201
+}
+
+def val202 : R202 = new R202(zero, val201)
+
+struct R203 {
+    v: Nat
+    inner: R202
+}
+
+def val203 : R203 = new R203(zero, val202)
+
+struct R204 {
+    v: Nat
+    inner: R203
+}
+
+def val204 : R204 = new R204(zero, val203)
+
+struct R205 {
+    v: Nat
+    inner: R204
+}
+
+def val205 : R205 = new R205(zero, val204)
+
+struct R206 {
+    v: Nat
+    inner: R205
+}
+
+def val206 : R206 = new R206(zero, val205)
+
+struct R207 {
+    v: Nat
+    inner: R206
+}
+
+def val207 : R207 = new R207(zero, val206)
+
+struct R208 {
+    v: Nat
+    inner: R207
+}
+
+def val208 : R208 = new R208(zero, val207)
+
+struct R209 {
+    v: Nat
+    inner: R208
+}
+
+def val209 : R209 = new R209(zero, val208)
+
+struct R210 {
+    v: Nat
+    inner: R209
+}
+
+def val210 : R210 = new R210(zero, val209)
+
+struct R211 {
+    v: Nat
+    inner: R210
+}
+
+def val211 : R211 = new R211(zero, val210)
+
+struct R212 {
+    v: Nat
+    inner: R211
+}
+
+def val212 : R212 = new R212(zero, val211)
+
+struct R213 {
+    v: Nat
+    inner: R212
+}
+
+def val213 : R213 = new R213(zero, val212)
+
+struct R214 {
+    v: Nat
+    inner: R213
+}
+
+def val214 : R214 = new R214(zero, val213)
+
+struct R215 {
+    v: Nat
+    inner: R214
+}
+
+def val215 : R215 = new R215(zero, val214)
+
+struct R216 {
+    v: Nat
+    inner: R215
+}
+
+def val216 : R216 = new R216(zero, val215)
+
+struct R217 {
+    v: Nat
+    inner: R216
+}
+
+def val217 : R217 = new R217(zero, val216)
+
+struct R218 {
+    v: Nat
+    inner: R217
+}
+
+def val218 : R218 = new R218(zero, val217)
+
+struct R219 {
+    v: Nat
+    inner: R218
+}
+
+def val219 : R219 = new R219(zero, val218)
+
+struct R220 {
+    v: Nat
+    inner: R219
+}
+
+def val220 : R220 = new R220(zero, val219)
+
+struct R221 {
+    v: Nat
+    inner: R220
+}
+
+def val221 : R221 = new R221(zero, val220)
+
+struct R222 {
+    v: Nat
+    inner: R221
+}
+
+def val222 : R222 = new R222(zero, val221)
+
+struct R223 {
+    v: Nat
+    inner: R222
+}
+
+def val223 : R223 = new R223(zero, val222)
+
+struct R224 {
+    v: Nat
+    inner: R223
+}
+
+def val224 : R224 = new R224(zero, val223)
+
+struct R225 {
+    v: Nat
+    inner: R224
+}
+
+def val225 : R225 = new R225(zero, val224)
+
+struct R226 {
+    v: Nat
+    inner: R225
+}
+
+def val226 : R226 = new R226(zero, val225)
+
+struct R227 {
+    v: Nat
+    inner: R226
+}
+
+def val227 : R227 = new R227(zero, val226)
+
+struct R228 {
+    v: Nat
+    inner: R227
+}
+
+def val228 : R228 = new R228(zero, val227)
+
+struct R229 {
+    v: Nat
+    inner: R228
+}
+
+def val229 : R229 = new R229(zero, val228)
+
+struct R230 {
+    v: Nat
+    inner: R229
+}
+
+def val230 : R230 = new R230(zero, val229)
+
+struct R231 {
+    v: Nat
+    inner: R230
+}
+
+def val231 : R231 = new R231(zero, val230)
+
+struct R232 {
+    v: Nat
+    inner: R231
+}
+
+def val232 : R232 = new R232(zero, val231)
+
+struct R233 {
+    v: Nat
+    inner: R232
+}
+
+def val233 : R233 = new R233(zero, val232)
+
+struct R234 {
+    v: Nat
+    inner: R233
+}
+
+def val234 : R234 = new R234(zero, val233)
+
+struct R235 {
+    v: Nat
+    inner: R234
+}
+
+def val235 : R235 = new R235(zero, val234)
+
+struct R236 {
+    v: Nat
+    inner: R235
+}
+
+def val236 : R236 = new R236(zero, val235)
+
+struct R237 {
+    v: Nat
+    inner: R236
+}
+
+def val237 : R237 = new R237(zero, val236)
+
+struct R238 {
+    v: Nat
+    inner: R237
+}
+
+def val238 : R238 = new R238(zero, val237)
+
+struct R239 {
+    v: Nat
+    inner: R238
+}
+
+def val239 : R239 = new R239(zero, val238)
+
+struct R240 {
+    v: Nat
+    inner: R239
+}
+
+def val240 : R240 = new R240(zero, val239)
+
+struct R241 {
+    v: Nat
+    inner: R240
+}
+
+def val241 : R241 = new R241(zero, val240)
+
+struct R242 {
+    v: Nat
+    inner: R241
+}
+
+def val242 : R242 = new R242(zero, val241)
+
+struct R243 {
+    v: Nat
+    inner: R242
+}
+
+def val243 : R243 = new R243(zero, val242)
+
+struct R244 {
+    v: Nat
+    inner: R243
+}
+
+def val244 : R244 = new R244(zero, val243)
+
+struct R245 {
+    v: Nat
+    inner: R244
+}
+
+def val245 : R245 = new R245(zero, val244)
+
+struct R246 {
+    v: Nat
+    inner: R245
+}
+
+def val246 : R246 = new R246(zero, val245)
+
+struct R247 {
+    v: Nat
+    inner: R246
+}
+
+def val247 : R247 = new R247(zero, val246)
+
+struct R248 {
+    v: Nat
+    inner: R247
+}
+
+def val248 : R248 = new R248(zero, val247)
+
+struct R249 {
+    v: Nat
+    inner: R248
+}
+
+def val249 : R249 = new R249(zero, val248)
+
+struct R250 {
+    v: Nat
+    inner: R249
+}
+
+def val250 : R250 = new R250(zero, val249)
+
+struct R251 {
+    v: Nat
+    inner: R250
+}
+
+def val251 : R251 = new R251(zero, val250)
+
+struct R252 {
+    v: Nat
+    inner: R251
+}
+
+def val252 : R252 = new R252(zero, val251)
+
+struct R253 {
+    v: Nat
+    inner: R252
+}
+
+def val253 : R253 = new R253(zero, val252)
+
+struct R254 {
+    v: Nat
+    inner: R253
+}
+
+def val254 : R254 = new R254(zero, val253)
+
+struct R255 {
+    v: Nat
+    inner: R254
+}
+
+def val255 : R255 = new R255(zero, val254)
+
+struct R256 {
+    v: Nat
+    inner: R255
+}
+
+def val256 : R256 = new R256(zero, val255)
+
+struct R257 {
+    v: Nat
+    inner: R256
+}
+
+def val257 : R257 = new R257(zero, val256)
+
+struct R258 {
+    v: Nat
+    inner: R257
+}
+
+def val258 : R258 = new R258(zero, val257)
+
+struct R259 {
+    v: Nat
+    inner: R258
+}
+
+def val259 : R259 = new R259(zero, val258)
+
+struct R260 {
+    v: Nat
+    inner: R259
+}
+
+def val260 : R260 = new R260(zero, val259)
+
+struct R261 {
+    v: Nat
+    inner: R260
+}
+
+def val261 : R261 = new R261(zero, val260)
+
+struct R262 {
+    v: Nat
+    inner: R261
+}
+
+def val262 : R262 = new R262(zero, val261)
+
+struct R263 {
+    v: Nat
+    inner: R262
+}
+
+def val263 : R263 = new R263(zero, val262)
+
+struct R264 {
+    v: Nat
+    inner: R263
+}
+
+def val264 : R264 = new R264(zero, val263)
+
+struct R265 {
+    v: Nat
+    inner: R264
+}
+
+def val265 : R265 = new R265(zero, val264)
+
+struct R266 {
+    v: Nat
+    inner: R265
+}
+
+def val266 : R266 = new R266(zero, val265)
+
+struct R267 {
+    v: Nat
+    inner: R266
+}
+
+def val267 : R267 = new R267(zero, val266)
+
+struct R268 {
+    v: Nat
+    inner: R267
+}
+
+def val268 : R268 = new R268(zero, val267)
+
+struct R269 {
+    v: Nat
+    inner: R268
+}
+
+def val269 : R269 = new R269(zero, val268)
+
+struct R270 {
+    v: Nat
+    inner: R269
+}
+
+def val270 : R270 = new R270(zero, val269)
+
+struct R271 {
+    v: Nat
+    inner: R270
+}
+
+def val271 : R271 = new R271(zero, val270)
+
+struct R272 {
+    v: Nat
+    inner: R271
+}
+
+def val272 : R272 = new R272(zero, val271)
+
+struct R273 {
+    v: Nat
+    inner: R272
+}
+
+def val273 : R273 = new R273(zero, val272)
+
+struct R274 {
+    v: Nat
+    inner: R273
+}
+
+def val274 : R274 = new R274(zero, val273)
+
+struct R275 {
+    v: Nat
+    inner: R274
+}
+
+def val275 : R275 = new R275(zero, val274)
+
+struct R276 {
+    v: Nat
+    inner: R275
+}
+
+def val276 : R276 = new R276(zero, val275)
+
+struct R277 {
+    v: Nat
+    inner: R276
+}
+
+def val277 : R277 = new R277(zero, val276)
+
+struct R278 {
+    v: Nat
+    inner: R277
+}
+
+def val278 : R278 = new R278(zero, val277)
+
+struct R279 {
+    v: Nat
+    inner: R278
+}
+
+def val279 : R279 = new R279(zero, val278)
+
+struct R280 {
+    v: Nat
+    inner: R279
+}
+
+def val280 : R280 = new R280(zero, val279)
+
+struct R281 {
+    v: Nat
+    inner: R280
+}
+
+def val281 : R281 = new R281(zero, val280)
+
+struct R282 {
+    v: Nat
+    inner: R281
+}
+
+def val282 : R282 = new R282(zero, val281)
+
+struct R283 {
+    v: Nat
+    inner: R282
+}
+
+def val283 : R283 = new R283(zero, val282)
+
+struct R284 {
+    v: Nat
+    inner: R283
+}
+
+def val284 : R284 = new R284(zero, val283)
+
+struct R285 {
+    v: Nat
+    inner: R284
+}
+
+def val285 : R285 = new R285(zero, val284)
+
+struct R286 {
+    v: Nat
+    inner: R285
+}
+
+def val286 : R286 = new R286(zero, val285)
+
+struct R287 {
+    v: Nat
+    inner: R286
+}
+
+def val287 : R287 = new R287(zero, val286)
+
+struct R288 {
+    v: Nat
+    inner: R287
+}
+
+def val288 : R288 = new R288(zero, val287)
+
+struct R289 {
+    v: Nat
+    inner: R288
+}
+
+def val289 : R289 = new R289(zero, val288)
+
+struct R290 {
+    v: Nat
+    inner: R289
+}
+
+def val290 : R290 = new R290(zero, val289)
+
+struct R291 {
+    v: Nat
+    inner: R290
+}
+
+def val291 : R291 = new R291(zero, val290)
+
+struct R292 {
+    v: Nat
+    inner: R291
+}
+
+def val292 : R292 = new R292(zero, val291)
+
+struct R293 {
+    v: Nat
+    inner: R292
+}
+
+def val293 : R293 = new R293(zero, val292)
+
+struct R294 {
+    v: Nat
+    inner: R293
+}
+
+def val294 : R294 = new R294(zero, val293)
+
+struct R295 {
+    v: Nat
+    inner: R294
+}
+
+def val295 : R295 = new R295(zero, val294)
+
+struct R296 {
+    v: Nat
+    inner: R295
+}
+
+def val296 : R296 = new R296(zero, val295)
+
+struct R297 {
+    v: Nat
+    inner: R296
+}
+
+def val297 : R297 = new R297(zero, val296)
+
+struct R298 {
+    v: Nat
+    inner: R297
+}
+
+def val298 : R298 = new R298(zero, val297)
+
+struct R299 {
+    v: Nat
+    inner: R298
+}
+
+def val299 : R299 = new R299(zero, val298)
+
+struct R300 {
+    v: Nat
+    inner: R299
+}
+
+def val300 : R300 = new R300(zero, val299)
+
+struct R301 {
+    v: Nat
+    inner: R300
+}
+
+def val301 : R301 = new R301(zero, val300)
+
+struct R302 {
+    v: Nat
+    inner: R301
+}
+
+def val302 : R302 = new R302(zero, val301)
+
+struct R303 {
+    v: Nat
+    inner: R302
+}
+
+def val303 : R303 = new R303(zero, val302)
+
+struct R304 {
+    v: Nat
+    inner: R303
+}
+
+def val304 : R304 = new R304(zero, val303)
+
+struct R305 {
+    v: Nat
+    inner: R304
+}
+
+def val305 : R305 = new R305(zero, val304)
+
+struct R306 {
+    v: Nat
+    inner: R305
+}
+
+def val306 : R306 = new R306(zero, val305)
+
+struct R307 {
+    v: Nat
+    inner: R306
+}
+
+def val307 : R307 = new R307(zero, val306)
+
+struct R308 {
+    v: Nat
+    inner: R307
+}
+
+def val308 : R308 = new R308(zero, val307)
+
+struct R309 {
+    v: Nat
+    inner: R308
+}
+
+def val309 : R309 = new R309(zero, val308)
+
+struct R310 {
+    v: Nat
+    inner: R309
+}
+
+def val310 : R310 = new R310(zero, val309)
+
+struct R311 {
+    v: Nat
+    inner: R310
+}
+
+def val311 : R311 = new R311(zero, val310)
+
+struct R312 {
+    v: Nat
+    inner: R311
+}
+
+def val312 : R312 = new R312(zero, val311)
+
+struct R313 {
+    v: Nat
+    inner: R312
+}
+
+def val313 : R313 = new R313(zero, val312)
+
+struct R314 {
+    v: Nat
+    inner: R313
+}
+
+def val314 : R314 = new R314(zero, val313)
+
+struct R315 {
+    v: Nat
+    inner: R314
+}
+
+def val315 : R315 = new R315(zero, val314)
+
+struct R316 {
+    v: Nat
+    inner: R315
+}
+
+def val316 : R316 = new R316(zero, val315)
+
+struct R317 {
+    v: Nat
+    inner: R316
+}
+
+def val317 : R317 = new R317(zero, val316)
+
+struct R318 {
+    v: Nat
+    inner: R317
+}
+
+def val318 : R318 = new R318(zero, val317)
+
+struct R319 {
+    v: Nat
+    inner: R318
+}
+
+def val319 : R319 = new R319(zero, val318)
+
+struct R320 {
+    v: Nat
+    inner: R319
+}
+
+def val320 : R320 = new R320(zero, val319)
+
+struct R321 {
+    v: Nat
+    inner: R320
+}
+
+def val321 : R321 = new R321(zero, val320)
+
+struct R322 {
+    v: Nat
+    inner: R321
+}
+
+def val322 : R322 = new R322(zero, val321)
+
+struct R323 {
+    v: Nat
+    inner: R322
+}
+
+def val323 : R323 = new R323(zero, val322)
+
+struct R324 {
+    v: Nat
+    inner: R323
+}
+
+def val324 : R324 = new R324(zero, val323)
+
+struct R325 {
+    v: Nat
+    inner: R324
+}
+
+def val325 : R325 = new R325(zero, val324)
+
+struct R326 {
+    v: Nat
+    inner: R325
+}
+
+def val326 : R326 = new R326(zero, val325)
+
+struct R327 {
+    v: Nat
+    inner: R326
+}
+
+def val327 : R327 = new R327(zero, val326)
+
+struct R328 {
+    v: Nat
+    inner: R327
+}
+
+def val328 : R328 = new R328(zero, val327)
+
+struct R329 {
+    v: Nat
+    inner: R328
+}
+
+def val329 : R329 = new R329(zero, val328)
+
+struct R330 {
+    v: Nat
+    inner: R329
+}
+
+def val330 : R330 = new R330(zero, val329)
+
+struct R331 {
+    v: Nat
+    inner: R330
+}
+
+def val331 : R331 = new R331(zero, val330)
+
+struct R332 {
+    v: Nat
+    inner: R331
+}
+
+def val332 : R332 = new R332(zero, val331)
+
+struct R333 {
+    v: Nat
+    inner: R332
+}
+
+def val333 : R333 = new R333(zero, val332)
+
+struct R334 {
+    v: Nat
+    inner: R333
+}
+
+def val334 : R334 = new R334(zero, val333)
+
+struct R335 {
+    v: Nat
+    inner: R334
+}
+
+def val335 : R335 = new R335(zero, val334)
+
+struct R336 {
+    v: Nat
+    inner: R335
+}
+
+def val336 : R336 = new R336(zero, val335)
+
+struct R337 {
+    v: Nat
+    inner: R336
+}
+
+def val337 : R337 = new R337(zero, val336)
+
+struct R338 {
+    v: Nat
+    inner: R337
+}
+
+def val338 : R338 = new R338(zero, val337)
+
+struct R339 {
+    v: Nat
+    inner: R338
+}
+
+def val339 : R339 = new R339(zero, val338)
+
+struct R340 {
+    v: Nat
+    inner: R339
+}
+
+def val340 : R340 = new R340(zero, val339)
+
+struct R341 {
+    v: Nat
+    inner: R340
+}
+
+def val341 : R341 = new R341(zero, val340)
+
+struct R342 {
+    v: Nat
+    inner: R341
+}
+
+def val342 : R342 = new R342(zero, val341)
+
+struct R343 {
+    v: Nat
+    inner: R342
+}
+
+def val343 : R343 = new R343(zero, val342)
+
+struct R344 {
+    v: Nat
+    inner: R343
+}
+
+def val344 : R344 = new R344(zero, val343)
+
+struct R345 {
+    v: Nat
+    inner: R344
+}
+
+def val345 : R345 = new R345(zero, val344)
+
+struct R346 {
+    v: Nat
+    inner: R345
+}
+
+def val346 : R346 = new R346(zero, val345)
+
+struct R347 {
+    v: Nat
+    inner: R346
+}
+
+def val347 : R347 = new R347(zero, val346)
+
+struct R348 {
+    v: Nat
+    inner: R347
+}
+
+def val348 : R348 = new R348(zero, val347)
+
+struct R349 {
+    v: Nat
+    inner: R348
+}
+
+def val349 : R349 = new R349(zero, val348)
+
+struct R350 {
+    v: Nat
+    inner: R349
+}
+
+def val350 : R350 = new R350(zero, val349)
+
+struct R351 {
+    v: Nat
+    inner: R350
+}
+
+def val351 : R351 = new R351(zero, val350)
+
+struct R352 {
+    v: Nat
+    inner: R351
+}
+
+def val352 : R352 = new R352(zero, val351)
+
+struct R353 {
+    v: Nat
+    inner: R352
+}
+
+def val353 : R353 = new R353(zero, val352)
+
+struct R354 {
+    v: Nat
+    inner: R353
+}
+
+def val354 : R354 = new R354(zero, val353)
+
+struct R355 {
+    v: Nat
+    inner: R354
+}
+
+def val355 : R355 = new R355(zero, val354)
+
+struct R356 {
+    v: Nat
+    inner: R355
+}
+
+def val356 : R356 = new R356(zero, val355)
+
+struct R357 {
+    v: Nat
+    inner: R356
+}
+
+def val357 : R357 = new R357(zero, val356)
+
+struct R358 {
+    v: Nat
+    inner: R357
+}
+
+def val358 : R358 = new R358(zero, val357)
+
+struct R359 {
+    v: Nat
+    inner: R358
+}
+
+def val359 : R359 = new R359(zero, val358)
+
+struct R360 {
+    v: Nat
+    inner: R359
+}
+
+def val360 : R360 = new R360(zero, val359)
+
+struct R361 {
+    v: Nat
+    inner: R360
+}
+
+def val361 : R361 = new R361(zero, val360)
+
+struct R362 {
+    v: Nat
+    inner: R361
+}
+
+def val362 : R362 = new R362(zero, val361)
+
+struct R363 {
+    v: Nat
+    inner: R362
+}
+
+def val363 : R363 = new R363(zero, val362)
+
+struct R364 {
+    v: Nat
+    inner: R363
+}
+
+def val364 : R364 = new R364(zero, val363)
+
+struct R365 {
+    v: Nat
+    inner: R364
+}
+
+def val365 : R365 = new R365(zero, val364)
+
+struct R366 {
+    v: Nat
+    inner: R365
+}
+
+def val366 : R366 = new R366(zero, val365)
+
+struct R367 {
+    v: Nat
+    inner: R366
+}
+
+def val367 : R367 = new R367(zero, val366)
+
+struct R368 {
+    v: Nat
+    inner: R367
+}
+
+def val368 : R368 = new R368(zero, val367)
+
+struct R369 {
+    v: Nat
+    inner: R368
+}
+
+def val369 : R369 = new R369(zero, val368)
+
+struct R370 {
+    v: Nat
+    inner: R369
+}
+
+def val370 : R370 = new R370(zero, val369)
+
+struct R371 {
+    v: Nat
+    inner: R370
+}
+
+def val371 : R371 = new R371(zero, val370)
+
+struct R372 {
+    v: Nat
+    inner: R371
+}
+
+def val372 : R372 = new R372(zero, val371)
+
+struct R373 {
+    v: Nat
+    inner: R372
+}
+
+def val373 : R373 = new R373(zero, val372)
+
+struct R374 {
+    v: Nat
+    inner: R373
+}
+
+def val374 : R374 = new R374(zero, val373)
+
+struct R375 {
+    v: Nat
+    inner: R374
+}
+
+def val375 : R375 = new R375(zero, val374)
+
+struct R376 {
+    v: Nat
+    inner: R375
+}
+
+def val376 : R376 = new R376(zero, val375)
+
+struct R377 {
+    v: Nat
+    inner: R376
+}
+
+def val377 : R377 = new R377(zero, val376)
+
+struct R378 {
+    v: Nat
+    inner: R377
+}
+
+def val378 : R378 = new R378(zero, val377)
+
+struct R379 {
+    v: Nat
+    inner: R378
+}
+
+def val379 : R379 = new R379(zero, val378)
+
+struct R380 {
+    v: Nat
+    inner: R379
+}
+
+def val380 : R380 = new R380(zero, val379)
+
+struct R381 {
+    v: Nat
+    inner: R380
+}
+
+def val381 : R381 = new R381(zero, val380)
+
+struct R382 {
+    v: Nat
+    inner: R381
+}
+
+def val382 : R382 = new R382(zero, val381)
+
+struct R383 {
+    v: Nat
+    inner: R382
+}
+
+def val383 : R383 = new R383(zero, val382)
+
+struct R384 {
+    v: Nat
+    inner: R383
+}
+
+def val384 : R384 = new R384(zero, val383)
+
+struct R385 {
+    v: Nat
+    inner: R384
+}
+
+def val385 : R385 = new R385(zero, val384)
+
+struct R386 {
+    v: Nat
+    inner: R385
+}
+
+def val386 : R386 = new R386(zero, val385)
+
+struct R387 {
+    v: Nat
+    inner: R386
+}
+
+def val387 : R387 = new R387(zero, val386)
+
+struct R388 {
+    v: Nat
+    inner: R387
+}
+
+def val388 : R388 = new R388(zero, val387)
+
+struct R389 {
+    v: Nat
+    inner: R388
+}
+
+def val389 : R389 = new R389(zero, val388)
+
+struct R390 {
+    v: Nat
+    inner: R389
+}
+
+def val390 : R390 = new R390(zero, val389)
+
+struct R391 {
+    v: Nat
+    inner: R390
+}
+
+def val391 : R391 = new R391(zero, val390)
+
+struct R392 {
+    v: Nat
+    inner: R391
+}
+
+def val392 : R392 = new R392(zero, val391)
+
+struct R393 {
+    v: Nat
+    inner: R392
+}
+
+def val393 : R393 = new R393(zero, val392)
+
+struct R394 {
+    v: Nat
+    inner: R393
+}
+
+def val394 : R394 = new R394(zero, val393)
+
+struct R395 {
+    v: Nat
+    inner: R394
+}
+
+def val395 : R395 = new R395(zero, val394)
+
+struct R396 {
+    v: Nat
+    inner: R395
+}
+
+def val396 : R396 = new R396(zero, val395)
+
+struct R397 {
+    v: Nat
+    inner: R396
+}
+
+def val397 : R397 = new R397(zero, val396)
+
+struct R398 {
+    v: Nat
+    inner: R397
+}
+
+def val398 : R398 = new R398(zero, val397)
+
+struct R399 {
+    v: Nat
+    inner: R398
+}
+
+def val399 : R399 = new R399(zero, val398)
+
+def deep : Nat = val399.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.v
+def deep2 : Nat = val399.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.v
+def deep3 : Nat = val399.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.v
+def deep4 : Nat = val399.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.v

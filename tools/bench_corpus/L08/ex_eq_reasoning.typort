@@ -1,0 +1,41 @@
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def rfl[A][a: A]: Eq a a =
+    refl a
+
+def cong[A, B, f: A -> B, x: A, y: A](e: Eq x y): Eq (f x) (f y) =
+    match e {
+        case refl(a) => refl (f a)
+    }
+
+def symm[A, x, y: A](e: Eq[A] y x): Eq[A] x y =
+    match e {
+        case refl(a) => refl a
+    }
+
+def trans[A, x, y, z: A](e1: Eq[A] x y, e2: Eq[A] y z): Eq[A] x z =
+    match e1 {
+        case refl(a) => e2
+    }
+
+def two = succ (succ zero)
+
+def three = succ (succ (succ zero))
+
+def e1: Eq three three = cong[Nat][Nat][succ][two][two] (refl two)
+
+def e2: Eq two two = symm[Nat][two][two] (refl two)
+
+def e3: Eq two two = trans[Nat][two][two][two] (refl two) (refl two)
+
+println e1
+println e2
+println e3

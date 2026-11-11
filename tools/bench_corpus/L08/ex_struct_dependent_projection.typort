@@ -1,0 +1,20 @@
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def Eq[A : U](x: A, y: A): U = (P : A -> U) -> P x -> P y
+def rfl[A : U, x: A]: Eq[A] x x = _ => px => px
+def two = succ (succ zero)
+
+struct Exists[A: U, P: A -> U] {
+    witness: A
+    proof: (P witness)
+}
+
+def use_proof (e : Exists[Nat][x => Eq x two]) : Eq e.witness two = e.proof
+def e2 : Exists[Nat][x => Eq x two] = Exists.mk[Nat][x => Eq x two] two rfl
+def z : Eq e2.witness two = e2.proof
+println z
+println (use_proof e2)

@@ -1,0 +1,79 @@
+// ladder_small.typort
+// Scale ladder for L09: a 19-unit proof/literal registry (same skeleton at
+// every size; only the registry block grows). Shape: Nat literals + GADT
+// equality proofs + one length-indexed Vec snapshot + a Nat total.
+// Decl target: ~50 (actual: 51).
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl[a: A] -> Eq[A] a a
+}
+
+enum Vec[A](len: Nat) {
+    nil -> Vec[A] zero
+    cons[n: Nat](x: A, xs: Vec[A] n) -> Vec[A] (succ n)
+}
+
+def one: Nat = succ zero
+
+def two: Nat = succ one
+
+def vtwo: Vec[Nat] two = cons one (cons two nil)
+
+def nat_add_lit(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (nat_add_lit n y)
+    }
+def lit0: Nat = zero
+def proof0: Eq[Nat] lit0 lit0 = refl
+def lit1: Nat = one
+def proof1: Eq[Nat] lit1 lit1 = refl
+def lit2: Nat = two
+def proof2: Eq[Nat] lit2 lit2 = refl
+def lit3: Nat = zero
+def proof3: Eq[Nat] lit3 lit3 = refl
+def lit4: Nat = zero
+def proof4: Eq[Nat] lit4 lit4 = refl
+def lit5: Nat = one
+def proof5: Eq[Nat] lit5 lit5 = refl
+def lit6: Nat = two
+def proof6: Eq[Nat] lit6 lit6 = refl
+def lit7: Nat = zero
+def proof7: Eq[Nat] lit7 lit7 = refl
+def lit8: Nat = zero
+def proof8: Eq[Nat] lit8 lit8 = refl
+def lit9: Nat = one
+def proof9: Eq[Nat] lit9 lit9 = refl
+def lit10: Nat = two
+def proof10: Eq[Nat] lit10 lit10 = refl
+def lit11: Nat = zero
+def proof11: Eq[Nat] lit11 lit11 = refl
+def lit12: Nat = zero
+def proof12: Eq[Nat] lit12 lit12 = refl
+def lit13: Nat = one
+def proof13: Eq[Nat] lit13 lit13 = refl
+def lit14: Nat = two
+def proof14: Eq[Nat] lit14 lit14 = refl
+def lit15: Nat = zero
+def proof15: Eq[Nat] lit15 lit15 = refl
+def lit16: Nat = zero
+def proof16: Eq[Nat] lit16 lit16 = refl
+def lit17: Nat = one
+def proof17: Eq[Nat] lit17 lit17 = refl
+def lit18: Nat = two
+def proof18: Eq[Nat] lit18 lit18 = refl
+
+def last_lit: Nat = lit18
+
+def ladder_vec: Vec[Nat] two = cons last_lit (cons one nil)
+
+def ladder_total: Nat = nat_add_lit last_lit last_lit
+
+println last_lit
+println ladder_total
+println vtwo

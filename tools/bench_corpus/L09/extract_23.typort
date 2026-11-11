@@ -1,0 +1,20 @@
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+enum Tagged[B](b: Bool) {
+    t1 -> Tagged[B] true
+}
+
+def f(x: Tagged[Nat] true): Nat =
+    match x {
+        case t1 => zero
+    }
+
+println (f t1)

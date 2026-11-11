@@ -1,0 +1,32 @@
+
+enum Bool {
+    true
+    false
+}
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Option[T] {
+    Some(t: T)
+    None
+}
+
+def not(x: Bool): Bool =
+    match x {
+        case true => false
+        case false => true
+    }
+
+def map[R, X](x: Option[R], f: R -> X): Option[X] =
+    match x {
+        case None => None
+        case Some(t) => Some (f t)
+    }
+
+println (map (Some true) not)
+println (map (Some (succ zero)) (x => x))
+println (map (Some true) (x => x))
+println (map None (x => x))

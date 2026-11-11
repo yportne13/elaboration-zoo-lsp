@@ -1,0 +1,25 @@
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+def even(x: Nat): Bool =
+    match x {
+        case zero => true
+        case succ(n) => even n
+    }
+
+def odd(x: Nat): Bool =
+    match x {
+        case zero => false
+        case succ(n) => even n
+    }
+
+println (even (succ (succ zero)))
+println (odd (succ zero))

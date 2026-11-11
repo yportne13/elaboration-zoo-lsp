@@ -1,0 +1,106 @@
+// 寄存器规格 DSL：声明级宏 + 嵌套宏片段（$body: Reg）生成模块定义，
+// 模块体里每个 reg 语句走 Reg 宏展开成 let 绑定，最后从可变全局取回规格。
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+struct Register {
+    name: String
+    width: Nat
+}
+
+enum Item {
+    item(name: String)
+}
+
+struct Block {
+    name: String
+    items: List[Item]
+}
+
+def new_register(name: String, w: Nat): Register =
+    let changed = change_mutable("Block", x => Block.mk(x.name, cons(item(name), x.items)));
+    Register.mk(name, w)
+
+macro_rules Reg {
+    (reg $x:ident <- Reg[$width:raw]) => {let $x = new_register(stringify $x, $width);};
+}
+
+macro_rules block {
+    ($name: ident $args: params {$( $body: Reg )*}) => {def $name $args = let created = create_global("Block", Block.mk(stringify $name, nil));$({$body})* get_global("Block")};
+    ($name: ident) => {def $name = create_global("Block", Block.mk(stringify $name, nil))};
+}
+
+block top[w: Nat] {
+    reg clk <- Reg[w]
+    reg rst <- Reg[w]
+    reg data <- Reg[w]
+    reg valid <- Reg[w]
+}
+
+def one = succ zero
+
+def two = succ one
+
+def top_block = top[one]
+
+println top_block.name
+
+def reg_count[T](xs: List[T]): Nat =
+    match xs {
+        case nil => zero
+        case cons(h, t) => succ (reg_count t)
+    }
+
+def item_count(xs: List[Item]): Nat =
+    match xs {
+        case nil => zero
+        case cons(h, t) => succ (item_count t)
+    }
+
+def first_item(xs: List[Item]): String =
+    match xs {
+        case nil => "empty"
+        case cons(item(n), t) => n
+    }
+
+def items_of(b: Block): List[Item] = b.items
+
+def name_of(b: Block): String = b.name
+
+println (reg_count top_block.items)
+
+println (name_of top_block)
+
+println (first_item (items_of top_block))
+
+// 第二个模块：控制通路，同样由宏生成寄存器序列。
+block control[w: Nat] {
+    reg enable <- Reg[w]
+    reg ready <- Reg[w]
+    reg stall <- Reg[w]
+    reg flush <- Reg[w]
+    reg irq <- Reg[w]
+}
+
+def control_block = control[two]
+
+println control_block.name
+
+println (item_count (items_of control_block))
+
+println (first_item (items_of control_block))
+
+def total_regs = reg_count top_block.items
+
+def doubled_regs = succ total_regs
+
+println doubled_regs
+
+println (reg_count (items_of control_block))

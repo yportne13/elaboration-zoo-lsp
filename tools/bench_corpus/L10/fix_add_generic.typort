@@ -1,0 +1,35 @@
+// extract fix: Add outParam generic dictionary function — `outParam` decl added
+def outParam[A](a: A): A = a
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+trait Add[T, O: outParam(Type 0)] {
+    def add(that: T): O
+}
+
+def nat_add_helper(x: Nat, y: Nat): Nat =
+    match y {
+        case zero => x
+        case succ(n) => succ (nat_add_helper x n)
+    }
+
+impl Add[Nat, Nat] for Nat {
+    def add(that: Nat): Nat =
+        nat_add_helper this that
+}
+
+def two = succ (succ zero)
+
+def use_add[T][i: Add[T, T]](x: T, y: T): T = i.add x y
+
+def r = use_add two two
+
+def four = r
+
+def s = use_add four four
+
+println r
+println s

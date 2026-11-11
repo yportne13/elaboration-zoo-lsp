@@ -1,0 +1,11 @@
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+/* a block
+   comment */
+def two = succ (succ zero)
+
+println two

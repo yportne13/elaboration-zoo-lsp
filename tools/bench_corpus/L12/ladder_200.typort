@@ -1,0 +1,240 @@
+// 规模阶梯（L12 实例解析）：每个 def 都触发一次 Show[T] 实例求解，
+// 具体实例在 Bool / Nat 之间交替，形成实例解析密集的调用序列。
+def outParam[A](a: A): A = a
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+trait Show {
+    def show: String
+}
+
+impl Show for Bool {
+    def show: String =
+        match this {
+            case true => "true"
+            case false => "false"
+        }
+}
+
+impl Show for Nat {
+    def show: String =
+        match this {
+            case zero => "0"
+            case succ(n) => "n"
+        }
+}
+
+def one = succ zero
+
+def two = succ one
+
+def three = succ two
+
+def render[T][s: Show[T]](x: T): String = s.show x
+def r_000 : String = render true
+def r_001 : String = render false
+def r_002 : String = render zero
+def r_003 : String = render one
+def r_004 : String = render two
+def r_005 : String = render three
+def r_006 : String = render true
+def r_007 : String = render false
+def r_008 : String = render zero
+def r_009 : String = render one
+def r_010 : String = render two
+def r_011 : String = render three
+def r_012 : String = render true
+def r_013 : String = render false
+def r_014 : String = render zero
+def r_015 : String = render one
+def r_016 : String = render two
+def r_017 : String = render three
+def r_018 : String = render true
+def r_019 : String = render false
+def r_020 : String = render zero
+def r_021 : String = render one
+def r_022 : String = render two
+def r_023 : String = render three
+def r_024 : String = render true
+def r_025 : String = render false
+def r_026 : String = render zero
+def r_027 : String = render one
+def r_028 : String = render two
+def r_029 : String = render three
+def r_030 : String = render true
+def r_031 : String = render false
+def r_032 : String = render zero
+def r_033 : String = render one
+def r_034 : String = render two
+def r_035 : String = render three
+def r_036 : String = render true
+def r_037 : String = render false
+def r_038 : String = render zero
+def r_039 : String = render one
+def r_040 : String = render two
+def r_041 : String = render three
+def r_042 : String = render true
+def r_043 : String = render false
+def r_044 : String = render zero
+def r_045 : String = render one
+def r_046 : String = render two
+def r_047 : String = render three
+def r_048 : String = render true
+def r_049 : String = render false
+def r_050 : String = render zero
+def r_051 : String = render one
+def r_052 : String = render two
+def r_053 : String = render three
+def r_054 : String = render true
+def r_055 : String = render false
+def r_056 : String = render zero
+def r_057 : String = render one
+def r_058 : String = render two
+def r_059 : String = render three
+def r_060 : String = render true
+def r_061 : String = render false
+def r_062 : String = render zero
+def r_063 : String = render one
+def r_064 : String = render two
+def r_065 : String = render three
+def r_066 : String = render true
+def r_067 : String = render false
+def r_068 : String = render zero
+def r_069 : String = render one
+def r_070 : String = render two
+def r_071 : String = render three
+def r_072 : String = render true
+def r_073 : String = render false
+def r_074 : String = render zero
+def r_075 : String = render one
+def r_076 : String = render two
+def r_077 : String = render three
+def r_078 : String = render true
+def r_079 : String = render false
+def r_080 : String = render zero
+def r_081 : String = render one
+def r_082 : String = render two
+def r_083 : String = render three
+def r_084 : String = render true
+def r_085 : String = render false
+def r_086 : String = render zero
+def r_087 : String = render one
+def r_088 : String = render two
+def r_089 : String = render three
+def r_090 : String = render true
+def r_091 : String = render false
+def r_092 : String = render zero
+def r_093 : String = render one
+def r_094 : String = render two
+def r_095 : String = render three
+def r_096 : String = render true
+def r_097 : String = render false
+def r_098 : String = render zero
+def r_099 : String = render one
+def r_100 : String = render two
+def r_101 : String = render three
+def r_102 : String = render true
+def r_103 : String = render false
+def r_104 : String = render zero
+def r_105 : String = render one
+def r_106 : String = render two
+def r_107 : String = render three
+def r_108 : String = render true
+def r_109 : String = render false
+def r_110 : String = render zero
+def r_111 : String = render one
+def r_112 : String = render two
+def r_113 : String = render three
+def r_114 : String = render true
+def r_115 : String = render false
+def r_116 : String = render zero
+def r_117 : String = render one
+def r_118 : String = render two
+def r_119 : String = render three
+def r_120 : String = render true
+def r_121 : String = render false
+def r_122 : String = render zero
+def r_123 : String = render one
+def r_124 : String = render two
+def r_125 : String = render three
+def r_126 : String = render true
+def r_127 : String = render false
+def r_128 : String = render zero
+def r_129 : String = render one
+def r_130 : String = render two
+def r_131 : String = render three
+def r_132 : String = render true
+def r_133 : String = render false
+def r_134 : String = render zero
+def r_135 : String = render one
+def r_136 : String = render two
+def r_137 : String = render three
+def r_138 : String = render true
+def r_139 : String = render false
+def r_140 : String = render zero
+def r_141 : String = render one
+def r_142 : String = render two
+def r_143 : String = render three
+def r_144 : String = render true
+def r_145 : String = render false
+def r_146 : String = render zero
+def r_147 : String = render one
+def r_148 : String = render two
+def r_149 : String = render three
+def r_150 : String = render true
+def r_151 : String = render false
+def r_152 : String = render zero
+def r_153 : String = render one
+def r_154 : String = render two
+def r_155 : String = render three
+def r_156 : String = render true
+def r_157 : String = render false
+def r_158 : String = render zero
+def r_159 : String = render one
+def r_160 : String = render two
+def r_161 : String = render three
+def r_162 : String = render true
+def r_163 : String = render false
+def r_164 : String = render zero
+def r_165 : String = render one
+def r_166 : String = render two
+def r_167 : String = render three
+def r_168 : String = render true
+def r_169 : String = render false
+def r_170 : String = render zero
+def r_171 : String = render one
+def r_172 : String = render two
+def r_173 : String = render three
+def r_174 : String = render true
+def r_175 : String = render false
+def r_176 : String = render zero
+def r_177 : String = render one
+def r_178 : String = render two
+def r_179 : String = render three
+def r_180 : String = render true
+def r_181 : String = render false
+def r_182 : String = render zero
+def r_183 : String = render one
+def r_184 : String = render two
+def r_185 : String = render three
+def r_186 : String = render true
+def r_187 : String = render false
+def r_188 : String = render zero
+def r_189 : String = render one
+def r_190 : String = render two
+def r_191 : String = render three
+
+println r_000
+
+println r_001
+
+println r_002
+println r_191

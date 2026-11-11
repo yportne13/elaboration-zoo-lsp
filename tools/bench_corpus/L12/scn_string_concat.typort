@@ -1,0 +1,5 @@
+
+def str_id: String = string_concat "hello " "world"
+
+println str_id
+

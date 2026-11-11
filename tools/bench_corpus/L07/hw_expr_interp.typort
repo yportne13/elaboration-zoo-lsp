@@ -1,0 +1,168 @@
+// 项目级真实程序（手写）：小型算术表达式解释器。
+//
+// 真实场景：一个带变量环境、常量折叠与条件分支的解释器前端。
+// 覆盖特性（L07）：
+//   - enum Expr 多构造子递归和类型 + 多层嵌套 match（6 臂全覆盖）；
+//   - 依赖模式匹配：Eq GADT + refl，解释器语义引理（求值/折叠的可证等式）；
+//   - 环境编码为 `Name -> Nat` 的函数值（依赖 Pi + 高阶应用）；
+//   - let 绑定、lambda、递归 def、println 求值输出。
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+enum Name {
+    vx
+    vy
+    vz
+}
+
+enum Expr {
+    Lit(n: Nat)
+    Lookup(v: Name)
+    Add(lhs: Expr, rhs: Expr)
+    Mul(lhs: Expr, rhs: Expr)
+    Neg(inner: Expr)
+    If(cond: Expr, then_e: Expr, else_e: Expr)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def rfl[A][a: A]: Eq a a = refl a
+
+// 算术原语：全部用依赖模式匹配递归定义（L07 无内建算术）。
+def add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def mul(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => zero
+        case succ(n) => add y (mul n y)
+    }
+
+def sub(x: Nat, y: Nat): Nat =
+    match y {
+        case zero => x
+        case succ(m) => match x {
+            case zero => zero
+            case succ(n) => sub n m
+        }
+    }
+
+def if_nat(c: Nat, t: Nat, f: Nat): Nat =
+    match c {
+        case zero => f
+        case succ(k) => t
+    }
+
+// 两个变量环境（真实解释器里的“作用域”）。
+def env0(v: Name): Nat =
+    match v {
+        case vx => succ (succ zero)
+        case vy => succ zero
+        case vz => zero
+    }
+
+def env1(v: Name): Nat =
+    match v {
+        case vx => succ zero
+        case vy => zero
+        case vz => succ (succ (succ zero))
+    }
+
+def lookup(env: Name -> Nat, v: Name): Nat = env v
+
+// 核心求值器：对 Expr 的 6 个构造子逐一递归求值。
+def eval(e: Expr, env: Name -> Nat): Nat =
+    match e {
+        case Lit(n) => n
+        case Lookup(v) => lookup env v
+        case Add(lhs, rhs) => add (eval lhs env) (eval rhs env)
+        case Mul(lhs, rhs) => mul (eval lhs env) (eval rhs env)
+        case Neg(inner) => sub zero (eval inner env)
+        case If(cond, then_e, else_e) => if_nat (eval cond env) (eval then_e env) (eval else_e env)
+    }
+
+// 若干“源程序”AST：表达式树即数据。
+def prog0 : Expr = Add (Lit (succ zero)) (Lookup vx)
+
+def prog1 : Expr = Mul (prog0) (Lookup vy)
+
+def prog2 : Expr = If (Lit zero) (Lit (succ (succ (succ zero)))) (Lookup vz)
+
+def prog3 : Expr = Neg (Add (Lit (succ zero)) (Lit (succ zero)))
+
+def prog4 : Expr =
+    Add (Mul (Lookup vx) (Lookup vy)) (If (Lookup vz) (Lit zero) (Lit (succ zero)))
+
+// 解释执行结果。
+def r0 : Nat = eval prog0 env0
+def r1 : Nat = eval prog1 env0
+def r2 : Nat = eval prog2 env0
+def r3 : Nat = eval prog3 env0
+def r4 : Nat = eval prog4 env0
+def r0b : Nat = eval prog0 env1
+def r4b : Nat = eval prog4 env1
+
+println r0
+println r1
+println r2
+println r3
+println r4
+println r0b
+println r4b
+
+// 常量折叠：把 Add(Lit a, Lit b) 折成 Lit (add a b)，其余原样重建。
+def fold_add(lhs: Expr, rhs: Expr): Expr =
+    match lhs {
+        case Lit(a) => match rhs {
+            case Lit(b) => Lit (add a b)
+            case _ => Add lhs rhs
+        }
+        case _ => Add lhs rhs
+    }
+
+def const_fold(e: Expr): Expr =
+    match e {
+        case Lit(n) => Lit n
+        case Lookup(v) => Lookup v
+        case Add(lhs, rhs) => fold_add (const_fold lhs) (const_fold rhs)
+        case Mul(lhs, rhs) => Mul (const_fold lhs) (const_fold rhs)
+        case Neg(inner) => Neg (const_fold inner)
+        case If(cond, then_e, else_e) =>
+            If (const_fold cond) (const_fold then_e) (const_fold else_e)
+    }
+
+def prog5 : Expr = Add (Lit (succ zero)) (Lit (succ (succ zero)))
+
+def folded5 : Expr = const_fold prog5
+def r5 : Nat = eval folded5 env0
+def r6 : Nat = eval (const_fold prog4) env1
+
+println r5
+println r6
+
+// 语义引理（依赖模式匹配 + 索引精化的可证等式）：
+// 1) 字面量求值等于自身；2) 加零不改变解释结果；3) 零条件分支取 else。
+def eval_lit(n: Nat, env: Name -> Nat): Eq (eval (Lit n) env) n = rfl
+
+def eval_add_zero(e: Expr, env: Name -> Nat): Eq (eval (Add (Lit zero) e) env) (eval e env) =
+    rfl
+
+def eval_if_zero(t: Expr, f: Expr, env: Name -> Nat): Eq (eval (If (Lit zero) t f) env) (eval f env) =
+    rfl
+
+// 折叠对字面量加法保持语义（可证等式，refl 即可）。
+def fold_add_lit(a: Nat, b: Nat, env: Name -> Nat): Eq (eval (fold_add (Lit a) (Lit b)) env) (add a b) =
+    rfl

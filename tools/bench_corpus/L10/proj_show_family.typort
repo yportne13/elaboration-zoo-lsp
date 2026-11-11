@@ -1,0 +1,157 @@
+// show_family.typort
+// A realistic typeclass layer: ToString / Pretty / Say / Num dictionary families.
+//
+// Real-world analogue: the formatting + numeric section of a small standard
+// library, written in the L10 trait/typeclass fragment.
+//
+// Covered features:
+//   * trait declarations with a receiver method, instances for several types
+//   * default-style methods: `Pretty` instances delegate to `default_pretty`,
+//     which takes the `ToString` dictionary explicitly (superclass-style
+//     dictionary dispatch — L10 has no instance-dependency mechanism)
+//   * generic functions with one and with two trait constraints (dictionary
+//     passing / instance synthesis)
+//   * blanket instance (`impl[T] Say for T`) next to concrete instances
+//   * outParam numeric trait with an operator-style method
+//   * multi-method trait (Num: plus + label)
+
+// ---------------------------------------------------------------- core types
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+def one: Nat = succ zero
+def two: Nat = succ one
+def three: Nat = succ two
+
+def nat_add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (nat_add n y)
+    }
+
+// ------------------------------------------------------------- ToString family
+
+trait ToString {
+    def to_string: String
+}
+
+impl ToString for Nat {
+    def to_string: String =
+        match this {
+            case zero => "zero"
+            case succ(_) => "succ"
+        }
+}
+
+impl ToString for Bool {
+    def to_string: String =
+        match this {
+            case true => "true"
+            case false => "false"
+        }
+}
+
+// Generic formatter: explicit dictionary parameter.
+def show[T][s: ToString[T]](x: T): String = s.to_string x
+
+// "Default method" supplied as a library function parameterized by the
+// superclass dictionary: instances can delegate to it.
+def default_pretty[T][s: ToString[T]](x: T): String =
+    string_concat "pretty(" (string_concat (s.to_string x) ")")
+
+trait Pretty {
+    def pretty: String
+}
+
+impl Pretty for Nat {
+    def pretty: String = default_pretty this
+}
+
+impl Pretty for Bool {
+    def pretty: String = string_concat "bool:" (default_pretty this)
+}
+
+// Two dictionaries in one generic function.
+def audit[T][s: ToString[T], p: Pretty[T]](x: T): String =
+    string_concat (s.to_string x) (p.pretty x)
+
+// Blanket default instance: every type gets a fallback `Say`.
+trait Say {
+    def say(x: Nat): String
+}
+
+impl[T] Say for T {
+    def say(x: Nat): String = "hello"
+}
+
+// ---------------------------------------------------------------- Num family
+
+trait Num {
+    def plus(that: Nat): Nat
+    def label: String
+}
+
+impl Num for Nat {
+    def plus(that: Nat): Nat = nat_add this that
+    def label: String = "nat"
+}
+
+// outParam numeric trait: the result type is selected by the instance.
+def outParam[A](a: A): A = a
+
+trait Add[T, O: outParam(Type 0)] {
+    def add(that: T): O
+}
+
+impl Add[Nat, Nat] for Nat {
+    def add(that: Nat): Nat = nat_add this that
+}
+
+def sum3[T][a: Add[T, T]](x: T, y: T, z: T): T = a.add (a.add x y) z
+
+// ---------------------------------------------------------------- Client code
+
+def n_show: String = show two
+
+def b_show: String = show true
+
+def n_pretty: String = (two).pretty
+
+def b_pretty: String = (true).pretty
+
+def audit_nat: String = audit one
+
+def audit_bool: String = audit false
+
+def hello: String = zero.say zero
+
+def four: Nat = two.plus two
+
+def seven: Nat = sum3 two two three
+
+def nat_boxed: Nat = sum3 one one two
+
+def nat_label: String = (two).label
+
+def dot_call_sum: Nat = two.add two
+
+println n_show
+println b_show
+println n_pretty
+println b_pretty
+println audit_nat
+println audit_bool
+println hello
+println four
+println seven
+println nat_boxed
+println nat_label
+println dot_call_sum

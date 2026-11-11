@@ -1,0 +1,15 @@
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+def two = succ (succ zero)
+struct Ex {
+    witness: Nat
+    proof: Eq witness two
+}
+def p = Ex.mk two (refl two)
+def get_proof(e: Ex): Eq e.witness two = e.proof
+println (get_proof p)

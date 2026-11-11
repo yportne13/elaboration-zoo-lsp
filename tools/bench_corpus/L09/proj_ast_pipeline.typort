@@ -1,0 +1,256 @@
+// ast_pipeline.typort
+// A small expression pipeline for the L09 MLTT slice.
+//
+// Real-world analogue: an interpreter front-end (untyped AST -> evaluator ->
+// constant folder) plus a typed AST skeleton traversed with a dependent
+// function indexed by the expression's type.
+//
+// Covered features:
+//   * multi-constructor enums + exhaustive match, recursive functions
+//   * GADT-indexed enum (TExpr(t: Typ)) with a dependently typed traversal
+//   * Bool/Nat interaction, saturating subtraction over Nat
+
+// ---------------------------------------------------------------- Nat / Bool
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+def one: Nat = succ zero
+def two: Nat = succ one
+def three: Nat = succ two
+
+def nat_add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (nat_add n y)
+    }
+
+def nat_mul(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => zero
+        case succ(n) => nat_add y (nat_mul n y)
+    }
+
+// Saturating subtraction: zero when y is greater than x.
+def nat_sub(x: Nat, y: Nat): Nat =
+    match y {
+        case zero => x
+        case succ(m) => match x {
+            case zero => zero
+            case succ(k) => nat_sub k m
+        }
+    }
+
+def nat_eq(x: Nat, y: Nat): Bool =
+    match x {
+        case zero => match y {
+            case zero => true
+            case succ(_) => false
+        }
+        case succ(n) => match y {
+            case zero => false
+            case succ(m) => nat_eq n m
+        }
+    }
+
+def nat_max(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => match y {
+            case zero => x
+            case succ(m) => succ (nat_max n m)
+        }
+    }
+
+// ---------------------------------------------------------------- Untyped AST
+
+enum Expr {
+    lit(v: Nat)
+    eadd(l: Expr, r: Expr)
+    emul(l: Expr, r: Expr)
+    esub(l: Expr, r: Expr)
+    eite(c: Expr, t: Expr, e: Expr)
+}
+
+def eval(e: Expr): Nat =
+    match e {
+        case lit(v) => v
+        case eadd(l, r) => nat_add (eval l) (eval r)
+        case emul(l, r) => nat_mul (eval l) (eval r)
+        case esub(l, r) => nat_sub (eval l) (eval r)
+        case eite(c, t, f) => match eval c {
+            case zero => eval f
+            case succ(_) => eval t
+        }
+    }
+
+def expr_size(e: Expr): Nat =
+    match e {
+        case lit(_) => one
+        case eadd(l, r) => succ (nat_add (expr_size l) (expr_size r))
+        case emul(l, r) => succ (nat_add (expr_size l) (expr_size r))
+        case esub(l, r) => succ (nat_add (expr_size l) (expr_size r))
+        case eite(c, t, f) => succ (nat_add (expr_size c) (nat_add (expr_size t) (expr_size f)))
+    }
+
+def expr_depth(e: Expr): Nat =
+    match e {
+        case lit(_) => one
+        case eadd(l, r) => succ (nat_max (expr_depth l) (expr_depth r))
+        case emul(l, r) => succ (nat_max (expr_depth l) (expr_depth r))
+        case esub(l, r) => succ (nat_max (expr_depth l) (expr_depth r))
+        case eite(c, t, f) => succ (nat_max (expr_depth c) (nat_max (expr_depth t) (expr_depth f)))
+    }
+
+def count_lits(e: Expr): Nat =
+    match e {
+        case lit(_) => one
+        case eadd(l, r) => nat_add (count_lits l) (count_lits r)
+        case emul(l, r) => nat_add (count_lits l) (count_lits r)
+        case esub(l, r) => nat_add (count_lits l) (count_lits r)
+        case eite(c, t, f) => nat_add (count_lits c) (nat_add (count_lits t) (count_lits f))
+    }
+
+def is_lit(e: Expr): Bool =
+    match e {
+        case lit(_) => true
+        case _ => false
+    }
+
+// ------------------------------------------------------------- Constant folding
+
+def fold_add(l: Expr, r: Expr): Expr =
+    match l {
+        case lit(a) => match r {
+            case lit(b) => lit (nat_add a b)
+            case _ => eadd l r
+        }
+        case _ => eadd l r
+    }
+
+def fold_mul(l: Expr, r: Expr): Expr =
+    match l {
+        case lit(a) => match r {
+            case lit(b) => lit (nat_mul a b)
+            case _ => emul l r
+        }
+        case _ => emul l r
+    }
+
+def fold_sub(l: Expr, r: Expr): Expr =
+    match l {
+        case lit(a) => match r {
+            case lit(b) => lit (nat_sub a b)
+            case _ => esub l r
+        }
+        case _ => esub l r
+    }
+
+def const_fold(e: Expr): Expr =
+    match e {
+        case lit(v) => lit v
+        case eadd(l, r) => fold_add (const_fold l) (const_fold r)
+        case emul(l, r) => fold_mul (const_fold l) (const_fold r)
+        case esub(l, r) => fold_sub (const_fold l) (const_fold r)
+        case eite(c, t, f) => eite (const_fold c) (const_fold t) (const_fold f)
+    }
+
+// ---------------------------------------------------------- Typed AST (GADT)
+
+enum Typ {
+    ty_nat
+    ty_bool
+}
+
+enum TExpr(t: Typ) {
+    tlit(v: Nat) -> TExpr ty_nat
+    tbool(b: Bool) -> TExpr ty_bool
+    tadd(l: TExpr ty_nat, r: TExpr ty_nat) -> TExpr ty_nat
+    tnot(b: TExpr ty_bool) -> TExpr ty_bool
+    tif(c: TExpr ty_bool, t: TExpr ty_nat, e: TExpr ty_nat) -> TExpr ty_nat
+}
+
+// Dependent traversal: the index t is refined by each constructor pattern, so
+// all five arms are required even though the result type is always Nat.
+def tsize[t: Typ](e: TExpr t): Nat =
+    match e {
+        case tlit(_) => one
+        case tbool(_) => one
+        case tadd(l, r) => succ (nat_add (tsize l) (tsize r))
+        case tnot(b) => succ (tsize b)
+        case tif(c, t1, e1) => succ (nat_add (tsize c) (nat_add (tsize t1) (tsize e1)))
+    }
+
+def tnat_count[t: Typ](e: TExpr t): Nat =
+    match e {
+        case tlit(_) => one
+        case tbool(_) => zero
+        case tadd(l, r) => nat_add (tnat_count l) (tnat_count r)
+        case tnot(b) => tnat_count b
+        case tif(c, t1, e1) => nat_add (tnat_count c) (nat_add (tnat_count t1) (tnat_count e1))
+    }
+
+// ---------------------------------------------------------------- Client code
+
+def sample1: Expr = eadd (lit two) (emul (lit three) (lit two))
+
+def sample2: Expr = esub (lit three) (lit two)
+
+def sample3: Expr = eite (lit zero) (lit one) (lit two)
+
+def sample4: Expr = eadd (emul (lit two) (lit two)) (eite (lit one) (lit two) (lit three))
+
+def sample1_value: Nat = eval sample1
+
+def sample2_value: Nat = eval sample2
+
+def sample3_value: Nat = eval sample3
+
+def sample4_value: Nat = eval sample4
+
+def sample1_size: Nat = expr_size sample1
+
+def sample1_depth: Nat = expr_depth sample1
+
+def sample1_lits: Nat = count_lits sample1
+
+def sample1_folded: Expr = const_fold sample1
+
+def sample1_folded_value: Nat = eval sample1_folded
+
+def fold_preserves_value: Bool = nat_eq sample1_value sample1_folded_value
+
+def sample2_is_lit: Bool = is_lit sample2
+
+def texpr1: TExpr ty_nat =
+    tif (tbool true) (tadd (tlit two) (tlit two)) (tlit zero)
+
+def texpr2: TExpr ty_nat =
+    tadd (tadd (tlit one) (tlit two)) (tif (tnot (tbool false)) (tlit three) (tlit zero))
+
+def texpr1_size: Nat = tsize texpr1
+
+def texpr2_size: Nat = tsize texpr2
+
+def texpr2_nat_count: Nat = tnat_count texpr2
+
+println sample1_value
+println sample2_value
+println sample3_value
+println sample4_value
+println sample1_size
+println sample1_depth
+println sample1_lits
+println sample1_folded_value
+println fold_preserves_value
+println sample2_is_lit
+println texpr1_size
+println texpr2_size
+println texpr2_nat_count

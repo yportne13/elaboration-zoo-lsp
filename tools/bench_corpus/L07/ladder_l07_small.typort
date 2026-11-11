@@ -1,0 +1,83 @@
+// 规模阶梯（同形态，small/medium/large）：解释器前端流水线。
+// 每个阶段新增一个表达式定义 + 一个累计求值定义；阶段数即规模轴。
+// 覆盖：enum Expr + 多层 match 求值 + 递归 Nat 算术 + 累积值。
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Name {
+    vx
+    vy
+    vz
+}
+
+enum Expr {
+    Lit(n: Nat)
+    Lookup(v: Name)
+    Add(lhs: Expr, rhs: Expr)
+}
+
+def add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def eval(e: Expr, env: Name -> Nat): Nat =
+    match e {
+        case Lit(n) => n
+        case Lookup(v) => env v
+        case Add(lhs, rhs) => add (eval lhs env) (eval rhs env)
+    }
+
+def env0(v: Name): Nat =
+    match v {
+        case vx => succ (succ zero)
+        case vy => succ zero
+        case vz => zero
+    }
+
+def e0 : Expr = Lit (succ zero)
+def acc0 : Nat = eval e0 env0
+def total0 : Nat = acc0
+def e1 : Expr = Add (Lookup vy) (Lit (succ (succ zero)))
+def acc1 : Nat = eval e1 env0
+def total1 : Nat = add total0 acc1
+def e2 : Expr = Add (Add (Lit (succ zero)) (Lit (succ zero))) (Lookup vz)
+def acc2 : Nat = eval e2 env0
+def total2 : Nat = add total1 acc2
+def e3 : Expr = Add (Lit (succ zero)) (Lookup vx)
+def acc3 : Nat = eval e3 env0
+def total3 : Nat = add total2 acc3
+def e4 : Expr = Add (Lookup vy) (Lit (succ (succ zero)))
+def acc4 : Nat = eval e4 env0
+def total4 : Nat = add total3 acc4
+def e5 : Expr = Add (Add (Lit (succ zero)) (Lit (succ zero))) (Lookup vz)
+def acc5 : Nat = eval e5 env0
+def total5 : Nat = add total4 acc5
+def e6 : Expr = Add (Lit (succ zero)) (Lookup vx)
+def acc6 : Nat = eval e6 env0
+def total6 : Nat = add total5 acc6
+def e7 : Expr = Add (Lookup vy) (Lit (succ (succ zero)))
+def acc7 : Nat = eval e7 env0
+def total7 : Nat = add total6 acc7
+def e8 : Expr = Add (Add (Lit (succ zero)) (Lit (succ zero))) (Lookup vz)
+def acc8 : Nat = eval e8 env0
+def total8 : Nat = add total7 acc8
+def e9 : Expr = Add (Lit (succ zero)) (Lookup vx)
+def acc9 : Nat = eval e9 env0
+def total9 : Nat = add total8 acc9
+def e10 : Expr = Add (Lookup vy) (Lit (succ (succ zero)))
+def acc10 : Nat = eval e10 env0
+def total10 : Nat = add total9 acc10
+def e11 : Expr = Add (Add (Lit (succ zero)) (Lit (succ zero))) (Lookup vz)
+def acc11 : Nat = eval e11 env0
+def total11 : Nat = add total10 acc11
+def e12 : Expr = Add (Lit (succ zero)) (Lookup vx)
+def acc12 : Nat = eval e12 env0
+def total12 : Nat = add total11 acc12
+def e13 : Expr = Add (Lookup vy) (Lit (succ (succ zero)))
+def acc13 : Nat = eval e13 env0
+def total13 : Nat = add total12 acc13

@@ -1,0 +1,145 @@
+// 项目级真实程序（手写）：自然数等式推理库（证明片段）。
+//
+// 真实场景：把 L07 的依赖模式匹配当作“迷你证明助手”使用——等式类型
+// Eq 是 GADT，refl 做精化，归纳证明走 match + cong_succ/trans。
+// 覆盖特性（L07）：
+//   - GADT 风格 enum（Eq[A](x, y) 的 refl 返回索引 Eq a a）；
+//   - 索引精化（分支体里 x/y 被精化成同一个模式变量）；
+//   - 归纳证明的递归 def、显式隐式实参（cong[...][...][...]）、let 绑定；
+//   - 传递/对称/合同三条等式推理规则 + 加法/乘法交换律、结合律、单位律。
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def rfl[A][a: A]: Eq a a = refl a
+
+// 合同（congruence）：f x = f y，从 Eq x y 得到。
+def cong[A, B, f: A -> B, x: A, y: A](e: Eq x y): Eq (f x) (f y) =
+    match e {
+        case refl(a) => refl (f a)
+    }
+
+def cong_succ[x: Nat, y: Nat](e: Eq x y): Eq (succ x) (succ y) =
+    cong[Nat][Nat][succ][x][y] e
+
+// 对称：Eq x y -> Eq y x。
+def symm[A, x, y: A](e: Eq[A] x y): Eq[A] y x =
+    match e {
+        case refl(a) => refl[A] a
+    }
+
+// 传递：Eq x y -> Eq y z -> Eq x z。
+def trans[A, x, y, z: A](e1: Eq[A] x y, e2: Eq[A] y z): Eq[A] x z =
+    match e1 {
+        case refl(a) => e2
+    }
+
+// ── 算术 ──────────────────────────────────────────────────────────────────
+
+def add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def mul(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => zero
+        case succ(n) => add y (mul n y)
+    }
+
+def two : Nat = succ (succ zero)
+def three : Nat = succ (succ (succ zero))
+def four : Nat = succ (succ (succ (succ zero)))
+
+// ── 加法引理 ──────────────────────────────────────────────────────────────
+
+// add zero m = m（定义即成立）
+def add_zero_left(m: Nat): Eq[Nat] (add zero m) m = rfl
+
+// add a zero = a（对 a 归纳）
+def add_zero_right(a: Nat): Eq (add a zero) a =
+    match a {
+        case zero => refl zero
+        case succ(t) => cong_succ (add_zero_right t)
+    }
+
+// add a (succ b) = succ (add a b)
+def add_succ_right(a: Nat, b: Nat): Eq (add a (succ b)) (succ (add a b)) =
+    match a {
+        case zero => rfl[Nat][succ b]
+        case succ(t) => cong_succ (add_succ_right t b)
+    }
+
+// 交换律：add a b = add b a
+def add_comm(a: Nat, b: Nat): Eq (add a b) (add b a) =
+    match a {
+        case zero => trans (refl b) (symm (add_zero_right b))
+        case succ(t) => trans (cong_succ (add_comm t b)) (symm (add_succ_right b t))
+    }
+
+// 结合律：add (add a b) c = add a (add b c)
+def add_assoc(a: Nat, b: Nat, c: Nat): Eq (add (add a b) c) (add a (add b c)) =
+    match a {
+        case zero => rfl
+        case succ(t) => cong_succ (add_assoc t b c)
+    }
+
+// ── 乘法引理 ──────────────────────────────────────────────────────────────
+
+// mul n zero = zero
+def mul_zero_right(n: Nat): Eq[Nat] (mul n zero) zero =
+    match n {
+        case zero => rfl
+        case succ(k) => trans (refl (add zero (mul k zero))) (mul_zero_right k)
+    }
+
+// mul n (succ zero) = n
+def mul_one_right(n: Nat): Eq[Nat] (mul n (succ zero)) n =
+    match n {
+        case zero => rfl[Nat][zero]
+        case succ(k) =>
+            let ih = mul_one_right k;
+            let lemma: Eq[Nat] (add (succ zero) k) (succ k) = cong_succ (add_zero_left k);
+            trans (cong[Nat][Nat][add (succ zero)][mul k (succ zero)][k] ih) lemma
+    }
+
+// ── 组合用例：把引理用到具体数上 ──────────────────────────────────────────
+
+def comm_two_three : Eq (add two three) (add three two) = add_comm two three
+
+def assoc_check : Eq (add (add two three) four) (add two (add three four)) =
+    add_assoc two three four
+
+def zero_right_check : Eq (add four zero) four = add_zero_right four
+
+def succ_right_check : Eq (add two (succ three)) (succ (add two three)) =
+    add_succ_right two three
+
+def mul_zero_check : Eq (mul three zero) zero = mul_zero_right three
+
+def mul_one_check : Eq (mul four (succ zero)) four = mul_one_right four
+
+def symm_check : Eq (add three two) (add two three) = symm (add_comm two three)
+
+def trans_check : Eq (add two three) (add three two) =
+    trans (add_comm two three) (add_comm three two)
+
+def cong_check : Eq (succ (add two three)) (succ (add three two)) =
+    cong_succ (add_comm two three)
+
+println comm_two_three
+println assoc_check
+println zero_right_check
+println succ_right_check
+println mul_zero_check
+println mul_one_check
+println symm_check
+println trans_check
+println cong_check

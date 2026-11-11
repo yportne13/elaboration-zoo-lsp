@@ -1,0 +1,360 @@
+// container_lib.typort
+// A small polymorphic container + proof library for the L09 MLTT slice.
+//
+// Real-world analogue: an in-house collections module with an equality toolkit.
+//
+// Covered features:
+//   * Type 0: Nat / Bool / List / Pair / Vec (GADT length index) / Eq (GADT)
+//   * index-refined programs: vhead / vtail / vzip / vreplicate (dependent match)
+//   * dependent record: SizedVec, a later field's type mentions an earlier field
+//   * universe stratification: Type 1 (identity, type codes) and Type 2 (higher
+//     enums whose constructor fields live one level up)
+
+// ---------------------------------------------------------------- Nat (Type 0)
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+def one: Nat = succ zero
+def two: Nat = succ one
+def three: Nat = succ two
+def four: Nat = succ three
+
+def nat_add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (nat_add n y)
+    }
+
+def nat_mul(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => zero
+        case succ(n) => nat_add y (nat_mul n y)
+    }
+
+def nat_eq(x: Nat, y: Nat): Bool =
+    match x {
+        case zero => match y {
+            case zero => true
+            case succ(_) => false
+        }
+        case succ(n) => match y {
+            case zero => false
+            case succ(m) => nat_eq n m
+        }
+    }
+
+def nat_le(x: Nat, y: Nat): Bool =
+    match x {
+        case zero => true
+        case succ(n) => match y {
+            case zero => false
+            case succ(m) => nat_le n m
+        }
+    }
+
+// -------------------------------------------------------------- Bool helpers
+
+def bool_not(x: Bool): Bool =
+    match x {
+        case true => false
+        case false => true
+    }
+
+def bool_and(x: Bool, y: Bool): Bool =
+    match x {
+        case true => y
+        case false => false
+    }
+
+def bool_or(x: Bool, y: Bool): Bool =
+    match x {
+        case true => true
+        case false => y
+    }
+
+// ---------------------------------------------------------------- List (Type 0)
+
+enum List[A] {
+    lnil
+    lcons(head: A, tail: List[A])
+}
+
+def list_length[A](xs: List[A]): Nat =
+    match xs {
+        case lnil => zero
+        case lcons(_, tail) => succ (list_length tail)
+    }
+
+def list_map[A, B](f: A -> B, xs: List[A]): List[B] =
+    match xs {
+        case lnil => lnil
+        case lcons(head, tail) => lcons (f head) (list_map f tail)
+    }
+
+def list_append[A](xs: List[A], ys: List[A]): List[A] =
+    match xs {
+        case lnil => ys
+        case lcons(head, tail) => lcons head (list_append tail ys)
+    }
+
+def list_rev_go[A](acc: List[A], xs: List[A]): List[A] =
+    match xs {
+        case lnil => acc
+        case lcons(head, tail) => list_rev_go (lcons head acc) tail
+    }
+
+def list_reverse[A](xs: List[A]): List[A] = list_rev_go lnil xs
+
+def list_sum(xs: List[Nat]): Nat =
+    match xs {
+        case lnil => zero
+        case lcons(head, tail) => nat_add head (list_sum tail)
+    }
+
+def is_positive(x: Nat): Bool =
+    match x {
+        case zero => false
+        case succ(_) => true
+    }
+
+def list_all_positive(xs: List[Nat]): Bool =
+    match xs {
+        case lnil => true
+        case lcons(head, tail) => bool_and (is_positive head) (list_all_positive tail)
+    }
+
+// ---------------------------------------------------------------- Pair (Type 0)
+
+struct Pair[A, B] {
+    fst: A
+    snd: B
+}
+
+def pair_first[A, B](p: Pair[A, B]): A = p.fst
+
+def pair_swap[A, B](p: Pair[A, B]): Pair[B, A] = new Pair(p.snd, p.fst)
+
+// ------------------------------------- Vec: GADT with a length index (Type 0)
+
+enum Vec[A](len: Nat) {
+    nil -> Vec[A] zero
+    cons[n: Nat](x: A, xs: Vec[A] n) -> Vec[A] (succ n)
+}
+
+def vlength[T, n: Nat](xs: Vec[T] n): Nat =
+    match xs {
+        case nil => zero
+        case cons(_, tail) => succ (vlength tail)
+    }
+
+def vmap[T, U, n: Nat](f: T -> U, xs: Vec[T] n): Vec[U] n =
+    match xs {
+        case nil => nil
+        case cons(head, tail) => cons (f head) (vmap f tail)
+    }
+
+// vhead / vtail show the dependent-match refinement: the nil constructor is
+// unreachable because its index would have to be `succ n`.
+def vhead[T, n: Nat](xs: Vec[T] (succ n)): T =
+    match xs {
+        case cons(head, _) => head
+    }
+
+def vtail[T, n: Nat](xs: Vec[T] (succ n)): Vec[T] n =
+    match xs {
+        case cons(_, tail) => tail
+    }
+
+def vzip[T, U, n: Nat](xs: Vec[T] n, ys: Vec[U] n): Vec[Pair[T, U]] n =
+    match xs {
+        case nil => nil
+        case cons(x, xs2) => match ys {
+            case cons(y, ys2) => cons (new Pair(x, y)) (vzip xs2 ys2)
+        }
+    }
+
+// Indexed recursion: builds a vector whose length index is the given Nat.
+def vreplicate[T](x: T, n: Nat): Vec[T] n =
+    match n {
+        case zero => nil
+        case succ(k) => cons x (vreplicate x k)
+    }
+
+def vsum[n: Nat](xs: Vec[Nat] n): Nat =
+    match xs {
+        case nil => zero
+        case cons(head, tail) => nat_add head (vsum tail)
+    }
+
+// ------------------------------------------ Eq: GADT equality (Type 0)
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def rfl[A, x: A]: Eq[A] x x = refl x
+
+def eq_sym[A, x: A, y: A](e: Eq[A] x y): Eq[A] y x =
+    match e {
+        case refl(a) => refl a
+    }
+
+def eq_trans[A, x: A, y: A, z: A](xy: Eq[A] x y, yz: Eq[A] y z): Eq[A] x z =
+    match xy {
+        case refl(a) => yz
+    }
+
+def eq_cong[A, B, f: A -> B, x: A, y: A](e: Eq[A] x y): Eq[B] (f x) (f y) =
+    match e {
+        case refl(a) => refl (f a)
+    }
+
+def eq_succ_cong[x: Nat, y: Nat](e: Eq[Nat] x y): Eq[Nat] (succ x) (succ y) =
+    match e {
+        case refl(a) => refl (succ a)
+    }
+
+// --------------------------------- Dependent record: later field mentions the first
+
+struct SizedVec {
+    size: Nat
+    data: Vec[Nat] size
+}
+
+def sized_empty: SizedVec = SizedVec.mk zero nil
+
+def sized_one: SizedVec = SizedVec.mk one (cons one nil)
+
+def sized_two: SizedVec = SizedVec.mk two (cons two (cons three nil))
+
+def sized_data(v: SizedVec): Vec[Nat] v.size = v.data
+
+def sized_len(v: SizedVec): Nat = v.size
+
+def sized_sum(v: SizedVec): Nat = vsum v.data
+
+// ------------------------------------------------- Universe stratification
+
+// Type 1 stores the code of Type 0 (types as first-class values).
+def Level0: Type 1 = Type 0
+
+// Type 2 stores the code of Type 1: a nested Type level.
+def Level1: Type 2 = Type 1
+
+def FunSpace: Type 2 = Type 1 -> Type 0
+
+// Universe-polymorphic-by-stratification: one identity per universe level.
+def id_type0[A: Type 0](x: A): A = x
+
+def id_type1[A: Type 1](x: A): A = x
+
+def const_type0[A: Type 0, B: Type 0](x: A, y: B): A = x
+
+// `Nat` is a value of Type 0, so it can be passed where a Type 0 code is needed.
+def nat_code: Type 0 = id_type1 Nat
+
+def fun_code: Type 2 = id_type1 FunSpace
+
+// Higher universe enum: a constructor field may itself live at Type 2.
+enum HighLvl[A] {
+    case1(a: A)
+    case2(a: FunSpace)
+}
+
+def high_nat: HighLvl[Nat] = case1 zero
+
+def high_fun: HighLvl[Nat] = case2 (w => Nat)
+
+def high_ty: Type 2 = HighLvl[Nat]
+
+// Nested Type level: the enum parameter itself is annotated at Type 2.
+enum HighLvl2[A: Type 2] {
+    pack(a: A)
+    base(x: Nat)
+}
+
+def packed_high: HighLvl2[HighLvl[Nat]] = pack high_nat
+
+def packed_base: HighLvl2[HighLvl[Nat]] = base one
+
+def packed_ty: Type 2 = HighLvl2[HighLvl[Nat]]
+
+// Struct at Type 1: the field is a Type 0 code.
+struct Wrapped[A: Type 1] {
+    inner: A
+}
+
+def wrapped_nat: Wrapped[Type 0] = new Wrapped(Nat)
+
+def wrapped_inner(w: Wrapped[Type 0]): Type 0 = w.inner
+
+def nat_again: Type 0 = wrapped_inner wrapped_nat
+
+// ---------------------------------------------------------------- Client code
+
+def digits: List[Nat] = lcons one (lcons two lnil)
+
+def digits_sum: Nat = list_sum digits
+
+def digits_length: Nat = list_length digits
+
+def digits_doubled: List[Nat] = list_map (x => nat_add x x) digits
+
+def v1: Vec[Nat] three = cons one (cons two (cons three nil))
+
+def v2: Vec[Bool] three = cons true (cons false (cons true nil))
+
+def v1_len: Nat = vlength v1
+
+def v1_sum: Nat = vsum v1
+
+def v1_pairs: Vec[Pair[Nat, Bool]] three = vzip v1 v2
+
+def v4: Vec[Nat] four = vreplicate one four
+
+def v4_head: Nat = vhead v4
+
+def v4_tail: Vec[Nat] three = vtail v4
+
+def v4_head_of_tail: Nat = vhead v4_tail
+
+def proof_two: Eq[Nat] two two = rfl
+
+def proof_chain: Eq[Nat] two two = eq_trans proof_two proof_two
+
+def proof_sym: Eq[Nat] two two = eq_sym proof_two
+
+def proof_cong: Eq[Nat] three three = eq_succ_cong proof_two
+
+def all_digits_positive: Bool = list_all_positive digits
+
+def sized_check: Bool = nat_eq (sized_len sized_two) two
+
+def is_three(x: Nat): Bool = nat_eq x three
+
+def bounded: Bool = bool_and (nat_le one three) (is_three (v4_head))
+
+println digits_sum
+println digits_length
+println v1_len
+println v1_sum
+println v4_head
+println v4_head_of_tail
+println (vlength v1_pairs)
+println (list_length digits_doubled)
+println sized_check
+println all_digits_positive
+println bounded
+println (nat_mul two (nat_add one three))
+println (bool_not (bool_or true false))
+println high_ty
+println packed_ty
+println nat_again

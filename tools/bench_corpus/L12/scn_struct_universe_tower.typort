@@ -1,0 +1,36 @@
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def test1: Type 2 = Type 1 -> Type 0
+
+struct HighLvl[A] {
+    case1: A
+    case2: test1
+}
+
+def test2_t: Type 1 -> Type 0 = t => Nat
+
+def test2: HighLvl[Nat] = new HighLvl(zero, test2_t)
+
+def test3: Type 2 = HighLvl[Nat]
+
+struct HighLvl2[A: Type 2] {
+    case2_1: A
+    case2_2: Nat
+}
+
+def test1_2: HighLvl2[HighLvl[Nat]] = new HighLvl2(test2, zero)
+
+def test1_3: Type 2 = HighLvl2[HighLvl[Nat]]
+
+struct HighLvl3[A: Type 2] {
+    case3_1: Nat
+    case3_2: Nat
+}
+
+def test2_2: HighLvl3[HighLvl[Nat]] = new HighLvl3(zero, zero)
+
+def test2_3: Type 2 = HighLvl3[HighLvl[Nat]]

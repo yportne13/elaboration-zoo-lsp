@@ -1,0 +1,123 @@
+
+enum Bool {
+    true
+    false
+}
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+def listid(x: List[Bool]): List[Bool] = x
+
+def create0: List[Bool] = nil
+
+def create1: List[Bool] = cons true nil
+
+def create2: List[Bool] = cons (true, cons false nil)
+
+def two = succ (succ zero)
+
+def not(x: Bool): Bool =
+    match x {
+        case true => false
+        case false => true
+    }
+
+println (not true)
+
+def add(x: Nat, y: Nat) =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def mul(x: Nat, y: Nat) = match x {
+    case zero => zero
+    case succ(n) => add (y, mul n y)
+}
+
+def four = add two two
+
+println four
+
+struct Point[T] {
+    x: T
+    y: T
+}
+
+def get_x[T](p: Point[T]): T = p.x
+
+def point_add(p1: Point[Nat], p2: Point[Nat]): Point[Nat] =
+    new Point((add p1.x p2.x), (add p1.y p2.y))
+
+def start_point = new Point(zero, four)
+
+def end_point = new Point(four, two)
+
+println (get_x start_point)
+
+println (point_add start_point end_point)
+
+def test0: Type 1 = Type 0
+
+def test1: Type 2 = Type 1 -> Type 0
+
+enum HighLvl[A] {
+    case1(a: A)
+    case2(a: test1)
+}
+
+def test2: HighLvl[Nat] = case1 zero
+
+def test3: Type 2 = HighLvl[Nat]
+
+enum HighLvl2[A: Type 2] {
+    case2_1(x: A)
+    case2_2(x: Nat)
+}
+
+def test1_2: HighLvl2[HighLvl[Nat]] = case2_1 test2
+
+def test1_3: Type 2 = HighLvl2[HighLvl[Nat]]
+
+enum HighLvl3[A: Type 2] {
+    case3_1
+    case3_2(x: Nat)
+}
+
+def test2_2: HighLvl3[HighLvl[Nat]] = case3_1
+
+def test2_3: Type 2 = HighLvl3[HighLvl[Nat]]
+
+def Eq[A](x: A, y: A) = (P : A -> Type 0) -> P x -> P y
+
+def refl[A, x: A]: Eq[A] x x = _ => px => px
+
+struct Bits {
+    name: String
+    size: Nat
+}
+
+def get_name(x: Bits) = x.name
+
+def assign(a: Bits, b: Bits)(eq: Eq[Nat] a.size b.size): String = a.name
+
+def sigA = new Bits("A", four)
+
+def sigB = new Bits("B", four)
+
+def sigC = new Bits("C", two)
+
+def sigD = new Bits("D", two)
+
+def ab = assign sigA sigB refl
+
+def cd = assign sigC sigD refl
+

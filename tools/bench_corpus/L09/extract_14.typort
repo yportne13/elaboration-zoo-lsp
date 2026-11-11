@@ -1,0 +1,8 @@
+
+def mystr = "hello world"
+
+def mystr2 = string_concat mystr "!"
+
+println mystr
+println mystr2
+println (string_concat "hello " "world")

@@ -1,0 +1,103 @@
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def one = succ zero
+
+def two = succ one
+
+def three = succ two
+
+def four = succ three
+
+enum Bool {
+    true
+    false
+}
+
+enum Vec[A](len: Nat) {
+    nil -> Vec[A] zero
+    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
+}
+
+def v_one: Vec[Nat] one = cons (two, nil)
+
+def v_two: Vec[Nat] two = cons (one, cons (three, nil))
+
+def v_four: Vec[Nat] four = cons (one, cons (two, cons (three, cons (four, nil))))
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+def l_one: List[Nat] = cons (one, nil)
+
+def l_two: List[Nat] = cons (one, cons (two, nil))
+
+struct Stage {
+    name: String
+    depth: Nat
+}
+
+struct Pipeline {
+    name: String
+    stage: Stage
+}
+
+def stage_of(n: String, d: Nat): Stage = new Stage(n, d)
+
+def pipeline_of(n: String, st: Stage): Pipeline = new Pipeline(n, st)
+
+def depth_of(p: Pipeline): Nat = p.stage.depth
+
+def stage_name(p: Pipeline): String = p.stage.name
+
+def alu = stage_of "alu" three
+
+def core = pipeline_of "core" alu
+
+def first_of_core = depth_of core
+
+def total_depth = add first_of_core two
+
+def twice_depth = add total_depth total_depth
+
+def quadded = add twice_depth twice_depth
+
+def pick(x: Bool): Nat =
+    match x {
+        case true => total_depth
+        case false => quadded
+    }
+
+def answer = pick true
+
+def answer2 = pick false
+
+def extra = add answer two
+
+println total_depth
+
+println twice_depth
+
+println quadded
+
+println answer
+
+println answer2
+
+println extra
+
+println stage_name core
+
+println (add (depth_of core) three)
+
+println (add one one)

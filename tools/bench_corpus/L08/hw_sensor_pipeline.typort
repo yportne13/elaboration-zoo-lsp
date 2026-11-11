@@ -1,0 +1,215 @@
+// 项目级真实程序（手写）：传感器读数校准流水线。
+//
+// 真实场景：IoT 采集后端——原始读数（Reading）按标定参数（Calibration）
+// 换算成工程量，样本（Sample）是嵌套记录；再在样本列表上做阈值查找。
+// 覆盖特性（L08，product type 重点）：
+//   - 三层嵌套记录 + 深投影链（s.reading.raw / s.calibration.scale）；
+//   - 依赖字段（Sigma）struct Verified[A][P]：proof 字段类型依赖 witness；
+//   - 类型级投影穿越依赖字段（v.proof 的类型是 P v.witness）；
+//   - 记录更新函数（recalibrate / reraw）返回新记录；
+//   - enum List / Option + 递归函数 + 多层 match 混合使用。
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+enum Option[A] {
+    None
+    Some(value: A)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def rfl[A][a: A]: Eq a a = refl a
+
+def add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def mul(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => zero
+        case succ(n) => add y (mul n y)
+    }
+
+def sub(x: Nat, y: Nat): Nat =
+    match y {
+        case zero => x
+        case succ(m) => match x {
+            case zero => zero
+            case succ(n) => sub n m
+        }
+    }
+
+def is_zero(x: Nat): Bool =
+    match x {
+        case zero => true
+        case succ(k) => false
+    }
+
+def le(x: Nat, y: Nat): Bool = is_zero (sub x y)
+
+def gt(x: Nat, y: Nat): Bool =
+    match le x y {
+        case true => false
+        case false => true
+    }
+
+// ── 记录类型 ──────────────────────────────────────────────────────────────
+
+struct Reading {
+    sensor: String
+    raw: Nat
+}
+
+struct Calibration {
+    offset: Nat
+    scale: Nat
+}
+
+struct Sample {
+    reading: Reading
+    calibration: Calibration
+}
+
+// 依赖字段（Sigma / 存在谓词对）：proof 的类型依赖 witness。
+struct Verified[A: U, P: A -> U] {
+    witness: A
+    proof: (P witness)
+}
+
+// ── 记录级函数（深投影链）─────────────────────────────────────────────────
+
+def sensor_of(s: Sample): String = s.reading.sensor
+def raw_of(s: Sample): Nat = s.reading.raw
+def scale_of(s: Sample): Nat = s.calibration.scale
+def offset_of(s: Sample): Nat = s.calibration.offset
+
+// 工程量 = raw * scale + offset
+def calibrated(s: Sample): Nat = add (mul s.reading.raw s.calibration.scale) s.calibration.offset
+
+// 记录更新：换标定参数（返回新 Sample）
+def recalibrate(s: Sample, offset: Nat, scale: Nat): Sample =
+    new Sample(s.reading, new Calibration(offset, scale))
+
+// 记录更新：换原始读数
+def reraw(s: Sample, raw: Nat): Sample =
+    new Sample(new Reading(s.reading.sensor, raw), s.calibration)
+
+// 记录更新：只挪 offset
+def rezero(s: Sample, offset: Nat): Sample =
+    new Sample(s.reading, new Calibration(offset, s.calibration.scale))
+
+// ── 样本列表上的阈值查找 ──────────────────────────────────────────────────
+
+def first_above(samples: List[Sample], threshold: Nat): Option[Nat] =
+    match samples {
+        case nil => None
+        case cons(s, rest) => match gt (calibrated s) threshold {
+            case true => Some (calibrated s)
+            case false => first_above rest threshold
+        }
+    }
+
+def count_above(samples: List[Sample], threshold: Nat): Nat =
+    match samples {
+        case nil => zero
+        case cons(s, rest) => match gt (calibrated s) threshold {
+            case true => succ (count_above rest threshold)
+            case false => count_above rest threshold
+        }
+    }
+
+def total_calibrated(samples: List[Sample]): Nat =
+    match samples {
+        case nil => zero
+        case cons(s, rest) => add (calibrated s) (total_calibrated rest)
+    }
+
+// ── 数据 ──────────────────────────────────────────────────────────────────
+
+def one : Nat = succ zero
+def two : Nat = succ (succ zero)
+def three : Nat = succ (succ (succ zero))
+def four : Nat = succ (succ (succ (succ zero)))
+def ten : Nat = add four (mul two three)
+
+def cal_a : Calibration = new Calibration(zero, two)
+def cal_b : Calibration = new Calibration(one, three)
+def cal_c : Calibration = new Calibration(two, one)
+
+def s_a : Sample = new Sample(new Reading("temp", three), cal_a)
+def s_b : Sample = new Sample(new Reading("temp", four), cal_b)
+def s_c : Sample = new Sample(new Reading("pressure", one), cal_c)
+def s_d : Sample = new Sample(new Reading("pressure", ten), cal_c)
+
+def batch : List[Sample] = cons s_a (cons s_b (cons s_c (cons s_d nil)))
+def batch2 : List[Sample] = cons s_b (cons s_d nil)
+
+def c_a : Nat = calibrated s_a
+def c_b : Nat = calibrated s_b
+def c_c : Nat = calibrated s_c
+def c_d : Nat = calibrated s_d
+
+def s_b2 : Sample = reraw s_b four
+def s_c2 : Sample = recalibrate s_c one three
+def s_d2 : Sample = rezero s_d zero
+
+def c_b2 : Nat = calibrated s_b2
+def c_c2 : Nat = calibrated s_c2
+def c_d2 : Nat = calibrated s_d2
+
+def first : Option[Nat] = first_above batch two
+def first_none : Option[Nat] = first_above batch ten
+def cnt : Nat = count_above batch two
+def total : Nat = total_calibrated batch
+def total2 : Nat = total_calibrated batch2
+
+println c_a
+println c_b
+println c_c
+println c_d
+println c_b2
+println c_c2
+println c_d2
+println first
+println first_none
+println cnt
+println total
+println total2
+println (sensor_of s_a)
+println (raw_of s_d)
+println (scale_of s_b)
+println (offset_of s_c)
+
+// ── 依赖记录：Verified 的 proof 字段类型依赖 witness ──────────────────────
+
+def verified_two : Verified[Nat][x => Eq x two] =
+    Verified.mk[Nat][x => Eq x two] two rfl
+
+def witness_of : Nat = verified_two.witness
+
+// 穿越依赖字段的投影：proof 的类型就是 Eq verified_two.witness two。
+def proof_of : Eq verified_two.witness two = verified_two.proof
+
+// 记录级引理：校准函数对同一标定幂等（refl 精化）。
+def calibrate_stable(s: Sample): Eq (calibrated s) (calibrated s) = refl (calibrated s)
+
+// 记录级引理：换 offset 后 calibrated 恰好多出 offset 的贡献。
+def rezero_shape(s: Sample, offset: Nat): Eq (calibrated (rezero s offset)) (add (mul (raw_of s) (scale_of s)) offset) =
+    refl (calibrated (rezero s offset))

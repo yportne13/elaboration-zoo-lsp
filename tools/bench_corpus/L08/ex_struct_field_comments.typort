@@ -1,0 +1,17 @@
+
+enum Nat {
+    zero
+
+    // case 间注释行
+    succ(x: Nat)
+}
+
+struct P {
+    x: Nat
+
+    // 注释行 + 空行
+    y: Nat
+}
+
+def p = new P(zero, (succ (succ zero)))
+println p.y

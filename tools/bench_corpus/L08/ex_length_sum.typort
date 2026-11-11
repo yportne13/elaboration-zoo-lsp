@@ -1,0 +1,37 @@
+
+enum Bool {
+    true
+    false
+}
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+def length(x: List[Bool]): Nat =
+    match x {
+        case nil => zero
+        case cons(h, t) => succ (length t)
+    }
+
+println (length (cons true (cons false nil)))
+
+def add(x: Nat, y: Nat) =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def sum(x: List[Nat]): Nat =
+    match x {
+        case nil => zero
+        case cons(h, t) => add h (sum t)
+    }
+
+println (sum (cons (succ zero) (cons (succ (succ zero)) nil)))

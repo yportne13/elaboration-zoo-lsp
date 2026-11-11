@@ -1,0 +1,104 @@
+// 服务代码生成：宏批量生成业务函数，并在生成体里嵌套表达式级宏调用；
+// 另用 derive 风格宏为多个枚举生成 Show 实现，最后经泛型约束做统一渲染。
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def one = succ zero
+
+def two = succ one
+
+trait Show {
+    def show: String
+}
+
+macro_rules make_enum {
+    ($name: ident $a: ident $b: ident) => {
+        enum $name {
+            $a
+            $b
+        }
+    }
+}
+
+macro_rules derive_show {
+    ($t: ident $c1: ident $c2: ident) => {
+        impl Show for $t {
+            def show: String =
+                match this {
+                    case $c1 => stringify $c1
+                    case $c2 => stringify $c2
+                }
+        }
+    }
+}
+
+make_enum ServiceKind read write
+
+derive_show ServiceKind read write
+
+make_enum AuditState clean dirty
+
+derive_show AuditState clean dirty
+
+macro_rules inc {
+    ($x: raw) => { succ $x }
+}
+
+macro_rules inc_twice {
+    ($x: raw) => { inc (inc $x) }
+}
+
+// 声明级宏：每个调用生成一个业务函数，体内嵌套 inc_twice 展开。
+macro_rules service {
+    ($name: ident $seed: raw) => {
+        def $name : Nat = inc_twice $seed
+    }
+}
+
+service order_validate zero
+
+service order_reserve order_validate
+
+service order_confirm order_reserve
+
+service order_settle order_confirm
+
+service invoice_issue zero
+
+service invoice_void invoice_issue
+
+service stock_lock zero
+
+service stock_release stock_lock
+
+service audit_open zero
+
+service audit_close audit_open
+
+def pipeline_tail = add order_settle stock_release
+
+def pipeline_total = add pipeline_tail audit_close
+
+println order_validate
+
+println order_settle
+
+println audit_close
+
+println pipeline_total
+
+def describe_kind = read
+
+println describe_kind.show
+
+println clean.show
+
+println dirty.show

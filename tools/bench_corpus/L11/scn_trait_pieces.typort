@@ -1,0 +1,82 @@
+
+def outParam[A](a: A): A = a
+
+enum Bool {
+    true
+    false
+}
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+def listmap[T, U](xs: List[T], f: T -> U): List[U] =
+    match xs {
+        case nil => nil
+        case cons(head, tail) => cons (f head) (listmap tail f)
+    }
+
+def two = succ (succ zero)
+
+def listnat = cons two (cons (succ zero) nil)
+
+def listnat2 = listmap listnat (x => succ x)
+
+println listnat2
+
+trait ToString {
+    def to_string: String
+}
+
+impl ToString for Bool {
+    def to_string: String =
+        match this {
+            case true => "true"
+            case false => "false"
+        }
+}
+
+def t[T][s: ToString[T]](x: T): String =
+    s.to_string x
+
+println (t true)
+
+trait Say {
+    def say(x: Nat): String
+}
+
+impl[T] Say for T {
+    def say(x: Nat): String = "hello"
+}
+
+println (zero.say zero)
+
+trait Add[T, O: outParam(Type 0)] {
+    def add(that: T): O
+}
+
+def nat_add_helper(x: Nat, y: Nat): Nat =
+    match y {
+        case zero => x
+        case succ(n) => succ (nat_add_helper x n)
+    }
+
+impl Add[Nat, Nat] for Nat {
+    def add(that: Nat): Nat =
+        nat_add_helper this that
+}
+
+def mul(x: Nat, y: Nat) = match x {
+    case zero => zero
+    case succ(n) => y.add (mul n y)
+}
+
+def four = two.add two
+
+println four

@@ -1,0 +1,3191 @@
+// ladder_large.typort
+// Scale ladder for L10: a 393-unit tag-instance registry (same skeleton at
+// every size; only the registry block grows). Shape: Tag trait + dictionary
+// default renderer + one Tag instance per generated register struct.
+// Decl target: ~800 (actual: 802).
+
+def outParam[A](a: A): A = a
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def one: Nat = succ zero
+
+def two: Nat = succ one
+
+def three: Nat = succ two
+
+def four: Nat = succ three
+
+def nat_add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (nat_add n y)
+    }
+
+trait Tag {
+    def tag: String
+}
+
+impl Tag for Nat {
+    def tag: String = "nat"
+}
+
+def default_render[T][t: Tag[T]](x: T): String =
+    string_concat "render(" (string_concat (t.tag x) ")")
+
+struct Reg0 {
+    width: Nat
+}
+
+impl Tag for Reg0 {
+    def tag: String = "reg0"
+}
+
+struct Reg1 {
+    width: Nat
+}
+
+impl Tag for Reg1 {
+    def tag: String = "reg1"
+}
+
+struct Reg2 {
+    width: Nat
+}
+
+impl Tag for Reg2 {
+    def tag: String = "reg2"
+}
+
+struct Reg3 {
+    width: Nat
+}
+
+impl Tag for Reg3 {
+    def tag: String = "reg3"
+}
+
+struct Reg4 {
+    width: Nat
+}
+
+impl Tag for Reg4 {
+    def tag: String = "reg4"
+}
+
+struct Reg5 {
+    width: Nat
+}
+
+impl Tag for Reg5 {
+    def tag: String = "reg5"
+}
+
+struct Reg6 {
+    width: Nat
+}
+
+impl Tag for Reg6 {
+    def tag: String = "reg6"
+}
+
+struct Reg7 {
+    width: Nat
+}
+
+impl Tag for Reg7 {
+    def tag: String = "reg7"
+}
+
+struct Reg8 {
+    width: Nat
+}
+
+impl Tag for Reg8 {
+    def tag: String = "reg8"
+}
+
+struct Reg9 {
+    width: Nat
+}
+
+impl Tag for Reg9 {
+    def tag: String = "reg9"
+}
+
+struct Reg10 {
+    width: Nat
+}
+
+impl Tag for Reg10 {
+    def tag: String = "reg10"
+}
+
+struct Reg11 {
+    width: Nat
+}
+
+impl Tag for Reg11 {
+    def tag: String = "reg11"
+}
+
+struct Reg12 {
+    width: Nat
+}
+
+impl Tag for Reg12 {
+    def tag: String = "reg12"
+}
+
+struct Reg13 {
+    width: Nat
+}
+
+impl Tag for Reg13 {
+    def tag: String = "reg13"
+}
+
+struct Reg14 {
+    width: Nat
+}
+
+impl Tag for Reg14 {
+    def tag: String = "reg14"
+}
+
+struct Reg15 {
+    width: Nat
+}
+
+impl Tag for Reg15 {
+    def tag: String = "reg15"
+}
+
+struct Reg16 {
+    width: Nat
+}
+
+impl Tag for Reg16 {
+    def tag: String = "reg16"
+}
+
+struct Reg17 {
+    width: Nat
+}
+
+impl Tag for Reg17 {
+    def tag: String = "reg17"
+}
+
+struct Reg18 {
+    width: Nat
+}
+
+impl Tag for Reg18 {
+    def tag: String = "reg18"
+}
+
+struct Reg19 {
+    width: Nat
+}
+
+impl Tag for Reg19 {
+    def tag: String = "reg19"
+}
+
+struct Reg20 {
+    width: Nat
+}
+
+impl Tag for Reg20 {
+    def tag: String = "reg20"
+}
+
+struct Reg21 {
+    width: Nat
+}
+
+impl Tag for Reg21 {
+    def tag: String = "reg21"
+}
+
+struct Reg22 {
+    width: Nat
+}
+
+impl Tag for Reg22 {
+    def tag: String = "reg22"
+}
+
+struct Reg23 {
+    width: Nat
+}
+
+impl Tag for Reg23 {
+    def tag: String = "reg23"
+}
+
+struct Reg24 {
+    width: Nat
+}
+
+impl Tag for Reg24 {
+    def tag: String = "reg24"
+}
+
+struct Reg25 {
+    width: Nat
+}
+
+impl Tag for Reg25 {
+    def tag: String = "reg25"
+}
+
+struct Reg26 {
+    width: Nat
+}
+
+impl Tag for Reg26 {
+    def tag: String = "reg26"
+}
+
+struct Reg27 {
+    width: Nat
+}
+
+impl Tag for Reg27 {
+    def tag: String = "reg27"
+}
+
+struct Reg28 {
+    width: Nat
+}
+
+impl Tag for Reg28 {
+    def tag: String = "reg28"
+}
+
+struct Reg29 {
+    width: Nat
+}
+
+impl Tag for Reg29 {
+    def tag: String = "reg29"
+}
+
+struct Reg30 {
+    width: Nat
+}
+
+impl Tag for Reg30 {
+    def tag: String = "reg30"
+}
+
+struct Reg31 {
+    width: Nat
+}
+
+impl Tag for Reg31 {
+    def tag: String = "reg31"
+}
+
+struct Reg32 {
+    width: Nat
+}
+
+impl Tag for Reg32 {
+    def tag: String = "reg32"
+}
+
+struct Reg33 {
+    width: Nat
+}
+
+impl Tag for Reg33 {
+    def tag: String = "reg33"
+}
+
+struct Reg34 {
+    width: Nat
+}
+
+impl Tag for Reg34 {
+    def tag: String = "reg34"
+}
+
+struct Reg35 {
+    width: Nat
+}
+
+impl Tag for Reg35 {
+    def tag: String = "reg35"
+}
+
+struct Reg36 {
+    width: Nat
+}
+
+impl Tag for Reg36 {
+    def tag: String = "reg36"
+}
+
+struct Reg37 {
+    width: Nat
+}
+
+impl Tag for Reg37 {
+    def tag: String = "reg37"
+}
+
+struct Reg38 {
+    width: Nat
+}
+
+impl Tag for Reg38 {
+    def tag: String = "reg38"
+}
+
+struct Reg39 {
+    width: Nat
+}
+
+impl Tag for Reg39 {
+    def tag: String = "reg39"
+}
+
+struct Reg40 {
+    width: Nat
+}
+
+impl Tag for Reg40 {
+    def tag: String = "reg40"
+}
+
+struct Reg41 {
+    width: Nat
+}
+
+impl Tag for Reg41 {
+    def tag: String = "reg41"
+}
+
+struct Reg42 {
+    width: Nat
+}
+
+impl Tag for Reg42 {
+    def tag: String = "reg42"
+}
+
+struct Reg43 {
+    width: Nat
+}
+
+impl Tag for Reg43 {
+    def tag: String = "reg43"
+}
+
+struct Reg44 {
+    width: Nat
+}
+
+impl Tag for Reg44 {
+    def tag: String = "reg44"
+}
+
+struct Reg45 {
+    width: Nat
+}
+
+impl Tag for Reg45 {
+    def tag: String = "reg45"
+}
+
+struct Reg46 {
+    width: Nat
+}
+
+impl Tag for Reg46 {
+    def tag: String = "reg46"
+}
+
+struct Reg47 {
+    width: Nat
+}
+
+impl Tag for Reg47 {
+    def tag: String = "reg47"
+}
+
+struct Reg48 {
+    width: Nat
+}
+
+impl Tag for Reg48 {
+    def tag: String = "reg48"
+}
+
+struct Reg49 {
+    width: Nat
+}
+
+impl Tag for Reg49 {
+    def tag: String = "reg49"
+}
+
+struct Reg50 {
+    width: Nat
+}
+
+impl Tag for Reg50 {
+    def tag: String = "reg50"
+}
+
+struct Reg51 {
+    width: Nat
+}
+
+impl Tag for Reg51 {
+    def tag: String = "reg51"
+}
+
+struct Reg52 {
+    width: Nat
+}
+
+impl Tag for Reg52 {
+    def tag: String = "reg52"
+}
+
+struct Reg53 {
+    width: Nat
+}
+
+impl Tag for Reg53 {
+    def tag: String = "reg53"
+}
+
+struct Reg54 {
+    width: Nat
+}
+
+impl Tag for Reg54 {
+    def tag: String = "reg54"
+}
+
+struct Reg55 {
+    width: Nat
+}
+
+impl Tag for Reg55 {
+    def tag: String = "reg55"
+}
+
+struct Reg56 {
+    width: Nat
+}
+
+impl Tag for Reg56 {
+    def tag: String = "reg56"
+}
+
+struct Reg57 {
+    width: Nat
+}
+
+impl Tag for Reg57 {
+    def tag: String = "reg57"
+}
+
+struct Reg58 {
+    width: Nat
+}
+
+impl Tag for Reg58 {
+    def tag: String = "reg58"
+}
+
+struct Reg59 {
+    width: Nat
+}
+
+impl Tag for Reg59 {
+    def tag: String = "reg59"
+}
+
+struct Reg60 {
+    width: Nat
+}
+
+impl Tag for Reg60 {
+    def tag: String = "reg60"
+}
+
+struct Reg61 {
+    width: Nat
+}
+
+impl Tag for Reg61 {
+    def tag: String = "reg61"
+}
+
+struct Reg62 {
+    width: Nat
+}
+
+impl Tag for Reg62 {
+    def tag: String = "reg62"
+}
+
+struct Reg63 {
+    width: Nat
+}
+
+impl Tag for Reg63 {
+    def tag: String = "reg63"
+}
+
+struct Reg64 {
+    width: Nat
+}
+
+impl Tag for Reg64 {
+    def tag: String = "reg64"
+}
+
+struct Reg65 {
+    width: Nat
+}
+
+impl Tag for Reg65 {
+    def tag: String = "reg65"
+}
+
+struct Reg66 {
+    width: Nat
+}
+
+impl Tag for Reg66 {
+    def tag: String = "reg66"
+}
+
+struct Reg67 {
+    width: Nat
+}
+
+impl Tag for Reg67 {
+    def tag: String = "reg67"
+}
+
+struct Reg68 {
+    width: Nat
+}
+
+impl Tag for Reg68 {
+    def tag: String = "reg68"
+}
+
+struct Reg69 {
+    width: Nat
+}
+
+impl Tag for Reg69 {
+    def tag: String = "reg69"
+}
+
+struct Reg70 {
+    width: Nat
+}
+
+impl Tag for Reg70 {
+    def tag: String = "reg70"
+}
+
+struct Reg71 {
+    width: Nat
+}
+
+impl Tag for Reg71 {
+    def tag: String = "reg71"
+}
+
+struct Reg72 {
+    width: Nat
+}
+
+impl Tag for Reg72 {
+    def tag: String = "reg72"
+}
+
+struct Reg73 {
+    width: Nat
+}
+
+impl Tag for Reg73 {
+    def tag: String = "reg73"
+}
+
+struct Reg74 {
+    width: Nat
+}
+
+impl Tag for Reg74 {
+    def tag: String = "reg74"
+}
+
+struct Reg75 {
+    width: Nat
+}
+
+impl Tag for Reg75 {
+    def tag: String = "reg75"
+}
+
+struct Reg76 {
+    width: Nat
+}
+
+impl Tag for Reg76 {
+    def tag: String = "reg76"
+}
+
+struct Reg77 {
+    width: Nat
+}
+
+impl Tag for Reg77 {
+    def tag: String = "reg77"
+}
+
+struct Reg78 {
+    width: Nat
+}
+
+impl Tag for Reg78 {
+    def tag: String = "reg78"
+}
+
+struct Reg79 {
+    width: Nat
+}
+
+impl Tag for Reg79 {
+    def tag: String = "reg79"
+}
+
+struct Reg80 {
+    width: Nat
+}
+
+impl Tag for Reg80 {
+    def tag: String = "reg80"
+}
+
+struct Reg81 {
+    width: Nat
+}
+
+impl Tag for Reg81 {
+    def tag: String = "reg81"
+}
+
+struct Reg82 {
+    width: Nat
+}
+
+impl Tag for Reg82 {
+    def tag: String = "reg82"
+}
+
+struct Reg83 {
+    width: Nat
+}
+
+impl Tag for Reg83 {
+    def tag: String = "reg83"
+}
+
+struct Reg84 {
+    width: Nat
+}
+
+impl Tag for Reg84 {
+    def tag: String = "reg84"
+}
+
+struct Reg85 {
+    width: Nat
+}
+
+impl Tag for Reg85 {
+    def tag: String = "reg85"
+}
+
+struct Reg86 {
+    width: Nat
+}
+
+impl Tag for Reg86 {
+    def tag: String = "reg86"
+}
+
+struct Reg87 {
+    width: Nat
+}
+
+impl Tag for Reg87 {
+    def tag: String = "reg87"
+}
+
+struct Reg88 {
+    width: Nat
+}
+
+impl Tag for Reg88 {
+    def tag: String = "reg88"
+}
+
+struct Reg89 {
+    width: Nat
+}
+
+impl Tag for Reg89 {
+    def tag: String = "reg89"
+}
+
+struct Reg90 {
+    width: Nat
+}
+
+impl Tag for Reg90 {
+    def tag: String = "reg90"
+}
+
+struct Reg91 {
+    width: Nat
+}
+
+impl Tag for Reg91 {
+    def tag: String = "reg91"
+}
+
+struct Reg92 {
+    width: Nat
+}
+
+impl Tag for Reg92 {
+    def tag: String = "reg92"
+}
+
+struct Reg93 {
+    width: Nat
+}
+
+impl Tag for Reg93 {
+    def tag: String = "reg93"
+}
+
+struct Reg94 {
+    width: Nat
+}
+
+impl Tag for Reg94 {
+    def tag: String = "reg94"
+}
+
+struct Reg95 {
+    width: Nat
+}
+
+impl Tag for Reg95 {
+    def tag: String = "reg95"
+}
+
+struct Reg96 {
+    width: Nat
+}
+
+impl Tag for Reg96 {
+    def tag: String = "reg96"
+}
+
+struct Reg97 {
+    width: Nat
+}
+
+impl Tag for Reg97 {
+    def tag: String = "reg97"
+}
+
+struct Reg98 {
+    width: Nat
+}
+
+impl Tag for Reg98 {
+    def tag: String = "reg98"
+}
+
+struct Reg99 {
+    width: Nat
+}
+
+impl Tag for Reg99 {
+    def tag: String = "reg99"
+}
+
+struct Reg100 {
+    width: Nat
+}
+
+impl Tag for Reg100 {
+    def tag: String = "reg100"
+}
+
+struct Reg101 {
+    width: Nat
+}
+
+impl Tag for Reg101 {
+    def tag: String = "reg101"
+}
+
+struct Reg102 {
+    width: Nat
+}
+
+impl Tag for Reg102 {
+    def tag: String = "reg102"
+}
+
+struct Reg103 {
+    width: Nat
+}
+
+impl Tag for Reg103 {
+    def tag: String = "reg103"
+}
+
+struct Reg104 {
+    width: Nat
+}
+
+impl Tag for Reg104 {
+    def tag: String = "reg104"
+}
+
+struct Reg105 {
+    width: Nat
+}
+
+impl Tag for Reg105 {
+    def tag: String = "reg105"
+}
+
+struct Reg106 {
+    width: Nat
+}
+
+impl Tag for Reg106 {
+    def tag: String = "reg106"
+}
+
+struct Reg107 {
+    width: Nat
+}
+
+impl Tag for Reg107 {
+    def tag: String = "reg107"
+}
+
+struct Reg108 {
+    width: Nat
+}
+
+impl Tag for Reg108 {
+    def tag: String = "reg108"
+}
+
+struct Reg109 {
+    width: Nat
+}
+
+impl Tag for Reg109 {
+    def tag: String = "reg109"
+}
+
+struct Reg110 {
+    width: Nat
+}
+
+impl Tag for Reg110 {
+    def tag: String = "reg110"
+}
+
+struct Reg111 {
+    width: Nat
+}
+
+impl Tag for Reg111 {
+    def tag: String = "reg111"
+}
+
+struct Reg112 {
+    width: Nat
+}
+
+impl Tag for Reg112 {
+    def tag: String = "reg112"
+}
+
+struct Reg113 {
+    width: Nat
+}
+
+impl Tag for Reg113 {
+    def tag: String = "reg113"
+}
+
+struct Reg114 {
+    width: Nat
+}
+
+impl Tag for Reg114 {
+    def tag: String = "reg114"
+}
+
+struct Reg115 {
+    width: Nat
+}
+
+impl Tag for Reg115 {
+    def tag: String = "reg115"
+}
+
+struct Reg116 {
+    width: Nat
+}
+
+impl Tag for Reg116 {
+    def tag: String = "reg116"
+}
+
+struct Reg117 {
+    width: Nat
+}
+
+impl Tag for Reg117 {
+    def tag: String = "reg117"
+}
+
+struct Reg118 {
+    width: Nat
+}
+
+impl Tag for Reg118 {
+    def tag: String = "reg118"
+}
+
+struct Reg119 {
+    width: Nat
+}
+
+impl Tag for Reg119 {
+    def tag: String = "reg119"
+}
+
+struct Reg120 {
+    width: Nat
+}
+
+impl Tag for Reg120 {
+    def tag: String = "reg120"
+}
+
+struct Reg121 {
+    width: Nat
+}
+
+impl Tag for Reg121 {
+    def tag: String = "reg121"
+}
+
+struct Reg122 {
+    width: Nat
+}
+
+impl Tag for Reg122 {
+    def tag: String = "reg122"
+}
+
+struct Reg123 {
+    width: Nat
+}
+
+impl Tag for Reg123 {
+    def tag: String = "reg123"
+}
+
+struct Reg124 {
+    width: Nat
+}
+
+impl Tag for Reg124 {
+    def tag: String = "reg124"
+}
+
+struct Reg125 {
+    width: Nat
+}
+
+impl Tag for Reg125 {
+    def tag: String = "reg125"
+}
+
+struct Reg126 {
+    width: Nat
+}
+
+impl Tag for Reg126 {
+    def tag: String = "reg126"
+}
+
+struct Reg127 {
+    width: Nat
+}
+
+impl Tag for Reg127 {
+    def tag: String = "reg127"
+}
+
+struct Reg128 {
+    width: Nat
+}
+
+impl Tag for Reg128 {
+    def tag: String = "reg128"
+}
+
+struct Reg129 {
+    width: Nat
+}
+
+impl Tag for Reg129 {
+    def tag: String = "reg129"
+}
+
+struct Reg130 {
+    width: Nat
+}
+
+impl Tag for Reg130 {
+    def tag: String = "reg130"
+}
+
+struct Reg131 {
+    width: Nat
+}
+
+impl Tag for Reg131 {
+    def tag: String = "reg131"
+}
+
+struct Reg132 {
+    width: Nat
+}
+
+impl Tag for Reg132 {
+    def tag: String = "reg132"
+}
+
+struct Reg133 {
+    width: Nat
+}
+
+impl Tag for Reg133 {
+    def tag: String = "reg133"
+}
+
+struct Reg134 {
+    width: Nat
+}
+
+impl Tag for Reg134 {
+    def tag: String = "reg134"
+}
+
+struct Reg135 {
+    width: Nat
+}
+
+impl Tag for Reg135 {
+    def tag: String = "reg135"
+}
+
+struct Reg136 {
+    width: Nat
+}
+
+impl Tag for Reg136 {
+    def tag: String = "reg136"
+}
+
+struct Reg137 {
+    width: Nat
+}
+
+impl Tag for Reg137 {
+    def tag: String = "reg137"
+}
+
+struct Reg138 {
+    width: Nat
+}
+
+impl Tag for Reg138 {
+    def tag: String = "reg138"
+}
+
+struct Reg139 {
+    width: Nat
+}
+
+impl Tag for Reg139 {
+    def tag: String = "reg139"
+}
+
+struct Reg140 {
+    width: Nat
+}
+
+impl Tag for Reg140 {
+    def tag: String = "reg140"
+}
+
+struct Reg141 {
+    width: Nat
+}
+
+impl Tag for Reg141 {
+    def tag: String = "reg141"
+}
+
+struct Reg142 {
+    width: Nat
+}
+
+impl Tag for Reg142 {
+    def tag: String = "reg142"
+}
+
+struct Reg143 {
+    width: Nat
+}
+
+impl Tag for Reg143 {
+    def tag: String = "reg143"
+}
+
+struct Reg144 {
+    width: Nat
+}
+
+impl Tag for Reg144 {
+    def tag: String = "reg144"
+}
+
+struct Reg145 {
+    width: Nat
+}
+
+impl Tag for Reg145 {
+    def tag: String = "reg145"
+}
+
+struct Reg146 {
+    width: Nat
+}
+
+impl Tag for Reg146 {
+    def tag: String = "reg146"
+}
+
+struct Reg147 {
+    width: Nat
+}
+
+impl Tag for Reg147 {
+    def tag: String = "reg147"
+}
+
+struct Reg148 {
+    width: Nat
+}
+
+impl Tag for Reg148 {
+    def tag: String = "reg148"
+}
+
+struct Reg149 {
+    width: Nat
+}
+
+impl Tag for Reg149 {
+    def tag: String = "reg149"
+}
+
+struct Reg150 {
+    width: Nat
+}
+
+impl Tag for Reg150 {
+    def tag: String = "reg150"
+}
+
+struct Reg151 {
+    width: Nat
+}
+
+impl Tag for Reg151 {
+    def tag: String = "reg151"
+}
+
+struct Reg152 {
+    width: Nat
+}
+
+impl Tag for Reg152 {
+    def tag: String = "reg152"
+}
+
+struct Reg153 {
+    width: Nat
+}
+
+impl Tag for Reg153 {
+    def tag: String = "reg153"
+}
+
+struct Reg154 {
+    width: Nat
+}
+
+impl Tag for Reg154 {
+    def tag: String = "reg154"
+}
+
+struct Reg155 {
+    width: Nat
+}
+
+impl Tag for Reg155 {
+    def tag: String = "reg155"
+}
+
+struct Reg156 {
+    width: Nat
+}
+
+impl Tag for Reg156 {
+    def tag: String = "reg156"
+}
+
+struct Reg157 {
+    width: Nat
+}
+
+impl Tag for Reg157 {
+    def tag: String = "reg157"
+}
+
+struct Reg158 {
+    width: Nat
+}
+
+impl Tag for Reg158 {
+    def tag: String = "reg158"
+}
+
+struct Reg159 {
+    width: Nat
+}
+
+impl Tag for Reg159 {
+    def tag: String = "reg159"
+}
+
+struct Reg160 {
+    width: Nat
+}
+
+impl Tag for Reg160 {
+    def tag: String = "reg160"
+}
+
+struct Reg161 {
+    width: Nat
+}
+
+impl Tag for Reg161 {
+    def tag: String = "reg161"
+}
+
+struct Reg162 {
+    width: Nat
+}
+
+impl Tag for Reg162 {
+    def tag: String = "reg162"
+}
+
+struct Reg163 {
+    width: Nat
+}
+
+impl Tag for Reg163 {
+    def tag: String = "reg163"
+}
+
+struct Reg164 {
+    width: Nat
+}
+
+impl Tag for Reg164 {
+    def tag: String = "reg164"
+}
+
+struct Reg165 {
+    width: Nat
+}
+
+impl Tag for Reg165 {
+    def tag: String = "reg165"
+}
+
+struct Reg166 {
+    width: Nat
+}
+
+impl Tag for Reg166 {
+    def tag: String = "reg166"
+}
+
+struct Reg167 {
+    width: Nat
+}
+
+impl Tag for Reg167 {
+    def tag: String = "reg167"
+}
+
+struct Reg168 {
+    width: Nat
+}
+
+impl Tag for Reg168 {
+    def tag: String = "reg168"
+}
+
+struct Reg169 {
+    width: Nat
+}
+
+impl Tag for Reg169 {
+    def tag: String = "reg169"
+}
+
+struct Reg170 {
+    width: Nat
+}
+
+impl Tag for Reg170 {
+    def tag: String = "reg170"
+}
+
+struct Reg171 {
+    width: Nat
+}
+
+impl Tag for Reg171 {
+    def tag: String = "reg171"
+}
+
+struct Reg172 {
+    width: Nat
+}
+
+impl Tag for Reg172 {
+    def tag: String = "reg172"
+}
+
+struct Reg173 {
+    width: Nat
+}
+
+impl Tag for Reg173 {
+    def tag: String = "reg173"
+}
+
+struct Reg174 {
+    width: Nat
+}
+
+impl Tag for Reg174 {
+    def tag: String = "reg174"
+}
+
+struct Reg175 {
+    width: Nat
+}
+
+impl Tag for Reg175 {
+    def tag: String = "reg175"
+}
+
+struct Reg176 {
+    width: Nat
+}
+
+impl Tag for Reg176 {
+    def tag: String = "reg176"
+}
+
+struct Reg177 {
+    width: Nat
+}
+
+impl Tag for Reg177 {
+    def tag: String = "reg177"
+}
+
+struct Reg178 {
+    width: Nat
+}
+
+impl Tag for Reg178 {
+    def tag: String = "reg178"
+}
+
+struct Reg179 {
+    width: Nat
+}
+
+impl Tag for Reg179 {
+    def tag: String = "reg179"
+}
+
+struct Reg180 {
+    width: Nat
+}
+
+impl Tag for Reg180 {
+    def tag: String = "reg180"
+}
+
+struct Reg181 {
+    width: Nat
+}
+
+impl Tag for Reg181 {
+    def tag: String = "reg181"
+}
+
+struct Reg182 {
+    width: Nat
+}
+
+impl Tag for Reg182 {
+    def tag: String = "reg182"
+}
+
+struct Reg183 {
+    width: Nat
+}
+
+impl Tag for Reg183 {
+    def tag: String = "reg183"
+}
+
+struct Reg184 {
+    width: Nat
+}
+
+impl Tag for Reg184 {
+    def tag: String = "reg184"
+}
+
+struct Reg185 {
+    width: Nat
+}
+
+impl Tag for Reg185 {
+    def tag: String = "reg185"
+}
+
+struct Reg186 {
+    width: Nat
+}
+
+impl Tag for Reg186 {
+    def tag: String = "reg186"
+}
+
+struct Reg187 {
+    width: Nat
+}
+
+impl Tag for Reg187 {
+    def tag: String = "reg187"
+}
+
+struct Reg188 {
+    width: Nat
+}
+
+impl Tag for Reg188 {
+    def tag: String = "reg188"
+}
+
+struct Reg189 {
+    width: Nat
+}
+
+impl Tag for Reg189 {
+    def tag: String = "reg189"
+}
+
+struct Reg190 {
+    width: Nat
+}
+
+impl Tag for Reg190 {
+    def tag: String = "reg190"
+}
+
+struct Reg191 {
+    width: Nat
+}
+
+impl Tag for Reg191 {
+    def tag: String = "reg191"
+}
+
+struct Reg192 {
+    width: Nat
+}
+
+impl Tag for Reg192 {
+    def tag: String = "reg192"
+}
+
+struct Reg193 {
+    width: Nat
+}
+
+impl Tag for Reg193 {
+    def tag: String = "reg193"
+}
+
+struct Reg194 {
+    width: Nat
+}
+
+impl Tag for Reg194 {
+    def tag: String = "reg194"
+}
+
+struct Reg195 {
+    width: Nat
+}
+
+impl Tag for Reg195 {
+    def tag: String = "reg195"
+}
+
+struct Reg196 {
+    width: Nat
+}
+
+impl Tag for Reg196 {
+    def tag: String = "reg196"
+}
+
+struct Reg197 {
+    width: Nat
+}
+
+impl Tag for Reg197 {
+    def tag: String = "reg197"
+}
+
+struct Reg198 {
+    width: Nat
+}
+
+impl Tag for Reg198 {
+    def tag: String = "reg198"
+}
+
+struct Reg199 {
+    width: Nat
+}
+
+impl Tag for Reg199 {
+    def tag: String = "reg199"
+}
+
+struct Reg200 {
+    width: Nat
+}
+
+impl Tag for Reg200 {
+    def tag: String = "reg200"
+}
+
+struct Reg201 {
+    width: Nat
+}
+
+impl Tag for Reg201 {
+    def tag: String = "reg201"
+}
+
+struct Reg202 {
+    width: Nat
+}
+
+impl Tag for Reg202 {
+    def tag: String = "reg202"
+}
+
+struct Reg203 {
+    width: Nat
+}
+
+impl Tag for Reg203 {
+    def tag: String = "reg203"
+}
+
+struct Reg204 {
+    width: Nat
+}
+
+impl Tag for Reg204 {
+    def tag: String = "reg204"
+}
+
+struct Reg205 {
+    width: Nat
+}
+
+impl Tag for Reg205 {
+    def tag: String = "reg205"
+}
+
+struct Reg206 {
+    width: Nat
+}
+
+impl Tag for Reg206 {
+    def tag: String = "reg206"
+}
+
+struct Reg207 {
+    width: Nat
+}
+
+impl Tag for Reg207 {
+    def tag: String = "reg207"
+}
+
+struct Reg208 {
+    width: Nat
+}
+
+impl Tag for Reg208 {
+    def tag: String = "reg208"
+}
+
+struct Reg209 {
+    width: Nat
+}
+
+impl Tag for Reg209 {
+    def tag: String = "reg209"
+}
+
+struct Reg210 {
+    width: Nat
+}
+
+impl Tag for Reg210 {
+    def tag: String = "reg210"
+}
+
+struct Reg211 {
+    width: Nat
+}
+
+impl Tag for Reg211 {
+    def tag: String = "reg211"
+}
+
+struct Reg212 {
+    width: Nat
+}
+
+impl Tag for Reg212 {
+    def tag: String = "reg212"
+}
+
+struct Reg213 {
+    width: Nat
+}
+
+impl Tag for Reg213 {
+    def tag: String = "reg213"
+}
+
+struct Reg214 {
+    width: Nat
+}
+
+impl Tag for Reg214 {
+    def tag: String = "reg214"
+}
+
+struct Reg215 {
+    width: Nat
+}
+
+impl Tag for Reg215 {
+    def tag: String = "reg215"
+}
+
+struct Reg216 {
+    width: Nat
+}
+
+impl Tag for Reg216 {
+    def tag: String = "reg216"
+}
+
+struct Reg217 {
+    width: Nat
+}
+
+impl Tag for Reg217 {
+    def tag: String = "reg217"
+}
+
+struct Reg218 {
+    width: Nat
+}
+
+impl Tag for Reg218 {
+    def tag: String = "reg218"
+}
+
+struct Reg219 {
+    width: Nat
+}
+
+impl Tag for Reg219 {
+    def tag: String = "reg219"
+}
+
+struct Reg220 {
+    width: Nat
+}
+
+impl Tag for Reg220 {
+    def tag: String = "reg220"
+}
+
+struct Reg221 {
+    width: Nat
+}
+
+impl Tag for Reg221 {
+    def tag: String = "reg221"
+}
+
+struct Reg222 {
+    width: Nat
+}
+
+impl Tag for Reg222 {
+    def tag: String = "reg222"
+}
+
+struct Reg223 {
+    width: Nat
+}
+
+impl Tag for Reg223 {
+    def tag: String = "reg223"
+}
+
+struct Reg224 {
+    width: Nat
+}
+
+impl Tag for Reg224 {
+    def tag: String = "reg224"
+}
+
+struct Reg225 {
+    width: Nat
+}
+
+impl Tag for Reg225 {
+    def tag: String = "reg225"
+}
+
+struct Reg226 {
+    width: Nat
+}
+
+impl Tag for Reg226 {
+    def tag: String = "reg226"
+}
+
+struct Reg227 {
+    width: Nat
+}
+
+impl Tag for Reg227 {
+    def tag: String = "reg227"
+}
+
+struct Reg228 {
+    width: Nat
+}
+
+impl Tag for Reg228 {
+    def tag: String = "reg228"
+}
+
+struct Reg229 {
+    width: Nat
+}
+
+impl Tag for Reg229 {
+    def tag: String = "reg229"
+}
+
+struct Reg230 {
+    width: Nat
+}
+
+impl Tag for Reg230 {
+    def tag: String = "reg230"
+}
+
+struct Reg231 {
+    width: Nat
+}
+
+impl Tag for Reg231 {
+    def tag: String = "reg231"
+}
+
+struct Reg232 {
+    width: Nat
+}
+
+impl Tag for Reg232 {
+    def tag: String = "reg232"
+}
+
+struct Reg233 {
+    width: Nat
+}
+
+impl Tag for Reg233 {
+    def tag: String = "reg233"
+}
+
+struct Reg234 {
+    width: Nat
+}
+
+impl Tag for Reg234 {
+    def tag: String = "reg234"
+}
+
+struct Reg235 {
+    width: Nat
+}
+
+impl Tag for Reg235 {
+    def tag: String = "reg235"
+}
+
+struct Reg236 {
+    width: Nat
+}
+
+impl Tag for Reg236 {
+    def tag: String = "reg236"
+}
+
+struct Reg237 {
+    width: Nat
+}
+
+impl Tag for Reg237 {
+    def tag: String = "reg237"
+}
+
+struct Reg238 {
+    width: Nat
+}
+
+impl Tag for Reg238 {
+    def tag: String = "reg238"
+}
+
+struct Reg239 {
+    width: Nat
+}
+
+impl Tag for Reg239 {
+    def tag: String = "reg239"
+}
+
+struct Reg240 {
+    width: Nat
+}
+
+impl Tag for Reg240 {
+    def tag: String = "reg240"
+}
+
+struct Reg241 {
+    width: Nat
+}
+
+impl Tag for Reg241 {
+    def tag: String = "reg241"
+}
+
+struct Reg242 {
+    width: Nat
+}
+
+impl Tag for Reg242 {
+    def tag: String = "reg242"
+}
+
+struct Reg243 {
+    width: Nat
+}
+
+impl Tag for Reg243 {
+    def tag: String = "reg243"
+}
+
+struct Reg244 {
+    width: Nat
+}
+
+impl Tag for Reg244 {
+    def tag: String = "reg244"
+}
+
+struct Reg245 {
+    width: Nat
+}
+
+impl Tag for Reg245 {
+    def tag: String = "reg245"
+}
+
+struct Reg246 {
+    width: Nat
+}
+
+impl Tag for Reg246 {
+    def tag: String = "reg246"
+}
+
+struct Reg247 {
+    width: Nat
+}
+
+impl Tag for Reg247 {
+    def tag: String = "reg247"
+}
+
+struct Reg248 {
+    width: Nat
+}
+
+impl Tag for Reg248 {
+    def tag: String = "reg248"
+}
+
+struct Reg249 {
+    width: Nat
+}
+
+impl Tag for Reg249 {
+    def tag: String = "reg249"
+}
+
+struct Reg250 {
+    width: Nat
+}
+
+impl Tag for Reg250 {
+    def tag: String = "reg250"
+}
+
+struct Reg251 {
+    width: Nat
+}
+
+impl Tag for Reg251 {
+    def tag: String = "reg251"
+}
+
+struct Reg252 {
+    width: Nat
+}
+
+impl Tag for Reg252 {
+    def tag: String = "reg252"
+}
+
+struct Reg253 {
+    width: Nat
+}
+
+impl Tag for Reg253 {
+    def tag: String = "reg253"
+}
+
+struct Reg254 {
+    width: Nat
+}
+
+impl Tag for Reg254 {
+    def tag: String = "reg254"
+}
+
+struct Reg255 {
+    width: Nat
+}
+
+impl Tag for Reg255 {
+    def tag: String = "reg255"
+}
+
+struct Reg256 {
+    width: Nat
+}
+
+impl Tag for Reg256 {
+    def tag: String = "reg256"
+}
+
+struct Reg257 {
+    width: Nat
+}
+
+impl Tag for Reg257 {
+    def tag: String = "reg257"
+}
+
+struct Reg258 {
+    width: Nat
+}
+
+impl Tag for Reg258 {
+    def tag: String = "reg258"
+}
+
+struct Reg259 {
+    width: Nat
+}
+
+impl Tag for Reg259 {
+    def tag: String = "reg259"
+}
+
+struct Reg260 {
+    width: Nat
+}
+
+impl Tag for Reg260 {
+    def tag: String = "reg260"
+}
+
+struct Reg261 {
+    width: Nat
+}
+
+impl Tag for Reg261 {
+    def tag: String = "reg261"
+}
+
+struct Reg262 {
+    width: Nat
+}
+
+impl Tag for Reg262 {
+    def tag: String = "reg262"
+}
+
+struct Reg263 {
+    width: Nat
+}
+
+impl Tag for Reg263 {
+    def tag: String = "reg263"
+}
+
+struct Reg264 {
+    width: Nat
+}
+
+impl Tag for Reg264 {
+    def tag: String = "reg264"
+}
+
+struct Reg265 {
+    width: Nat
+}
+
+impl Tag for Reg265 {
+    def tag: String = "reg265"
+}
+
+struct Reg266 {
+    width: Nat
+}
+
+impl Tag for Reg266 {
+    def tag: String = "reg266"
+}
+
+struct Reg267 {
+    width: Nat
+}
+
+impl Tag for Reg267 {
+    def tag: String = "reg267"
+}
+
+struct Reg268 {
+    width: Nat
+}
+
+impl Tag for Reg268 {
+    def tag: String = "reg268"
+}
+
+struct Reg269 {
+    width: Nat
+}
+
+impl Tag for Reg269 {
+    def tag: String = "reg269"
+}
+
+struct Reg270 {
+    width: Nat
+}
+
+impl Tag for Reg270 {
+    def tag: String = "reg270"
+}
+
+struct Reg271 {
+    width: Nat
+}
+
+impl Tag for Reg271 {
+    def tag: String = "reg271"
+}
+
+struct Reg272 {
+    width: Nat
+}
+
+impl Tag for Reg272 {
+    def tag: String = "reg272"
+}
+
+struct Reg273 {
+    width: Nat
+}
+
+impl Tag for Reg273 {
+    def tag: String = "reg273"
+}
+
+struct Reg274 {
+    width: Nat
+}
+
+impl Tag for Reg274 {
+    def tag: String = "reg274"
+}
+
+struct Reg275 {
+    width: Nat
+}
+
+impl Tag for Reg275 {
+    def tag: String = "reg275"
+}
+
+struct Reg276 {
+    width: Nat
+}
+
+impl Tag for Reg276 {
+    def tag: String = "reg276"
+}
+
+struct Reg277 {
+    width: Nat
+}
+
+impl Tag for Reg277 {
+    def tag: String = "reg277"
+}
+
+struct Reg278 {
+    width: Nat
+}
+
+impl Tag for Reg278 {
+    def tag: String = "reg278"
+}
+
+struct Reg279 {
+    width: Nat
+}
+
+impl Tag for Reg279 {
+    def tag: String = "reg279"
+}
+
+struct Reg280 {
+    width: Nat
+}
+
+impl Tag for Reg280 {
+    def tag: String = "reg280"
+}
+
+struct Reg281 {
+    width: Nat
+}
+
+impl Tag for Reg281 {
+    def tag: String = "reg281"
+}
+
+struct Reg282 {
+    width: Nat
+}
+
+impl Tag for Reg282 {
+    def tag: String = "reg282"
+}
+
+struct Reg283 {
+    width: Nat
+}
+
+impl Tag for Reg283 {
+    def tag: String = "reg283"
+}
+
+struct Reg284 {
+    width: Nat
+}
+
+impl Tag for Reg284 {
+    def tag: String = "reg284"
+}
+
+struct Reg285 {
+    width: Nat
+}
+
+impl Tag for Reg285 {
+    def tag: String = "reg285"
+}
+
+struct Reg286 {
+    width: Nat
+}
+
+impl Tag for Reg286 {
+    def tag: String = "reg286"
+}
+
+struct Reg287 {
+    width: Nat
+}
+
+impl Tag for Reg287 {
+    def tag: String = "reg287"
+}
+
+struct Reg288 {
+    width: Nat
+}
+
+impl Tag for Reg288 {
+    def tag: String = "reg288"
+}
+
+struct Reg289 {
+    width: Nat
+}
+
+impl Tag for Reg289 {
+    def tag: String = "reg289"
+}
+
+struct Reg290 {
+    width: Nat
+}
+
+impl Tag for Reg290 {
+    def tag: String = "reg290"
+}
+
+struct Reg291 {
+    width: Nat
+}
+
+impl Tag for Reg291 {
+    def tag: String = "reg291"
+}
+
+struct Reg292 {
+    width: Nat
+}
+
+impl Tag for Reg292 {
+    def tag: String = "reg292"
+}
+
+struct Reg293 {
+    width: Nat
+}
+
+impl Tag for Reg293 {
+    def tag: String = "reg293"
+}
+
+struct Reg294 {
+    width: Nat
+}
+
+impl Tag for Reg294 {
+    def tag: String = "reg294"
+}
+
+struct Reg295 {
+    width: Nat
+}
+
+impl Tag for Reg295 {
+    def tag: String = "reg295"
+}
+
+struct Reg296 {
+    width: Nat
+}
+
+impl Tag for Reg296 {
+    def tag: String = "reg296"
+}
+
+struct Reg297 {
+    width: Nat
+}
+
+impl Tag for Reg297 {
+    def tag: String = "reg297"
+}
+
+struct Reg298 {
+    width: Nat
+}
+
+impl Tag for Reg298 {
+    def tag: String = "reg298"
+}
+
+struct Reg299 {
+    width: Nat
+}
+
+impl Tag for Reg299 {
+    def tag: String = "reg299"
+}
+
+struct Reg300 {
+    width: Nat
+}
+
+impl Tag for Reg300 {
+    def tag: String = "reg300"
+}
+
+struct Reg301 {
+    width: Nat
+}
+
+impl Tag for Reg301 {
+    def tag: String = "reg301"
+}
+
+struct Reg302 {
+    width: Nat
+}
+
+impl Tag for Reg302 {
+    def tag: String = "reg302"
+}
+
+struct Reg303 {
+    width: Nat
+}
+
+impl Tag for Reg303 {
+    def tag: String = "reg303"
+}
+
+struct Reg304 {
+    width: Nat
+}
+
+impl Tag for Reg304 {
+    def tag: String = "reg304"
+}
+
+struct Reg305 {
+    width: Nat
+}
+
+impl Tag for Reg305 {
+    def tag: String = "reg305"
+}
+
+struct Reg306 {
+    width: Nat
+}
+
+impl Tag for Reg306 {
+    def tag: String = "reg306"
+}
+
+struct Reg307 {
+    width: Nat
+}
+
+impl Tag for Reg307 {
+    def tag: String = "reg307"
+}
+
+struct Reg308 {
+    width: Nat
+}
+
+impl Tag for Reg308 {
+    def tag: String = "reg308"
+}
+
+struct Reg309 {
+    width: Nat
+}
+
+impl Tag for Reg309 {
+    def tag: String = "reg309"
+}
+
+struct Reg310 {
+    width: Nat
+}
+
+impl Tag for Reg310 {
+    def tag: String = "reg310"
+}
+
+struct Reg311 {
+    width: Nat
+}
+
+impl Tag for Reg311 {
+    def tag: String = "reg311"
+}
+
+struct Reg312 {
+    width: Nat
+}
+
+impl Tag for Reg312 {
+    def tag: String = "reg312"
+}
+
+struct Reg313 {
+    width: Nat
+}
+
+impl Tag for Reg313 {
+    def tag: String = "reg313"
+}
+
+struct Reg314 {
+    width: Nat
+}
+
+impl Tag for Reg314 {
+    def tag: String = "reg314"
+}
+
+struct Reg315 {
+    width: Nat
+}
+
+impl Tag for Reg315 {
+    def tag: String = "reg315"
+}
+
+struct Reg316 {
+    width: Nat
+}
+
+impl Tag for Reg316 {
+    def tag: String = "reg316"
+}
+
+struct Reg317 {
+    width: Nat
+}
+
+impl Tag for Reg317 {
+    def tag: String = "reg317"
+}
+
+struct Reg318 {
+    width: Nat
+}
+
+impl Tag for Reg318 {
+    def tag: String = "reg318"
+}
+
+struct Reg319 {
+    width: Nat
+}
+
+impl Tag for Reg319 {
+    def tag: String = "reg319"
+}
+
+struct Reg320 {
+    width: Nat
+}
+
+impl Tag for Reg320 {
+    def tag: String = "reg320"
+}
+
+struct Reg321 {
+    width: Nat
+}
+
+impl Tag for Reg321 {
+    def tag: String = "reg321"
+}
+
+struct Reg322 {
+    width: Nat
+}
+
+impl Tag for Reg322 {
+    def tag: String = "reg322"
+}
+
+struct Reg323 {
+    width: Nat
+}
+
+impl Tag for Reg323 {
+    def tag: String = "reg323"
+}
+
+struct Reg324 {
+    width: Nat
+}
+
+impl Tag for Reg324 {
+    def tag: String = "reg324"
+}
+
+struct Reg325 {
+    width: Nat
+}
+
+impl Tag for Reg325 {
+    def tag: String = "reg325"
+}
+
+struct Reg326 {
+    width: Nat
+}
+
+impl Tag for Reg326 {
+    def tag: String = "reg326"
+}
+
+struct Reg327 {
+    width: Nat
+}
+
+impl Tag for Reg327 {
+    def tag: String = "reg327"
+}
+
+struct Reg328 {
+    width: Nat
+}
+
+impl Tag for Reg328 {
+    def tag: String = "reg328"
+}
+
+struct Reg329 {
+    width: Nat
+}
+
+impl Tag for Reg329 {
+    def tag: String = "reg329"
+}
+
+struct Reg330 {
+    width: Nat
+}
+
+impl Tag for Reg330 {
+    def tag: String = "reg330"
+}
+
+struct Reg331 {
+    width: Nat
+}
+
+impl Tag for Reg331 {
+    def tag: String = "reg331"
+}
+
+struct Reg332 {
+    width: Nat
+}
+
+impl Tag for Reg332 {
+    def tag: String = "reg332"
+}
+
+struct Reg333 {
+    width: Nat
+}
+
+impl Tag for Reg333 {
+    def tag: String = "reg333"
+}
+
+struct Reg334 {
+    width: Nat
+}
+
+impl Tag for Reg334 {
+    def tag: String = "reg334"
+}
+
+struct Reg335 {
+    width: Nat
+}
+
+impl Tag for Reg335 {
+    def tag: String = "reg335"
+}
+
+struct Reg336 {
+    width: Nat
+}
+
+impl Tag for Reg336 {
+    def tag: String = "reg336"
+}
+
+struct Reg337 {
+    width: Nat
+}
+
+impl Tag for Reg337 {
+    def tag: String = "reg337"
+}
+
+struct Reg338 {
+    width: Nat
+}
+
+impl Tag for Reg338 {
+    def tag: String = "reg338"
+}
+
+struct Reg339 {
+    width: Nat
+}
+
+impl Tag for Reg339 {
+    def tag: String = "reg339"
+}
+
+struct Reg340 {
+    width: Nat
+}
+
+impl Tag for Reg340 {
+    def tag: String = "reg340"
+}
+
+struct Reg341 {
+    width: Nat
+}
+
+impl Tag for Reg341 {
+    def tag: String = "reg341"
+}
+
+struct Reg342 {
+    width: Nat
+}
+
+impl Tag for Reg342 {
+    def tag: String = "reg342"
+}
+
+struct Reg343 {
+    width: Nat
+}
+
+impl Tag for Reg343 {
+    def tag: String = "reg343"
+}
+
+struct Reg344 {
+    width: Nat
+}
+
+impl Tag for Reg344 {
+    def tag: String = "reg344"
+}
+
+struct Reg345 {
+    width: Nat
+}
+
+impl Tag for Reg345 {
+    def tag: String = "reg345"
+}
+
+struct Reg346 {
+    width: Nat
+}
+
+impl Tag for Reg346 {
+    def tag: String = "reg346"
+}
+
+struct Reg347 {
+    width: Nat
+}
+
+impl Tag for Reg347 {
+    def tag: String = "reg347"
+}
+
+struct Reg348 {
+    width: Nat
+}
+
+impl Tag for Reg348 {
+    def tag: String = "reg348"
+}
+
+struct Reg349 {
+    width: Nat
+}
+
+impl Tag for Reg349 {
+    def tag: String = "reg349"
+}
+
+struct Reg350 {
+    width: Nat
+}
+
+impl Tag for Reg350 {
+    def tag: String = "reg350"
+}
+
+struct Reg351 {
+    width: Nat
+}
+
+impl Tag for Reg351 {
+    def tag: String = "reg351"
+}
+
+struct Reg352 {
+    width: Nat
+}
+
+impl Tag for Reg352 {
+    def tag: String = "reg352"
+}
+
+struct Reg353 {
+    width: Nat
+}
+
+impl Tag for Reg353 {
+    def tag: String = "reg353"
+}
+
+struct Reg354 {
+    width: Nat
+}
+
+impl Tag for Reg354 {
+    def tag: String = "reg354"
+}
+
+struct Reg355 {
+    width: Nat
+}
+
+impl Tag for Reg355 {
+    def tag: String = "reg355"
+}
+
+struct Reg356 {
+    width: Nat
+}
+
+impl Tag for Reg356 {
+    def tag: String = "reg356"
+}
+
+struct Reg357 {
+    width: Nat
+}
+
+impl Tag for Reg357 {
+    def tag: String = "reg357"
+}
+
+struct Reg358 {
+    width: Nat
+}
+
+impl Tag for Reg358 {
+    def tag: String = "reg358"
+}
+
+struct Reg359 {
+    width: Nat
+}
+
+impl Tag for Reg359 {
+    def tag: String = "reg359"
+}
+
+struct Reg360 {
+    width: Nat
+}
+
+impl Tag for Reg360 {
+    def tag: String = "reg360"
+}
+
+struct Reg361 {
+    width: Nat
+}
+
+impl Tag for Reg361 {
+    def tag: String = "reg361"
+}
+
+struct Reg362 {
+    width: Nat
+}
+
+impl Tag for Reg362 {
+    def tag: String = "reg362"
+}
+
+struct Reg363 {
+    width: Nat
+}
+
+impl Tag for Reg363 {
+    def tag: String = "reg363"
+}
+
+struct Reg364 {
+    width: Nat
+}
+
+impl Tag for Reg364 {
+    def tag: String = "reg364"
+}
+
+struct Reg365 {
+    width: Nat
+}
+
+impl Tag for Reg365 {
+    def tag: String = "reg365"
+}
+
+struct Reg366 {
+    width: Nat
+}
+
+impl Tag for Reg366 {
+    def tag: String = "reg366"
+}
+
+struct Reg367 {
+    width: Nat
+}
+
+impl Tag for Reg367 {
+    def tag: String = "reg367"
+}
+
+struct Reg368 {
+    width: Nat
+}
+
+impl Tag for Reg368 {
+    def tag: String = "reg368"
+}
+
+struct Reg369 {
+    width: Nat
+}
+
+impl Tag for Reg369 {
+    def tag: String = "reg369"
+}
+
+struct Reg370 {
+    width: Nat
+}
+
+impl Tag for Reg370 {
+    def tag: String = "reg370"
+}
+
+struct Reg371 {
+    width: Nat
+}
+
+impl Tag for Reg371 {
+    def tag: String = "reg371"
+}
+
+struct Reg372 {
+    width: Nat
+}
+
+impl Tag for Reg372 {
+    def tag: String = "reg372"
+}
+
+struct Reg373 {
+    width: Nat
+}
+
+impl Tag for Reg373 {
+    def tag: String = "reg373"
+}
+
+struct Reg374 {
+    width: Nat
+}
+
+impl Tag for Reg374 {
+    def tag: String = "reg374"
+}
+
+struct Reg375 {
+    width: Nat
+}
+
+impl Tag for Reg375 {
+    def tag: String = "reg375"
+}
+
+struct Reg376 {
+    width: Nat
+}
+
+impl Tag for Reg376 {
+    def tag: String = "reg376"
+}
+
+struct Reg377 {
+    width: Nat
+}
+
+impl Tag for Reg377 {
+    def tag: String = "reg377"
+}
+
+struct Reg378 {
+    width: Nat
+}
+
+impl Tag for Reg378 {
+    def tag: String = "reg378"
+}
+
+struct Reg379 {
+    width: Nat
+}
+
+impl Tag for Reg379 {
+    def tag: String = "reg379"
+}
+
+struct Reg380 {
+    width: Nat
+}
+
+impl Tag for Reg380 {
+    def tag: String = "reg380"
+}
+
+struct Reg381 {
+    width: Nat
+}
+
+impl Tag for Reg381 {
+    def tag: String = "reg381"
+}
+
+struct Reg382 {
+    width: Nat
+}
+
+impl Tag for Reg382 {
+    def tag: String = "reg382"
+}
+
+struct Reg383 {
+    width: Nat
+}
+
+impl Tag for Reg383 {
+    def tag: String = "reg383"
+}
+
+struct Reg384 {
+    width: Nat
+}
+
+impl Tag for Reg384 {
+    def tag: String = "reg384"
+}
+
+struct Reg385 {
+    width: Nat
+}
+
+impl Tag for Reg385 {
+    def tag: String = "reg385"
+}
+
+struct Reg386 {
+    width: Nat
+}
+
+impl Tag for Reg386 {
+    def tag: String = "reg386"
+}
+
+struct Reg387 {
+    width: Nat
+}
+
+impl Tag for Reg387 {
+    def tag: String = "reg387"
+}
+
+struct Reg388 {
+    width: Nat
+}
+
+impl Tag for Reg388 {
+    def tag: String = "reg388"
+}
+
+struct Reg389 {
+    width: Nat
+}
+
+impl Tag for Reg389 {
+    def tag: String = "reg389"
+}
+
+struct Reg390 {
+    width: Nat
+}
+
+impl Tag for Reg390 {
+    def tag: String = "reg390"
+}
+
+struct Reg391 {
+    width: Nat
+}
+
+impl Tag for Reg391 {
+    def tag: String = "reg391"
+}
+
+struct Reg392 {
+    width: Nat
+}
+
+impl Tag for Reg392 {
+    def tag: String = "reg392"
+}
+
+def sample_first = new Reg0(one)
+
+def sample_last = new Reg392(four)
+
+def last_nat: Nat = nat_add two two
+
+println (default_render sample_first)
+println (default_render sample_last)
+println last_nat

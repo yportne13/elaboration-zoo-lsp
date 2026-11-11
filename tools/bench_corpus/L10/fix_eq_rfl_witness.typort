@@ -1,0 +1,21 @@
+// extract fix: dependent Eq witness with rfl helper (missing `rfl` added)
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def two = succ (succ zero)
+
+enum Eq[A](x: A, y: A) {
+    refl[a: A] -> Eq[A] a a
+}
+
+def rfl[A, x: A]: Eq[A] x x = refl
+
+struct Sig[A] {
+    witness: A
+}
+
+def pf(e: Sig[Nat], p: Eq[Nat] (e.witness) (e.witness)): Eq[Nat] (e.witness) (e.witness) = p
+
+println (pf (new Sig(two)) rfl)

@@ -1,0 +1,191 @@
+// ladder_small.typort
+// Scale ladder for L10: a 18-unit tag-instance registry (same skeleton at
+// every size; only the registry block grows). Shape: Tag trait + dictionary
+// default renderer + one Tag instance per generated register struct.
+// Decl target: ~50 (actual: 52).
+
+def outParam[A](a: A): A = a
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def one: Nat = succ zero
+
+def two: Nat = succ one
+
+def three: Nat = succ two
+
+def four: Nat = succ three
+
+def nat_add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (nat_add n y)
+    }
+
+trait Tag {
+    def tag: String
+}
+
+impl Tag for Nat {
+    def tag: String = "nat"
+}
+
+def default_render[T][t: Tag[T]](x: T): String =
+    string_concat "render(" (string_concat (t.tag x) ")")
+
+struct Reg0 {
+    width: Nat
+}
+
+impl Tag for Reg0 {
+    def tag: String = "reg0"
+}
+
+struct Reg1 {
+    width: Nat
+}
+
+impl Tag for Reg1 {
+    def tag: String = "reg1"
+}
+
+struct Reg2 {
+    width: Nat
+}
+
+impl Tag for Reg2 {
+    def tag: String = "reg2"
+}
+
+struct Reg3 {
+    width: Nat
+}
+
+impl Tag for Reg3 {
+    def tag: String = "reg3"
+}
+
+struct Reg4 {
+    width: Nat
+}
+
+impl Tag for Reg4 {
+    def tag: String = "reg4"
+}
+
+struct Reg5 {
+    width: Nat
+}
+
+impl Tag for Reg5 {
+    def tag: String = "reg5"
+}
+
+struct Reg6 {
+    width: Nat
+}
+
+impl Tag for Reg6 {
+    def tag: String = "reg6"
+}
+
+struct Reg7 {
+    width: Nat
+}
+
+impl Tag for Reg7 {
+    def tag: String = "reg7"
+}
+
+struct Reg8 {
+    width: Nat
+}
+
+impl Tag for Reg8 {
+    def tag: String = "reg8"
+}
+
+struct Reg9 {
+    width: Nat
+}
+
+impl Tag for Reg9 {
+    def tag: String = "reg9"
+}
+
+struct Reg10 {
+    width: Nat
+}
+
+impl Tag for Reg10 {
+    def tag: String = "reg10"
+}
+
+struct Reg11 {
+    width: Nat
+}
+
+impl Tag for Reg11 {
+    def tag: String = "reg11"
+}
+
+struct Reg12 {
+    width: Nat
+}
+
+impl Tag for Reg12 {
+    def tag: String = "reg12"
+}
+
+struct Reg13 {
+    width: Nat
+}
+
+impl Tag for Reg13 {
+    def tag: String = "reg13"
+}
+
+struct Reg14 {
+    width: Nat
+}
+
+impl Tag for Reg14 {
+    def tag: String = "reg14"
+}
+
+struct Reg15 {
+    width: Nat
+}
+
+impl Tag for Reg15 {
+    def tag: String = "reg15"
+}
+
+struct Reg16 {
+    width: Nat
+}
+
+impl Tag for Reg16 {
+    def tag: String = "reg16"
+}
+
+struct Reg17 {
+    width: Nat
+}
+
+impl Tag for Reg17 {
+    def tag: String = "reg17"
+}
+
+def sample_first = new Reg0(one)
+
+def sample_last = new Reg17(four)
+
+def last_nat: Nat = nat_add two two
+
+println (default_render sample_first)
+println (default_render sample_last)
+println last_nat

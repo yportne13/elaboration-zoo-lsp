@@ -1,0 +1,31 @@
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Vec[A](len: Nat) {
+    nil -> Vec[A] zero
+    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
+}
+
+def two = succ (succ zero)
+
+def t = cons zero (cons two nil)
+
+def head[T, L: Nat](x: Vec[T] (succ L)): T =
+    match x {
+        case cons(x, _) => x
+    }
+
+def length[T, l: Nat](x: Vec[T] l): Nat =
+    match x {
+        case nil => zero
+        case cons(_, xs) => succ (xs.len)
+    }
+
+println t.len
+println (cons two nil).len
+println (head (cons zero nil))
+println (head (cons (succ (succ zero)) nil))
+println (length (cons zero (cons two nil)))

@@ -1,0 +1,12 @@
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def ttt =
+    let useless1 = create_global "Nat" 2;
+    let useless2 = change_mutable("Nat", z => succ(z));
+    get_global "Nat"
+
+println ttt

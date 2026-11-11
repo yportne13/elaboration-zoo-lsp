@@ -1,0 +1,15 @@
+enum Nat {{
+    zero
+    succ(x: Nat)
+}}
+
+enum W(f: Nat -> Nat) {{
+    big(a: Nat, b: Nat, c: Nat, d: Nat) -> W (\n => succ zero)
+    mk -> W (\n => succ zero)
+    ident -> W (\n => n)
+}}
+
+def t(w: W (\n => succ zero)): Nat =
+    match w {{
+        {arms}
+    }}
