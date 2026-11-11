@@ -1183,9 +1183,7 @@ impl Infer {
         //println!("{} {:?}", "quote".green(), t);
         let t = self.force(t);
         match t {
-            Val::Sum(..) | Val::SumCase { .. } | Val::Obj(..) if deep_chain(&t) => {
-                self.quote_deep(l, t)
-            }
+            Val::Sum(..) | Val::SumCase { .. } | Val::Obj(..) => self.quote_deep(l, t),
             // 正常路径 force 后顶层不会是 VSub；fuel 耗尽时 force 原样返回
             // VSub——解包打印内层（σ 未推开，保真度同旧版"打印未展开 rigid"）。
             // 必须 **move**（不能 clone）：深 Box 链的 clone 是递归深拷贝。

@@ -272,9 +272,7 @@ impl Infer {
         match v {
             // 只有可能深的值才走帧式收集器；浅值走直接递归臂（同 quote 的
             // `deep_chain` 探测——避免给每一层 Sum/SumCase 付帧分配）
-            Val::Sum(..) | Val::SumCase { .. } | Val::Obj(..) if super::deep_chain(&v) => {
-                self.rename_deep(pren, v)
-            }
+            Val::Sum(..) | Val::SumCase { .. } | Val::Obj(..) => self.rename_deep(pren, v),
             _ => self.rename_arm(pren, v),
         }
     }
