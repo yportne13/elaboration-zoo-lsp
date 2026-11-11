@@ -88,7 +88,12 @@ impl Infer {
         sp: Spine,
     ) -> Result<(PartialRenaming, Option<Pruning>), UnifyError> {
         //println!("{} {:?} {:?}", "invert".green(), gamma, sp);
-        let (dom, ren, nlvars, fsp) = self.invert_go(sp)?;
+        // spine 不可逆 = 判不出来（不是结构矛盾）：P3 记 Undecided，对齐 L07
+        // "rename/invert/solve 族失败一律 Undecided" 的口径。
+        let (dom, ren, nlvars, fsp) = self.invert_go(sp).map_err(|e| {
+            self.note_unify_kind(super::UnifyKind::Undecided);
+            e
+        })?;
 
         Ok((
             PartialRenaming {
@@ -132,7 +137,11 @@ impl Infer {
                 let b = self.closure_apply(&b, Val::vvar(pren.cod));
                 self.prune_ty_go(rest, &skip(pren), b)
             }
-            _ => Err(UnifyError), // impossible case
+            _ => {
+                // 掩码与 Π 层对不上：判不出来（P3：Undecided）
+                self.note_unify_kind(super::UnifyKind::Undecided);
+                Err(UnifyError) // impossible case
+            }
         }
     }
     pub fn prune_ty(&mut self, pr: &Pruning, a: Val) -> Result<Tm, UnifyError> {
@@ -468,11 +477,17 @@ impl Infer {
                 Err(UnifyError)
             }
             Val::Flex(m_prime, sp) => match pren.occ {
-                Some(m) if m == m_prime => Err(UnifyError),
+                // occurs 命中（解里出现被解 meta 自身）：判不出来，不是矛盾
+                Some(m) if m == m_prime => {
+                    self.note_unify_kind(super::UnifyKind::Undecided);
+                    Err(UnifyError)
+                }
                 _ => self.prune_vflex(pren, m_prime, sp),
             },
             Val::Rigid(x, sp) => match pren.ren.get(&x.0) {
+                // 作用域失配（层级不在 renaming 域内）：判不出来（P3）
                 None => if x.0 < 1919810 {
+                    self.note_unify_kind(super::UnifyKind::Undecided);
                     Err(UnifyError)
                 } else {
                     let t = Tm::Var(lvl2ix(pren.dom, x));
