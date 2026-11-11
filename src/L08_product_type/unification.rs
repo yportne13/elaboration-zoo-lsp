@@ -21,11 +21,11 @@ use std::rc::Rc;
 
 use smol_str::SmolStr;
 
-use crate::list::List;
+use crate::{list::List, parser_lib::Span};
 
 use super::{
     pretty::pretty_tm,
-    v_applicable, val_mentions_lvl, wrap_sub, Infer, Lvl, MetaEntry, MetaVar, PatternDetail, Spine,
+    v_applicable, wrap_sub, val_mentions_lvl, Infer, Lvl, MetaEntry, MetaVar, PatternDetail, Spine,
     Subst, Tm, UnifyError, Val, VTy,
     cxt::{Cxt, Decls},
     lvl2ix,
@@ -55,23 +55,41 @@ struct PartialRenaming {
     ren: HashMap<u32, Lvl>, // Δ 变量 → Γ 变量
 }
 
-fn lift(pr: &PartialRenaming) -> PartialRenaming {
-    let mut new_ren = pr.ren.clone();
-    new_ren.insert(pr.cod.0, pr.dom);
-    PartialRenaming {
-        occ: pr.occ,
-        dom: pr.dom + 1,
-        cod: pr.cod + 1,
-        ren: new_ren,
-    }
+/// lift / skip 的性能口径（性能评审 P1-1）：旧版每 binder 克隆整张
+/// `ren` HashMap（O(n·k) 哈希 + n 次分配，rename 单分支 O(bind²)）。现为
+/// **原位插入 + 按值转移**：
+/// - `lift_in_place` 在独占表上追加一个绑定器槽，O(1)；
+/// - `lift` / `skip` 按值消费——调用方持有独占表（线性递归 / 每臂私有
+///   副本）时零克隆；
+/// - `rename_arm` 的 Lam/Pi 臂只有**借用**（兄弟子树复用同一 renaming），
+///   用"原位插入 + 递归后回滚"（[`Self::unlift`]）达成同款零克隆——回滚
+///   保证兄弟子树看到的表与克隆版 lift 的临时副本逐位一致。
+fn lift_in_place(pr: &mut PartialRenaming) {
+    pr.ren.insert(pr.cod.0, pr.dom);
+    pr.dom = pr.dom + 1;
+    pr.cod = pr.cod + 1;
 }
 
-fn skip(pr: &PartialRenaming) -> PartialRenaming {
-    PartialRenaming {
-        occ: pr.occ,
-        dom: pr.dom,
-        cod: pr.cod + 1,
-        ren: pr.ren.clone(),
+fn lift(mut pr: PartialRenaming) -> PartialRenaming {
+    lift_in_place(&mut pr);
+    pr
+}
+
+fn skip(mut pr: PartialRenaming) -> PartialRenaming {
+    pr.cod = pr.cod + 1;
+    pr
+}
+
+/// lift 原位插入的回滚：恢复槽位旧值（无旧值则移除）——调用点保证插入/
+/// 回滚配对，兄弟子树看到的表与克隆版 lift 语义逐位一致。
+fn unlift(pr: &mut PartialRenaming, key: u32, prev: Option<Lvl>) {
+    match prev {
+        Some(v) => {
+            pr.ren.insert(key, v);
+        }
+        None => {
+            pr.ren.remove(&key);
+        }
     }
 }
 
@@ -103,7 +121,12 @@ impl Infer {
                             Ok((dom + 1, ren, nlvars, fsp.prepend((x, a.head().unwrap().1))))
                         }
                     }
-                    _ => Err(UnifyError),
+                    _ => {
+                        // 不可逆的 spine（实参不是裸 rigid）：解不出来 ≠ 矛盾。
+                        // P3 第二刀：rename/invert/solve 族的失败一律 Undecided。
+                        self.note_unify_kind(super::UnifyKind::Undecided);
+                        Err(UnifyError)
+                    }
                 }
             }
         }
@@ -141,25 +164,31 @@ impl Infer {
         &mut self,
         decl: &Decls,
         rev: &[Option<Icit>],
-        pren: &PartialRenaming,
+        // 按值持有：本递归是线性的（每层 lift/skip 后旧表不再使用），
+        // lift/skip 原位插入零克隆（P1-1）。
+        mut pren: PartialRenaming,
         a: Val,
     ) -> Result<Tm, UnifyError> {
         // 掩码按"外→内"配对 Π 层：`rev` 头 = 最外层槽位（`prune_ty` 已把
         // Pruning 反转——List 头是最内层）。旧实现直接按链头配对外层 Π，
         // 多层 telescope + 混合掩码时掩码与 Π 层错位（L05 已修的同款）。
         match (rev.split_first(), self.force(decl, a)) {
-            (None, a) => self.rename(decl, pren, a),
+            (None, a) => self.rename(decl, &mut pren, a),
             (Some((Some(_), rest)), Val::Pi(x, i, a, b)) => {
-                let a = self.rename(decl, pren, (*a).clone())?;
+                let a = self.rename(decl, &mut pren, (*a).clone())?;
                 let b = self.closure_apply(decl, &b, Val::vvar(pren.cod));
-                let b = self.prune_ty_go(decl, rest, &lift(pren), b)?;
+                let b = self.prune_ty_go(decl, rest, lift(pren), b)?;
                 Ok(Tm::Pi(x, i, Rc::new(a), Rc::new(b)))
             }
-            (Some((None, rest)), Val::Pi(x, i, _, b)) => {
+            (Some((None, rest)), Val::Pi(_, _, _, b)) => {
                 let b = self.closure_apply(decl, &b, Val::vvar(pren.cod));
-                self.prune_ty_go(decl, rest, &skip(pren), b)
+                self.prune_ty_go(decl, rest, skip(pren), b)
             }
-            _ => Err(UnifyError),
+            _ => {
+                // 剪枝时类型形状与 Pruning 不符：解不出来，不是矛盾。
+                self.note_unify_kind(super::UnifyKind::Undecided);
+                Err(UnifyError)
+            }
         }
     }
 
@@ -171,7 +200,7 @@ impl Infer {
         self.prune_ty_go(
             decl,
             &rev,
-            &PartialRenaming {
+            PartialRenaming {
                 occ: None,
                 dom: Lvl(0),
                 cod: Lvl(0),
@@ -187,32 +216,33 @@ impl Infer {
             // force 在 fuel 耗尽时会把已解 meta 当未解返回（拒绝展开），
             // 随后走到的剪枝/求解按合一失败降级，不 panic——与"fuel 耗尽
             // 按未解失败"的既有降级故事一致（窗口：恰在 1→0 递减帧内）
-            _ => return Err(UnifyError),
+            _ => {
+                // meta 已解（或 fuel 耗尽窗口把它当未解）：降级失败，非矛盾。
+                self.note_unify_kind(super::UnifyKind::Undecided);
+                return Err(UnifyError);
+            }
         };
 
         let prune_ty = self.prune_ty(decl, &pruning, mty.clone())?;
-        let prunedty = self.eval(decl, &List::new(), prune_ty);
+        let prunedty = self.eval(decl, &List::new(), &prune_ty);
         let m_prime = self.new_meta(prunedty);
 
-        let solution = self.eval(
+        let sol_tm = self.lams(
             decl,
-            &List::new(),
-            self.lams(
-                decl,
-                Lvl(pruning.len() as u32),
-                mty.clone(),
-                Tm::AppPruning(Box::new(Tm::Meta(m_prime)), pruning),
-            ),
+            Lvl(pruning.len() as u32),
+            mty.clone(),
+            Tm::AppPruning(Box::new(Tm::Meta(m_prime)), pruning),
         );
+        let solution = self.eval(decl, &List::new(), &sol_tm);
 
-        self.meta[m.0 as usize] = MetaEntry::Solved(solution, mty);
+        self.overwrite_meta(m, MetaEntry::Solved(solution, mty));
         Ok(m_prime)
     }
 
     fn prune_vflex_go(
         &mut self,
         decl: &Decls,
-        pren: &PartialRenaming,
+        pren: &mut PartialRenaming,
         sp: Spine,
     ) -> Result<(List<(Option<Tm>, Icit)>, SpinePruneStatus), UnifyError> {
         if sp.head().is_none() {
@@ -225,14 +255,21 @@ impl Infer {
                         sp_rest.prepend((Some(Tm::Var(lvl2ix(pren.dom, *x))), sp.head().unwrap().1)),
                         status,
                     )),
-                    (None, SpinePruneStatus::OKNonRenaming) => Err(UnifyError),
+                    (None, SpinePruneStatus::OKNonRenaming) => {
+                    // 非线性实参无法剪掉：解不出来。
+                    self.note_unify_kind(super::UnifyKind::Undecided);
+                    Err(UnifyError)
+                }
                     (None, _) => Ok((
                         sp_rest.prepend((None, sp.head().unwrap().1)),
                         SpinePruneStatus::NeedsPruning,
                     )),
                 },
                 t => match status {
-                    SpinePruneStatus::NeedsPruning => Err(UnifyError),
+                    SpinePruneStatus::NeedsPruning => {
+                        self.note_unify_kind(super::UnifyKind::Undecided);
+                        Err(UnifyError)
+                    }
                     _ => {
                         let t = self.rename(decl, pren, t)?;
                         Ok((
@@ -248,7 +285,7 @@ impl Infer {
     fn prune_vflex(
         &mut self,
         decl: &Decls,
-        pren: &PartialRenaming,
+        pren: &mut PartialRenaming,
         m: MetaVar,
         sp: Spine,
     ) -> Result<Tm, UnifyError> {
@@ -260,7 +297,10 @@ impl Infer {
                     MetaEntry::Unsolved(_) => m,
                     // fuel 耗尽窗口（同 prune_meta 注）：已解 meta 被 force
                     // 当未解返回后走到这里，按失败降级
-                    _ => return Err(UnifyError),
+                    _ => {
+                        self.note_unify_kind(super::UnifyKind::Undecided);
+                        return Err(UnifyError);
+                    }
                 }
             }
             SpinePruneStatus::NeedsPruning => {
@@ -284,7 +324,13 @@ impl Infer {
         Ok(t)
     }
 
-    fn rename_sp(&mut self, decl: &Decls, pren: &PartialRenaming, t: Tm, sp: &Spine) -> Result<Tm, UnifyError> {
+    fn rename_sp(
+        &mut self,
+        decl: &Decls,
+        pren: &mut PartialRenaming,
+        t: Tm,
+        sp: &Spine,
+    ) -> Result<Tm, UnifyError> {
         match sp {
             List { head: None, .. } => Ok(t),
             a => {
@@ -295,7 +341,7 @@ impl Infer {
         }
     }
 
-    fn rename(&mut self, decl: &Decls, pren: &PartialRenaming, t: Val) -> Result<Tm, UnifyError> {
+    fn rename(&mut self, decl: &Decls, pren: &mut PartialRenaming, t: Val) -> Result<Tm, UnifyError> {
         static REN_DEPTH: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         if super::LOOP_DEBUG.load(std::sync::atomic::Ordering::Relaxed) {
             let d = REN_DEPTH.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
@@ -310,100 +356,310 @@ impl Infer {
             }
             let _g = G;
         }
-        match self.force(decl, t) {
+        let v = self.force(decl, t);
+        // 深链分派（README §7.6，2026-09-18）：Sum / SumCase / Obj 是唯一能
+        // 按值深度自嵌的形态（succ^N 链经 datas[0]），交给帧式收集器
+        // [`Self::rename_deep`]；其余形态（Lam/Pi/Match/spine 头——结构嵌套
+        // 浅）回落 [`Self::rename_arm`]，其子值调用点回到本入口——深链在
+        // 任意深度进入收集器后整链消化，native 栈深 = 结构嵌套而非值深。
+        match v {
+            Val::Sum(..) | Val::SumCase { .. } | Val::Obj(..) => {
+                self.rename_deep(decl, pren, v)
+            }
+            _ => self.rename_arm(decl, pren, v),
+        }
+    }
+
+    /// rename 的深链收集器：Sum / SumCase / Obj 帧式下降/组装（子件顺序、
+    /// App 折叠序与旧递归臂逐点一致——rename_sp 的应用序 = spine List
+    /// 尾先头后）。子件回落 [`Self::rename_arm`]（同 pren，无 lift——
+    /// 对齐旧臂：Sum 参数/SumCase 字段/Obj 内层与实参都在同一 renaming 下）。
+    fn rename_deep(
+        &mut self,
+        decl: &Decls,
+        pren: &mut PartialRenaming,
+        root: Val,
+    ) -> Result<Tm, UnifyError> {
+        enum FrameKind {
+            Sum {
+                name: Span<String>,
+                cases: Vec<Span<String>>,
+                metas: Vec<(Span<String>, Icit)>,
+            },
+            SumCase {
+                case_name: Span<String>,
+                datas_metas: Vec<(Span<String>, Icit)>,
+            },
+            Obj {
+                name: Span<String>,
+            },
+        }
+        // 帧**不**持有 renaming：深链所有帧共用调用方的同一 pren（子件
+        // 无 lift），rename_arm 的 Lam/Pi 原位 lift 自带回滚，帧间无痕
+        // （P1-1： pren 由 &mut 穿线，不再克隆进帧）。
+        struct Frame {
+            pending: Vec<Val>,
+            icits: Vec<Icit>,
+            kind: FrameKind,
+            done: Vec<Tm>,
+            idx: usize,
+        }
+        fn frame_new(v: Val) -> Frame {
+            match v {
+                Val::Sum(name, params, cases) => {
+                    let mut pending = Vec::with_capacity(params.len() * 2);
+                    let mut metas = Vec::with_capacity(params.len());
+                    for (n, v, t, i) in params.iter() {
+                        pending.push(super::rc_take(v.clone()));
+                        pending.push(super::rc_take(t.clone()));
+                        metas.push((n.clone(), *i));
+                    }
+                    let n_all = pending.len();
+                    Frame {
+                        pending,
+                        icits: Vec::new(),
+                        kind: FrameKind::Sum { name, cases: (*cases).clone(), metas },
+                        done: Vec::with_capacity(n_all),
+                        idx: 0,
+                    }
+                }
+                Val::SumCase {
+                    typ,
+                    case_name,
+                    datas,
+                } => {
+                    let mut pending = Vec::with_capacity(datas.len() + 1);
+                    pending.push(super::rc_take(typ));
+                    let mut datas_metas = Vec::with_capacity(datas.len());
+                    for (n, v, i) in datas.iter() {
+                        pending.push(super::rc_take(v.clone()));
+                        datas_metas.push((n.clone(), *i));
+                    }
+                    let n_all = pending.len();
+                    Frame {
+                        pending,
+                        icits: Vec::new(),
+                        kind: FrameKind::SumCase {
+                            case_name,
+                            datas_metas,
+                        },
+                        done: Vec::with_capacity(n_all),
+                        idx: 0,
+                    }
+                }
+                Val::Obj(x, name, sp) => {
+                    // pending = [被投影者, spine 实参…]；实参按 List 头→尾序
+                    // 入列（头 = 最外层 App），组装时逆序折叠 = rename_sp 的
+                    // 应用序（List 尾的实参最先应用）
+                    let mut pending = vec![(*x).clone()];
+                    let mut icits = Vec::new();
+                    for (u, i) in sp.iter() {
+                        pending.push(u.clone());
+                        icits.push(*i);
+                    }
+                    let n_all = pending.len();
+                    Frame {
+                        pending,
+                        icits,
+                        kind: FrameKind::Obj { name },
+                        done: Vec::with_capacity(n_all),
+                        idx: 0,
+                    }
+                }
+                _ => unreachable!("rename_deep 只接受 Sum/SumCase/Obj"),
+            }
+        }
+        fn frame_assemble(frame: Frame) -> Tm {
+            match frame.kind {
+                FrameKind::Sum { name, cases, metas } => {
+                    let mut it = frame.done.into_iter();
+                    let params = metas
+                        .into_iter()
+                        .map(|(n, i)| {
+                            let v = it.next().unwrap();
+                            let t = it.next().unwrap();
+                            (n, v, t, i)
+                        })
+                        .collect();
+                    Tm::Sum(name, params, cases)
+                }
+                FrameKind::SumCase {
+                    case_name,
+                    datas_metas,
+                } => {
+                    let mut it = frame.done.into_iter();
+                    let typ = it.next().unwrap();
+                    let datas = datas_metas
+                        .into_iter()
+                        .map(|(n, i)| (n, it.next().unwrap(), i))
+                        .collect();
+                    Tm::SumCase {
+                        typ: Box::new(typ),
+                        case_name,
+                        datas,
+                    }
+                }
+                FrameKind::Obj { name } => {
+                    let mut it = frame.done.into_iter();
+                    let head = Tm::Obj(Box::new(it.next().unwrap()), name);
+                    let args: Vec<Tm> = it.collect();
+                    let mut acc = head;
+                    for (u, i) in args.into_iter().zip(frame.icits).rev() {
+                        acc = Tm::App(Box::new(acc), Box::new(u), i);
+                    }
+                    acc
+                }
+            }
+        }
+        let mut frames: Vec<Frame> = vec![frame_new(root)];
+        let mut result: Option<Tm> = None;
+        while let Some(frame) = frames.last_mut() {
+            if frame.idx == frame.pending.len() {
+                let frame = frames.pop().unwrap();
+                let tm = frame_assemble(frame);
+                match frames.last_mut() {
+                    Some(parent) => {
+                        parent.done.push(tm);
+                        parent.idx += 1;
+                    }
+                    None => result = Some(tm),
+                }
+                continue;
+            }
+            let w = frame.pending[frame.idx].clone();
+            let w = self.force(decl, w);
+            match w {
+                Val::Sum(..) | Val::SumCase { .. } | Val::Obj(..) => {
+                    // 子帧组装回填时推进本帧 idx
+                    frames.push(frame_new(w));
+                }
+                _ => {
+                    let tm = self.rename_arm(decl, pren, w)?;
+                    let frame = frames.last_mut().unwrap();
+                    frame.done.push(tm);
+                    frame.idx += 1;
+                }
+            }
+        }
+        Ok(result.expect("rename_deep 至少产出一个 Tm"))
+    }
+
+    /// rename 的浅结构臂（入口已 force、已分派掉深链形态）。
+    fn rename_arm(&mut self, decl: &Decls, pren: &mut PartialRenaming, t: Val) -> Result<Tm, UnifyError> {
+        match t {
             // 不变式：force 的返回值顶层不会是 VSub（入口已推开）
-            Val::VSub(..) => Err(UnifyError),
+            Val::VSub(..) => {
+                // 不变式被破（force 后顶层仍是 VSub）：判不出来，不是矛盾。
+                self.note_unify_kind(super::UnifyKind::Undecided);
+                Err(UnifyError)
+            }
+            // 深链形态在入口已分派给 rename_deep，这里不可达；与 VSub 臂
+            // 同样的防御性回落（不改写值，直接失败交上层诊断）
+            Val::Sum(..) | Val::SumCase { .. } | Val::Obj(..) => {
+                self.note_unify_kind(super::UnifyKind::Undecided);
+                Err(UnifyError)
+            }
             Val::Flex(m_prime, sp) => match pren.occ {
-                Some(m) if m == m_prime => Err(UnifyError),
+                Some(m) if m == m_prime => {
+                    // 要 rename 的值提到正在求解的 meta 本身（rename 视角的
+                    // occurs）：解不出来，不是矛盾。
+                    self.note_unify_kind(super::UnifyKind::Undecided);
+                    Err(UnifyError)
+                }
                 _ => self.prune_vflex(decl, pren, m_prime, sp),
             },
             Val::Rigid(x, sp) => match pren.ren.get(&x.0) {
-                None => Err(UnifyError), // scope error
+                None => {
+                    // 作用域越界：目标上下文无法表达该变量（Agda 同情境报
+                    // "cannot generalize"/blocked，而非矛盾）。
+                    self.note_unify_kind(super::UnifyKind::Undecided);
+                    Err(UnifyError)
+                } // scope error
                 Some(x_prime) => {
                     let t = Tm::Var(lvl2ix(pren.dom, *x_prime));
                     self.rename_sp(decl, pren, t, &sp)
                 }
             },
             Val::Decl(name, sp) => self.rename_sp(decl, pren, Tm::Decl(name), &sp),
-            Val::Obj(x, name, sp) => {
-                let t = Tm::Obj(Box::new(self.rename(decl, pren, (*x).clone())?), name);
-                self.rename_sp(decl, pren, t, &sp)
-            }
             Val::Lam(x, i, closure) => {
-                let t = self.rename(
-                    decl,
-                    &lift(pren),
-                    self.closure_apply(decl, &closure, Val::vvar(pren.cod)),
-                )?;
+                let body_v = self.closure_apply(decl, &closure, Val::vvar(pren.cod));
+                // lift 原位 + 递归后回滚（P1-1）：兄弟子树复用同一张表，
+                // 回滚后与"克隆版 lift 的临时副本"逐位一致；Err 路径同样
+                // 回滚（错误沿栈传播，pren 不再复用，回滚只为不变式干净）。
+                let key = pren.cod.0;
+                let prev = pren.ren.insert(key, pren.dom);
+                pren.dom = pren.dom + 1;
+                pren.cod = pren.cod + 1;
+                let t = match self.rename(decl, pren, body_v) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        unlift(pren, key, prev);
+                        pren.dom = pren.dom - 1;
+                        pren.cod = pren.cod - 1;
+                        return Err(e);
+                    }
+                };
+                unlift(pren, key, prev);
+                pren.dom = pren.dom - 1;
+                pren.cod = pren.cod - 1;
                 Ok(Tm::Lam(x, i, Rc::new(t)))
             }
             Val::Pi(x, i, a, closure) => {
                 let a = self.rename(decl, pren, (*a).clone())?;
-                let b = self.rename(
-                    decl,
-                    &lift(pren),
-                    self.closure_apply(decl, &closure, Val::vvar(pren.cod)),
-                )?;
+                let body_v = self.closure_apply(decl, &closure, Val::vvar(pren.cod));
+                // lift 原位 + 回滚（同 Lam 臂）
+                let key = pren.cod.0;
+                let prev = pren.ren.insert(key, pren.dom);
+                pren.dom = pren.dom + 1;
+                pren.cod = pren.cod + 1;
+                let b = match self.rename(decl, pren, body_v) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        unlift(pren, key, prev);
+                        pren.dom = pren.dom - 1;
+                        pren.cod = pren.cod - 1;
+                        return Err(e);
+                    }
+                };
+                unlift(pren, key, prev);
+                pren.dom = pren.dom - 1;
+                pren.cod = pren.cod - 1;
                 Ok(Tm::Pi(x, i, Rc::new(a), Rc::new(b)))
             }
             Val::U => Ok(Tm::U),
             Val::LiteralType => Ok(Tm::LiteralType),
             Val::LiteralIntro(x) => Ok(Tm::LiteralIntro(x)),
             Val::Prim(name, sp) => self.rename_sp(decl, pren, Tm::Prim(name), &sp),
-            Val::Sum(name, params, cases) => {
-                let new_params = params
-                    .iter()
-                    .map(|(n, v, t, i)| {
-                        Ok((
-                            n.clone(),
-                            self.rename(decl, pren, super::rc_take(v.clone()))?,
-                            self.rename(decl, pren, super::rc_take(t.clone()))?,
-                            *i,
-                        ))
-                    })
-                    .collect::<Result<Vec<_>, UnifyError>>()?;
-                Ok(Tm::Sum(name, new_params, (*cases).clone()))
-            }
-            Val::SumCase {
-                typ,
-                case_name,
-                datas,
-            } => {
-                let typ = self.rename(decl, pren, super::rc_take(typ))?;
-                let datas = datas
-                    .iter()
-                    .map(|(n, v, i)| Ok((n.clone(), self.rename(decl, pren, super::rc_take(v.clone()))?, *i)))
-                    .collect::<Result<Vec<_>, UnifyError>>()?;
-                Ok(Tm::SumCase {
-                    typ: Box::new(typ),
-                    case_name,
-                    datas,
-                })
-            }
             Val::Match(val, env, cases, pending) => {
                 // 分支体是裸 Tm：先在"捕获 env + fresh rigid 槽"下重新求值
                 // （简化 decl 表防重展开），再在 lift 过的 renaming 下 rename
                 let val = self.rename(decl, pren, (*val).clone())?;
-                let declb = super::simpl_decl(decl);
+                // P1-2：简化表旁路缓存（同实例只构建一次）
+                let declb = self.simpl_decl_cached(decl);
                 let cases = cases
                     .iter()
                     .map(|(pat, tm)| {
                         let count = pat.bind_count();
-                        let (env, pren) = (0..count).fold(
-                            (env.clone(), pren.clone()),
-                            |(env, pren), _| (env.prepend(Val::vvar(pren.cod)), lift(&pren)),
-                        );
+                        // 每分支一张私有表（原 pren 保持不动，供 pending 实参
+                        // 复用）：整表克隆一次后 k 次 lift 全部原位插入
+                        // （P1-1：旧版每 lift 克隆整表，单分支 O(bind²)）
+                        let mut env = env.clone();
+                        let mut pren_c = pren.clone();
+                        for _ in 0..count {
+                            env = env.prepend(Val::vvar(pren_c.cod));
+                            lift_in_place(&mut pren_c);
+                        }
                         // 同 quote(Match)：rename 用简化表，防止中性递归引用
                         // 被入口 force 再展开（解里带卡住 match 时发散）
-                        let body = self.rename(&declb, &pren, self.eval(&declb, &env, tm.clone()))?;
+                        let body = self.rename(&declb, &mut pren_c, self.eval(&declb, &env, tm))?;
                         Ok((pat.clone(), body))
                     })
-                    .collect::<Result<Vec<_>, UnifyError>>()?;
+                    .collect::<Result<_, UnifyError>>()?;
                 // 卡住期累积的实参：同 quote，包在 Match 外的 App 链里
                 let m = Tm::Match(Box::new(val), cases);
-                pending.iter().fold(Ok(m), |acc: Result<Tm, UnifyError>, (u, i)| {
-                    let u = self.rename(decl, pren, u.clone())?;
-                    Ok(Tm::App(Box::new(acc?), Box::new(u), *i))
+                pending.into_iter().fold(Ok(m), |acc: Result<Tm, UnifyError>, (u, i)| {
+                    let u = self.rename(decl, pren, u)?;
+                    Ok(Tm::App(Box::new(acc?), Box::new(u), i))
                 })
             }
         }
@@ -451,7 +707,11 @@ impl Infer {
             MetaEntry::Unsolved(ref a) => a.clone(),
             // fuel 耗尽窗口（同 prune_meta 注）：已解 meta 被 force 当未解
             // 返回后走到求解臂，按合一失败降级而不是 panic
-            _ => return Err(UnifyError),
+            _ => {
+                // meta 已解（或 fuel 窗口）：求解降级失败，非矛盾。
+                self.note_unify_kind(super::UnifyKind::Undecided);
+                return Err(UnifyError);
+            }
         };
 
         // spine 非线性时，检查这些参数能从 meta 类型里剪掉（保证解是良型的）
@@ -459,16 +719,15 @@ impl Infer {
             self.prune_ty(decl, &pr, mty.clone())?;
         }
 
-        let rhs = self.rename(
-            decl,
-            &PartialRenaming {
-                occ: Some(m),
-                ..pren
-            },
-            rhs,
-        )?;
-        let solution = self.eval(decl, &List::new(), self.lams(decl, pren.dom, mty.clone(), rhs));
-        self.meta[m.0 as usize] = MetaEntry::Solved(solution, mty);
+        // occ 换成本 meta（occurs 守卫）；dom/cod/ren 原样转移
+        let mut pren = PartialRenaming {
+            occ: Some(m),
+            ..pren
+        };
+        let rhs = self.rename(decl, &mut pren, rhs)?;
+        let sol_tm = self.lams(decl, pren.dom, mty.clone(), rhs);
+        let solution = self.eval(decl, &List::new(), &sol_tm);
+        self.overwrite_meta(m, MetaEntry::Solved(solution, mty));
 
         Ok(())
     }
@@ -495,7 +754,11 @@ impl Infer {
                     spec,
                 )
             }
-            _ => Err(UnifyError),
+            _ => {
+                // spine 长度不齐：判不出相等，但不是结构矛盾。
+                self.note_unify_kind(super::UnifyKind::Undecided);
+                Err(UnifyError)
+            }
         }
     }
 
@@ -524,7 +787,12 @@ impl Infer {
         // "长 spine 含非 rigid 项（变量槽被精化成构造子值）"时漏掉
         // 可行方向（test5 的内层 match 场景）。
         // 第一次尝试可能已 solve 部分 meta 才失败，反向尝试前回滚。
-        let snap = self.meta.clone();
+        // （P0-2：回滚为 undo-log 水位，不再全量深拷贝 metacontext）
+        let snap = self.meta_snapshot();
+        // review R9：`unify_kind` 是 Infer 上的 Cell，**不在** meta 快照内；
+        // 第一次尝试的失败分档（Undecided/Fuel）会单调残留，污染反向重试
+        // 的终判（真 Absurd 被报成"无法判定"）。重试前恢复分档水位。
+        let kind_before = self.unify_kind();
         let (m1, sp1, m2, sp2) = if sp.len() <= sp_prime.len() {
             (m, sp, m_prime, sp_prime)
         } else {
@@ -533,7 +801,8 @@ impl Infer {
         match go(self, m1, sp1.clone(), m2, sp2.clone()) {
             Ok(()) => Ok(()),
             Err(_) => {
-                self.meta = snap;
+                self.meta_restore(snap);
+                self.unify_kind.set(kind_before);
                 match go(self, m2, sp2, m1, sp1) {
                     Ok(()) => Ok(()),
                     Err(e) => Err(e),
@@ -589,19 +858,30 @@ impl Infer {
     }
 
     /// 宽松臂的实现体：未登记名放行，已登记名按登记类型把关。
+    ///
+    /// P8 收窄：未登记名的放行**仅限空 spine**——`string_to_global_type` 对未
+    /// 知名返回的是以其名字的**裸**卡住 `Decl(name, [])`（动态类型的逃逸舱
+    /// 口）；带实参的未知名卡住头只是"某个未知函数被应用"，不是动态类型，
+    /// 与 String 相等判不出来（Undecided，dpm 的 conv false ⇒ UIDK），不得
+    /// 静默放行。
     fn loose_string(
         &mut self,
         decl: &Decls,
         l: Lvl,
         cxt: &Cxt,
         n: &SmolStr,
+        sp_is_empty: bool,
         spec: Option<&mut SpecSolve<'_>>,
     ) -> Result<(), UnifyError> {
         match decl.get(n) {
-            None => Ok(()),
             Some(e) => {
                 let ty = e.ty.clone();
                 self.unify(decl, l, cxt, Val::LiteralType, ty, spec)
+            }
+            None if sp_is_empty => Ok(()),
+            None => {
+                self.note_unify_kind(super::UnifyKind::Undecided);
+                Err(UnifyError)
             }
         }
     }
@@ -625,6 +905,8 @@ impl Infer {
                     pretty_tm(0, cxt.names(), &self.quote(decl, l, u.clone()))
                 );
             }
+            // P3：预算耗尽 ≠ 结构矛盾——调用方据此报"无法判定"而不是"不相容"。
+            self.note_unify_kind(super::UnifyKind::Fuel);
             return Err(UnifyError);
         }
         self.unify_fuel.set(fuel - 1);
@@ -651,28 +933,23 @@ impl Infer {
         match (&t, &u) {
             (Val::U, Val::U) => Ok(()),
             (Val::Pi(x, i, a, b), Val::Pi(x_prime, i_prime, a_prime, b_prime)) if i == i_prime => {
-                self.unify(
-                    decl,
-                    l,
-                    cxt,
-                    (**a).clone(),
-                    (**a_prime).clone(),
-                    spec.as_deref_mut(),
-                )?;
+                self.unify(decl, l, cxt, (**a).clone(), (**a_prime).clone(), spec.as_deref_mut())?;
                 self.unify(
                     decl,
                     l + 1,
                     // quote 用**当前层级 l**而不是 cxt.lvl：Lam 的 η 递归臂
                     // `l+1` 不推进 cxt（binder 类型在值层不可得），`l == cxt.lvl`
                     // 的不变式在那里就会破——用 cxt.lvl quote 会把 `Rigid(l)`
-                    // 打越界（lvl2ix assert，L08 Exists 的 `P witness` 域踩中；
-                    // L07 同码但无触发用例）。cxt 只服务显示名字表，名字对不上
-                    // 时 go_ix 有 `@i` 兜底。
+
+                    // 打越界（lvl2ix assert；L08 Exists 的 `P witness` 域踩中，
+                    // L07 同码潜伏，自 L08 回合）。cxt 只服务显示名字表，名字
+                    // 对不上时 go_ix 有 `@i` 兜底。
                     &cxt.bind(
                         x.clone(),
                         self.quote(decl, l, (**a).clone()),
                         (**a).clone(),
                     ),
+
                     self.closure_apply(decl, b, Val::vvar(l)),
                     self.closure_apply(decl, b_prime, Val::vvar(l)),
                     spec.as_deref_mut(),
@@ -697,8 +974,10 @@ impl Infer {
                 if val_mentions_lvl(v, *x) {
                     return Err(UnifyError);
                 }
-                // L07 P1 迁移：传递 occurs（两跳环）。仅当解值挂在既有解链上
-                // 时才付这次扫描；干净解零开销。
+                // 传递 occurs（P1，见 L07-RISKS）：浅扫描只看单步环，挡不住
+                // 「x := a、a := succ x」这种经模式槽中转的两跳环——两步各自
+                // 无环，组合出的 σ 却是循环的。解值若挂在既有解链上，先置于
+                // acc 之下 force 一次再查；干净解不付这次 force。
                 if let Some(acc) = spec.as_deref().map(|s| s.acc.clone()) {
                     if !acc.is_empty()
                         && acc.mentions_any_solved(v)
@@ -738,15 +1017,7 @@ impl Infer {
                 self.unify_sp(decl, l, cxt, sp, sp_prime, spec.as_deref_mut())
             }
             (Val::Flex(m, sp), Val::Flex(m_prime, sp_prime)) if m == m_prime => {
-                self.intersect(
-                    decl,
-                    l,
-                    cxt,
-                    *m,
-                    sp.clone(),
-                    sp_prime.clone(),
-                    spec.as_deref_mut(),
-                )
+                self.intersect(decl, l, cxt, *m, sp.clone(), sp_prime.clone(), spec.as_deref_mut())
             }
             (Val::Flex(m, sp), Val::Flex(m_prime, sp_prime)) => {
                 self.flex_flex(decl, l, *m, sp.clone(), *m_prime, sp_prime.clone())
@@ -782,23 +1053,28 @@ impl Infer {
             // 合一只对 decl 表**未登记名**放行——string_to_global_type 对
             // 未知名返回以其名字的卡住 Decl（动态类型的逃逸舱口）；已登记
             // 名按登记类型把关（U 型返回的 builtin 卡住值不再冒充 String）
-            (Val::LiteralType, Val::Prim(n, _)) | (Val::Prim(n, _), Val::LiteralType) => {
-                self.loose_string(decl, l, cxt, n, spec)
+            (Val::LiteralType, Val::Prim(n, sp)) | (Val::Prim(n, sp), Val::LiteralType) => {
+                self.loose_string(decl, l, cxt, n, sp.is_empty(), spec)
             }
-            (Val::LiteralType, Val::Decl(n, _)) | (Val::Decl(n, _), Val::LiteralType) => {
-                self.loose_string(decl, l, cxt, n, spec)
+            (Val::LiteralType, Val::Decl(n, sp)) | (Val::Decl(n, sp), Val::LiteralType) => {
+                self.loose_string(decl, l, cxt, n, sp.is_empty(), spec)
             }
             // 卡住的内建：同名比实参 spine（异名失败）——不带实参的单元
             // Prim 会把 `x ++ y ≡ x ++ z` 判成相等
             (Val::Prim(a, sp), Val::Prim(b, sp_prime)) if a == b => {
                 self.unify_sp(decl, l, cxt, sp, sp_prime, spec.as_deref_mut())
             }
-            (Val::Prim(..), Val::Prim(..)) => Err(UnifyError),
+            (Val::Prim(..), Val::Prim(..)) => {
+                // 异名卡住内建：不是同一个函数，但也不是构造子矛盾——判不出
+                // 相等（dpm 的 conv false ⇒ UIDK）。
+                self.note_unify_kind(super::UnifyKind::Undecided);
+                Err(UnifyError)
+            }
             // 卡住的投影：字段名相同即比接收者与卡住期实参 spine（合同规则）。
-            // L07 潜伏缺口：两侧同为 `Val::Obj` 的合一从未发生（投影类型走
-            // 剥链直接出结果）；L08 剥链以接收者卡住投影精确实例化后，
-            // `e.witness ≡ e.witness` 成为可达形态，落到兜底臂即误报
-            // can't unify。`Obj` vs 其它仍按失配处理（兜底臂）。
+            // 两侧同为 `Val::Obj` 的合一在 L07 从未发生（投影类型走剥链直接出
+            // 结果）；L08 剥链以接收者卡住投影精确实例化后，`e.witness ≡
+            // e.witness` 成为可达形态，落到兜底臂会误报 can't unify。
+            // `Obj` vs 其它仍按失配处理（兜底臂）。
             (Val::Obj(o1, f1, sp1), Val::Obj(o2, f2, sp2)) if f1.data == f2.data => {
                 self.unify(decl, l, cxt, (**o1).clone(), (**o2).clone(), spec.as_deref_mut())?;
                 self.unify_sp(decl, l, cxt, sp1, sp2, spec.as_deref_mut())
@@ -877,18 +1153,21 @@ impl Infer {
                 {
                     return Ok(());
                 }
-                // 总次数预算（review R3/R8）：快路径先试，只有真正逐分支重
-                // 求值的比较才计入——与 L07 参考版 / 孪生版"每顶层调用 64 次"
-                // 同口径。超出按"无法判定为相等"保守失败（L08 未迁 P3 三档，
-                // 失败仍按旧口径报"分支不可达"）。
+                // 总次数预算（review R3/R8）：快路径**先试**，只有快路径失效、
+                // 真正逐分支重求值的比较才计入并消耗——与孪生
+                // `bump_spine_iter::MATCH_CMP_BUDGET = 64`（每顶层调用一份）
+                // 同口径。超出按"无法判定为相等"保守失败（P3：Undecided；
+                // 不放过真矛盾——任何 Err 在所有消费点都是失败/不可达）。
                 if !self.burn_match_cmp_budget() {
+                    self.note_unify_kind(super::UnifyKind::Undecided);
                     return Err(UnifyError);
                 }
                 self.unify(decl, l, cxt, (**s1).clone(), (**s2).clone(), spec.as_deref_mut())?;
                 if cases1.len() != cases2.len() {
                     return Err(UnifyError);
                 }
-                let declb = super::simpl_decl(decl);
+                // P1-2：简化表旁路缓存（同实例只构建一次）
+                let declb = self.simpl_decl_cached(decl);
                 for ((p1, b1), (p2, b2)) in cases1.iter().zip(cases2.iter()) {
                     if p1 != p2 {
                         return Err(UnifyError);
@@ -898,8 +1177,8 @@ impl Infer {
                         .fold(env1.clone(), |env, i| env.prepend(Val::vvar(l + i)));
                     let env2 = (0..count)
                         .fold(env2.clone(), |env, i| env.prepend(Val::vvar(l + i)));
-                    let v1 = self.eval(&declb, &env1, b1.clone());
-                    let v2 = self.eval(&declb, &env2, b2.clone());
+                    let v1 = self.eval(&declb, &env1, b1);
+                    let v2 = self.eval(&declb, &env2, b2);
                     self.unify(decl, l + count, cxt, v1, v2, spec.as_deref_mut())?;
                 }
                 if pending1.len() != pending2.len() {
@@ -918,8 +1197,9 @@ impl Infer {
             // 通配且分支体就是 scrutinee 本身。无条件接受会把 `f x` 证成 `x`。
             (Val::Match(s, _, cases, pending), other) | (other, Val::Match(s, _, cases, pending)) => {
                 // 带 pending 实参的卡住 match 不是 eta 形态（分支体经实参
-                // 应用后不再等于 scrutinee）
+                // 应用后不再等于 scrutinee）。P3：这是"不是 eta"而非"矛盾"。
                 if !pending.is_empty() {
+                    self.note_unify_kind(super::UnifyKind::Undecided);
                     return Err(UnifyError);
                 }
                 match (self.force(decl, (**s).clone()), other) {
@@ -934,13 +1214,123 @@ impl Infer {
                         if is_eta {
                             Ok(())
                         } else {
+                            // 非 eta 形态：判不出相等，但不是矛盾。
+                            self.note_unify_kind(super::UnifyKind::Undecided);
                             Err(UnifyError)
                         }
                     }
-                    _ => Err(UnifyError),
+                    _ => {
+                        self.note_unify_kind(super::UnifyKind::Undecided);
+                        Err(UnifyError)
+                    }
                 }
             }
-            _ => Err(UnifyError),
+            _ => self.unify_no_arm(&t, &u),
         }
+    }
+
+    /// 合一**到底**（没有任何臂命中）时的原因分档。
+    ///
+    /// 两侧都是**规范值/规范类型头**（构造子值 / 字面量 / 和类型头 / Π / λ /
+    /// U）且形态不同 ⇒ 确定不等（Absurd，分支确不可达）。同形态组合早已被
+    /// 前面的臂处理，走到这里只剩不同构造子 / 异名 / 不同字面量 / icit 不匹配
+    /// 等**确定**冲突；缺了 `Sum×LiteralType`、`U×Sum`、`Sum×Pi` 等组合会让
+    /// "空类型的零臂 match"被误判为不可判定而拒绝（review R1）。
+    ///
+    /// 其余（中性头 vs 别的东西、卡住 match vs 非 eta、混合形态）⇒ 判不出来
+    /// （Undecided，对齐 dpm `conv` false ⇒ `UIDK`）。
+    fn unify_no_arm(&self, t: &Val, u: &Val) -> Result<(), UnifyError> {
+        let definite = Self::is_canonical_head(t) && Self::is_canonical_head(u);
+        if !definite {
+            self.note_unify_kind(super::UnifyKind::Undecided);
+        }
+        Err(UnifyError)
+    }
+
+    /// 规范值 / 规范类型头：两个这样的值形态不同即确定不等（不是"判不出来"）。
+    fn is_canonical_head(v: &Val) -> bool {
+        matches!(
+            v,
+            Val::Sum(..)
+                | Val::SumCase { .. }
+                | Val::LiteralType
+                | Val::LiteralIntro(_)
+                | Val::U
+                | Val::Pi(..)
+                | Val::Lam(..)
+        )
+    }
+}
+
+#[cfg(test)]
+mod deep_rename_tests {
+    use super::*;
+
+    /// README §7.6 回归钉：rename 的深链收集器（SumCase 链）在默认测试栈
+    /// （约 2 MB）下迭代消化——旧递归版 1 万层会爆栈（收集器消化后 1 万层
+    /// 通行）。两处测试基建之坑（非被测代码）：①输入链的 Rc 级联释放
+    /// 是深递归——每层句柄保留在 keep 里（释放只递减不归零），末尾
+    /// forget 泄漏；②产物 Tm 树逐层剥开（循环，每层 Box<Tm> 浅释放）。
+    #[test]
+    fn deep_rename_collector_under_default_stack() {
+        const N: usize = 10_000;
+        fn nat_sum() -> Val {
+            Val::Sum(
+                super::super::empty_span("Nat".to_string()),
+                std::rc::Rc::new(vec![]),
+                std::rc::Rc::new(vec![
+                    super::super::empty_span("zero".to_string()),
+                    super::super::empty_span("succ".to_string()),
+                ]),
+            )
+        }
+        let nat = std::rc::Rc::new(nat_sum());
+        let mut keep: Vec<std::rc::Rc<Val>> = Vec::with_capacity(N);
+        let mut v = Val::SumCase {
+            typ: std::rc::Rc::clone(&nat),
+            case_name: super::super::empty_span("zero".to_string()),
+            datas: std::rc::Rc::new(vec![]),
+        };
+        for _ in 0..N {
+            let inner = std::rc::Rc::new(v);
+            keep.push(std::rc::Rc::clone(&inner));
+            v = Val::SumCase {
+                typ: std::rc::Rc::clone(&nat),
+                case_name: super::super::empty_span("succ".to_string()),
+                datas: std::rc::Rc::new(vec![(super::super::empty_span("x".to_string()), inner, Icit::Expl)]),
+            };
+        }
+        let mut infer = Infer::new();
+        let decl = Decls::new();
+        let mut pren = PartialRenaming {
+            occ: None,
+            dom: Lvl(0),
+            cod: Lvl(0),
+            ren: std::collections::HashMap::new(),
+        };
+        let mut cur = infer.rename(&decl, &mut pren, v).expect("深链 rename 应成功");
+        let mut depth = 0usize;
+        loop {
+            match cur {
+                Tm::SumCase {
+                    typ,
+                    case_name,
+                    datas,
+                } => {
+                    drop(typ);
+                    if datas.is_empty() {
+                        assert_eq!(case_name.data, "zero", "叶子应是 zero");
+                        break;
+                    }
+                    let mut it = datas.into_iter();
+                    let (_, next, _) = it.next().expect("succ 层应有 data");
+                    depth += 1;
+                    cur = next;
+                }
+                _ => panic!("深链产物应是 SumCase 链"),
+            }
+        }
+        assert_eq!(depth, N, "剥链深度应等于构造层数");
+        std::mem::forget(keep); // 泄漏给进程：避开深链的递归 Drop
     }
 }

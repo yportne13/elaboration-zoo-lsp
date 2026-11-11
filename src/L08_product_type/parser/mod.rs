@@ -26,13 +26,6 @@ pub enum ErrMsg {
     Custom(String),
 }
 
-fn extract_base(m: ErrMsg) -> ErrMsg {
-    match m {
-        ErrMsg::Base(b) => ErrMsg::Base(b),
-        ErrMsg::Custom(_) => m,
-    }
-}
-
 use std::fmt;
 
 impl fmt::Display for BaseMsg {
@@ -59,6 +52,15 @@ impl fmt::Display for ErrMsg {
 #[derive(Debug, Clone)]
 pub struct IError {
     pub msg: Span<ErrMsg>,
+}
+
+/// 错误进度 = 错误锚定的 token 源偏移。`or_far` 用它保留"最远失败"的备选
+/// 错误，而不是 last-branch-wins 把正确位置吞掉（review R6：`p_decl` 的
+/// `or` 链会把 `def` 在 `)` 处的错误换成 `enum` 分支在 `def` 处的错误）。
+impl ErrorProgress for IError {
+    fn parse_progress(&self) -> u32 {
+        self.msg.start_offset
+    }
 }
 
 type IResult<'a, 'b, O> = Result<(&'b [TokenNode<'a>], O), IError>;
@@ -92,14 +94,32 @@ impl<'a: 'b, 'b, A, T: Parser<&'b [TokenNode<'a>], A, MacroState, IError>> Parse
     where
         P: Parser<&'b [TokenNode<'a>], X, MacroState, IError>,
     {
-        move |input, state: &mut MacroState| match self.many0_sep(sep).parse(input, state) {
-            Ok((i, v)) if v.is_empty() => Err(IError {
-                msg: i.first()
-                    .map(|x| x.to_span())
-                    .unwrap_or(empty_span(()))
-                    .map(|_| ErrMsg::Base(BaseMsg::EmptyVec))
-            }),
-            x => x,
+        move |input, state: &mut MacroState| {
+            // 先试第一个 item：失败时**保留底层错误**（含失败 token 的真实
+            // span），不再像 `many0_sep` 那样吞掉错误、再在包装层用"剩余输
+            // 入首 token"伪装成 EmptyVec——后者会把语法错误定位到失败 decl
+            // 的起点（review R6）。
+            let (mut input, first) = self.parse(input, state)?;
+            let mut result = vec![first];
+            loop {
+                let (after_sep, _) = match sep.parse(input, state) {
+                    Ok(x) => x,
+                    Err(_) => break,
+                };
+                match self.parse(after_sep, state) {
+                    Ok((i, a)) => {
+                        input = i;
+                        result.push(a);
+                    }
+                    // 与 `many0_sep` 旧语义一致：分隔符已消费、下一个 item
+                    // 失败即正常结束（尾随换行/空行等），不报错。
+                    Err(_) => {
+                        input = after_sep;
+                        break;
+                    }
+                }
+            }
+            Ok((input, result))
         }
     }
 }
@@ -107,8 +127,33 @@ impl<'a: 'b, 'b, A, T: Parser<&'b [TokenNode<'a>], A, MacroState, IError>> Parse
 /// 解析 decl 序列。decl 流必须吃完全部 token：残留 token（`;` / 垃圾
 /// token 曾把后续 decl 静默截断）一律报错，并带**首个残余 token**的内容
 /// 与偏移——`;` 结尾这类最常见错误不再无从定位。任何解析失败都折叠为
-/// 整体 `Err("parse error")`（契约被 l08 blackbox 钉死）。
+/// 整体 `Err("parse error")`（契约被 l07 blackbox 钉死）。
 pub fn parser(input: &str, id: u32) -> Result<Vec<Decl>, String> {
+    parser_with_span(input, id).map_err(|(msg, _)| msg)
+}
+
+/// 解析错误（P10 第二步）：文案 + 可选位置。
+///
+/// 文案与 [`parser`] 的契约**逐字节一致**（`"parse error"` / 残余 token 那条），
+/// 只有位置是新增的：IError 的 span（失败 token 处）或残余 token 的 span。
+pub type ParseError = (String, Option<Span<()>>);
+
+fn span_of(s: &Span<ErrMsg>) -> Option<Span<()>> {
+    // 0,0 是"无位置"哨兵（空输入 / lexer 失败）；有偏移才返回
+    if s.start_offset == 0 && s.end_offset == 0 {
+        None
+    } else {
+        Some(Span {
+            data: (),
+            start_offset: s.start_offset,
+            end_offset: s.end_offset,
+            path_id: s.path_id,
+        })
+    }
+}
+
+/// 带位置的解析入口：[`parser`] 的契约 + 错误位置（供 LSP/诊断消费）。
+pub fn parser_with_span(input: &str, id: u32) -> Result<Vec<Decl>, ParseError> {
     match lex::lex(Span {
         data: input,
         start_offset: 0,
@@ -123,16 +168,26 @@ pub fn parser(input: &str, id: u32) -> Result<Vec<Decl>, String> {
                         Ok(decls)
                     } else {
                         let t = &rest[0];
-                        Err(format!(
-                            "parse error: leftover token `{}` @ {},{}",
-                            t.data.0, t.start_offset, t.end_offset
+                        Err((
+                            format!(
+                                "parse error: leftover token `{}` @ {},{}",
+                                t.data.0, t.start_offset, t.end_offset
+                            ),
+                            Some(t.to_span()),
                         ))
                     }
                 }
-                Err(_e) => Err("parse error".to_owned()),
+                Err(e) => {
+                    let span = span_of(&e.msg).or_else(|| {
+                        err_collect
+                            .first()
+                            .and_then(|c| span_of(&c.msg))
+                    });
+                    Err(("parse error".to_owned(), span))
+                }
             }
         }
-        None => Err("parse error".to_owned()),
+        None => Err(("parse error".to_owned(), None)),
     }
 }
 
@@ -251,14 +306,10 @@ fn p_atom1<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IR
         .parse(input, state)
 }
 
-/// 原子 + 投影后缀链。L07 只允许单个 `.field`，嵌套 struct 的 `l.a.x`
-/// 会以 leftover `.` 解析失败；L08 扩为**左结合多段投影链**（纯语法扩展，
-/// 单段与无段行为逐字不变）。
 fn p_atom<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
+    // L08 积类型：原子 + 左结合多段投影链（`p.x.y`）；L07 只允许单段。
     (p_atom1, (kw(T![.]), string(Ident)).many0())
-        .map(|(x, t)| {
-            t.into_iter().fold(x, |acc, (_, f)| Raw::Obj(Box::new(acc), f))
-        })
+        .map(|(x, t)| t.into_iter().fold(x, |acc, (_, f)| Raw::Obj(Box::new(acc), f)))
         .parse(input, state)
         .map_err(|_e| {
             IError {
@@ -441,10 +492,10 @@ fn p_match<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IR
         .parse(input, state)
 }
 
-/// `new Name(a, b, ...)` —— 积类型的构造语法糖：脱糖成限定构造子
+/// `new Name(a, b, ...)` —— L08 积类型构造语法糖：脱糖成限定构造子
 /// `Name.mk` 的显式应用（`struct` 注册的构造子名就是 `{Name}.mk`）。
-/// 结果可直接接 `.field` 投影后缀链（与原子同等待遇，`new P(a, b).x`
-/// 等价 `(new P(a, b)).x`）；裸 spine 实参位仍不接 `new`（p_arg 不动）。
+/// 结果可直接接 `.field` 投影后缀链（与原子同等待遇）；裸 spine 实参位
+/// 仍不接 `new`（p_arg 不动）。
 fn p_new<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
     (
         kw(NewKeyword),
@@ -524,7 +575,7 @@ fn p_enum<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
             )
                 // case 间允许连续空行：注释行经 preprocess 剥成空白后仍产生
                 // EndLine，单 EndLine 分隔会把「case 间注释」打成语法错误
-                // （同 match 臂 / struct 字段）
+                // （同 match 臂；L08 p_enum 同款，回合对齐）
                 .many1_sep(kw(EndLine).many1()),
         ),
     )
@@ -536,13 +587,11 @@ fn p_enum<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
         .parse(input, state)
 }
 
-/// `struct Name[A: U, ...] { field: Type ... }` —— 积类型语法糖：脱糖成
-/// **单构造子 enum**，构造子名为 `{Name}.mk`，字段全部显式（Expl），参数
-/// 走隐式方括号组（`[A]` / `[A: U]`）。字段可依赖参数与在前字段
-/// （依赖积 / Sigma）：`struct Exists[A: U, P: A -> U] { witness: A
-/// proof: P witness }`——字段按行分隔（无逗号形态）。构造用
-/// `new Name(e1, e2)` 或限定名 `Name.mk`；字段访问 `p.field` 走
-/// enum 投影（值级）与 `.mk` 构造子类型链剥层（类型级，见 elaboration）。
+/// `struct Name[A: U, ...] { field: Type ... }` —— L08 积类型语法糖：脱糖成
+/// **单构造子 enum**，构造子名为 `{Name}.mk`，字段全部显式（Expl），参数走
+/// 隐式方括号组（`[A]` / `[A: U]`）。字段可依赖参数与在前字段（依赖积 /
+/// Sigma）。构造用 `new Name(e1, e2)` 或限定名 `Name.mk`；字段访问 `p.field`
+/// 走 enum 投影（值级）与 `.mk` 构造子类型链剥层（类型级，见 elaboration）。
 fn p_struct<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Decl> {
     (
         kw(StructKeyword),
@@ -551,10 +600,10 @@ fn p_struct<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> I
         brace(
             (string(Ident), kw(T![:]), p_raw)
                 .map(|(name, _, ty)| (name, ty))
-                // 字段按行分隔，无逗号；连续空行也容忍——注释行经
-                // preprocess 剥成空白后仍产生 EndLine，单 EndLine 分隔
-                // 会把「字段间注释」打成语法错误（同 match 臂）
-                .many0_sep(kw(EndLine).many1()), //
+                // 字段按行分隔、无逗号；连续空行也容忍（注释行经 preprocess
+                // 剥成空白后仍产生 EndLine，单 EndLine 分隔会把「字段间注释」
+                // 打成语法错误）。
+                .many0_sep(kw(EndLine).many1()),
         ),
     )
         .map(|(_, name, params, fields)| Decl::Enum {
@@ -570,30 +619,11 @@ fn p_struct<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> I
 }
 
 fn p_decl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Decl> {
-    p_def.or(p_print).or(p_enum).or(p_struct)
-        .parse(input, state)
-        .map_err(|e| IError {
-            msg: e.msg.map(extract_base)
-        })
-}
-
-#[test]
-fn test() {
-    // The trailing garbage keeps the whole-file contract: Err, not partial.
-    let input = r#"
-enum Nat {
-    zero
-    succ(x: Nat)
-}
-
-def two = succ succ zero
-
-println two
-
-impl-like free form
-"#;
-    let parsed = parser(input, 0);
-    assert!(parsed.is_err());
+    // 错误原样透传：外层按契约折叠为整体 `parse error`（Custom 文案不外泄）。
+    // `or_far`（而非 `or`）保留最远失败分支的错误位置——否则 `p_enum` 在
+    // `def` 首 token 的期望错误会覆盖 `p_def` 在真正失败 token（如 `)`）处
+    // 的错误（review R6）。
+    p_def.or_far(p_print).or_far(p_enum).or_far(p_struct).parse(input, state)
 }
 
 #[test]
@@ -604,18 +634,15 @@ enum Nat {
     succ(x: Nat)
 }
 
-struct Point {
-    x: Nat
-    y: Nat
-}
-
 def two = succ succ zero
 
-def get_x(p: Point): Nat = p.x
+def add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ add n y
+    }
 
-def mk(): Point = new Point(two, two)
-
-println two
+println add two two
 "#;
     let decls = parser(input, 0).unwrap();
     assert!(!decls.is_empty());
@@ -623,9 +650,16 @@ println two
 
 #[test]
 fn test_leftover_located() {
-    // `--` 是独立 token（非注释），报错带定位（同 l08 blackbox v2 契约）。
-    let input = "enum Nat {\n    zero\n}\n-- old comment\nprintln zero\n";
+    // `;` 结尾 / 垃圾 token 报错带定位（同 l07 blackbox 契约）。
+    let input = "enum Nat {\n    zero\n}\nprintln zero;\n";
     let err = parser(input, 0).unwrap_err();
     assert!(err.contains("parse error"), "err: {err}");
-    assert!(err.contains("`--`"), "err should locate the token: {err}");
+    assert!(err.contains("`;`"), "err should locate the token: {err}");
+}
+
+#[test]
+fn test_whole_file_fail() {
+    // 坏 decl 折叠为整体 `parse error`（契约被 blackbox 钉死）。
+    let input = "enum Void {\n}\n";
+    assert_eq!(parser(input, 0).unwrap_err(), "parse error");
 }

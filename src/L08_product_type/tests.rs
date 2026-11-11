@@ -1,11 +1,12 @@
-//! L08 的测试套件 = L07 全部既有用例（继承和类型 / 依赖模式匹配 / builtin
-//! 注册表行为）+ 产品类型专项：
+//! L07 的测试套件。
 //!
-//! - `test_product_basic` / `test_product_generic` / `test_product_dependent` /
-//!   `test_product_field_err`：`struct` / `new` / 字段投影（值级 + 类型级
-//!   `.mk` 剥链）/ 依赖字段（Sigma：`Exists`）/ 错误路径。
-//!   积类型的形态与旧 L08 test2 对齐（Point[T] / Bits / Exists 三连），
-//!   语法糖的脱糖语义见 mod.rs 模块头。
+//! - `test_basic` / `test_index` / `test_dependent_match` / `test_dependent_match_nested_eval`
+//!   / `test_eq_reasoning` / `test_lambda_calculus_and_strings`：从 L07a_depend_pm
+//!   移植（旧测试全部保留语义）。
+//! - `test_generic_match` / `test_catch_all_mixed` / `test_gadt_*` /
+//!   `test_projection_typing` / `test_stuck_match_*` / `test_hole_in_branch` /
+//!   `test_nested_patterns` / `test_missing_case_err` / `test_index_equality_err`：
+//!   针对 L07/L07a 已知 bug 的回归测试（见 README.md 的"修了什么"一节）。
 
 use super::*;
 
@@ -32,6 +33,369 @@ fn check_err(input: &str) -> String {
         .unwrap()
         .join()
         .unwrap()
+}
+
+/// P1 回归钉（见 docs/compare-l07-vs-dpm/L07-RISKS.md）：浅 occurs 只挡
+/// **单步**环（`Id Nat (succ x) x` 直接 `x := succ x`）；经构造子模式槽中转的
+/// 两跳环（`x := a`、`a := succ x`）每一步各自无环，组合出的 σ 却是循环的
+/// ——旧实现接受该子句（实测 81 ms 返回 OK）。传递 occurs 把它判为不可达。
+#[test]
+fn test_occurs_check_transitive_chain() {
+    let msg = check_err(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def bad(x: Nat, e: Eq[Nat] x (succ x)): Nat =
+    match e {
+        case refl(a) => zero
+    }
+"#,
+    );
+    assert!(msg.contains("分支不可达"), "err: {msg}");
+    // 文案按源码形态渲染（P9）：不得出现 `Con(\"refl\" @ 166,170, …)` 这类内部表示
+    assert!(msg.contains("refl(a)"), "err: {msg}");
+    assert!(!msg.contains("Con("), "诊断泄漏内部 Debug 表示: {msg}");
+}
+
+/// 正向对照：传递 occurs 只应拦住循环解，不能误伤正常的索引精化。
+#[test]
+fn test_occurs_check_keeps_legit_refinement() {
+    let out = check(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def symm[A, x, y: A](e: Eq[A] x y): Eq[A] y x =
+    match e {
+        case refl(a) => refl[A] a
+    }
+
+println "done"
+"#,
+    );
+    assert_eq!(out, "done\n");
+}
+
+/// R2 回归钉（2026-11-08 review R2，**当前已知限制**，不是缺陷修复）：
+/// `occurs_transitive` 的 `VSub` 臂只把**内层** σ 传给递归（`go(inner, s2, …)`），
+/// 外层 σ 的后续解在 VSub 内部不可见。按 force/frcs 的组合语义
+/// （`frcs(outer, VSub(v, s2)) = frcs(compose(outer, s2), v)`）本用例的值应
+/// 归约到 `Rigid(9)`，但传递 occurs 在 VSub 臂改用内层空 σ，查不到
+/// `0 ↦ 7 ↦ 9` 的两跳链 ⇒ 返回 false（漏检）。
+///
+/// σ = {0↦7, 7↦9}；`nested = VSub(VSub(Rigid(0), ∅), σ)`。
+/// **若未来实现「不物化 compose 的多 σ 查找」**（让 VSub 臂同时携带/组合
+/// 外层 σ，见 review R2 建议），本断言应改为 `true`——那是修复而非回归，
+/// 届时同步更新 README/设计稿的已知限制记录。单层 `VSub(Rigid(0), σ)` 的
+/// 对照表明：同一 σ 直接作用时两跳链能被正常检出（漏检只发生在嵌套包裹）。
+#[test]
+fn test_occurs_transitive_vsub_nested_is_documented_limitation() {
+    let empty: std::rc::Rc<Subst> = std::rc::Rc::new(Subst::default());
+    // 链头最新：σ = {0↦7, 7↦9}（先 extend 0↦7，再把 7↦9 cons 到链头）
+    let sigma = Subst::extend(
+        &Subst::extend(&empty, Lvl(0), Val::vvar(Lvl(7))),
+        Lvl(7),
+        Val::vvar(Lvl(9)),
+    );
+
+    // 对照：同一 σ 直接包裹一层 ⇒ 0 ↦ 7 ↦ 9 的两跳链被检出
+    let single = Val::VSub(Rc::new(Val::vvar(Lvl(0))), sigma.clone());
+    assert!(
+        sigma.occurs_transitive(&single, Lvl(9)),
+        "单层 VSub 下 σ 的两跳链应被检出（occurs_transitive 返回 true）"
+    );
+
+    // 已知限制：嵌套 VSub 的外层 σ 在 VSub 臂被丢弃 ⇒ 漏检（当前期望 false）
+    let nested = Val::VSub(
+        Rc::new(Val::VSub(
+            Rc::new(Val::vvar(Lvl(0))),
+            empty.clone(),
+        )),
+        sigma.clone(),
+    );
+    assert!(
+        !sigma.occurs_transitive(&nested, Lvl(9)),
+        "R2 已知限制被改变：嵌套 VSub 现在能检出外层 σ 的两跳链。\
+         若这是修复（多 σ 查找落地），请把本断言改为 true 并更新 README/设计稿；\
+         若是意外回归，请检查 VSub 臂的 σ 传递"
+    );
+}
+
+/// S1 回归钉（FINDING-struct-eq-pending）：`struct_eq` 的卡住 match 臂
+/// 必须比较 pending **值**，不能只比长度/icit。否则「scrutinee 本身是另一个
+/// pending 不同的卡住 match」的两份 match 会被判等，`refl` 可证明两个
+/// 闭实例化结果不同的函数相等（`f 1 = zero` vs `g 1 = succ zero`）。
+/// 本缺陷由 commit 2309e2a4 的迭代化重写引入（注释仍写"访问序含 pending"，
+/// 实现却只压了分支体）。
+#[test]
+fn test_struct_eq_compares_match_pending_values() {
+    let msg = check_err(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def pfun(n: Nat): Nat -> Nat =
+    match n {
+        case zero => k => k
+        case succ(j) => k => k
+    }
+
+def f(x: Nat): Nat =
+    match (pfun x zero) {
+        case zero => zero
+        case succ(m) => succ m
+    }
+
+def g(x: Nat): Nat =
+    match (pfun x (succ zero)) {
+        case zero => zero
+        case succ(m) => succ m
+    }
+
+def bad : Eq[Nat -> Nat] f g =
+    refl f
+"#,
+    );
+    assert!(msg.contains("can't unify"), "err: {msg}");
+}
+
+/// 该缺陷的强化后果：在上面的 `bad` 之上可证 `False`。修复后必须在
+/// `bad` 处就失败（不得走到 `boom`）。
+#[test]
+fn test_nested_match_pending_cannot_prove_false() {
+    let msg = check_err(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def pfun(n: Nat): Nat -> Nat =
+    match n {
+        case zero => k => k
+        case succ(j) => k => k
+    }
+
+def f(x: Nat): Nat =
+    match (pfun x zero) {
+        case zero => zero
+        case succ(m) => succ m
+    }
+
+def g(x: Nat): Nat =
+    match (pfun x (succ zero)) {
+        case zero => zero
+        case succ(m) => succ m
+    }
+
+def bad : Eq[Nat -> Nat] f g =
+    refl f
+
+def False : U = (A : U) -> A
+
+def ap(f: Nat -> Nat, g: Nat -> Nat, e: Eq[Nat -> Nat] f g): Eq[Nat] (f (succ zero)) (g (succ zero)) =
+    match e {
+        case refl(a) => refl (a (succ zero))
+    }
+
+def eqn : Eq[Nat] zero (succ zero) =
+    ap f g bad
+
+def boom : False =
+    match eqn {
+    }
+"#,
+    );
+    assert!(msg.contains("can't unify"), "err: {msg}");
+}
+
+/// P2 回归钉（见 docs/compare-l07-vs-dpm/L07-RISKS.md）：两个递归 def 的
+/// 卡住索引方程互比时，结构快路径失效，`(Match, Match)` 臂会逐层在 fresh
+/// rigid 下重求值分支体——递归 def 每层再产生新的卡住 match，层级递增、永不
+/// 结构收敛。修复前唯一的下限是 fuel 池：4 个 def 的程序实测 **256 s** 才靠
+/// fuel 停下（旧口径报成"分支不可达"）。`MATCH_CMP_BUDGET`（总次数 64、每个
+/// 顶层合一入口一份；结构快路径**先试**，只有慢路径的逐分支重求值才计数）
+/// 把最坏情况压到有界时间；判定按 P3 分档为「无法判定」（`Undecided`），
+/// **不是**「分支不可达」——见下方两条断言（口径与 L07 孪生版对齐，R3/R8）。
+#[test]
+fn test_stuck_match_equation_bounded() {
+    let src = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def f(x: Nat, y: Nat, e: Eq[Nat] (add x zero) (add y zero)): Nat =
+    match e {
+        case refl(a) => a
+    }
+"#;
+    let t0 = std::time::Instant::now();
+    let msg = check_err(src);
+    let dt = t0.elapsed();
+    // P3：判不出来 ≠ 矛盾——必须报"无法判定"，不得伪装成"不可达"
+    assert!(msg.contains("无法判定"), "err: {msg}");
+    assert!(!msg.contains("不相容"), "undecided 不得伪装成矛盾: {msg}");
+    assert!(
+        dt < std::time::Duration::from_secs(30),
+        "耗时 {dt:?}：卡住 match 比较的深度预算失效（修复前为分钟级）"
+    );
+}
+
+/// P3 分档对照：**结构矛盾**仍报「分支不可达」，**判不出来**报「无法判定」。
+/// 两档不能混——前者是"这个分支不可能"，后者是"我不知道"（对齐 dpm 的
+/// `UnifyRes::UAbs` / `UIDK`）。
+#[test]
+fn test_unify_kind_separates_absurd_from_undecided() {
+    // 结构矛盾：zero ≐ succ zero 无解
+    let absurd = check_err(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def f(e: Eq[Nat] zero (succ zero)): Nat =
+    match e {
+        case refl(a) => zero
+    }
+"#,
+    );
+    assert!(absurd.contains("分支不可达"), "err: {absurd}");
+
+    // 判不出来：两个递归 def 的卡住 match 相等性
+    let undecided = check_err(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def f(x: Nat, y: Nat, e: Eq[Nat] (add x zero) (add y zero)): Nat =
+    match e {
+        case refl(a) => a
+    }
+"#,
+    );
+    assert!(undecided.contains("无法判定"), "err: {undecided}");
+    assert!(
+        !undecided.contains("分支不可达"),
+        "undecided 不得伪装成不可达: {undecided}"
+    );
+}
+
+/// R1 回归钉（2026-11-08 review R1）：`unify_no_arm` 的 definite 判定补全为
+/// 「两侧都是规范值/规范类型头且形态不同 ⇒ Absurd」后，空类型的零臂 match
+/// 恢复被接受。`enum T(A : U) { c -> T Nat }` 只有一个构造子 `c : T Nat`：
+/// `T Bool`（Nat 与 Bool 是不同 Sum ⇒ Sum×Sum）与 `T String`（String 是
+/// `LiteralType` ⇒ Sum×LiteralType）语义上都是**空类型**，零臂 match 是其
+/// 合法消去。修复前 `T String` 落 Undecided，被误报「match 不完整：缺少
+/// 构造子 c」——基线接受、修复前拒绝的接受集回归（S1）。
+#[test]
+fn test_empty_type_zero_arm_match_accepts_canonical_conflicts() {
+    let out = check(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+enum T(A : U) {
+    c -> T Nat
+}
+
+def ok_bool(e: T Bool): Nat = match e { }
+
+def ok_string(e: T String): Nat = match e { }
+
+println "done"
+"#,
+    );
+    assert_eq!(out, "done\n");
+}
+
+/// 反向钉：深度预算不能把**非递归**的卡住 match 误判为不等——同一位置换成
+/// 非递归的 `g` 仍应接受（修复前 13 ms 收敛，修复后必须保持）。
+#[test]
+fn test_stuck_match_nonrecursive_still_equal() {
+    let out = check(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def g(x: Nat): Nat =
+    match x {
+        case zero => zero
+        case succ(n) => zero
+    }
+
+def f(x: Nat, y: Nat, e: Eq[Nat] (g x) (g y)): Nat =
+    match e {
+        case refl(a) => a
+    }
+
+println "done"
+"#,
+    );
+    assert_eq!(out, "done\n");
 }
 
 /// 基础 ADT + 多态 + 高阶函数（移植自 L07a test2）
@@ -240,12 +604,8 @@ def t[len: Nat](x: Vec[Nat] len, y: Vec[Nat] len): Vec[Nat] (succ len) =
 }
 
 /// 等式推理：cong / symm / trans / rfl（移植自 L07a test4 的核心部分）。
-///
-/// 已知限制（相对 L07a，详见 README 的"已知限制"一节）：依赖递归函数的
-/// 索引族等式推理（add_zero_right / add_succ_right / add_comm / add_assoc，
-/// 期望类型里出现"递归函数应用于模式绑定器"的 stuck match 组合）会触发
-/// unify 中"索引槽 ↔ 构造子值"互相引用的未收敛路径（被 fuel 防护拦下后
-/// 报 can't unify）。
+/// 依赖递归扩展即本文件后半的 `test_eq_add_*` / `test_eq_reasoning_*`
+/// 全家（README §6 的修复表）。
 #[test]
 fn test_eq_reasoning() {
     check(
@@ -341,7 +701,7 @@ println four
 }
 
 /// 回归：泛型类型的 match —— 字段类型来自构造子类型按头部实参实例化，
-/// 不再依赖"参数名恰好在 match 现场可见"（L08_product_type 的 Raw-in-Term bug）
+/// 不再依赖"参数名恰好在 match 现场可见"（L07_sum_type 的 Raw-in-Term bug）
 #[test]
 fn test_generic_match() {
     let out = check(
@@ -1228,28 +1588,19 @@ println bits_adder (cons true nil) (cons false nil)
 // L06 演进同步（2026-09）：builtin 注册表 / 可变全局 / 文件 IO / 宽松臂
 // --------------------------------------------------------------------------------
 
-/// DEMO 全串：enum + 依赖 match + 字符串 builtin + 文件 IO + 可变全局。
-/// （形态对齐 DEMO_SRC：函数体无花括号、enum 闭括号后空一行——顶层 decl
-/// 分隔要求 `EndLine.many1()`，而 enum 的 case 分隔已吃掉 `}` 前的换行；
-/// 旧版此测试零断言，两段一直在静默报 parse error，断言补上后修正。）
+/// DEMO 全串：enum + 依赖 match + 字符串 builtin + 文件 IO + 可变全局
+/// （参考版整段跑通并断言 Ok；Ok 输出双实现对拍见
+/// tests/l07_fast_parity.rs::parity_demo_src）。
 #[test]
 fn test_demo() {
-    for (name, seg) in [
-        ("add", "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\ndef add(x: Nat, y: Nat): Nat =\n    match x {\n        case zero => y\n        case succ(n) => succ (add n y)\n    }\nprintln (add (succ (succ zero)) (succ zero))\n"),
-        ("add_sp", "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\ndef add(x: Nat, y: Nat): Nat =\n    match x {\n        case zero => y\n        case succ(n) => succ (add n y)\n    }\nprintln (add (succ (succ zero)) (succ zero))\nprintln (add (succ zero) (succ (succ zero)))\n"),
-    ] {
-        let r = std::thread::Builder::new()
-            .stack_size(64 * 1024 * 1024)
-            .spawn(move || match run(seg, 0) {
-                Ok(_) => "ok".to_string(),
-                Err(e) => format!("ERR: {e}"),
-            })
-            .unwrap()
-            .join()
-            .unwrap();
-        println!("SEG {name}: {r}");
-        assert_eq!(r, "ok", "{name}");
-    }
+    let _guard = FILE_IO_LOCK.lock().unwrap();
+    let r = std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(move || run(DEMO_SRC, 0).map(|_| ()))
+        .unwrap()
+        .join()
+        .unwrap();
+    assert!(r.is_ok(), "DEMO_SRC 应整段跑通：{:?}", r);
 }
 
 /// 字符串 builtin：拼接 / 判等 / 缩进。
@@ -1347,13 +1698,13 @@ fn test_file_io_builtins() {
     let _guard = FILE_IO_LOCK.lock().unwrap();
     let out = check(
         r#"
-def p : U = file_write_all_text "l08_test_io.txt" "hello"
-def a : U = file_append_all_text "l08_test_io.txt" "!"
-def r : String = file_read_all_text "l08_test_io.txt"
+def p : U = file_write_all_text "l07_test_io.txt" "hello"
+def a : U = file_append_all_text "l07_test_io.txt" "!"
+def r : String = file_read_all_text "l07_test_io.txt"
 println r
-println (file_exists "l08_test_io.txt")
-def d : U = file_delete "l08_test_io.txt"
-println (file_exists "l08_test_io.txt")
+println (file_exists "l07_test_io.txt")
+def d : U = file_delete "l07_test_io.txt"
+println (file_exists "l07_test_io.txt")
 "#,
     );
     assert_eq!(out, "hello!
@@ -1362,13 +1713,123 @@ false
 ");
 }
 
-// --------------------------------------------------------------------------------
-// L08：积类型（struct / new / 字段投影）
-// --------------------------------------------------------------------------------
+// 显式替换重构（2026-09，dpm-nbe 对齐）的直接单测：Subst 链语义 /
+// force_arg 多层解包 / struct_eq 的 VSub 分支。机制层回归——run 级行为
+// 由上方用例与 l07_fast_parity 双 oracle 覆盖。
 
-/// struct 声明 + new 构造 + 值级字段投影 + 空 struct + 限定构造子应用。
+/// Subst 持久化链：沿链取最新（≙ 旧 pm_def 的 rev().find）、未命中回
+/// vvar、compose 外层覆盖、extend 不影响既有链（臂边界 Rc 回滚的前提）。
 #[test]
-fn test_product_basic() {
+fn subst_chain_semantics() {
+    let s0: std::rc::Rc<Subst> = std::rc::Rc::new(Subst::default());
+    assert!(s0.is_empty());
+
+    let s1 = Subst::extend(&s0, Lvl(5), Val::vvar(Lvl(1)));
+    assert!(s1.has(Lvl(5)));
+    assert!(struct_eq::val_eq(&s1.lookup(Lvl(5)), &Val::vvar(Lvl(1))));
+    // 未命中 = 恒等延拓
+    assert!(struct_eq::val_eq(&s1.lookup(Lvl(9)), &Val::vvar(Lvl(9))));
+
+    // 同键再解：链头（最新）胜
+    let s2 = Subst::extend(&s1, Lvl(5), Val::vvar(Lvl(2)));
+    assert!(struct_eq::val_eq(&s2.lookup(Lvl(5)), &Val::vvar(Lvl(2))));
+    // 旧链不受 extend 影响（Rc 共享）
+    assert!(struct_eq::val_eq(&s1.lookup(Lvl(5)), &Val::vvar(Lvl(1))));
+
+    // compose：外层（后应用）条目覆盖内层同键
+    let outer = Subst::extend(&s0, Lvl(5), Val::vvar(Lvl(3)));
+    let comp = Subst::compose(&outer, &s1);
+    assert!(struct_eq::val_eq(&comp.lookup(Lvl(5)), &Val::vvar(Lvl(3))));
+}
+
+/// lookup 命中的包裹判据：解值引用已解层级 ⇒ 包 VSub(·, σ)（读点推开）；
+/// 干净解值 ⇒ 原样返回（零分配零 fuel 的热路径）。
+#[test]
+fn subst_lookup_conditional_wrap() {
+    let s0: std::rc::Rc<Subst> = std::rc::Rc::new(Subst::default());
+    let s1 = Subst::extend(&s0, Lvl(3), Val::vvar(Lvl(30)));
+    // 1 := Rigid(3)：解值引用已解层级 3 ⇒ 包裹
+    let s2 = Subst::extend(&s1, Lvl(1), Val::vvar(Lvl(3)));
+    match s2.lookup(Lvl(1)) {
+        Val::VSub(v, sub) => {
+            // 包裹携带的是整条 σ（后解的 3 := 30 借此对先解的 1 生效）
+            assert!(std::rc::Rc::ptr_eq(&sub, &s2), "VSub must carry the full subst");
+            assert!(struct_eq::val_eq(&v, &Val::vvar(Lvl(3))));
+        }
+        other => panic!("expected VSub, got {other:?}"),
+    }
+    // 1 := U：解值干净 ⇒ 原样
+    let s3 = Subst::extend(&s1, Lvl(1), Val::U);
+    assert!(matches!(s3.lookup(Lvl(1)), Val::U));
+    // 1 := Rigid(7)：7 未解 ⇒ 原样（精化传播不需要 σ）
+    let s4 = Subst::extend(&s1, Lvl(1), Val::vvar(Lvl(7)));
+    assert!(struct_eq::val_eq(&s4.lookup(Lvl(1)), &Val::vvar(Lvl(7))));
+    // 解值引用藏在**闭包 env 槽**里（mentions_level 区别于 val_mentions_lvl
+    // 的分界情形）：λ 捕获 env 引用已解层级 3 ⇒ 也要包裹
+    let lam = Val::Lam(
+        empty_span("a".to_owned()),
+        Icit::Expl,
+        Closure(List::new().prepend(Val::vvar(Lvl(3))), Rc::new(Tm::Var(Ix(0)))),
+    );
+    let s5 = Subst::extend(&s1, Lvl(1), lam);
+    assert!(matches!(s5.lookup(Lvl(1)), Val::VSub(..)));
+}
+
+/// force_arg 逐层解包：嵌套 match 的上下文被外层臂与内层臂各 subst_cxt
+/// 一次，槽位带两层 VSub——invert/prune 需要看的是裸 rigid 槽位。
+#[test]
+fn force_arg_unwraps_nested_vsub() {
+    let infer = Infer::new();
+    let decl = cxt::Decls::new();
+    let inner: std::rc::Rc<Subst> = std::rc::Rc::new(Subst::default());
+    let outer = Subst::extend(&inner, Lvl(9), Val::U);
+    // 两层包裹、内层是未解的裸 rigid 槽 ⇒ 解包到裸形态（pm_defs 不参与
+    // invert 的旧行为等价）
+    let slot = Val::VSub(Rc::new(Val::vvar(Lvl(7))), outer.clone());
+    let slot = Val::VSub(Rc::new(slot), outer);
+    match infer.force_arg(&decl, slot) {
+        Val::Rigid(x, sp) => {
+            assert!(sp.is_empty());
+            assert_eq!(x, Lvl(7));
+        }
+        other => panic!("expected bare rigid slot, got {other:?}"),
+    }
+    // 内层是已解引用：invert 视角同样**不**推开 σ（旧"pm_defs 不参与
+    // invert"等价——槽位是作用域事实，解的可见性属 force 全量视角）
+    let mapped = Subst::extend(&inner, Lvl(7), Val::U);
+    let slot2 = Val::VSub(Rc::new(Val::vvar(Lvl(7))), mapped);
+    match infer.force_arg(&decl, slot2) {
+        Val::Rigid(x, sp) => {
+            assert!(sp.is_empty());
+            assert_eq!(x, Lvl(7));
+        }
+        other => panic!("expected bare rigid slot, got {other:?}"),
+    }
+    // 对照：全量 force 视角才推开为解值
+    let slot3 = Val::VSub(Rc::new(Val::vvar(Lvl(7))), Subst::extend(&inner, Lvl(7), Val::U));
+    assert!(matches!(infer.force(&decl, slot3), Val::U));
+}
+
+/// struct_eq 的 VSub 分支：同一替换实例（同 Rc）且内层结构相等才短路；
+/// 异实例一律 false 回落慢路径（正确性由 unify 的 force 承接）。
+#[test]
+fn struct_eq_vsub_pointer_identity() {
+    let sub: std::rc::Rc<Subst> = std::rc::Rc::new(Subst::default());
+    let a = Val::VSub(Rc::new(Val::U), sub.clone());
+    let b = Val::VSub(Rc::new(Val::U), sub.clone());
+    assert!(struct_eq::val_eq(&a, &b));
+    let other = Subst::extend(&sub, Lvl(1), Val::U);
+    let c = Val::VSub(Rc::new(Val::U), other);
+    assert!(!struct_eq::val_eq(&a, &c));
+}
+
+/// frcs 对"已解 rigid + 非空 spine"做解析应用（对齐 dpm-nbe 的 napp
+/// 组合子；旧 pm_defs 版在带 spine 的 rigid 上卡住不展开）。函数类型的
+/// 索引槽被特化解成 λ 后，类型位置的应用在 elaboration 期归约——本用例
+/// 在新架构下通过，旧架构下 `Rigid(g,[zero])` 卡住会误报 can't unify。
+/// 性能版移植必须复刻同一归约选择（l07_fast_parity 强制）。
+#[test]
+fn test_fn_typed_index_slot_applied_after_refine() {
     let out = check(
         r#"
 enum Nat {
@@ -1376,366 +1837,168 @@ enum Nat {
     succ(x: Nat)
 }
 
-def two = succ (succ zero)
-def four = succ (succ two)
-
-struct Point {
-    x: Nat
-    y: Nat
+enum Foo(f: Nat -> Nat) {
+    mk -> Foo (n => n)
 }
 
-struct Unit {
-}
+def refl_e[A : U, x: A]: (P : A -> U) -> P x -> P x =
+    P => px => px
 
-def p = new Point(two, four)
-println p.x
-println p.y
-println p
-
-def p2 = Point.mk two four
-println p2
-
-def u = new Unit()
-println u
+def t(g: Nat -> Nat, w: Foo g): (P : Nat -> U) -> P (g zero) -> P zero =
+    match w {
+        case mk => refl_e
+    }
 "#,
     );
-    // 精确断言：p.x = two、p.y = four；p / p2 的显示去重形态（§4）；
-    // nullary 构造子显示为 `Unit.mk`（无实参括号）
-    assert_eq!(
-        out,
-        "Nat::succ(Nat::succ(Nat::zero))\n\
-         Nat::succ(Nat::succ(Nat::succ(Nat::succ(Nat::zero))))\n\
-         Point.mk(Nat::succ(Nat::succ(Nat::zero)) Nat::succ(Nat::succ(Nat::succ(Nat::succ(Nat::zero)))))\n\
-         Point.mk(Nat::succ(Nat::succ(Nat::zero)) Nat::succ(Nat::succ(Nat::succ(Nat::succ(Nat::zero)))))\n\
-         Unit.mk\n"
-    );
+    assert!(out.is_empty(), "{out}");
 }
 
-/// 泛型 struct（隐式参数）+ 类型级投影（`get_x` 的 `p.x`：接收者只有
-/// `Val::Sum` 类型）+ 字段构造的递归函数。形态对齐旧 L08 test2。
+/// 深嵌套模式的 fuel 预算边界回归：d=400 的逐层 cons 嵌套 + 通配兜底。
+/// 显式替换初版把"每次 VSub 推开"都计 1 fuel，燃烧剖面劣化使默认 4096
+/// 池在 d≈380 耗尽、被误报"分支不可达"（假 absurd）；燃烧点移到 lookup
+/// 命中后剖面与旧 pm_defs 对齐（旧版 d=2000 仍在预算内）。d=400 为
+/// 修复前的确定性失败点。512 MB 栈（走查递归深度 × walk_con 帧较大）。
 #[test]
-fn test_product_generic() {
-    let out = check(
-        r#"
-enum Nat {
+fn test_deep_pattern_fuel_budget_regression() {
+    let depth = 400usize;
+    let mut big = "nil".to_owned();
+    for i in 0..depth {
+        let elem = if i + 1 == depth { "succ zero" } else { "zero" };
+        big = format!("cons ({elem}) ({big})");
+    }
+    let mut pat = "nil".to_owned();
+    for i in (0..depth).rev() {
+        pat = format!("cons(h{i}, {pat})");
+    }
+    let src = format!(
+        "{NAT}{VEC}
+def big = {big}
+
+def f[n: Nat](v: Vec[Nat] n): Nat =
+    match v {{
+        case {pat} => h0
+        case _ => zero
+    }}
+
+println (f big)
+",
+        NAT = r#"enum Nat {
     zero
     succ(x: Nat)
 }
 
-def add(x: Nat, y: Nat): Nat =
-    match x {
-        case zero => y
-        case succ(n) => succ (add n y)
+"#,
+        VEC = r#"enum Vec[A](len: Nat) {
+    nil -> Vec[A] zero
+    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
+}
+
+"#,
+    );
+    let src = src.to_owned();
+    let out = std::thread::Builder::new()
+        .stack_size(512 * 1024 * 1024)
+        .spawn(move || run(&src, 0).unwrap_or_else(|e| panic!("check failed: {e:?}")))
+        .unwrap()
+        .join()
+        .unwrap();
+    assert_eq!(out.lines().next(), Some("Nat::succ(Nat::zero)"));
+}
+
+/// README §7.6 回归钉（2026-09-18）：深值（succ^N 链）上的 occurs 守卫与
+/// 结构相等全部迭代化——**默认测试栈**（约 2 MB，正是“常规栈 1–8 MB”的
+/// 下界）下不再爆栈（旧递归版在 ~万级深度爆栈）。深链的 Rc/Drop 自身是
+/// 深递归（测试基建的坑，非被测代码），故 ManuallyDrop 泄漏给进程。
+#[test]
+fn deep_value_iterative_under_default_stack() {
+    const N_OCCURS: usize = 100_000;
+    const N_EQ: usize = 4_000;
+
+    fn nat_sum() -> Val {
+        Val::Sum(
+            empty_span("Nat".to_string()),
+            Rc::new(vec![]),
+            Rc::new(vec![
+                empty_span("zero".to_string()),
+                empty_span("succ".to_string()),
+            ]),
+        )
+    }
+    fn succ_of(typ: &std::rc::Rc<Val>, prev: Val) -> Val {
+        Val::SumCase {
+            typ: std::rc::Rc::clone(typ),
+            case_name: empty_span("succ".to_string()),
+            datas: Rc::new(vec![(empty_span("x".to_string()), std::rc::Rc::new(prev), Icit::Expl)]),
+        }
+    }
+    fn chain(nat: &std::rc::Rc<Val>, n: usize) -> Val {
+        let mut v = Val::SumCase {
+            typ: std::rc::Rc::clone(nat),
+            case_name: empty_span("zero".to_string()),
+            datas: Rc::new(vec![]),
+        };
+        for _ in 0..n {
+            v = succ_of(nat, v);
+        }
+        v
     }
 
-def two = succ (succ zero)
-def four = add two two
-
-struct Point[T] {
-    x: T
-    y: T
-}
-
-def get_x[T](p: Point[T]) = p.x
-
-def point_add(p1: Point[Nat], p2: Point[Nat]): Point[Nat] =
-    new Point((add p1.x p2.x), (add p1.y p2.y))
-
-def start_point = new Point(zero, four)
-def end_point = new Point(four, two)
-
-println (get_x start_point)
-println (point_add start_point end_point)
-
-def sy : Nat = end_point.y
-println sy
-"#,
-    );
-    // 精确断言：get_x start_point = zero；point_add 两分量 = add zero four
-    // （= four）与 add four two（= six）；sy = end_point.y = two。
-    assert_eq!(
-        out,
-        "Nat::zero\n\
-         Point.mk(Nat::succ(Nat::succ(Nat::succ(Nat::succ(Nat::zero)))) Nat::succ(Nat::succ(Nat::succ(Nat::succ(Nat::succ(Nat::succ(Nat::zero)))))))\n\
-         Nat::succ(Nat::succ(Nat::zero))\n"
-    );
-}
-
-/// 依赖字段（Sigma 积）：`Bits.name : String` 用字面量类型；
-/// `Exists` 的 `proof` 字段依赖 `witness`；`Exists.mk` 显式实例化隐式参数。
-#[test]
-fn test_product_dependent() {
-    let out = check(
-        r#"
-def Eq[A : U](x: A, y: A): U = (P : A -> U) -> P x -> P y
-def rfl[A : U, x: A]: Eq[A] x x = _ => px => px
-
-enum Nat {
-    zero
-    succ(x: Nat)
-}
-
-def two = succ (succ zero)
-
-struct Bits {
-    name: String
-    size: Nat
-}
-
-def get_name(x: Bits) = x.name
-def sigA = new Bits("A", two)
-println (get_name sigA)
-println sigA
-
-struct Exists[A: U, P: A -> U] {
-    witness: A
-    proof: (P witness)
-}
-
-def exists_two: Exists[Nat][x => Eq x two] =
-    Exists.mk[Nat][x => Eq x two] two rfl
-
-println exists_two
-def w : Nat = exists_two.witness
-println w
-"#,
-    );
-    // 精确断言（已知形态的行）：get_name sigA = "A"（String 值裸打）；
-    // sigA 的 Bits.mk 两字段；w = exists_two.witness = two。
-    // （exists_two 自身的 Exists.mk 显示带隐参形态，泛型测试已覆盖同构
-    // 输出，这里不锁死。）
-    let lines: Vec<&str> = out.lines().collect();
-    assert_eq!(lines.first(), Some(&"A"), "{out}");
+    let nat = std::rc::Rc::new(nat_sum());
+    // ① occurs 守卫：10 万层深链（无预算，纯遍历）
+    let deep = std::mem::ManuallyDrop::new(chain(&nat, N_OCCURS));
     assert!(
-        out.contains(
-            "Bits.mk(A Nat::succ(Nat::succ(Nat::zero)))"
-        ),
-        "{out}"
+        !val_mentions_lvl(&deep, Lvl(1)),
+        "深链不含 Lvl(1)（且旧递归版此处爆栈）"
     );
-    assert_eq!(
-        lines.last(),
-        Some(&"Nat::succ(Nat::succ(Nat::zero))"),
-        "{out}"
+    // 链中段嵌 Rigid(7)：命中为 true、别处为 false
+    let mut with_rigid = Val::vvar(Lvl(7));
+    for _ in 0..N_OCCURS / 2 {
+        with_rigid = succ_of(&nat, with_rigid);
+    }
+    let with_rigid = std::mem::ManuallyDrop::new(with_rigid);
+    assert!(val_mentions_lvl(&with_rigid, Lvl(7)));
+    assert!(!val_mentions_lvl(&with_rigid, Lvl(1)));
+
+    // ② 结构相等：预算内同构链判等；超预算（10 万层 > EQ_BUDGET 2 万）
+    // 有界降级为 false——两者都不爆栈
+    let a = std::mem::ManuallyDrop::new(chain(&nat, N_EQ));
+    let b = std::mem::ManuallyDrop::new(chain(&nat, N_EQ));
+    assert!(struct_eq::val_eq(&a, &b), "同构深链应判等（预算内）");
+    let c = std::mem::ManuallyDrop::new(chain(&nat, N_OCCURS));
+    assert!(
+        !struct_eq::val_eq(&deep, &c),
+        "超预算应有界降级（false），不爆栈"
     );
-}
 
-/// 字段不存在 → 类型级与值级都给 `has no field` 错误。
-#[test]
-fn test_product_field_err() {
-    let e1 = check_err(
-        r#"
-enum Nat {
-    zero
-    succ(x: Nat)
-}
-
-struct Point {
-    x: Nat
-}
-
-def p = new Point(zero)
-def bad = p.zzz
-"#,
-    );
-    assert!(e1.contains("has no field"), "{e1}");
-    let e2 = check_err(
-        r#"
-enum Nat {
-    zero
-    succ(x: Nat)
-}
-
-struct Point {
-    x: Nat
-}
-
-def bad(p: Point) = p.zzz
-"#,
-    );
-    assert!(e2.contains("has no field"), "{e2}");
-}
-
-/// struct 的字段名与 enum 的索引参数名一样参与投影查找（参数槽优先），
-/// 且普通单 case enum（case 名不带 `.mk`）不享受类型级剥链——旧 L08 的
-/// `contains(".mk")` 门控。
-#[test]
-fn test_product_vs_plain_enum() {
-    let e = check_err(
-        r#"
-enum Nat {
-    zero
-    succ(x: Nat)
-}
-
-enum Wrap {
-    only(x: Nat)
-}
-
-def bad(w: Wrap) = w.x
-"#,
-    );
-    assert!(e.contains("has no field"), "{e}");
-}
-
-/// 依赖字段投影出现在检查位：类型级剥链对前字段 binder 用接收者的
-/// 卡住投影实例化，`e.proof` 拿到 `Eq e.witness two`（评审修复回归——
-/// 旧 `U` 占位下 `P e.witness` vs `P U` 合一失败，合法程序被假拒）。
-#[test]
-fn test_product_dependent_check() {
-    let out = check(
-        r#"
-enum Nat {
-    zero
-    succ(x: Nat)
-}
-
-def Eq[A : U](x: A, y: A): U = (P : A -> U) -> P x -> P y
-def rfl[A : U, x: A]: Eq[A] x x = _ => px => px
-def two = succ (succ zero)
-
-struct Exists[A: U, P: A -> U] {
-    witness: A
-    proof: (P witness)
-}
-
-def use_proof (e : Exists[Nat][x => Eq x two]) : Eq e.witness two = e.proof
-def e2 : Exists[Nat][x => Eq x two] = Exists.mk[Nat][x => Eq x two] two rfl
-def z : Eq e2.witness two = e2.proof
-println z
-"#,
-    );
-    assert!(out.contains("_ => px => px"), "{out}");
-}
-
-/// `new` 结果直接接 `.field` 投影后缀链（与括号形式等价）；实参位
-/// 嵌套 `new` 不受影响。
-#[test]
-fn test_product_new_dot_chain() {
-    let out = check(
-        r#"
-enum Nat {
-    zero
-    succ(x: Nat)
-}
-def two = succ (succ zero)
-
-struct Point {
-    x: Nat
-    y: Nat
-}
-
-struct Line {
-    a: Point
-    b: Point
-}
-
-def d1 = new Point(two, zero).x
-def d2 = new Line(new Point(zero, zero), new Point(two, two)).b.x
-println d1
-println d2
-"#,
-    );
-    assert!(out.contains("Nat::succ(Nat::succ(Nat::zero))"), "{out}");
-    assert_eq!(
-        out.lines().filter(|x| x.contains("succ")).count(),
-        2,
-        "{out}"
-    );
-}
-
-/// 投影接收者的**局部遮蔽**回归：`Foo.c2` 的限定构造子快捷路径不得越过
-/// 局部 binder——`Foo` 是函数参数（类型 S）时必须投影其字段，而不是静默
-/// 解析成全局构造子 `Foo.c2`（旧实现先查 decl 表，恒返回 `c2` 的错误 Ok）。
-/// 同形 `Foo: Nat` 的接收者则报 `Nat has no field c2`（修复前是 Ok）。
-#[test]
-fn test_product_shadow() {
-    let out = check(
-        r#"
-enum Nat {
-    zero
-    succ(x: Nat)
-}
-
-enum Foo {
-    c1(x: Nat)
-    c2
-}
-
-struct S {
-    c2: Foo
-}
-
-def s : S = new S(c1 zero)
-def pick(Foo: S) = Foo.c2
-println (pick s)
-"#,
-    );
-    // 普通 enum case 的打印形态是 `Foo::c1`（§4 去重只作用于 `.mk` 形态）；
-    // 修复前此处恒打印全局构造子 `Foo::c2`
-    assert_eq!(out, "Foo::c1(Nat::zero)\n");
-    let e = check_err(
-        r#"
-enum Nat {
-    zero
-    succ(x: Nat)
-}
-
-enum Foo {
-    c1(x: Nat)
-    c2
-}
-
-def pick(Foo: Nat) = Foo.c2
-"#,
-    );
-    assert!(e.contains("has no field"), "{e}");
-}
-
-/// struct 字段间与 enum case 间容忍连续空行与注释行（注释行经 preprocess
-/// 剥成空白后仍产生 EndLine，单 EndLine 分隔会把字段/case 间注释打成
-/// 语法错误——与 match 臂的 `EndLine.many1()` 分隔同款）。
-#[test]
-fn test_product_field_blank_lines() {
-    let out = check(
-        r#"
-enum Nat {
-    zero
-
-    // case 间注释行
-    succ(x: Nat)
-}
-
-struct P {
-    x: Nat
-
-    // 注释行 + 空行
-    y: Nat
-}
-
-def p = new P(zero, (succ (succ zero)))
-println p.y
-"#,
-    );
-    assert_eq!(out, "Nat::succ(Nat::succ(Nat::zero))\n");
-}
-
-/// lexer 空字符串与转义回归（L08 附带修复）：组合子版 `string` 用
-/// `pmatch(c != '"')` 至少吃一字符，字面量 `""` 被误杀、`\` 不跳转义
-/// 使 `\"` 提前截断；重写为逐字节扫描（`\` 跳两字节）后形态正确。
-#[test]
-fn test_string_empty_and_escape() {
-    let out = check(
-        r#"
-println ""
-println "a\"b"
-println "\\"
-"#,
-    );
-    assert_eq!(out, "\na\"b\n\\\n");
+    // ③ quote（README §7.6：曾是仅剩的递归路径）+ pretty（定深截断）：
+    //    10 万层深链在**默认 2 MB 测试栈**下不爆栈。
+    //
+    //    值的消费路径是 move（frame 内 match 逐字段搬走、rc_take 对唯一
+    //    Rc try_unwrap 成功），不会触发深递归 Drop；返回的 Tm 是 Box 链，
+    //    必须 ManuallyDrop 泄漏（测试基建，同本测试的 Rc 链处理）。
+    let infer2 = Infer::new();
+    let decls = cxt::Decls::new();
+    let quoted = std::mem::ManuallyDrop::new(infer2.quote(&decls, Lvl(0), chain(&nat, N_OCCURS)));
+    // 迭代校验结构（不递归）：层数 = N_OCCURS + 1，且逐层是 SumCase
+    let mut depth = 1usize;
+    let mut cur: &Tm = &quoted;
+    loop {
+        match cur {
+            Tm::SumCase { datas, .. } if !datas.is_empty() => {
+                depth += 1;
+                cur = &datas[0].1;
+            }
+            _ => break,
+        }
+    }
+    assert_eq!(depth, N_OCCURS + 1, "quote 应逐层产出 SumCase");
+    // pretty：超深输入按 MAX_DEPTH 截断（不 panic、不爆栈）
+    let shown = pretty::pretty_tm(0, List::new(), &quoted);
+    assert!(shown.contains('…'), "深值显示应定深截断");
 }
 
 // --------------------------------------------------------------------------------
-// 2026-09-18 评审回归钉（四角度评审 + 修复轮，自 L07 同款移植）：
+// 2026-09-18 评审回归钉（四角度评审 + 修复轮）：
 // 嵌套覆盖检查 / stale-solvable 臂序污染 / 构造子良构性。
 
 /// P0（嵌套覆盖缺失）：nil 臂 + cons(h, nil) 臂缺 cons(h, cons(..))——
@@ -1792,7 +2055,12 @@ def f(x: List[Nat]): Nat =
 
 /// P1（stale-solvable 臂序污染）：big 臂（5 槽）在前时，其陈旧可解条目
 /// 让后续 ident 荒谬臂的瞬态 η 被误判可解——修复前静默接受（臂序依赖），
-/// 修复后两种臂序一致报"分支不可达"。
+/// 修复后两种臂序一致拒绝。
+///
+/// 文案是"无法判定"而非"分支不可达"（P3 第二刀）：该方程是
+/// `n => n` ≐ `n => succ zero`，落到 λ 体 `n ≐ succ zero` —— 刚性变量
+/// 不能被求解（不在可解集），所以既不能证相等、也不能证矛盾（Agda/dpm 的
+/// "cannot solve / UIDK"），而不是"这两个函数确定不同"。
 #[test]
 fn test_stale_solvable_order_independent() {
     for arms in [
@@ -1819,7 +2087,8 @@ def t(w: W (n => succ zero)): Nat =
 "#
         );
         let msg = check_err(&src);
-        assert!(msg.contains("分支不可达"), "{msg}");
+        assert!(msg.contains("无法判定"), "{msg}");
+        assert!(!msg.contains("分支不可达"), "undecided 不得伪装成不可达: {msg}");
     }
 }
 
@@ -1866,11 +2135,572 @@ enum Foo[A] {
     assert!(msg.contains("参数变量"), "{msg}");
 }
 
-/// 两段式结算的正向钉（v3_len_two_nested_pattern_refine 同款）：`Vec[Nat]
-/// two` 上嵌套两层 cons——外层方程解出 `l := succ zero` 后，字段 Sum 置于
-/// 终态 σ 下 force，内层位置才正确判出 cons 可达、nil 不可达。若在字段
-/// 走查中途早记 σ（第一版实现），外层解不在其中，内层 cons 会被误判
-/// 可达并报缺 nil。
+/// P10 回归钉：臂级错误携带源码 span（供 LSP 定位），且 `Display` 文案不变
+/// （位置**不**进文案——避免既有 golden 漂移）。
+#[test]
+fn error_carries_pattern_span() {
+    let src = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def f(n: Nat): Nat =
+    match n {
+        case x => zero
+        case zero => zero
+    }
+"#;
+    let input = src.to_owned();
+    let err = std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(move || run(&input, 0))
+        .unwrap()
+        .join()
+        .unwrap()
+        .expect_err("被遮蔽臂应报错");
+    let msg = err.to_string();
+    assert!(msg.contains("分支不可达"), "{msg}");
+    // Display 只打文案：不得出现行号/列号前缀
+    assert!(!msg.starts_with("1:"), "文案不应含位置前缀: {msg}");
+    let span = err.span().expect("臂级错误应携带 span");
+    assert!(span.start_offset < span.end_offset, "span 应非空");
+    assert!(span.end_offset as usize <= src.len(), "span 越界");
+    assert_eq!(span.path_id, 0);
+    // 定位应指向出问题的模式（被遮蔽臂的构造子 `zero`）
+    let tail = &src[span.start_offset as usize..span.end_offset as usize];
+    assert_eq!(tail, "zero", "span 应指向出问题的构造子: {tail:?}");
+}
+
+/// P10 第二步回归钉：解析错误也带位置，且文案契约**不变**（黑盒钉死）。
+/// R6（2026-11-08）：span 的**内容**也被钉住——语法错误指向失败 token `)`、
+/// 残余 token 指向 `;`（修复前前者切出 `def`，非空断言钉不住）。
+#[test]
+fn parse_error_carries_span() {
+    // 语法错误：`)` 不是表达式
+    let src = "def f : Nat = )\n";
+    let err = run(src, 0).unwrap_err();
+    assert_eq!(err.to_string(), "parse error", "文案契约不变");
+    let sp = err.span().expect("parse error 应带位置");
+    assert!(sp.end_offset as usize <= src.len(), "span 越界");
+    assert_eq!(sp.path_id, 0);
+    // R6（2026-11-08 review）：不只断言"非空"——span 必须指向**失败 token**
+    // 本身（`)`），而不是失败 decl 的首 token（`def`；修复前正是后者，旧断言
+    // 钉不住）。切片断言让位置错时立刻红。
+    let bad = &src[sp.start_offset as usize..sp.end_offset as usize];
+    assert_eq!(
+        bad, ")",
+        "span 应指向失败 token `)`，实际切片 {bad:?}（offset {}..{}）",
+        sp.start_offset, sp.end_offset
+    );
+
+    // 残余 token：消息仍含偏移（旧契约），位置指向残余 token 本身
+    let src2 = "println U ;\n";
+    let err2 = run(src2, 0).unwrap_err();
+    assert!(
+        err2.to_string().starts_with("parse error: leftover token"),
+        "{}",
+        err2
+    );
+    let sp2 = err2.span().expect("leftover 应带位置");
+    let tok = &src2[sp2.start_offset as usize..sp2.end_offset as usize];
+    assert_eq!(tok, ";", "位置应指向残余 token: {tok:?}");
+}
+
+/// R6 回归钉（2026-11-08 review R6）：语法错误的 span 必须指向**失败 token**
+/// 本身，而不是「失败 decl 的首 token」。修复前 `many1_sep` 在零 item 时用
+/// 剩余输入首 token 覆盖底层错误 ⇒ 本用例 span=(0,3) 切出 `def`；修复后
+/// `p_decl` 用 `or_far` 保留最远失败备选（p_def 在 `)` 处的错误优先于
+/// p_print/p_enum 在 decl 首 token 处的错误）⇒ span=(14,15) 切出 `)`。
+#[test]
+fn test_parse_error_span_points_at_failing_token() {
+    let src = "def f : Nat = )\n";
+    let err = run(src, 0).unwrap_err();
+    assert_eq!(err.to_string(), "parse error", "文案契约不变");
+    let sp = err.span().expect("语法错误应带位置");
+    assert!(sp.end_offset as usize <= src.len(), "span 越界");
+    let got = &src[sp.start_offset as usize..sp.end_offset as usize];
+    assert_eq!(
+        got, ")",
+        "语法错误 span 应指向失败 token `)`，实际切片 {got:?}（offset {}..{}）",
+        sp.start_offset, sp.end_offset
+    );
+}
+
+/// R7 回归钉（2026-11-08 review R7）：`preprocess` 把注释替换为**等字节数**
+/// 的空白（非 ASCII 字符按 `len_utf8` 个空格），因此注释里出现非 ASCII 字符时
+/// 后续 token 的 span 偏移也不会前移；`Error::span` 的偏移可按**原文本**切片。
+/// 本用例中 `;` 在原文本与预处理文本都是 27..28；修复前 4 个中文字（12 字节）
+/// 被压成 4 字节，leftover span=(19,20) 在原文本切出 `f`。
+#[test]
+fn test_parse_error_span_matches_raw_source_with_unicode_comment() {
+    let src = "// 中文注释\n\ndef x = U ;\n";
+    // 机制钉：注释替换保持字节长度，否则后续偏移必然漂移
+    assert_eq!(
+        preprocess(src).len(),
+        src.len(),
+        "preprocess 必须保持字节长度（非 ASCII 注释按 len_utf8 空格替换）"
+    );
+    let err = run(src, 0).unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.starts_with("parse error: leftover token"),
+        "文案契约不变，got: {msg}"
+    );
+    let sp = err.span().expect("leftover 错误应带位置");
+    assert!(sp.end_offset as usize <= src.len(), "span 越界");
+    let got = &src[sp.start_offset as usize..sp.end_offset as usize];
+    assert_eq!(
+        got, ";",
+        "span 必须按原文本坐标切开，实际切片 {got:?}（offset {}..{}）",
+        sp.start_offset, sp.end_offset
+    );
+}
+
+/// P6 回归钉（**已知边界**，不是 bug）：σ 只作用于被 `VSub` 包裹过的值；
+/// decl 表条目（`Val::Decl` 展开后的缓存 WHNF）与 meta 解值不在扫描/包裹
+/// 范围内。因此「def 缓存值里引用稍后被特化的槽位」时，精化在该读点不可见
+/// ——这是 README §1.3 记录的既有取舍（与 dpm 的对齐边界）。
+///
+/// 若未来把 σ 也推进 decl 条目，本钉会红：届时必须**同步更新 README/设计稿**
+/// 说明意图变化，而不是默默改掉语义。
+#[test]
+fn visibility_boundary_decl_value_is_not_refined() {
+    let infer = Infer::new();
+    let cxt = Cxt::new(&infer);
+    // def d := x（缓存值直接引用槽位 Lvl(0)）
+    let cxt = cxt.decl_insert(
+        "d",
+        cxt::DeclEntry { prim: None, eta: None, prim_names: None,
+            ty: Val::U,
+            val: Val::vvar(Lvl(0)),
+        },
+    );
+    let decls: &cxt::Decls = cxt.decl();
+    let sub = Subst::extend(&std::rc::Rc::new(Subst::default()), Lvl(0), Val::U);
+
+    // ① 直接包裹的 rigid：σ 在 force 读点推开 ⇒ 精化可见
+    let direct = infer.force(&decls.clone(), Val::VSub(Rc::new(Val::vvar(Lvl(0))), sub.clone()));
+    assert!(matches!(direct, Val::U), "被包裹的 rigid 应按 σ 展开为 U，got {direct:?}");
+
+    // ② decl 条目里的同名引用：σ 不进入 decl 缓存值 ⇒ 精化不可见
+    let d = Val::Decl("d".into(), List::new());
+    let via_decl = infer.force(decls, Val::VSub(Rc::new(d), sub));
+    match via_decl {
+        Val::Rigid(l, ref sp) => {
+            assert_eq!(l, Lvl(0), "decl 缓存值应原样（未被 σ 推开）");
+            assert!(sp.is_empty());
+        }
+        other => panic!("decl 缓存值不应被 σ 精化，got {other:?}"),
+    }
+}
+
+/// P5 回归钉：跨 meta 环（m1 := ?m2、m2 := ?m1）的 force 必须**有界终止**：
+/// 环守卫在展开栈上发现重复 meta 即返回卡住的 Flex，不再靠 fuel 烧尽兜底。
+#[test]
+fn cross_meta_cycle_force_is_bounded() {
+    let mut infer = Infer::new();
+    let ty = Val::U;
+    let m1 = infer.new_meta(ty.clone());
+    let m2 = infer.new_meta(ty.clone());
+    infer.overwrite_meta(m1, MetaEntry::Solved(Val::Flex(m2, List::new()), ty.clone()));
+    infer.overwrite_meta(m2, MetaEntry::Solved(Val::Flex(m1, List::new()), ty.clone()));
+    let decls = cxt::Decls::new();
+    infer.unify_fuel.set(64);
+    let out = infer.force(&decls, Val::Flex(m1, List::new()));
+    assert!(matches!(out, Val::Flex(..)), "环应降级为卡住的 Flex，got {out:?}");
+    assert!(
+        infer.unify_fuel.get() > 0,
+        "环守卫应避免烧光 fuel（旧行为靠耗尽兜底）：left {} ",
+        infer.unify_fuel.get()
+    );
+    assert!(infer.meta_expanding.borrow().is_empty(), "展开栈应在返回时清空");
+}
+
+/// P8 回归钉：宽松合一（String vs 未登记名的卡住 Decl/Prim）只对**空 spine**
+/// 放行——string_to_global_type 的"动态类型"是裸 Decl(name, [])；带实参的
+/// 未知卡住头不是动态类型（只是未知函数被应用），与 String 判不出来
+/// （Undecided），不得静默判等。
+#[test]
+fn loose_string_requires_empty_spine() {
+    let mut infer = Infer::new();
+    let cxt = Cxt::new(&infer);
+    let decls: &cxt::Decls = cxt.decl();
+
+    // ① 空 spine（st2g 对未知名的产物）：放行
+    let bare = Val::Decl("Missing".into(), List::new());
+    assert!(
+        infer.unify(decls, Lvl(0), &cxt, Val::LiteralType, bare, None).is_ok(),
+        "未知名裸 Decl 应作为动态类型放行"
+    );
+
+    // ② 非空 spine（未知函数被应用）：判不出来，且不得标记为 Absurd
+    let applied = Val::Decl(
+        "Missing".into(),
+        List::new().prepend((Val::U, Icit::Expl)),
+    );
+    infer.reset_unify_kind();
+    assert!(
+        infer
+            .unify(decls, Lvl(0), &cxt, Val::LiteralType, applied, None)
+            .is_err(),
+        "未知名 + 非空 spine 不应被宽松臂放行"
+    );
+    assert_eq!(
+        infer.unify_kind(),
+        UnifyKind::Undecided,
+        "应记为无法判定（不是矛盾）"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// L08 积类型 / 本层回归（自 L08 基线版本保留）
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_product_basic() {
+    let out = check(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def two = succ (succ zero)
+def four = succ (succ two)
+
+struct Point {
+    x: Nat
+    y: Nat
+}
+
+struct Unit {
+}
+
+def p = new Point(two, four)
+println p.x
+println p.y
+println p
+
+def p2 = Point.mk two four
+println p2
+
+def u = new Unit()
+println u
+"#,
+    );
+    // 精确断言：p.x = two、p.y = four；p / p2 的显示去重形态（§4）；
+    // nullary 构造子显示为 `Unit.mk`（无实参括号）
+    assert_eq!(
+        out,
+        "Nat::succ(Nat::succ(Nat::zero))\n\
+         Nat::succ(Nat::succ(Nat::succ(Nat::succ(Nat::zero))))\n\
+         Point.mk(Nat::succ(Nat::succ(Nat::zero)) Nat::succ(Nat::succ(Nat::succ(Nat::succ(Nat::zero)))))\n\
+         Point.mk(Nat::succ(Nat::succ(Nat::zero)) Nat::succ(Nat::succ(Nat::succ(Nat::succ(Nat::zero)))))\n\
+         Unit.mk\n"
+    );
+}
+
+#[test]
+fn test_product_generic() {
+    let out = check(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def two = succ (succ zero)
+def four = add two two
+
+struct Point[T] {
+    x: T
+    y: T
+}
+
+def get_x[T](p: Point[T]) = p.x
+
+def point_add(p1: Point[Nat], p2: Point[Nat]): Point[Nat] =
+    new Point((add p1.x p2.x), (add p1.y p2.y))
+
+def start_point = new Point(zero, four)
+def end_point = new Point(four, two)
+
+println (get_x start_point)
+println (point_add start_point end_point)
+
+def sy : Nat = end_point.y
+println sy
+"#,
+    );
+    // 精确断言：get_x start_point = zero；point_add 两分量 = add zero four
+    // （= four）与 add four two（= six）；sy = end_point.y = two。
+    assert_eq!(
+        out,
+        "Nat::zero\n\
+         Point.mk(Nat::succ(Nat::succ(Nat::succ(Nat::succ(Nat::zero)))) Nat::succ(Nat::succ(Nat::succ(Nat::succ(Nat::succ(Nat::succ(Nat::zero)))))))\n\
+         Nat::succ(Nat::succ(Nat::zero))\n"
+    );
+}
+
+#[test]
+fn test_product_dependent() {
+    let out = check(
+        r#"
+def Eq[A : U](x: A, y: A): U = (P : A -> U) -> P x -> P y
+def rfl[A : U, x: A]: Eq[A] x x = _ => px => px
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def two = succ (succ zero)
+
+struct Bits {
+    name: String
+    size: Nat
+}
+
+def get_name(x: Bits) = x.name
+def sigA = new Bits("A", two)
+println (get_name sigA)
+println sigA
+
+struct Exists[A: U, P: A -> U] {
+    witness: A
+    proof: (P witness)
+}
+
+def exists_two: Exists[Nat][x => Eq x two] =
+    Exists.mk[Nat][x => Eq x two] two rfl
+
+println exists_two
+def w : Nat = exists_two.witness
+println w
+"#,
+    );
+    // 精确断言（已知形态的行）：get_name sigA = "A"（String 值裸打）；
+    // sigA 的 Bits.mk 两字段；w = exists_two.witness = two。
+    // （exists_two 自身的 Exists.mk 显示带隐参形态，泛型测试已覆盖同构
+    // 输出，这里不锁死。）
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.first(), Some(&"A"), "{out}");
+    assert!(
+        out.contains(
+            "Bits.mk(A Nat::succ(Nat::succ(Nat::zero)))"
+        ),
+        "{out}"
+    );
+    assert_eq!(
+        lines.last(),
+        Some(&"Nat::succ(Nat::succ(Nat::zero))"),
+        "{out}"
+    );
+}
+
+#[test]
+fn test_product_field_err() {
+    let e1 = check_err(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+struct Point {
+    x: Nat
+}
+
+def p = new Point(zero)
+def bad = p.zzz
+"#,
+    );
+    assert!(e1.contains("has no field"), "{e1}");
+    let e2 = check_err(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+struct Point {
+    x: Nat
+}
+
+def bad(p: Point) = p.zzz
+"#,
+    );
+    assert!(e2.contains("has no field"), "{e2}");
+}
+
+#[test]
+fn test_product_vs_plain_enum() {
+    let e = check_err(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Wrap {
+    only(x: Nat)
+}
+
+def bad(w: Wrap) = w.x
+"#,
+    );
+    assert!(e.contains("has no field"), "{e}");
+}
+
+#[test]
+fn test_product_dependent_check() {
+    let out = check(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def Eq[A : U](x: A, y: A): U = (P : A -> U) -> P x -> P y
+def rfl[A : U, x: A]: Eq[A] x x = _ => px => px
+def two = succ (succ zero)
+
+struct Exists[A: U, P: A -> U] {
+    witness: A
+    proof: (P witness)
+}
+
+def use_proof (e : Exists[Nat][x => Eq x two]) : Eq e.witness two = e.proof
+def e2 : Exists[Nat][x => Eq x two] = Exists.mk[Nat][x => Eq x two] two rfl
+def z : Eq e2.witness two = e2.proof
+println z
+"#,
+    );
+    assert!(out.contains("_ => px => px"), "{out}");
+}
+
+#[test]
+fn test_product_new_dot_chain() {
+    let out = check(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+def two = succ (succ zero)
+
+struct Point {
+    x: Nat
+    y: Nat
+}
+
+struct Line {
+    a: Point
+    b: Point
+}
+
+def d1 = new Point(two, zero).x
+def d2 = new Line(new Point(zero, zero), new Point(two, two)).b.x
+println d1
+println d2
+"#,
+    );
+    assert!(out.contains("Nat::succ(Nat::succ(Nat::zero))"), "{out}");
+    assert_eq!(
+        out.lines().filter(|x| x.contains("succ")).count(),
+        2,
+        "{out}"
+    );
+}
+
+#[test]
+fn test_product_shadow() {
+    let out = check(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Foo {
+    c1(x: Nat)
+    c2
+}
+
+struct S {
+    c2: Foo
+}
+
+def s : S = new S(c1 zero)
+def pick(Foo: S) = Foo.c2
+println (pick s)
+"#,
+    );
+    // 普通 enum case 的打印形态是 `Foo::c1`（§4 去重只作用于 `.mk` 形态）；
+    // 修复前此处恒打印全局构造子 `Foo::c2`
+    assert_eq!(out, "Foo::c1(Nat::zero)\n");
+    let e = check_err(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Foo {
+    c1(x: Nat)
+    c2
+}
+
+def pick(Foo: Nat) = Foo.c2
+"#,
+    );
+    assert!(e.contains("has no field"), "{e}");
+}
+
+#[test]
+fn test_product_field_blank_lines() {
+    let out = check(
+        r#"
+enum Nat {
+    zero
+
+    // case 间注释行
+    succ(x: Nat)
+}
+
+struct P {
+    x: Nat
+
+    // 注释行 + 空行
+    y: Nat
+}
+
+def p = new P(zero, (succ (succ zero)))
+println p.y
+"#,
+    );
+    assert_eq!(out, "Nat::succ(Nat::succ(Nat::zero))\n");
+}
+
+#[test]
+fn test_string_empty_and_escape() {
+    let out = check(
+        r#"
+println ""
+println "a\"b"
+println "\\"
+"#,
+    );
+    assert_eq!(out, "\na\"b\n\\\n");
+}
+
 #[test]
 fn test_nested_pattern_refine_two_phase() {
     let out = check(
@@ -1898,10 +2728,6 @@ println (len_two (cons zero (cons two nil)))
     assert_eq!(out, "Nat::succ(Nat::succ(Nat::zero))\n");
 }
 
-/// 荒谬臂不产生覆盖义务（v3_absurd_nested_pattern_both_errors 同款）：
-/// `Vec[Nat] (succ zero)` 上的 `cons(h, cons(h2, t))`——内层 cons 结构
-/// 冲突 → 整臂不可达；nil 在该头部类型上同样不可达 → 不计覆盖要求
-/// （只报不可达一条，不叠加"缺 nil"）。
 #[test]
 fn test_absurd_nested_pattern_not_missing_coverage() {
     let msg = check_err(
@@ -1927,92 +2753,4 @@ def bad(v: Vec[Nat] (succ zero)): Nat =
         !msg.contains("缺少构造子"),
         "nil 在 succ zero 上不可达，不应报缺:\n{msg}"
     );
-}
-
-/// L07 P2 迁移的回归钉：两个递归 def 的卡住索引方程互比时，结构快路径失效，
-/// Match/Match 臂会逐层在 fresh rigid 下重求值分支体——递归 def 每层再产生
-/// 新的卡住 match，层级递增、永不结构收敛。无预算时唯一的下限是 fuel 池
-/// （L07 同形输入实测 256 s）；`MATCH_CMP_BUDGET`（总次数 64/每顶层合一入口，
-/// 快路径后计数）把最坏情况压到有界时间。
-#[test]
-fn test_stuck_match_equation_bounded() {
-    let src = r#"
-enum Nat {
-    zero
-    succ(x: Nat)
-}
-
-enum Eq[A](x: A, y: A) {
-    refl(a: A) -> Eq a a
-}
-
-def add(x: Nat, y: Nat): Nat =
-    match x {
-        case zero => y
-        case succ(n) => succ (add n y)
-    }
-
-def f(x: Nat, y: Nat, e: Eq[Nat] (add x zero) (add y zero)): Nat =
-    match e {
-        case refl(a) => a
-    }
-"#;
-    let t0 = std::time::Instant::now();
-    let msg = check_err(src);
-    let dt = t0.elapsed();
-    assert!(msg.contains("分支不可达"), "err: {msg}");
-    assert!(
-        dt < std::time::Duration::from_secs(30),
-        "耗时 {dt:?}：卡住 match 比较的深度预算失效（修复前为分钟级）"
-    );
-}
-
-/// L07 P1 迁移的回归钉：浅 occurs 只挡单步环（`Id Nat (succ x) x` 直接
-/// `x := succ x`）；经构造子模式槽中转的两跳环（`x := a`、`a := succ x`）
-/// 每一步各自无环，组合出的 σ 却是循环的——旧实现接受该子句。
-#[test]
-fn test_occurs_check_transitive_chain() {
-    let msg = check_err(
-        r#"
-enum Nat {
-    zero
-    succ(x: Nat)
-}
-
-enum Eq[A](x: A, y: A) {
-    refl(a: A) -> Eq a a
-}
-
-def bad(x: Nat, e: Eq[Nat] x (succ x)): Nat =
-    match e {
-        case refl(a) => zero
-    }
-"#,
-    );
-    assert!(msg.contains("分支不可达"), "err: {msg}");
-}
-
-/// 正向对照：传递 occurs 只应拦住循环解，不能误伤正常的索引精化。
-#[test]
-fn test_occurs_check_keeps_legit_refinement() {
-    let out = check(
-        r#"
-enum Nat {
-    zero
-    succ(x: Nat)
-}
-
-enum Eq[A](x: A, y: A) {
-    refl(a: A) -> Eq a a
-}
-
-def symm[A, x, y: A](e: Eq[A] x y): Eq[A] y x =
-    match e {
-        case refl(a) => refl[A] a
-    }
-
-println "done"
-"#,
-    );
-    assert_eq!(out, "done\n");
 }
