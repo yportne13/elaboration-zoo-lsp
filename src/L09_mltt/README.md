@@ -17,6 +17,31 @@ A4 登记（锚点见 `docs/archive/review-continuity/a4-r1.md`、`a4-r2.md`；�
   口径的逐臂实现（参考版 + 孪生同步，L10–L13 随后跟进），match 负载
   孪生 9.5×、参考版 3.8×（§5）。
 
+**2026-11-11 参考版加固回灌（本轮）**：参考版补齐 L07 的 P1–P11 适用子集，
+此前登记为"时代缺口"的以下各项已落地（孪生版本轮**未**移植，见 §6）：
+
+- **深值栈安全（P11 + 09-18 深值轮）**：`quote` 改迭代 `quote_deep`
+  （Frame 显式任务栈 + `InlineStack`）、`rename` 改 `rename_deep`
+  （Sum/SumCase/Obj 深链帧式收集）、`val_mentions_lvl` 迭代化、`pretty`
+  加 `MAX_DEPTH` 定深截断；新增 `struct_eq.rs`（`EqTask`/`InlineStack`
+  迭代结构相等 + 预算），并接回 `unify(Match, Match)` 结构快路径
+  （中性 global 视图保留为 fallback）。
+- **卡住 match 的 pending splice（L07 S1）**：`Val::Match` 恢复第 4 字段
+  `Rc<Vec<(Rc<Val>, Icit)>>`，`v_app` 从 panic 改为累积实参、分支选中后
+  在值层逐个应用；`force`/`quote`/`rename`/`unify`/`struct_eq` 全链适配。
+- **P2 卡住 match 比较总预算**：`MATCH_CMP_BUDGET = 64`（每顶层合一入口
+  一份，结构快路径之后计数）。
+- **P3 三档诊断**：`UnifyKind{Absurd, Undecided, Fuel}` + `Infer` 上
+  `unify_kind: Cell`，失败臂按 L07 口径 note；覆盖探测对 `Undecided`
+  保守判可达（不再把"判不出"当"分支不可达"）。
+- **P5 跨 meta 环守卫**：`meta_expanding: RefCell<Vec<MetaVar>>`，`force`
+  展开已解 meta 时压栈、同 meta 再现返回卡住 Flex（L09 原实现无 fuel 也无
+  守卫，跨 meta 环会栈溢出）。
+- **P0-2 判定**：L09 的探测回滚不走整表 `meta.clone()` 的路径，暂不引入
+  undo-log（记录为 N/A）。
+- **P8 / P1-2 判定**：依赖 decl 表（L09 无名字键表 / 无 registered-prim
+  守卫面），记录为 N/A。
+
 ## 1. 语言特性（分层宇宙）
 
 ```text
@@ -108,14 +133,12 @@ def refl[A, x: A]: Eq[A] x x = _ => px => px
   （`elaboration.rs:393-405`；enum 本体 `503-511`）。值层无 unfold
   算子——global 表存的都是终值，故 L06–L08 fuel 的"decl 展开"烧点
   在本层无宿主。
-- **卡住 match 是中性值，但无 pending splice**：eval 的 `Tm::Match`
+- **卡住 match 是中性值，pending splice 已回灌**：eval 的 `Tm::Match`
   臂把 scrutinee force 后是构造子值即 `eval_aux` 首匹配选臂，否则整体
-  卡成 `Val::Match(scrutinee, env, arms)`（`mod.rs:783-795`）。`v_app`
-  对 Match **panic**（`mod.rs:641-657`）——"卡住 match 再被应用"是
-  时代缺口（L07 起以值层 splice 实现了该特性；本层参考版与快版同崩 +
-  parity 一致，模块头 `mod.rs:1-10`）。unify 的两个 η 臂已加
-  `v_applicable` 守卫（`mod.rs:323-331`）：卡住 match / 字面量一侧与
-  λ 比较时改判 Err 而非 panic。
+  卡成 `Val::Match(scrutinee, env, arms, pending)`。`v_app` 把后续实参
+  累积进 `pending`（值层保存；项层 splice 会把实参自由变量引到错误
+  上下文），分支选中后逐个应用——与 L07 S1 同构。`v_applicable` 守卫
+  继续把"卡住 match / 字面量与 λ 比较"改判 Err 而非 panic。
 - **force 只有两个展开臂**：Flex（meta 解）与 VSub（σ 推开，
   `mod.rs:486-499`）。没有 Match 重选、decl 展开、Prim 归约——精化
   传播进卡住 match 内部的机制不存在；match 的分支重选只发生在 eval
@@ -287,16 +310,17 @@ universe 1856×）以这个更慢的参考版为基数，跨层比较应以 L10 
 
 ## 6. 已知限制（诚实清单）
 
-1. **卡住 match 不可再被应用**：`v_app` 对 `Val::Match` panic；合法
-   源码（打印引用自递归卡住 match 的函数值）可触发，参考版与快版
-   同崩 + parity 一致，属时代缺口而非缺陷。修复需实参吸收并参考版 +
-   快版同步大改，刻意不修（模块头 `mod.rs:1-10`）；η 臂的
-   `v_applicable` 守卫已把"卡住 match / 字面量与 λ 比较"改判 Err。
-2. **无 Match 重选 / decl 展开 / Prim 归约 / struct_eq 快路径**：force
-   只有 Flex + VSub 臂，卡住 match 恒卡住；`unify(Match, Match)` 的
-   分支体在**中性 global 克隆**下重求值（`avoid_recursive` 全局 →
-   rigid 封口，`unification.rs:354-361/733-741`），与 L07/L08 的
-   `struct_eq` 结构快路径不同构（A4-R2 登记，刻意分歧）。
+1. **卡住 match 已可再被应用（2026-11-11 回灌）**：`Val::Match` 带第 4
+   字段 pending，`v_app` 累积实参、分支选中后在值层应用；参考版不再
+   panic。**孪生版未移植**（其 `XCell::Match` 仍是 3 字段 + 原 panic
+   路径）——两版在该行为上按文档化不对称处理，parity 对该族只钉参考版
+   行为。
+2. **struct_eq 快路径已回灌；Match 重选 / decl 展开 / Prim 归约仍无宿主**：
+   force 仍只有 Flex + VSub 臂（卡住 match 恒卡住；进 match 内部靠 σ 推开
+   scrutinee 后 eval 重选）；`unify(Match, Match)` 现在**先走 struct_eq
+   迭代结构快路径**（EqTask + 预算），失效后回落到中性 global 克隆重求值
+   （原路径保留，与 L07 同构）。decl 展开/Prim 归约在本层无宿主（global
+   存终值、Prim 无 spine），维持 A4-R2 论证。
 3. **fuel 的适用面（A4-R2 论证 + 显式替换后的现状）**：L08 fuel 的
    六个烧点中五个在本层无触发面——① meta 解链间接环（solve 的
    rename 带 `occ: Some(m)` 做逐 meta occurs check，解链无环）；
@@ -313,12 +337,12 @@ universe 1856×）以这个更慢的参考版为基数，跨层比较应以 L10 
    跨 enum 重复按最后注册解析。
 5. **显示形态刻意分歧**（A4-R3 定案，不修）：comma 血统 +
    `(unsolved match n)`；与 L08 的 `.mk` 去重形态互不继承。
-6. **深值路径未做迭代化**：L07/L08 的 2026-09-18 深值栈安全轮
-   （occurs / 结构比较 / rename 的工作栈化与 σ 回收之外的其余项）
-   未移植本层；`quote` / `pretty` / 深值的递归 Drop 仍是按值深度的
-   递归路径。parity 与 bench 都在大栈线程里跑（parity 256 MB、bench
-   `L09_STACK_MB` 默认 128 MB），常规负载不触界；深值压测未做，
-   具体边界**未核实**。
+6. **深值路径已迭代化（2026-11-11 回灌）**：`quote` / `rename` /
+   `val_mentions_lvl` / `struct_eq` 走迭代实现、`pretty` 定深截断；
+   L07 的深值回归（10 万层 succ 链、默认栈）在参考版通过。仍为递归的：
+   深值 `Drop`（按值深度递归，未做 L13 式迭代 Drop）——parity/bench 的
+   大栈线程（256 MB / `L09_STACK_MB` 128 MB）继续兜底。**孪生版未移植
+   深值轮**（本轮只做参考版），深值负载在孪生上仍可能爆栈。
 7. **pending σ 的跨轮回收已落地**（非缺口，防误报）：孪生 arena 内
    `XCell::VSub` 持有的 `Rc<SubstV>` 克隆曾被 bump reset 跳过 Drop
    （跨轮慢泄漏）——`VSUB_REGS` 登记 + 轮界归还已修（§4 末条）。
@@ -354,14 +378,22 @@ universe 1856×）以这个更慢的参考版为基数，跨层比较应以 L10 
     头名检查的正向对照）、`parity_stale_solvable_order_independent`
     （臂序无关：荒谬臂静默跳过后覆盖仍完备，臂交换两序输出一致）。
 
-  随 `#[path]` 编入本目标的还有模块内 5 个 lib 用例（即下条的 lib
-  全部），计入总运行数（L08 §8 同款结构；确切总数以 cargo test 输出
-  为准，本轮未跑）。
-- `cargo test --lib L09_mltt`：**5 个**（`mod.rs` 的 `test1` /
-  `test2`——DEMO 全串：宇宙塔 `HighLvl` / `HighLvl2` / `HighLvl3`、
-  `Eq` 教学编码、`Bits` struct 与 `refl` 传递；`parser/mod.rs` 的
-  `test` 与 `test_bad_decl_reported_prefix_kept`——resilient 解析：
-  坏 decl 报错且保留前缀；`parser/lex.rs` 的 `test`）。大栈线程。
+  随 `#[path]` 编入本目标的还有模块内 **17** 个 lib 用例（即下条的
+  lib 全部），计入总运行数：`cargo test --test l09_fast_parity` 实测
+  **46 passed / 0 failed**（29 自有 + 17 lib）。
+- `cargo test --lib L09_mltt`：**17 个** = 原有 10（`mod.rs` 的
+  `test1` / `test2` 与 5 个 pm 负例、`parser/mod.rs` 的 `test` 与
+  `test_bad_decl_reported_prefix_kept`、`parser/lex.rs` 的 `test`）
+  + 2026-11-11 回灌回归 7（`deep_value_iterative_under_default_stack`、
+  `cross_meta_cycle_force_is_bounded`、
+  `test_unify_kind_separates_absurd_from_undecided`、
+  `test_stuck_match_splice`、`test_stuck_match_applied_with_outer_binder`、
+  `test_stuck_match_equation_bounded`、
+  `struct_eq_compares_match_pending_values`）。实测 17 passed。
+- `cargo test --test l09_blackbox`：**65 个黑盒用例**（2026-11-11 新增，
+  10 个家族：输出/显示契约、求值/递归/高阶、和类型/索引/GADT、struct/new
+  脱糖、Type N 宇宙、构造子良构/重定义、覆盖诊断、错误/span、解析恢复、
+  负向事实）；随 `#[path]` 带入 17 个 lib 用例 → 实测 **82 passed / 0 failed**。
 
 ## 8. 参考资料
 
