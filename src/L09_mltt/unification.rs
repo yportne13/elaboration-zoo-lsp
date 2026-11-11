@@ -989,8 +989,11 @@ impl Infer {
             }
             _ => {
                 // 没有任何臂命中：两侧都是规范值/类型头且形态不同 ⇒ 确定不等
-                // （Absurd）；其余（中性头 vs 别的东西、混合形态）⇒ 判不出来。
-                if !(Self::is_canonical_head(&t) && Self::is_canonical_head(&u)) {
+                // （Absurd）；预算耗尽 ⇒ Fuel（判定不可信，最保守）；其余
+                // （中性头 vs 别的东西、混合形态）⇒ 判不出来（Undecided）。
+                if self.fuel_exhausted() {
+                    self.note_unify_kind(super::UnifyKind::Fuel);
+                } else if !(Self::is_canonical_head(&t) && Self::is_canonical_head(&u)) {
                     self.note_unify_kind(super::UnifyKind::Undecided);
                 }
                 Err(UnifyError) // Rigid mismatch error

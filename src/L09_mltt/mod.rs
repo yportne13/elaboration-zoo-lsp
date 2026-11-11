@@ -1959,3 +1959,347 @@ def const_zero(x: Nat): Nat =
             Ok(out) => panic!("通配臂之后的臂（运行时永不可达）被静默接受：\n{out}"),
         }
     }
+
+// --------------------------------------------------------------------------------
+// 2026-11-11 L07 加固移植回归钉（P2/P3/P5/深值轮/splice）。
+//
+// 对应 L07 `tests.rs` 同名用例的 L09 适配：本层 Error 是 `Span<String>`
+// （`err.0.data`），无 decl 表（值级用例直接构造 Val），pretty 对卡住 match
+// 的输出是 `(unsolved match …)`（下断言处注明）。
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::list::List;
+
+    fn nat_sum() -> Val {
+        Val::Sum(
+            empty_span("Nat".to_string()),
+            Rc::new(vec![]),
+            Rc::new(vec![
+                empty_span("zero".to_string()),
+                empty_span("succ".to_string()),
+            ]),
+        )
+    }
+
+    fn zero_of(typ: &Rc<Val>) -> Val {
+        Val::SumCase {
+            typ: Rc::clone(typ),
+            case_name: empty_span("zero".to_string()),
+            datas: Rc::new(vec![]),
+        }
+    }
+
+    fn succ_of(typ: &Rc<Val>, prev: Val) -> Val {
+        Val::SumCase {
+            typ: Rc::clone(typ),
+            case_name: empty_span("succ".to_string()),
+            datas: Rc::new(vec![(empty_span("x".to_string()), Rc::new(prev), Icit::Expl)]),
+        }
+    }
+
+    fn chain(nat: &Rc<Val>, n: usize) -> Val {
+        let mut v = zero_of(nat);
+        for _ in 0..n {
+            v = succ_of(nat, v);
+        }
+        v
+    }
+
+    /// README §7.6 回归钉（L07 `deep_value_iterative_under_default_stack`
+    /// 的 L09 适配）：深值（`succ^N` 链）上的 occurs 守卫、结构相等、quote 与
+    /// pretty 全部迭代化/定深——**默认测试栈**（约 2 MB）下不再爆栈。
+    /// 深链的 Rc/Drop 自身是深递归（测试基建的坑，非被测代码），故
+    /// ManuallyDrop 泄漏给进程。
+    #[test]
+    fn deep_value_iterative_under_default_stack() {
+        const N_OCCURS: usize = 100_000;
+        const N_EQ: usize = 4_000;
+
+        let nat = Rc::new(nat_sum());
+        // ① occurs 守卫：10 万层深链（无预算，纯遍历）
+        let deep = std::mem::ManuallyDrop::new(chain(&nat, N_OCCURS));
+        assert!(
+            !val_mentions_lvl(&deep, Lvl(1)),
+            "深链不含 Lvl(1)（且旧递归版此处爆栈）"
+        );
+        // 链中段嵌 Rigid(7)：命中为 true、别处为 false
+        let mut with_rigid = Val::vvar(Lvl(7));
+        for _ in 0..N_OCCURS / 2 {
+            with_rigid = succ_of(&nat, with_rigid);
+        }
+        let with_rigid = std::mem::ManuallyDrop::new(with_rigid);
+        assert!(val_mentions_lvl(&with_rigid, Lvl(7)));
+        assert!(!val_mentions_lvl(&with_rigid, Lvl(1)));
+
+        // ② 结构相等：预算内同构链判等；超预算有界降级为 false——都不爆栈
+        let a = std::mem::ManuallyDrop::new(chain(&nat, N_EQ));
+        let b = std::mem::ManuallyDrop::new(chain(&nat, N_EQ));
+        assert!(struct_eq::val_eq(&a, &b), "同构深链应判等（预算内）");
+        let c = std::mem::ManuallyDrop::new(chain(&nat, N_OCCURS));
+        assert!(
+            !struct_eq::val_eq(&deep, &c),
+            "超预算应有界降级（false），不爆栈"
+        );
+
+        // ③ quote（曾是仅剩的递归路径）+ pretty（定深截断）：10 万层深链在
+        //    默认测试栈下不爆栈。返回的 Tm 是 Box 链，ManuallyDrop 泄漏。
+        let infer = Infer::new();
+        let quoted =
+            std::mem::ManuallyDrop::new(infer.quote(Lvl(0), chain(&nat, N_OCCURS)));
+        let mut depth = 1usize;
+        let mut cur: &Tm = &quoted;
+        loop {
+            match cur {
+                Tm::SumCase { datas, .. } if !datas.is_empty() => {
+                    depth += 1;
+                    cur = &datas[0].1;
+                }
+                _ => break,
+            }
+        }
+        assert_eq!(depth, N_OCCURS + 1, "quote 应逐层产出 SumCase");
+        let shown = pretty::pretty_tm(0, List::new(), &quoted);
+        assert!(shown.contains('…'), "深值显示应定深截断");
+    }
+
+    /// P5 回归钉（L07 `cross_meta_cycle_force_is_bounded` 的 L09 适配）：
+    /// 跨 meta 环（m1 := ?m2、m2 := ?m1）的 force 必须**有界终止**——环守卫
+    /// 在展开栈上发现重复 meta 即返回卡住的 Flex，不再靠 fuel 烧尽兜底。
+    #[test]
+    fn cross_meta_cycle_force_is_bounded() {
+        let mut infer = Infer::new();
+        let ty = Val::U(0);
+        let m1 = infer.new_meta(ty.clone());
+        let m2 = infer.new_meta(ty.clone());
+        infer.meta[m1 as usize] = MetaEntry::Solved(Val::Flex(MetaVar(m2), List::new()), ty.clone());
+        infer.meta[m2 as usize] = MetaEntry::Solved(Val::Flex(MetaVar(m1), List::new()), ty);
+        infer.unify_fuel.set(64);
+        let out = infer.force(Val::Flex(MetaVar(m1), List::new()));
+        assert!(
+            matches!(out, Val::Flex(..)),
+            "环应降级为卡住的 Flex，got {out:?}"
+        );
+        assert!(
+            infer.unify_fuel.get() > 0,
+            "环守卫应避免烧光 fuel（旧行为靠耗尽兜底）：left {}",
+            infer.unify_fuel.get()
+        );
+        assert!(
+            infer.meta_expanding.borrow().is_empty(),
+            "展开栈应在返回时清空"
+        );
+    }
+
+    /// P3 分档对照（L07 同名用例的值级适配）：**结构矛盾** = Absurd，
+    /// **判不出来**（中性头形态无法对齐）= Undecided。两档不能混。
+    #[test]
+    fn test_unify_kind_separates_absurd_from_undecided() {
+        let mut infer = Infer::new();
+        let cxt = Cxt::new();
+        let nat = Rc::new(nat_sum());
+        let zero = zero_of(&nat);
+        let one = succ_of(&nat, zero.clone());
+
+        // 结构矛盾：zero ≐ succ zero 无解
+        infer.reset_unify_kind();
+        assert!(
+            infer.unify(Lvl(0), &cxt, zero, one, None).is_err(),
+            "zero ≐ succ zero 必须失败"
+        );
+        assert_eq!(
+            infer.unify_kind(),
+            UnifyKind::Absurd,
+            "构造子矛盾应记为 Absurd（分支不可达）"
+        );
+
+        // 判不出来：同一中性头的 spine 长度失配——既不相等也不是矛盾
+        infer.reset_unify_kind();
+        let bare = Val::Rigid(Lvl(3), List::new());
+        let applied = Val::Rigid(Lvl(3), List::new().prepend((Val::U(0), Icit::Expl)));
+        assert!(infer.unify(Lvl(0), &cxt, bare, applied, None).is_err());
+        assert_eq!(
+            infer.unify_kind(),
+            UnifyKind::Undecided,
+            "spine 长度失配应记为 Undecided（不是矛盾）"
+        );
+    }
+
+    /// 回归（L07 `test_stuck_match_splice` 的 L09 适配）：卡住 match 被应用
+    /// 时不再 panic——实参进 pending，分支选中后在值层应用。
+    #[test]
+    fn test_stuck_match_splice() {
+        let out = run(
+            r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def f(n: Nat): Nat -> Nat =
+    match n {
+        case zero => succ
+        case succ(k) => succ
+    }
+
+println (f zero)
+println ((f zero) zero)
+println ((f (succ zero)) zero)
+"#,
+            0,
+        )
+        .expect("卡住 match 的应用（splice）不得 panic");
+        assert!(
+            out.contains("Nat::succ(Nat::zero)"),
+            "splice 后应归约出 succ zero：{out}"
+        );
+    }
+
+    /// 回归（L07 `test_stuck_match_applied_with_outer_binder` 的 L09 适配）：
+    /// 实参引用比捕获 env 更外层的 binder 时，实参必须在**值层**累积
+    /// （pending）、分支选中后再应用——项层 splice 会越界/错位。
+    /// 本层 pretty 对卡住 match 的输出是 `(unsolved match m)`。
+    #[test]
+    fn test_stuck_match_applied_with_outer_binder() {
+        let out = run(
+            r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def pick(n: Nat): Nat -> Nat =
+    match n {
+        case zero => k => k
+        case succ(k) => k => succ k
+    }
+
+def test(m: Nat, j: Nat): Nat = (pick m) j
+
+println test
+"#,
+            0,
+        )
+        .expect("外层 binder 实参的 splice 不得 panic");
+        assert!(out.contains("unsolved match m"), "{out}");
+        assert!(out.contains(") j"), "实参应在分支外层应用：{out}");
+        assert!(!out.contains("zero => j"), "实参不得 quote 进分支体：{out}");
+    }
+
+    /// S1 回归钉（L07 `test_struct_eq_compares_match_pending_values` 的
+    /// L09 适配）：`struct_eq` 的卡住 match 臂必须比较 pending **值**，不能
+    /// 只比长度/icit；漏比会让「scrutinee 是另一个 pending 不同的卡住 match」
+    /// 的两份 match 被判等，refl 可证明两个闭实例化结果不同的函数相等。
+    #[test]
+    fn struct_eq_compares_match_pending_values() {
+        let err = run(
+            r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def pfun(n: Nat): Nat -> Nat =
+    match n {
+        case zero => k => k
+        case succ(j) => k => k
+    }
+
+def f(x: Nat): Nat =
+    match (pfun x zero) {
+        case zero => zero
+        case succ(m) => succ m
+    }
+
+def g(x: Nat): Nat =
+    match (pfun x (succ zero)) {
+        case zero => zero
+        case succ(m) => succ m
+    }
+
+def bad : Eq[Nat -> Nat] f g =
+    refl f
+"#,
+            0,
+        )
+        .expect_err("pending 不同的两份卡住 match 不得判等（否则可证 False）");
+        assert!(err.0.data.contains("can't unify"), "err: {}", err.0.data);
+    }
+
+    /// P2 回归钉（L07 `test_stuck_match_equation_bounded` 的 L09 适配）：
+    /// 卡住 match 比较的结构快路径失效后，逐分支重求值受 `MATCH_CMP_BUDGET`
+    /// 封顶——耗尽按「无法判定为相等」失败（Undecided），不是矛盾；两个递归
+    /// def 的卡住索引方程互比必须在有界时间内结束（未加预算时为分钟级）。
+    #[test]
+    fn test_stuck_match_equation_bounded() {
+        // ① 值级：预算为 0 时 Match/Match 慢路径立刻判 Undecided
+        let mut infer = Infer::new();
+        let cxt = Cxt::new();
+        let cases = Rc::new(vec![(
+            PatternDetail::Any(empty_span(())),
+            Tm::Var(Ix(0)),
+        )]);
+        let scrut = Val::Rigid(Lvl(5), List::new());
+        let m1 = Val::Match(
+            Rc::new(scrut.clone()),
+            List::new(),
+            Rc::clone(&cases),
+            Rc::new(vec![]),
+        );
+        // 捕获 env 不同 ⇒ 结构快路径失效，进入预算计数的慢路径
+        let m2 = Val::Match(
+            Rc::new(scrut),
+            List::new().prepend(Val::U(0)),
+            cases,
+            Rc::new(vec![]),
+        );
+        infer.reset_match_cmp_budget();
+        infer.match_cmp_budget.set(0);
+        assert!(
+            infer.unify(Lvl(0), &cxt, m1, m2, None).is_err(),
+            "预算耗尽应按失败处理"
+        );
+        assert_eq!(
+            infer.unify_kind(),
+            UnifyKind::Undecided,
+            "预算耗尽应记为无法判定（不是矛盾）"
+        );
+
+        // ② 源级：两个递归 def 的卡住索引方程互比——有界时间
+        let t0 = std::time::Instant::now();
+        let _ = run(
+            r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def f(x: Nat, y: Nat, e: Eq[Nat] (add x zero) (add y zero)): Nat =
+    match e {
+        case refl(a) => a
+    }
+"#,
+            0,
+        );
+        let dt = t0.elapsed();
+        assert!(
+            dt < std::time::Duration::from_secs(30),
+            "耗时 {dt:?}：卡住 match 比较的深度预算失效（修复前为分钟级）"
+        );
+    }
+}
