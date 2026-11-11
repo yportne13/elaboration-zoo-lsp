@@ -1,0 +1,7 @@
+﻿# cmd: F:\projects\hermes\elaboration-zoo-lsp\target\release\l09bench.exe --only basic --workload match --max-k 13 --rounds 5 # wall: 0s exit: 0 # host: DESKTOP-QRAP4BP 2026-11-11T23:37:57.9158605+08:00 ---
+== workload: match ==
+k=9   n=1024     basic=     0.147ms*/     0.149
+k=10  n=2048     basic=     0.106ms*/     0.169
+k=11  n=4096     basic=     0.110ms*/     0.111
+k=12  n=8192     basic=     0.121ms*/     0.122
+k=13  n=16384    basic=     0.128ms*/     0.129

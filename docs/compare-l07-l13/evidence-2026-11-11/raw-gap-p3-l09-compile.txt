@@ -1,0 +1,1278 @@
+﻿# cmd: cargo test --lib --no-run
+# cwd: F:/projects/hermes/ezl-gap-evidence
+# exit: 101
+   Compiling elaboration-zoo-lsp v0.1.0 (F:\projects\hermes\ezl-gap-evidence)
+error[E0425]: cannot find type `UnifyKind` in this scope
+ --> src\L09_mltt\gap_p3_probe.rs:8:13
+  |
+8 |     let _k: UnifyKind = infer.unify_kind();
+  |             ^^^^^^^^^ not found in this scope
+  |
+help: consider importing this enum
+  |
+2 + use crate::L07_sum_type::UnifyKind;
+  |
+
+warning: unused imports: `hash::Hash`, `marker::PhantomData`, and `ops::Add`
+ --> src\parser_lib_resilient.rs:1:23
+  |
+1 | use std::{fmt::Debug, ops::Add, hash::Hash, marker::PhantomData};
+  |                       ^^^^^^^^  ^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `Pattern` and `Severity`
+ --> src\parser_lib_resilient.rs:3:43
+  |
+3 | pub use crate::parser_lib::{Span, ToSpan, Severity, Diagnostic, unescape, Pattern};
+  |                                           ^^^^^^^^                        ^^^^^^^
+
+warning: unused import: `crate::config::Config`
+  --> src\doc\collect.rs:22:5
+   |
+22 | use crate::config::Config;
+   |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `empty_span`
+  --> src\L07_sum_type\bump_spine_iter\machine.rs:15:13
+   |
+15 | use super::{empty_span, Error, PatternDetail};
+   |             ^^^^^^^^^^
+
+warning: unused import: `Closure`
+  --> src\L08_product_type\cxt.rs:10:5
+   |
+10 |     Closure, Env, Infer, Ix, Lvl, Tm, Ty, Val, VTy,
+   |     ^^^^^^^
+
+warning: unused import: `list::List`
+ --> src\L08_product_type\parser\syntax.rs:1:13
+  |
+1 | use crate::{list::List, parser_lib::Span};
+  |             ^^^^^^^^^^
+
+warning: unused import: `empty_span`
+  --> src\L08_product_type\bump_spine_iter\machine.rs:15:13
+   |
+15 | use super::{empty_span, Error, PatternDetail};
+   |             ^^^^^^^^^^
+
+warning: unused import: `Either`
+  --> src\L09_mltt\mod.rs:14:22
+   |
+14 | use parser::syntax::{Either, Icit};
+   |                      ^^^^^^
+
+warning: unused imports: `Error` and `pretty::pretty_tm`
+ --> src\L09_mltt\unification.rs:4:5
+  |
+4 |     Error, Infer, Lvl, MetaEntry, MetaVar, Spine, Subst, Tm, UnifyError, VTy, Val,
+  |     ^^^^^
+5 |     cxt::Cxt, lvl2ix, v_applicable, val_mentions_lvl, wrap_sub,
+6 |     parser::syntax::Icit, syntax::Pruning, empty_span, pretty::pretty_tm,
+  |                                                        ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `Either`
+ --> src\L10_typeclass\mod.rs:2:22
+  |
+2 | use parser::syntax::{Either, Icit, Raw};
+  |                      ^^^^^^
+
+warning: unused import: `Either`
+ --> src\L11_macro\mod.rs:2:23
+  |
+2 | use parser::{syntax::{Either, Icit, Raw}, IError};
+  |                       ^^^^^^
+
+warning: unused import: `extract_base`
+ --> src\L11_macro\parser\macros.rs:5:58
+  |
+5 | use super::{TokenNode, IError, HashMap, ErrMsg, BaseMsg, extract_base, string, p_raw, p_pi_binder, empty_span, owned_tokens_to_string...
+  |                                                          ^^^^^^^^^^^^
+
+warning: unused imports: `BTreeSet` and `HashMap`
+ --> src\L11_macro\pattern_match.rs:2:19
+  |
+2 |     collections::{BTreeSet, HashMap, HashSet},
+  |                   ^^^^^^^^  ^^^^^^^
+
+warning: unused import: `pretty::pretty_tm`
+ --> src\L11_macro\unification.rs:5:56
+  |
+5 |     parser::syntax::Icit, syntax::Pruning, empty_span, pretty::pretty_tm, typeclass::Assertion, Raw, Rc, Decl,
+  |                                                        ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `extract_base`
+ --> src\L12_canonical\parser\macros.rs:5:49
+  |
+5 | use super::{TokenNode, IError, ErrMsg, BaseMsg, extract_base, string, p_raw, p_pi_binder, empty_span, owned_tokens_to_string, ParserE...
+  |                                                 ^^^^^^^^^^^^
+
+warning: unused imports: `BTreeSet`, `HashMap`, and `HashSet`
+ --> src\L12_canonical\pattern_match.rs:2:19
+  |
+2 |     collections::{BTreeSet, HashMap, HashSet},
+  |                   ^^^^^^^^  ^^^^^^^  ^^^^^^^
+
+warning: unused import: `pretty::pretty_tm`
+ --> src\L12_canonical\unification.rs:7:56
+  |
+7 |     parser::syntax::Icit, syntax::Pruning, empty_span, pretty::pretty_tm, typeclass::Assertion, Raw, Rc, Decl,
+  |                                                        ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::L12_canonical::MetaVar as CMetaVar`
+   --> src\L12_canonical\bump_spine_iter.rs:163:5
+    |
+163 | use crate::L12_canonical::MetaVar as CMetaVar;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused doc comment
+    --> src\L13_namespace\mod.rs:1249:1
+     |
+1249 | / /// `simpl_decl` 的 decl 缓存（自函数体提升至模块级）：`Drop for
+1250 | | /// PreludeSlot` 推池前要能清空它（见该处的约束注释）。
+     | |_------------------------------------------------------^
+     |   |
+     |   rustdoc does not generate documentation for macro invocations
+     |
+     = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+     = note: `#[warn(unused_doc_comments)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `PrimFunc`
+ --> src\L13_namespace\elaboration.rs:9:45
+  |
+9 |     Closure, Cxt, DeclTm, Error, Infer, Ix, PrimFunc, Tm, VTy, Val,
+  |                                             ^^^^^^^^
+
+warning: unused imports: `HashMap` and `extract_base`
+ --> src\L13_namespace\parser\macros.rs:5:32
+  |
+5 | use super::{TokenNode, IError, HashMap, ErrMsg, BaseMsg, extract_base, string, p_raw, p_pi_binder, empty_span, owned_tokens_to_string...
+  |                                ^^^^^^^                   ^^^^^^^^^^^^
+
+warning: unused import: `ToSpan`
+ --> src\L13_namespace\parser\derive.rs:6:31
+  |
+6 | use crate::parser_lib::{Span, ToSpan};
+  |                               ^^^^^^
+
+warning: unused import: `Ix`
+  --> src\L13_namespace\parser\mod.rs:40:25
+   |
+40 | use super::{empty_span, Ix, Rc, Tm, Val};
+   |                         ^^
+
+warning: unnecessary parentheses around function argument
+    --> src\L13_namespace\parser\mod.rs:1183:54
+     |
+1183 | ...                   lhs = Raw::Hole((w.to_span() + tk.to_span()));
+     |                                       ^                          ^
+     |
+     = note: `#[warn(unused_parens)]` (part of `#[warn(unused)]`) on by default
+help: remove these parentheses
+     |
+1183 -                                         lhs = Raw::Hole((w.to_span() + tk.to_span()));
+1183 +                                         lhs = Raw::Hole(w.to_span() + tk.to_span());
+     |
+
+warning: unused doc comment
+  --> src\L13_namespace\unification.rs:18:1
+   |
+18 | / /// [`Infer::solve_multi_trait`] 的待解条目快照缓冲池：旧实现每次调用
+19 | | /// `self.trait_metas.clone()` 整表快照（该表整个会话保持 prelude 规模），
+20 | | /// 改为 retain 单遍 + 待解条目收进带所有权的小缓冲，按 LIFO 复用（嵌套
+21 | | /// solve 重入链各取各的缓冲，互不踩），暖机后零分配。池上限 = 最大 solve
+22 | | /// 重入深度。见 twin 侧同点位 `bump_spine_iter/typeclass.rs` 的
+23 | | /// TRAIT_METAS_SNAP_POOL（12c23b9，含 A/B 数据）。
+   | |_--------------------------------------------------^
+   |   |
+   |   rustdoc does not generate documentation for macro invocations
+   |
+   = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+
+warning: unused imports: `Assertion` and `pretty::pretty_tm`
+  --> src\L13_namespace\unification.rs:9:76
+   |
+ 9 |     is_nat_sum, lvl2ix, parser::syntax::Icit, syntax::Pruning, empty_span, pretty::pretty_tm,
+   |                                                                            ^^^^^^^^^^^^^^^^^
+10 |     typeclass::{Assertion, Instance}, Raw, Rc, Decl,
+   |                 ^^^^^^^^^
+
+warning: unused import: `std::collections::HashMap`
+  --> src\L13_namespace\unification.rs:14:5
+   |
+14 | use std::collections::HashMap;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `Lvl`, `MetaEntry`, `Span`, and `Tm`
+ --> src\L13_namespace\canonical.rs:3:12
+  |
+3 |     Infer, MetaEntry, Cxt, Rc, Val, UnifyError, Span,
+  |            ^^^^^^^^^                            ^^^^
+4 |     Tm, Lvl, List,
+  |     ^^  ^^^
+
+warning: unused doc comment
+   --> src\L13_namespace\bump_spine_iter.rs:197:1
+    |
+197 | / /// 构造子可达性探测次数（`compiler::probe_accessible` 入口自增）。与参考版
+198 | | /// `pattern_match::PROBE_COUNT` 同口径，用于"次数差异 vs 单价差异"的判别——
+199 | | /// `l13lspsample` 打印采样窗口内的增量（累计值含 prelude 与预热 kick，不可
+200 | | /// 直接跨引擎比）。
+    | |_-------------------^
+    |   |
+    |   rustdoc does not generate documentation for macro invocations
+    |
+    = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+
+warning: unused doc comment
+  --> src\L13_namespace\bump_spine_iter\typeclass.rs:64:1
+   |
+64 | / /// solve_multi_trait 的待解条目快照缓冲池（S1 轮）：旧实现每次调用
+65 | | /// `self.trait_metas.clone()`——整表快照（prelude-hdl 实测均值 3234 条、
+66 | | /// 峰值 6585 条）× 每次 trait 求解一次（实测 5 万次/轮）= 每轮数百 MB 的
+67 | | /// 分配 + memcpy 大户。retain+过滤后真正待解的条目通常个位数，改为进
+68 | | /// **带所有权的小缓冲**：池按 LIFO 复用（嵌套 solve → solve → trait_wrap
+69 | | /// 探测 → 再 solve 的重入链各自取各的缓冲，互不踩），暖机后零分配。
+   | |_-------------------------------------------------------------------^
+   |   |
+   |   rustdoc does not generate documentation for macro invocations
+   |
+   = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+
+warning: unused doc comment
+  --> src\L13_namespace\struct_refine_probe.rs:95:1
+   |
+95 | /// identity_vec: 重建构造函数，非绑定变量，应通过。
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ rustdoc does not generate documentation for macro invocations
+   |
+   = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+
+warning: unused doc comment
+   --> src\L13_namespace\struct_refine_probe.rs:108:1
+    |
+108 | /// 直接 Vec 匹配，重建构造函数，应通过。
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ rustdoc does not generate documentation for macro invocations
+    |
+    = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+
+warning: unused doc comment
+   --> src\L13_namespace\struct_refine_probe.rs:117:1
+    |
+117 | /// 非索引依赖的返回类型（A），预约束的类型 sucessor，通过。
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ rustdoc does not generate documentation for macro invocations
+    |
+    = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+
+warning: unused doc comment
+   --> src\L13_namespace\struct_refine_probe.rs:129:1
+    |
+129 | /// 嵌套结构体，预约束类型，通过。
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ rustdoc does not generate documentation for macro invocations
+    |
+    = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+
+warning: unused doc comment
+   --> src\L13_namespace\struct_refine_probe.rs:140:1
+    |
+140 | /// 不返回绑定变量，而是返回无类型依赖的值。
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ rustdoc does not generate documentation for macro invocations
+    |
+    = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+
+warning: unused doc comment
+   --> src\L13_namespace\struct_refine_probe.rs:157:1
+    |
+157 | / /// 直接 Vec 匹配，返回绑定变量 xs。最简复现。
+158 | | /// 失败模式：expected: Vec[A](_l + 1), find: Vec[A](_l)
+159 | | /// 原因：绑定 xs 的类型为 Vec[A] l'，但返回类型被细化为 Vec[A] (succ l')，无法统一。
+    | |_------------------------------------------------------------------------------------^
+    |   |
+    |   rustdoc does not generate documentation for macro invocations
+    |
+    = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+
+warning: unused doc comment
+   --> src\L13_namespace\struct_refine_probe.rs:168:1
+    |
+168 | / /// 单层 struct，泛型 len，返回绑定变量 xs。
+169 | | /// 失败模式：expected: Vec[A](_l + 1), find: Vec[A](_l)
+    | |_-------------------------------------------------------^
+    |   |
+    |   rustdoc does not generate documentation for macro invocations
+    |
+    = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+
+warning: unused doc comment
+   --> src\L13_namespace\struct_refine_probe.rs:182:1
+    |
+182 | / /// 两个字段，第二个字段类型依赖第一个字段的索引细化。
+183 | | /// 失败模式：expected: Fin(len + 1), find: Fin(1) 或反向。
+184 | | /// 原因：绑定 w 的类型 Fin(succ len) 中的 len 是原始的、未经 cons/nil 细化的变量。
+    | |_----------------------------------------------------------------------------------^
+    |   |
+    |   rustdoc does not generate documentation for macro invocations
+    |
+    = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+
+warning: unused doc comment
+   --> src\L13_namespace\struct_refine_probe.rs:198:1
+    |
+198 | / /// 嵌套 struct，泛型 len，返回绑定尾部变量。
+199 | | /// 失败模式同 weak02。
+    | |_----------------------^
+    |   |
+    |   rustdoc does not generate documentation for macro invocations
+    |
+    = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+
+warning: unused doc comment
+   --> src\L13_namespace\struct_refine_probe.rs:211:1
+    |
+211 | / /// VecHolder: Vec[A] len + Fin(succ len)，递归重建。
+212 | | /// 失败模式：expected: Fin(_l + 2), find: Fin(_n + 1)
+213 | | /// 原因：第一个字段匹配 cons (len:=succ l') 与第二个字段匹配 fsucc (len:=n) 的细化
+214 | | /// 没有传播到对方，导致 n 和 succ l' 无法统一。
+    | |_-----------------------------------------------^
+    |   |
+    |   rustdoc does not generate documentation for macro invocations
+    |
+    = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+
+warning: unused doc comment
+   --> src\L13_namespace\struct_refine_probe.rs:231:1
+    |
+231 | / /// 返回值是重建结构体，使用了从内部字段提取的变量。
+232 | | /// 成功/失败？
+    | |_--------------^
+    |   |
+    |   rustdoc does not generate documentation for macro invocations
+    |
+    = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+
+warning: unused macro definition: `assert_expected_fail`
+  --> src\L13_namespace\struct_refine_probe.rs:58:14
+   |
+58 | macro_rules! assert_expected_fail {
+   |              ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_macros)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `parser`
+   --> src\lib.rs:101:29
+    |
+101 | use L13_namespace::parser::{parser, parser_with_macros, macros::MacroRule, MacroExpansionInfo};
+    |                             ^^^^^^
+
+warning: unused imports: `self`, `stdin`, and `stdout`
+   --> src\lib.rs:108:15
+    |
+108 | use std::io::{self, BufRead, Write, stdin, stdout};
+    |               ^^^^                  ^^^^^  ^^^^^^
+
+warning: unused import: `std::thread`
+   --> src\lib.rs:109:5
+    |
+109 | use std::thread;
+    |     ^^^^^^^^^^^
+
+warning: use of deprecated function `codespan_reporting::term::emit`: Use `emit_to_write_style` instead or depending on the writer use `emit_to_io_write` or `emit_to_string`
+  --> src\client.rs:98:15
+   |
+98 |         term::emit(&mut writer, &config, &files, cs_diag).unwrap();
+   |               ^^^^
+   |
+   = note: `#[warn(deprecated)]` on by default
+
+error[E0599]: no method named `reset_unify_kind` found for struct `L09_mltt::Infer` in the current scope
+   --> src\L09_mltt\gap_p3_probe.rs:7:11
+    |
+  7 |     infer.reset_unify_kind();
+    |           ^^^^^^^^^^^^^^^^ method not found in `L09_mltt::Infer`
+    |
+   ::: src\L09_mltt\mod.rs:446:1
+    |
+446 | pub struct Infer {
+    | ---------------- method `reset_unify_kind` not found for this struct
+
+error[E0599]: no method named `unify_kind` found for struct `L09_mltt::Infer` in the current scope
+   --> src\L09_mltt\gap_p3_probe.rs:8:31
+    |
+  8 |     let _k: UnifyKind = infer.unify_kind();
+    |                               ^^^^^^^^^^
+    |
+   ::: src\L09_mltt\mod.rs:446:1
+    |
+446 | pub struct Infer {
+    | ---------------- method `unify_kind` not found for this struct
+    |
+help: there is a method `unify` with a similar name, but with different arguments
+   --> src\L09_mltt\unification.rs:542:5
+    |
+542 | /     pub fn unify(
+543 | |         &mut self,
+544 | |         l: Lvl,
+545 | |         cxt: &Cxt,
+...   |
+548 | |         mut spec: Option<&mut SpecSolve<'_>>,
+549 | |     ) -> Result<(), UnifyError> {
+    | |_______________________________^
+
+warning: unused import: `Write`
+   --> src\lib.rs:108:30
+    |
+108 | use std::io::{self, BufRead, Write, stdin, stdout};
+    |                              ^^^^^
+
+warning: unused import: `BufRead`
+   --> src\lib.rs:108:21
+    |
+108 | use std::io::{self, BufRead, Write, stdin, stdout};
+    |                     ^^^^^^^
+
+warning: unused import: `colored::Colorize`
+ --> src\L13_namespace\mod.rs:1:5
+  |
+1 | use colored::Colorize;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `colored::Colorize`
+ --> src\L13_namespace\unification.rs:1:5
+  |
+1 | use colored::Colorize;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `colored::Colorize`
+ --> src\L13_namespace\elaboration.rs:3:5
+  |
+3 | use colored::Colorize;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused variable: `e`
+  --> src\parser_lib_resilient.rs:22:71
+   |
+22 |         move |input, state: &mut S| self.parse(input, state).or_else(|e| rhs.parse(input, state))//TODO: err combine
+   |                                                                       ^ help: if this is intentional, prefix it with an underscore: `_e`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `version`
+   --> src\client.rs:177:75
+    |
+177 |     fn publish_diagnostics(&self, uri: Url, diagnostics: Vec<Diagnostic>, version: Option<i32>) {
+    |                                                                           ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_version`
+
+warning: unused variable: `sp`
+   --> src\L03_holes\mod.rs:360:32
+    |
+360 |             Val::Flex(m_prime, sp) if m == m_prime => Err(UnifyError),
+    |                                ^^ help: if this is intentional, prefix it with an underscore: `_sp`
+
+warning: unused variable: `sp`
+   --> src\L04_implicit\mod.rs:369:32
+    |
+369 |             Val::Flex(m_prime, sp) if m == m_prime => Err(UnifyError),
+    |                                ^^ help: if this is intentional, prefix it with an underscore: `_sp`
+
+warning: unused variable: `app_inner`
+    --> src\L04_implicit\mod.rs:1355:13
+     |
+1355 |         let app_inner = Val::Rigid(Lvl(1), sp_inner);
+     |             ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_app_inner`
+
+warning: unused variable: `a`
+   --> src\L05_pruning\mod.rs:336:48
+    |
+336 |     fn new_binder(&self, x: Name, a_quote: Tm, a: Val) -> Cxt {
+    |                                                ^ help: if this is intentional, prefix it with an underscore: `_a`
+
+warning: variable does not need to be mutable
+   --> src\L05_pruning\mod.rs:922:36
+    |
+922 |         fn go(inf: &Infer, l: Lvl, mut a: VTy, l_prime: Lvl, t: Tm) -> Tm {
+    |                                    ----^
+    |                                    |
+    |                                    help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `val`
+   --> src\L06_string\unification.rs:311:37
+    |
+311 |                 Val::Pi(span, icit, val, closure) => Tm::Lam(
+    |                                     ^^^ help: if this is intentional, prefix it with an underscore: `_val`
+
+warning: variable does not need to be mutable
+   --> src\L07_sum_type\unification.rs:774:13
+    |
+774 |         let mut go = |this: &mut Self,
+    |             ----^^
+    |             |
+    |             help: remove this `mut`
+
+warning: unused variable: `t`
+   --> src\L08_product_type\elaboration.rs:648:42
+    |
+648 |             Raw::Lam(x, Either::Name(_), t) => Err(Error(format!("infer named lambda {x:?}"))),
+    |                                          ^ help: if this is intentional, prefix it with an underscore: `_t`
+
+warning: unused variable: `x`
+   --> src\L08_product_type\unification.rs:158:42
+    |
+158 |             (Some((None, rest)), Val::Pi(x, i, _, b)) => {
+    |                                          ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `i`
+   --> src\L08_product_type\unification.rs:158:45
+    |
+158 |             (Some((None, rest)), Val::Pi(x, i, _, b)) => {
+    |                                             ^ help: if this is intentional, prefix it with an underscore: `_i`
+
+warning: variable does not need to be mutable
+   --> src\L08_product_type\unification.rs:511:13
+    |
+511 |         let mut go = |this: &mut Self,
+    |             ----^^
+    |             |
+    |             help: remove this `mut`
+
+warning: unused variable: `x`
+   --> src\L09_mltt\elaboration.rs:269:32
+    |
+269 |                         Val::U(x) => {//TODO:x?
+    |                                ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `t`
+   --> src\L09_mltt\elaboration.rs:756:42
+    |
+756 |             Raw::Lam(x, Either::Name(_), t) => Err(Error(x.map(|_| "infer named lambda".to_owned()))),
+    |                                          ^ help: if this is intentional, prefix it with an underscore: `_t`
+
+warning: unused variable: `typ`
+  --> src\L09_mltt\parser\syntax.rs:91:28
+   |
+91 |             Raw::SumCase { typ, case_name, datas } => datas.last()
+   |                            ^^^ help: try ignoring the field: `typ: _`
+
+warning: unused variable: `println_kw`
+   --> src\L09_mltt\parser\mod.rs:632:16
+    |
+632 |         .map(|(println_kw, x)| Decl::Println(x.unwrap_or(Raw::Hole)))
+    |                ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_println_kw`
+
+warning: unused variable: `x`
+   --> src\L09_mltt\unification.rs:131:42
+    |
+131 |             (Some((None, rest)), Val::Pi(x, i, _, b)) => {
+    |                                          ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `i`
+   --> src\L09_mltt\unification.rs:131:45
+    |
+131 |             (Some((None, rest)), Val::Pi(x, i, _, b)) => {
+    |                                             ^ help: if this is intentional, prefix it with an underscore: `_i`
+
+warning: unused variable: `val`
+   --> src\L09_mltt\unification.rs:372:37
+    |
+372 |                 Val::Pi(span, icit, val, closure) if span.data == "_" => {
+    |                                     ^^^ help: if this is intentional, prefix it with an underscore: `_val`
+
+warning: unused variable: `val`
+   --> src\L09_mltt\unification.rs:385:37
+    |
+385 |                 Val::Pi(span, icit, val, closure) => Tm::Lam(
+    |                                     ^^^ help: if this is intentional, prefix it with an underscore: `_val`
+
+warning: unused variable: `items`
+   --> src\L09_mltt\pretty.rs:203:28
+    |
+203 |         Tm::Sum(span, tms, items) => format!(
+    |                            ^^^^^ help: if this is intentional, prefix it with an underscore: `_items`
+
+warning: unused variable: `is_def`
+    --> src\L09_mltt\bump_spine_iter\machine.rs:2100:17
+     |
+2100 |             let is_def = matches!(d, Decl::Def { .. });
+     |                 ^^^^^^ help: if this is intentional, prefix it with an underscore: `_is_def`
+
+warning: unused variable: `x`
+   --> src\L10_typeclass\elaboration.rs:234:32
+    |
+234 |                         Val::U(x) => {//TODO:x?
+    |                                ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `typ`
+  --> src\L10_typeclass\parser\syntax.rs:94:41
+   |
+94 |             Raw::SumCase { is_trait: _, typ, case_name, datas } => datas.last()
+   |                                         ^^^ help: try ignoring the field: `typ: _`
+
+warning: unused variable: `match_kw`
+   --> src\L10_typeclass\parser\mod.rs:575:16
+    |
+575 |         .map(|(match_kw, scrutinee, body)| Raw::Match(
+    |                ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_match_kw`
+
+warning: unused variable: `println_kw`
+   --> src\L10_typeclass\parser\mod.rs:634:16
+    |
+634 |         .map(|(println_kw, x)| Decl::Println(x.unwrap_or(Raw::Hole)))
+    |                ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_println_kw`
+
+warning: unused variable: `x`
+   --> src\L10_typeclass\unification.rs:131:42
+    |
+131 |             (Some((None, rest)), Val::Pi(x, i, _, b)) => {
+    |                                          ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `i`
+   --> src\L10_typeclass\unification.rs:131:45
+    |
+131 |             (Some((None, rest)), Val::Pi(x, i, _, b)) => {
+    |                                             ^ help: if this is intentional, prefix it with an underscore: `_i`
+
+warning: unused variable: `val`
+   --> src\L10_typeclass\unification.rs:388:37
+    |
+388 |                 Val::Pi(span, icit, val, closure) => Tm::Lam(
+    |                                     ^^^ help: if this is intentional, prefix it with an underscore: `_val`
+
+warning: unused variable: `val`
+  --> src\L10_typeclass\typeclass.rs:24:22
+   |
+24 |             Val::Obj(val, span, sp) => None,
+   |                      ^^^ help: if this is intentional, prefix it with an underscore: `_val`
+
+warning: unused variable: `span`
+  --> src\L10_typeclass\typeclass.rs:24:27
+   |
+24 |             Val::Obj(val, span, sp) => None,
+   |                           ^^^^ help: if this is intentional, prefix it with an underscore: `_span`
+
+warning: unused variable: `sp`
+  --> src\L10_typeclass\typeclass.rs:24:33
+   |
+24 |             Val::Obj(val, span, sp) => None,
+   |                                 ^^ help: if this is intentional, prefix it with an underscore: `_sp`
+
+warning: unused variable: `span`
+  --> src\L10_typeclass\typeclass.rs:26:21
+   |
+26 |             Val::Pi(span, icit, val, closure) => None,
+   |                     ^^^^ help: if this is intentional, prefix it with an underscore: `_span`
+
+warning: unused variable: `icit`
+  --> src\L10_typeclass\typeclass.rs:26:27
+   |
+26 |             Val::Pi(span, icit, val, closure) => None,
+   |                           ^^^^ help: if this is intentional, prefix it with an underscore: `_icit`
+
+warning: unused variable: `val`
+  --> src\L10_typeclass\typeclass.rs:26:33
+   |
+26 |             Val::Pi(span, icit, val, closure) => None,
+   |                                 ^^^ help: if this is intentional, prefix it with an underscore: `_val`
+
+warning: unused variable: `closure`
+  --> src\L10_typeclass\typeclass.rs:26:38
+   |
+26 |             Val::Pi(span, icit, val, closure) => None,
+   |                                      ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_closure`
+
+warning: unused variable: `neutral`
+    --> src\L10_typeclass\bump_spine_iter\machine.rs:1045:13
+     |
+1045 |             neutral,
+     |             ^^^^^^^ help: try ignoring the field: `neutral: _`
+
+warning: unused variable: `neutral`
+    --> src\L10_typeclass\bump_spine_iter\machine.rs:1341:13
+     |
+1341 |             neutral,
+     |             ^^^^^^^ help: try ignoring the field: `neutral: _`
+
+warning: unused variable: `t0`
+    --> src\L10_typeclass\bump_spine_iter\machine.rs:2399:29
+     |
+2399 |                 if let Some(t0) = probe_t0 {
+     |                             ^^ help: if this is intentional, prefix it with an underscore: `_t0`
+
+warning: variable does not need to be mutable
+   --> src\L10_typeclass\bump_spine_iter\rename.rs:822:9
+    |
+822 |     let mut lams_loop = solve_probe::on().then(|| std::time::Instant::now());
+    |         ----^^^^^^^^^
+    |         |
+    |         help: remove this `mut`
+
+warning: unused variable: `t0`
+  --> src\L10_typeclass\bump_spine_iter\typeclass.rs:49:21
+   |
+49 |         if let Some(t0) = probe_t0 {
+   |                     ^^ help: if this is intentional, prefix it with an underscore: `_t0`
+
+warning: unused variable: `items`
+   --> src\L10_typeclass\pretty.rs:207:28
+    |
+207 |         Tm::Sum(span, tms, items, _) => format!(
+    |                            ^^^^^ help: if this is intentional, prefix it with an underscore: `_items`
+
+warning: unused variable: `is_trait`
+   --> src\L10_typeclass\pretty.rs:216:23
+    |
+216 |         Tm::SumCase { is_trait, typ, case_name, datas: params } => format!(
+    |                       ^^^^^^^^ help: try ignoring the field: `is_trait: _`
+
+warning: unused variable: `x`
+   --> src\L11_macro\elaboration.rs:246:32
+    |
+246 |                         Val::U(x) => {//TODO:x?
+    |                                ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `typ`
+   --> src\L11_macro\parser\syntax.rs:125:41
+    |
+125 |             Raw::SumCase { is_trait: _, typ, case_name, datas } => datas.last()
+    |                                         ^^^ help: try ignoring the field: `typ: _`
+
+warning: unused variable: `x`
+  --> src\L11_macro\parser\macros.rs:48:53
+   |
+48 | ...                   msg: token.map(|x| ErrMsg::Base(BaseMsg::Expect(*kind))),
+   |                                       ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `t`
+   --> src\L11_macro\parser\macros.rs:171:32
+    |
+171 |                         Ok((i, t)) if i.len() == input.len() => Err(IError {
+    |                                ^ help: if this is intentional, prefix it with an underscore: `_t`
+
+warning: value assigned to `rcurly_span` is never read
+    --> src\L11_macro\parser\mod.rs:1509:45
+     |
+1509 |     let mut rcurly_span: Option<Span<()>> = None;
+     |                                             ^^^^ this value is reassigned later and never used
+...
+1514 |             rcurly_span = Some(rc);
+     |             ---------------------- `rcurly_span` is overwritten here before the previous value is read
+     |
+     = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `val`
+   --> src\L11_macro\unification.rs:410:37
+    |
+410 |                 Val::Pi(span, icit, val, closure) => Tm::Lam(
+    |                                     ^^^ help: if this is intentional, prefix it with an underscore: `_val`
+
+warning: unused variable: `val`
+  --> src\L11_macro\typeclass.rs:26:22
+   |
+26 |             Val::Obj(val, span, sp) => None,
+   |                      ^^^ help: if this is intentional, prefix it with an underscore: `_val`
+
+warning: unused variable: `span`
+  --> src\L11_macro\typeclass.rs:26:27
+   |
+26 |             Val::Obj(val, span, sp) => None,
+   |                           ^^^^ help: if this is intentional, prefix it with an underscore: `_span`
+
+warning: unused variable: `sp`
+  --> src\L11_macro\typeclass.rs:26:33
+   |
+26 |             Val::Obj(val, span, sp) => None,
+   |                                 ^^ help: if this is intentional, prefix it with an underscore: `_sp`
+
+warning: unused variable: `span`
+  --> src\L11_macro\typeclass.rs:28:21
+   |
+28 |             Val::Pi(span, icit, val, closure) => None,
+   |                     ^^^^ help: if this is intentional, prefix it with an underscore: `_span`
+
+warning: unused variable: `icit`
+  --> src\L11_macro\typeclass.rs:28:27
+   |
+28 |             Val::Pi(span, icit, val, closure) => None,
+   |                           ^^^^ help: if this is intentional, prefix it with an underscore: `_icit`
+
+warning: unused variable: `val`
+  --> src\L11_macro\typeclass.rs:28:33
+   |
+28 |             Val::Pi(span, icit, val, closure) => None,
+   |                                 ^^^ help: if this is intentional, prefix it with an underscore: `_val`
+
+warning: unused variable: `closure`
+  --> src\L11_macro\typeclass.rs:28:38
+   |
+28 |             Val::Pi(span, icit, val, closure) => None,
+   |                                      ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_closure`
+
+warning: unused variable: `items`
+   --> src\L11_macro\pretty.rs:158:28
+    |
+158 |         Tm::Sum(span, tms, items, _) => {
+    |                            ^^^^^ help: if this is intentional, prefix it with an underscore: `_items`
+
+warning: unused variable: `is_trait`
+   --> src\L11_macro\pretty.rs:171:23
+    |
+171 |         Tm::SumCase { is_trait, typ, case_name, datas: params } => {
+    |                       ^^^^^^^^ help: try ignoring the field: `is_trait: _`
+
+warning: unused variable: `t`
+   --> src\L11_macro\mod.rs:109:35
+    |
+109 |                 MetaEntry::Solved(t, _) => None,//TODO: this is error. this will be fixed in L12
+    |                                   ^ help: if this is intentional, prefix it with an underscore: `_t`
+
+warning: unused variable: `span`
+   --> src\L12_canonical\elaboration.rs:660:21
+    |
+660 |                 let span = name.to_span();
+    |                     ^^^^ help: if this is intentional, prefix it with an underscore: `_span`
+
+warning: unused variable: `typ`
+   --> src\L12_canonical\parser\syntax.rs:142:41
+    |
+142 |             Raw::SumCase { is_trait: _, typ, case_name, datas } => datas.last()
+    |                                         ^^^ help: try ignoring the field: `typ: _`
+
+warning: unused variable: `x`
+  --> src\L12_canonical\parser\macros.rs:48:53
+   |
+48 | ...                   msg: token.map(|x| ErrMsg::Base(BaseMsg::Expect(*kind))),
+   |                                       ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `t`
+   --> src\L12_canonical\parser\macros.rs:171:32
+    |
+171 |                         Ok((i, t)) if i.len() == input.len() => Err(IError {
+    |                                ^ help: if this is intentional, prefix it with an underscore: `_t`
+
+warning: value assigned to `rcurly_span` is never read
+    --> src\L12_canonical\parser\mod.rs:1534:45
+     |
+1534 |     let mut rcurly_span: Option<Span<()>> = None;
+     |                                             ^^^^ this value is reassigned later and never used
+...
+1539 |             rcurly_span = Some(rc);
+     |             ---------------------- `rcurly_span` is overwritten here before the previous value is read
+
+warning: unused variable: `items`
+   --> src\L12_canonical\pretty.rs:164:28
+    |
+164 |         Tm::Sum(span, tms, items, _) => {
+    |                            ^^^^^ help: if this is intentional, prefix it with an underscore: `_items`
+
+warning: unused variable: `is_trait`
+   --> src\L12_canonical\pretty.rs:198:23
+    |
+198 |         Tm::SumCase { is_trait, typ, case_name, datas: params } => {
+    |                       ^^^^^^^^ help: try ignoring the field: `is_trait: _`
+
+warning: unused variable: `v`
+   --> src\L12_canonical\bump_spine_iter\spine.rs:182:29
+    |
+182 |         MetaEntry::Unsolved(v, _, _) => v_meta(m),
+    |                             ^ help: if this is intentional, prefix it with an underscore: `_v`
+
+warning: unused variable: `span`
+  --> src\L12_canonical\canonical.rs:85:35
+   |
+85 |                 while let Val::Pi(span, icit, dom, clos) = vt.as_ref() {
+   |                                   ^^^^ help: if this is intentional, prefix it with an underscore: `_span`
+
+warning: variable does not need to be mutable
+   --> src\L13_namespace\cxt.rs:488:9
+    |
+488 |     let mut intern = |s: &str, nodes: &mut Vec<String>| -> usize {
+    |         ----^^^^^^
+    |         |
+    |         help: remove this `mut`
+
+warning: unused variable: `out_param`
+    --> src\L13_namespace\elaboration.rs:2042:25
+     |
+2042 |                     let out_param = self.trait_out_param.get(&trait_full)
+     |                         ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_out_param`
+
+warning: unused variable: `inner`
+    --> src\L13_namespace\elaboration.rs:3039:37
+     |
+3039 |                     if let Raw::Obj(inner, Some(prev)) = x.as_ref() {
+     |                                     ^^^^^ help: if this is intentional, prefix it with an underscore: `_inner`
+
+warning: unused variable: `is_expl`
+    --> src\L13_namespace\elaboration.rs:3254:21
+     |
+3254 |                 let is_expl = matches!(i, Either::Icit(Icit::Expl));
+     |                     ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_is_expl`
+
+warning: unused variable: `head`
+    --> src\L13_namespace\elaboration.rs:3550:33
+     |
+3550 |                     if let Some(ref head) = typ_raw_head {
+     |                                 ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_head`
+
+warning: unused variable: `head`
+    --> src\L13_namespace\elaboration.rs:3792:37
+     |
+3792 |                         if let Some(ref head) = typ_raw_head {
+     |                                     ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_head`
+
+warning: unused variable: `typ`
+   --> src\L13_namespace\parser\syntax.rs:204:41
+    |
+204 |             Raw::SumCase { is_trait: _, typ, case_name, datas } => datas.last()
+    |                                         ^^^ help: try ignoring the field: `typ: _`
+
+warning: unused variable: `x`
+  --> src\L13_namespace\parser\macros.rs:48:53
+   |
+48 | ...                   msg: token.map(|x| ErrMsg::Base(BaseMsg::Expect(*kind))),
+   |                                       ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `t`
+   --> src\L13_namespace\parser\macros.rs:194:32
+    |
+194 |                         Ok((i, t)) if i.len() == input.len() => Err(IError {
+    |                                ^ help: if this is intentional, prefix it with an underscore: `_t`
+
+warning: unused variable: `bundle_body`
+   --> src\L13_namespace\parser\derive.rs:600:17
+    |
+600 |             let bundle_body = build_bundle_body(fields);
+    |                 ^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_bundle_body`
+
+warning: unused variable: `enum_name`
+    --> src\L13_namespace\parser\derive.rs:1205:5
+     |
+1205 |     enum_name: &str,
+     |     ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_enum_name`
+
+warning: value assigned to `rcurly_span` is never read
+    --> src\L13_namespace\parser\mod.rs:2120:45
+     |
+2120 |     let mut rcurly_span: Option<Span<()>> = None;
+     |                                             ^^^^ this value is reassigned later and never used
+...
+2125 |             rcurly_span = Some(rc);
+     |             ---------------------- `rcurly_span` is overwritten here before the previous value is read
+
+warning: unused variable: `e`
+    --> src\L13_namespace\parser\mod.rs:3082:13
+     |
+3082 |         Err(e) => Ok((input, vec![])), // No attribute found, not an error
+     |             ^ help: if this is intentional, prefix it with an underscore: `_e`
+
+warning: variable does not need to be mutable
+   --> src\L13_namespace\unification.rs:610:13
+    |
+610 |         let mut solution = self.eval(decl, &List::new(), &self.lams(pren.dom, decl, &mty, rhs));
+    |             ----^^^^^^^^
+    |             |
+    |             help: remove this `mut`
+
+warning: unused variable: `cxt`
+   --> src\L13_namespace\unification.rs:615:41
+    |
+615 |     pub fn solve_multi_trait(&mut self, cxt: &Cxt, m: MetaVar, allow_flex_defaulting: bool) -> Result<(), UnifyError> {
+    |                                         ^^^ help: if this is intentional, prefix it with an underscore: `_cxt`
+
+warning: unused variable: `items`
+   --> src\L13_namespace\pretty.rs:387:28
+    |
+387 |         Tm::Sum(span, tms, items, _) => {
+    |                            ^^^^^ help: if this is intentional, prefix it with an underscore: `_items`
+
+warning: unused variable: `span`
+  --> src\L13_namespace\canonical.rs:79:35
+   |
+79 |                 while let Val::Pi(span, icit, dom, clos) = vt.as_ref() {
+   |                                   ^^^^ help: if this is intentional, prefix it with an underscore: `_span`
+
+warning: unused variable: `t`
+    --> src\L13_namespace\bump_spine_iter\entry.rs:1224:41
+     |
+1224 |         let restore_done = kick_t0.map(|t| std::time::Instant::now());
+     |                                         ^ help: if this is intentional, prefix it with an underscore: `_t`
+
+warning: variable does not need to be mutable
+   --> src\L13_namespace\bump_spine_iter\machine.rs:277:21
+    |
+277 |                 let mut solver = &mut m.tstate.solver;
+    |                     ----^^^^^^
+    |                     |
+    |                     help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> src\L13_namespace\bump_spine_iter\machine.rs:286:21
+    |
+286 |                 let mut solver = &mut m.tstate.solver;
+    |                     ----^^^^^^
+    |                     |
+    |                     help: remove this `mut`
+
+warning: unused variable: `out_param`
+    --> src\L13_namespace\bump_spine_iter\machine.rs:4439:25
+     |
+4439 |                     let out_param = self
+     |                         ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_out_param`
+
+warning: unused variable: `a_t`
+    --> src\L13_namespace\bump_spine_iter\machine.rs:4958:25
+     |
+4958 |                     let a_t = self.quote(bump, &a_cxt, a_cxt.lvl, va);
+     |                         ^^^ help: if this is intentional, prefix it with an underscore: `_a_t`
+
+warning: unused variable: `r`
+   --> src\L13_namespace\bump_spine_iter\observe.rs:602:26
+    |
+602 |             .map(|(a, b, r)| format!("{}..{} {:?}", a, b, &src[*a as usize..*b as usize]))
+    |                          ^ help: if this is intentional, prefix it with an underscore: `_r`
+
+warning: unused variable: `work`
+   --> src\L13_namespace\bump_spine_iter\prim.rs:480:5
+    |
+480 |     work: &mut Vec<W<'a>>,
+    |     ^^^^ help: if this is intentional, prefix it with an underscore: `_work`
+
+warning: unused variable: `vals`
+   --> src\L13_namespace\bump_spine_iter\prim.rs:481:5
+    |
+481 |     vals: &mut Vec<V>,
+    |     ^^^^ help: if this is intentional, prefix it with an underscore: `_vals`
+
+warning: unused variable: `icits`
+   --> src\L13_namespace\bump_spine_iter\prim.rs:482:5
+    |
+482 |     icits: &mut Vec<Icit>,
+    |     ^^^^^ help: if this is intentional, prefix it with an underscore: `_icits`
+
+warning: variable does not need to be mutable
+   --> src\L13_namespace\bump_spine_iter\quote.rs:107:5
+    |
+107 |     mut memo: Option<&mut QuoteMemo<'a>>,
+    |     ----^^^^
+    |     |
+    |     help: remove this `mut`
+
+warning: unused variable: `cxt`
+  --> src\L13_namespace\bump_spine_iter\typeclass.rs:82:9
+   |
+82 |         cxt: &Cxt<'a>,
+   |         ^^^ help: if this is intentional, prefix it with an underscore: `_cxt`
+
+warning: variable does not need to be mutable
+   --> src\L13_namespace\bump_spine_iter\unify.rs:954:21
+    |
+954 |                 let mut args: Vec<(V, Icit)> = match v_tag(ov) {
+    |                     ----^^^^
+    |                     |
+    |                     help: remove this `mut`
+
+warning: unused variable: `o`
+  --> src\L13_namespace\module_probe_tests.rs:28:16
+   |
+28 |             Ok(o) => out.push_str(&format!("T_{}: {:?}\n", name, start.elapsed())),
+   |                ^ help: if this is intentional, prefix it with an underscore: `_o`
+
+warning: unused variable: `c1_pos`
+   --> src\L13_namespace\module_tests.rs:524:9
+    |
+524 |     let c1_pos = output.find("if (c1)").expect("if (c1) present");
+    |         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_c1_pos`
+
+warning: unused variable: `name`
+    --> src\L13_namespace\mod.rs:1970:22
+     |
+1970 |             Val::Lam(name, _, clos) => {
+     |                      ^^^^ help: if this is intentional, prefix it with an underscore: `_name`
+
+warning: unused variable: `name`
+    --> src\L13_namespace\mod.rs:1975:21
+     |
+1975 |             Val::Pi(name, _, vty, clos) => {
+     |                     ^^^^ help: if this is intentional, prefix it with an underscore: `_name`
+
+warning: unused variable: `s`
+    --> src\L13_namespace\mod.rs:1984:31
+     |
+1984 |             Val::LiteralIntro(s) => {
+     |                               ^ help: if this is intentional, prefix it with an underscore: `_s`
+
+warning: unused variable: `name`
+    --> src\L13_namespace\mod.rs:1987:22
+     |
+1987 |             Val::Sum(name, params, cases, _) => {
+     |                      ^^^^ help: if this is intentional, prefix it with an underscore: `_name`
+
+warning: unused variable: `pname`
+    --> src\L13_namespace\mod.rs:1989:22
+     |
+1989 |                 for (pname, pval, pvty, _) in params.iter() {
+     |                      ^^^^^ help: if this is intentional, prefix it with an underscore: `_pname`
+
+warning: unused variable: `cname`
+    --> src\L13_namespace\mod.rs:1994:21
+     |
+1994 |                 for cname in cases.iter() {
+     |                     ^^^^^ help: if this is intentional, prefix it with an underscore: `_cname`
+
+warning: unused variable: `dname`
+    --> src\L13_namespace\mod.rs:2000:22
+     |
+2000 |                 for (dname, dval, _) in datas.iter() {
+     |                      ^^^^^ help: if this is intentional, prefix it with an underscore: `_dname`
+
+warning: unused variable: `pat`
+    --> src\L13_namespace\mod.rs:2008:22
+     |
+2008 |                 for (pat, tm) in cases {
+     |                      ^^^ help: if this is intentional, prefix it with an underscore: `_pat`
+
+warning: unused variable: `name`
+    --> src\L13_namespace\mod.rs:2049:22
+     |
+2049 |             Tm::Decl(name) => {
+     |                      ^^^^ help: if this is intentional, prefix it with an underscore: `_name`
+
+warning: unused variable: `name`
+    --> src\L13_namespace\mod.rs:2052:28
+     |
+2052 |             Tm::Obj(inner, name) => {
+     |                            ^^^^ help: if this is intentional, prefix it with an underscore: `_name`
+
+warning: unused variable: `name`
+    --> src\L13_namespace\mod.rs:2056:21
+     |
+2056 |             Tm::Lam(name, _, body) => {
+     |                     ^^^^ help: if this is intentional, prefix it with an underscore: `_name`
+
+warning: unused variable: `name`
+    --> src\L13_namespace\mod.rs:2068:20
+     |
+2068 |             Tm::Pi(name, _, ty_a, ty_b) => {
+     |                    ^^^^ help: if this is intentional, prefix it with an underscore: `_name`
+
+warning: unused variable: `name`
+    --> src\L13_namespace\mod.rs:2073:21
+     |
+2073 |             Tm::Let(name, ty, val, body) => {
+     |                     ^^^^ help: if this is intentional, prefix it with an underscore: `_name`
+
+warning: unused variable: `name`
+    --> src\L13_namespace\mod.rs:2084:21
+     |
+2084 |             Tm::Sum(name, params, cases, _) => {
+     |                     ^^^^ help: if this is intentional, prefix it with an underscore: `_name`
+
+warning: unused variable: `pname`
+    --> src\L13_namespace\mod.rs:2086:22
+     |
+2086 |                 for (pname, ptm, pty, _) in params.iter() {
+     |                      ^^^^^ help: if this is intentional, prefix it with an underscore: `_pname`
+
+warning: unused variable: `cname`
+    --> src\L13_namespace\mod.rs:2091:21
+     |
+2091 |                 for cname in cases.iter() {
+     |                     ^^^^^ help: if this is intentional, prefix it with an underscore: `_cname`
+
+warning: unused variable: `dname`
+    --> src\L13_namespace\mod.rs:2097:22
+     |
+2097 |                 for (dname, dtm, _) in datas.iter() {
+     |                      ^^^^^ help: if this is intentional, prefix it with an underscore: `_dname`
+
+warning: unused variable: `pat`
+    --> src\L13_namespace\mod.rs:2104:22
+     |
+2104 |                 for (pat, branch) in cases {
+     |                      ^^^ help: if this is intentional, prefix it with an underscore: `_pat`
+
+warning: unused variable: `span`
+    --> src\L13_namespace\mod.rs:2127:18
+     |
+2127 |         for (_, (span, rtm, rval, rty, rvty, _, _)) in cxt.decl.iter() {
+     |                  ^^^^ help: if this is intentional, prefix it with an underscore: `_span`
+
+warning: unused variable: `span`
+    --> src\L13_namespace\mod.rs:2139:21
+     |
+2139 |         for (_, _, (span, vty)) in cxt.src_names.iter_all() {
+     |                     ^^^^ help: if this is intentional, prefix it with an underscore: `_span`
+
+warning: unused variable: `meta_alloc`
+    --> src\L13_namespace\mod.rs:2434:13
+     |
+2434 |         let meta_alloc = (std::mem::size_of::<MetaEntry>() + 16 + 7) & !7;
+     |             ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_meta_alloc`
+
+warning: unused variable: `x`
+    --> src\L13_namespace\mod.rs:4273:22
+     |
+4273 |                 let (x, _, new_cxt) = infer.infer_in_place(&mut cxt, tm.clone())?;
+     |                      ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: variable does not need to be mutable
+   --> src\lib.rs:597:17
+    |
+597 |             let mut value = if let Some(d) = def_block {
+    |                 ----^^^^^
+    |                 |
+    |                 help: remove this `mut`
+
+warning: unused variable: `url`
+    --> src\lib.rs:2094:29
+     |
+2094 |                         let url = params.uri.clone();
+     |                             ^^^ help: if this is intentional, prefix it with an underscore: `_url`
+
+warning: variable does not need to be mutable
+    --> src\lib.rs:2565:17
+     |
+2565 |             let mut infer = self.infer.lock().unwrap();
+     |                 ----^^^^^
+     |                 |
+     |                 help: remove this `mut`
+
+warning: unused variable: `uri`
+    --> src\lib.rs:2777:9
+     |
+2777 |         uri: &Url,
+     |         ^^^ help: if this is intentional, prefix it with an underscore: `_uri`
+
+warning: variable does not need to be mutable
+    --> src\lib.rs:2905:17
+     |
+2905 |             let mut infer = self.infer.lock().unwrap();
+     |                 ----^^^^^
+     |                 |
+     |                 help: remove this `mut`
+
+warning: unused variable: `span`
+    --> src\lib.rs:3189:35
+     |
+3189 |                     .filter_map(|(span, name)| {
+     |                                   ^^^^ help: if this is intentional, prefix it with an underscore: `_span`
+
+warning: variable does not need to be mutable
+    --> src\lib.rs:3339:13
+     |
+3339 |         let mut start_line = range.start.line as usize;
+     |             ----^^^^^^^^^^
+     |             |
+     |             help: remove this `mut`
+
+warning: unused variable: `resp`
+    --> src\lib.rs:3906:35
+     |
+3906 |                 Message::Response(resp) => {
+     |                                   ^^^^ help: if this is intentional, prefix it with an underscore: `_resp`
+
+Some errors have detailed explanations: E0425, E0599.
+For more information about an error, try `rustc --explain E0425`.
+warning: `elaboration-zoo-lsp` (lib test) generated 181 warnings
+error: could not compile `elaboration-zoo-lsp` (lib test) due to 3 previous errors; 181 warnings emitted
+

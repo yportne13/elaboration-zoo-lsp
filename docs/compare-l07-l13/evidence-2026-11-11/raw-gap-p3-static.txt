@@ -1,0 +1,68 @@
+﻿# P3 three-tier diagnostics API static absence probe
+# cwd: F:/projects/hermes/ezl-gap-evidence
+
+## L07_sum_type: matches=59
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\gap_evidence.rs:104: let expanding = infer.meta_expanding.borrow().len();
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\gap_evidence.rs:125: infer.reset_unify_kind();
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\gap_evidence.rs:129: let kind = infer.unify_kind();
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\gap_evidence.rs:132: matches!(kind, UnifyKind::Undecided)
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\mod.rs:503: /// 每个顶层合一入口先 [`Infer::reset_unify_kind`]，失败臂按语义 `note`，
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\mod.rs:504: /// 调用方取 [`Infer::unify_kind`] 决定诊断与覆盖处理。这样既拿到三档信息，
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\mod.rs:511: pub(crate) enum UnifyKind {
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\mod.rs:520: impl UnifyKind {
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\mod.rs:523: UnifyKind::Absurd => 0,
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\mod.rs:524: UnifyKind::Undecided => 1,
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\mod.rs:525: UnifyKind::Fuel => 2,
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\mod.rs:618: /// 最近一次合一失败的**原因分档**（见 [`UnifyKind`]）。顶层入口 reset、
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\mod.rs:620: unify_kind: std::cell::Cell<UnifyKind>,
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\mod.rs:624: meta_expanding: RefCell<Vec<MetaVar>>,
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\mod.rs:660: unify_kind: std::cell::Cell::new(UnifyKind::Absurd),
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\mod.rs:661: meta_expanding: RefCell::new(Vec::new()),
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\mod.rs:747: pub(crate) fn reset_unify_kind(&self) {        self.unify_kind.set(UnifyKind::Absurd);
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\mod.rs:752: pub(crate) fn note_unify_kind(&self, k: UnifyKind) {
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\mod.rs:753: let cur = self.unify_kind.get();
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\mod.rs:755: self.unify_kind.set(k);
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\mod.rs:760: pub(crate) fn unify_kind(&self) -> UnifyKind {
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\mod.rs:761: self.unify_kind.get()
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\mod.rs:802: if self.meta_expanding.borrow().contains(&m) {
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\mod.rs:814: self.meta_expanding.borrow_mut().push(m);
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\mod.rs:817: let mut st = self.meta_expanding.borrow_mut();
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\mod.rs:1781: self.reset_unify_kind();
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\pattern_match.rs:120: Kind(super::UnifyKind),
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\pattern_match.rs:409: Err(IndexUnify::Kind(k)) => k != super::UnifyKind::Absurd,
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\pattern_match.rs:448: infer.reset_unify_kind();
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\pattern_match.rs:463: return Err(IndexUnify::Kind(infer.unify_kind()));
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\pattern_match.rs:722: Err(IndexUnify::Kind(super::UnifyKind::Absurd)) => return Ok(Walk::Unreachable),
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\tests.rs:282: fn test_unify_kind_separates_absurd_from_undecided() {
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\tests.rs:2317: assert!(infer.meta_expanding.borrow().is_empty(), "展开栈应在返回时清空");
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\tests.rs:2342: infer.reset_unify_kind();
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\tests.rs:2350: infer.unify_kind(),
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\tests.rs:2351: UnifyKind::Undecided,
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\unification.rs:127: self.note_unify_kind(super::UnifyKind::Undecided);
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\unification.rs:189: self.note_unify_kind(super::UnifyKind::Undecided);
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\unification.rs:221: self.note_unify_kind(super::UnifyKind::Undecided);
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\unification.rs:260: self.note_unify_kind(super::UnifyKind::Undecided);
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\unification.rs:270: self.note_unify_kind(super::UnifyKind::Undecided);
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\unification.rs:301: self.note_unify_kind(super::UnifyKind::Undecided);
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\unification.rs:553: self.note_unify_kind(super::UnifyKind::Undecided);
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\unification.rs:559: self.note_unify_kind(super::UnifyKind::Undecided);
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\unification.rs:566: self.note_unify_kind(super::UnifyKind::Undecided);
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\unification.rs:575: self.note_unify_kind(super::UnifyKind::Undecided);
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\unification.rs:712: self.note_unify_kind(super::UnifyKind::Undecided);
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\unification.rs:759: self.note_unify_kind(super::UnifyKind::Undecided);
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\unification.rs:792: // review R9：`unify_kind` 是 Infer 上的 Cell，**不在** meta 快照内；
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\unification.rs:795: let kind_before = self.unify_kind();
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\unification.rs:805: self.unify_kind.set(kind_before);
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\unification.rs:883: self.note_unify_kind(super::UnifyKind::Undecided);
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\unification.rs:909: self.note_unify_kind(super::UnifyKind::Fuel);
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\unification.rs:1070: self.note_unify_kind(super::UnifyKind::Undecided);
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\unification.rs:1153: self.note_unify_kind(super::UnifyKind::Undecided);
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\unification.rs:1193: self.note_unify_kind(super::UnifyKind::Undecided);
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\unification.rs:1209: self.note_unify_kind(super::UnifyKind::Undecided);
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\unification.rs:1214: self.note_unify_kind(super::UnifyKind::Undecided);
+F:\projects\hermes\ezl-gap-evidence\src\L07_sum_type\unification.rs:1236: self.note_unify_kind(super::UnifyKind::Undecided);
+
+## L08_product_type: matches=0
+
+## L09_mltt: matches=0
+

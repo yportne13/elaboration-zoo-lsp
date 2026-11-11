@@ -1,0 +1,7 @@
+﻿# cmd: F:\projects\hermes\elaboration-zoo-lsp\target\release\l07bench.exe --only basic --workload church --max-k 13 --rounds 5 # wall: 0.3s exit: 0 # host: DESKTOP-QRAP4BP 2026-11-11T23:37:55.8153220+08:00 ---
+== workload: church ==
+k=9   n=1024     basic=     0.691ms*/     0.769
+k=10  n=2048     basic=     1.234ms*/     1.398
+k=11  n=4096     basic=     2.423ms*/     2.825
+k=12  n=8192     basic=     5.492ms*/     6.179
+k=13  n=16384    basic=    10.883ms*/    13.417

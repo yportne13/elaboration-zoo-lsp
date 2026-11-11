@@ -1,0 +1,9 @@
+﻿# cmd: F:/projects/hermes/ezl-gap-evidence/target/debug/deps/elaboration_zoo_lsp-647b90ef7f32ef90.exe L07_sum_type::gap_evidence::zz_gap_p11_quote_deep_1mb --exact --nocapture
+# exit: 0
+
+running 1 test
+[L07 zz_gap_p11_quote] quote 100k 深度 = 100001（期望 100001）
+test L07_sum_type::gap_evidence::zz_gap_p11_quote_deep_1mb ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1013 filtered out; finished in 0.18s
+

@@ -1,0 +1,9 @@
+﻿# cmd: F:/projects/hermes/ezl-gap-evidence/target/debug/deps/elaboration_zoo_lsp-647b90ef7f32ef90.exe L08_product_type::tests::zz_gap_struct_eq_pending_program --exact --nocapture
+# exit: 0
+
+running 1 test
+[L08 zz_gap_struct_eq_pending] REJECTED err="can't unify Eq[[(Nat → Nat)], (x => match ((match x { case zero => k => k; case succ(j) => k => k }) Nat::zero) { case zero => zero; case succ(m) => succ m }), (x => match ((match x { case zero => k => k; case succ(j) => k => k }) Nat::succ(Nat::zero)) { case zero => zero; case succ(m) => succ m })] == Eq[[((x: Nat) → Nat)], (x => match ((match x { case zero => k => k; case succ(j) => k => k }) Nat::zero) { case zero => zero; case succ(m) => succ m }), (x => match ((match x { case zero => k => k; case succ(j) => k => k }) Nat::zero) { case zero => zero; case succ(m) => succ m })]"
+test L08_product_type::tests::zz_gap_struct_eq_pending_program ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1013 filtered out; finished in 0.00s
+

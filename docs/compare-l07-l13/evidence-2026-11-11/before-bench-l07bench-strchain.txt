@@ -1,0 +1,5 @@
+﻿# cmd: F:\projects\hermes\elaboration-zoo-lsp\target\release\l07bench.exe --only basic --workload strchain --max-k 11 --rounds 3 # wall: 0.2s exit: 0 # host: DESKTOP-QRAP4BP 2026-11-11T23:37:56.0798668+08:00 ---
+== workload: strchain ==
+k=9   n=1024     basic=     1.879ms*/     2.096
+k=10  n=2048     basic=     5.125ms*/     6.816
+k=11  n=4096     basic=    15.358ms*/    15.911

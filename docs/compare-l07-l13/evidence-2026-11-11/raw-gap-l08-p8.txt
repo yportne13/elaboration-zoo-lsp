@@ -1,0 +1,9 @@
+﻿# cmd: F:/projects/hermes/ezl-gap-evidence/target/debug/deps/elaboration_zoo_lsp-647b90ef7f32ef90.exe L08_product_type::tests::zz_gap_p8_loose_string --exact --nocapture
+# exit: 0
+
+running 1 test
+[L08 zz_gap_p8] bare_ok=true applied_ok=true（L07: applied_err=true）
+test L08_product_type::tests::zz_gap_p8_loose_string ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1013 filtered out; finished in 0.00s
+

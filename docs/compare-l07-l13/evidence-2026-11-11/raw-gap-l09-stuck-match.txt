@@ -1,0 +1,11 @@
+﻿# cmd: F:/projects/hermes/ezl-gap-evidence/target/debug/deps/elaboration_zoo_lsp-647b90ef7f32ef90.exe L09_mltt::gap_tests::zz_gap_stuck_match_splice --exact --nocapture
+# exit: 0
+
+running 1 test
+> Nat
+> f
+[L09 zz_gap_stuck_match_splice] OK out="n => (unsolved match n)\nx => Nat::succ(x)\nNat::succ(Nat::zero)\n"
+test L09_mltt::gap_tests::zz_gap_stuck_match_splice ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1013 filtered out; finished in 0.00s
+

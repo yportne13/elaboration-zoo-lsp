@@ -1,0 +1,3 @@
+﻿# cmd: F:\projects\hermes\elaboration-zoo-lsp\target\release\l08bench.exe --only basic --workload enum --max-k 13 --rounds 5 # wall: 0s exit: 0 # host: DESKTOP-QRAP4BP 2026-11-11T23:37:56.3690300+08:00 ---
+== workload: enum ==
+k=9   n=1024     basic=     0.259ms*/     0.281

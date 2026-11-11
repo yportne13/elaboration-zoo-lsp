@@ -1,0 +1,9 @@
+﻿# cmd: F:/projects/hermes/ezl-gap-evidence/target/debug/deps/elaboration_zoo_lsp-647b90ef7f32ef90.exe L07_sum_type::tests::test_stuck_match_applied_with_outer_binder --exact --nocapture
+# exit: 0
+
+running 1 test
+test L07_sum_type::tests::test_stuck_match_applied_with_outer_binder ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1014 filtered out; finished in 0.00s
+
+
