@@ -132,6 +132,10 @@ impl Infer {
         t_span: Span<()>,
         spec: &mut SpecSolve<'_>,
     ) -> Result<(), Error> {
+        // 每条特化方程一个顶层合一入口：重置"卡住 match 比较"预算与失败
+        // 分档（P2/P3）。嵌套的 `unify` 递归不清——分档在整个方程内累积。
+        self.reset_match_cmp_budget();
+        self.reset_unify_kind();
         let mut f1 = self.force(t);
         let mut f2 = self.force(t_prime);
         // 方程两侧置于**当前已积累的解**之下再解释（dpm-nbe `subst ɑ vs`

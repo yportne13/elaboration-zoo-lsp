@@ -135,11 +135,13 @@ impl Compiler {
                 }
                 _ => {
                     break Self::unify_indices(infer, cxt, &sum_name, &head_params, &tyf, init_sub)
-                        // fuel 耗尽的失败是预算问题而非结构冲突：按可达处理
-                        // （保守地要求覆盖）。反方向（判不可达 → 覆盖检查放
-                        // 过该构造子）会让深负载下的非穷尽 match 被静默接受
-                        // （L07 同款方向纠偏，2026-09-18 评审修复 2）。
+                        // 预算耗尽 / 判不出来（P3 三档）的失败不是结构冲突：
+                        // 按**可达**处理（保守地要求覆盖）。反方向（判不可达 →
+                        // 覆盖检查放过该构造子）会让深负载下的非穷尽 match 被
+                        // 静默接受（L07 同款方向纠偏，2026-09-18 评审修复 2；
+                        // P3 后口径从"仅 fuel 耗尽"扩到 Undecided/Fuel 两档）。
                         || infer.fuel_exhausted()
+                        || infer.unify_kind() != super::UnifyKind::Absurd
                 }
             }
         };
