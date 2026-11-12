@@ -9,9 +9,14 @@
 > （顶层声明不进上下文、全局 O(1) 取用），但保留 L09 的宇宙语义/parser/显示/错误/
 > 测试面（不整层复制 L08 引擎，避免重做宇宙增量；用户批准方案 A 的实现层细化）。
 >
-> - HEAD `ae8ccb6c`；改动仅 `src/L09_mltt/{mod,cxt,elaboration,pretty,struct_eq}.rs` + 本层 README
-> - 改动规模 **+260/−121 行**（对比整层重定基 ~5k 行）；`bump_spine_iter`（孪生）与 tests 未动
-> - 语义门禁：`l09_fast_parity` **46/46**、`l09_blackbox` **82/82**、lib **17/17**、`--validate` 与基线完全一致
+> - HEAD `ae8ccb6c`；**第一批（2026-11-12）**：载体切换，改
+>   `src/L09_mltt/{mod,cxt,elaboration,pretty,struct_eq}.rs`（+260/−121 行）；
+>   **第二批（2026-11-13）**：从 L08 继承 G3 `Tm::Lam/Pi` 体 Rc 与重定义报错，
+>   改 `mod.rs/cxt.rs/elaboration.rs/unification.rs/syntax.rs/struct_eq.rs/
+>   bump_spine_iter/{machine,entry}.rs` + `tests/l09_blackbox.rs`。
+>   两批均不整层复制 L08（保留宇宙/parser/显示/错误/测试面）。
+> - 语义门禁（最终）：`l09_fast_parity` **46/46**、`l09_blackbox` **82/82**、
+>   lib **17/17**、`--validate` 与基线逐项一致（L09 common 6/0、自有语料 34/0）。
 
 ## 1. 改动内容
 
@@ -63,23 +68,23 @@
 - 审计噪声：首轮 AFTER 单跑曾出现控制层 +17~24% 的瞬时负载污染，已用 HEAD↔NEW
   交错 3 轮复测收敛（≤±1.7%），单轮数据保留在 `after/logs/` 附录 A。
 
-## 3. 仍存差距（非量级问题，后续可选）
+## 3. 第一批后的剩余差距（历史记录；第二批已关闭大部分）
 
-载体切换后 L09 ≈ L07/L08 的 1.0–1.7×，剩余常数项来源已定位但未在本轮处理：
+载体切换（第一批）后 L09 ≈ L07/L08 的 1.0–1.7×。下表是当时的错误/待定归因，
+**保留为诊断记录**：其中 common 1.43× 当时猜「ty_precheck 快路径缺失」，第二批
+实测证明主因是 `Tm::Lam/Pi` 体仍是 `Box`（G3）——改 Rc 后 common 直接到 1.01×。
 
-| 缺口 | 现象 | 锚点/原因 | 可选修法 |
+| 缺口 | 第一批现象 | 当时的（部分错误）原因假设 | 第二批结论 |
 |---|---|---|---|
-| common 1.43× | L07 风格 798-decl 代码 96.5 vs 65 | L09 每份类型注解都走完整 `check_universe`（infer + insert + 宇宙层级判定）；L07/L08 有结构预检 `ty_precheck` 捷径 | 给明显结构化的注解加快速宇宙判定（不动语义） |
-| church 1.7×、enum 1.7× | β/构造子路径的常数 | `Tm::Lam/Pi` 体仍是 `Box<Tm>`（L07/L08 已 `Rc`；借用版 `eval_ref` 建 Closure 时深拷） | 同步 85b9c87e 的 Tm 侧 Rc 化（G3） |
-| strchain 常数 | 已 1.06× L08 | 内建 `string_concat` 走普通 β + `Tm::Prim`（无 PrimFunc/eta） | 可选移植 PrimFunc（收益小） |
-
-这些都不改变结论：**L09 参考版已回到 L07/L08 性能量级**，且保留 L09 的
-「无名字键 decl 表、值表按下标存」的简化载体与全部宇宙语义。
+| common 1.43× | 96.5 vs L07 65 | 猜 check_universe 全推断/ty_precheck 缺失 | **G3（Tm Box 深拷）为主因**，Rc 化后 1.01× |
+| church 1.7×、enum 1.7× | β/构造子常数 | `Tm::Lam/Pi` 体 `Box`（G3） | G3 落地：church 0.95×、enum 1.33× |
+| strchain 1.06× L08 | 内建走普通 β | PrimFunc/eta（G4） | 判定**不合入**（理由见 §6） |
 
 ## 4. 回退与复验
 
-- 回退：`git checkout -- src/L09_mltt/{mod,cxt,elaboration,pretty,struct_eq}.rs src/L09_mltt/README.md`
-  （切换前 HEAD 版本同时导出在 `target/perf09/baseline/l09_*_head.rs`）。
+- 回退：`git checkout -- src/L09_mltt/ src/L09_mltt/README.md tests/l09_blackbox.rs`
+  （第一批切换前 HEAD 版本同时导出在 `target/perf09/baseline/l09_*_head.rs`；
+  第二批前的中间版本在 git 历史 `568c65c5`。）
 - 复验命令：
   ```powershell
   cargo test --release --test l09_fast_parity --test l09_blackbox
@@ -89,11 +94,67 @@
   target/release/realbench.exe --layer L09 --corpus tools/bench_corpus/common --rounds 3 --only basic
   target/release/l09bench.exe --workload strchain --max-k 11 --rounds 3 --only basic
   ```
-- A/B 脚本与原始数据：`target/perf09/baseline/{run_*.ps1,ab_recheck/,after/}`；
-  汇总报告 `target/perf09/baseline/after/ab_compare.md`、`.deltawork/perf09/baseline.md` §13。
+- A/B 脚本与原始数据：`target/perf09/baseline/{run_*.ps1,ab_recheck/,ab_recheck2/,after/,after2/}`；
+  最终报告 `target/perf09/baseline/after2/ab_compare.md`、
+  `target/perf09/baseline/ab_recheck2/ab_recheck.md`、`.deltawork/perf09/baseline.md` §13/§14。
 
 ## 5. 相关文档
 
-- 差距定位（历史）：[l09-perf-gap-2026-11-12.md](l09-perf-gap-2026-11-12.md)（§7 记录本轮落地）
+- 差距定位（历史）：[l09-perf-gap-2026-11-12.md](l09-perf-gap-2026-11-12.md)（§7 记录落地）
 - 跨层基准（切换前历史值）：[bench-crosslayer-ref-2026-11-12.md](bench-crosslayer-ref-2026-11-12.md)
-- 实现对应物：`src/L09_mltt/README.md` §2（载体）、§4（与孪生对齐）、§5（新基准表）
+- 从 L08 继承的侦察与取舍：`.deltawork/perf09/l08-inherit-recon.md`
+- 实现对应物：`src/L09_mltt/README.md` §2（载体）、§4（与孪生对齐 + G3）、§5（新基准表）
+
+## 6. 第二批（2026-11-13）：从 L08 继承 G3 与重定义检查
+
+用户口径：「项目最初目的就是下一章节继承上一章节然后添加新特性……该从 L08
+合过来的东西就合入吧」。按 `l08-inherit-recon.md` 的逐项判定，第二批合入两项、
+明确不合入三项：
+
+### 6.1 合入：G3 `Tm::Lam/Pi` 体 Rc（性能主项）
+
+- `Tm::Lam` 体 `Box<Tm>`→`Rc<Tm>`；`Tm::Pi` 域/余域 `Box<Ty>`→`Rc<Ty>`
+  （与 L07/L08 表示一致）。同步 eval / `eval_ref`（建 `Closure` 由深拷变
+  `Rc::clone`）/ quote_arm / `lams_go` / `tm_size_ref` / struct_eq / `close_ty` /
+  `Cxt::new` 内建 / 孪生 `CTm` 导出。
+- 语义零变化（parity/黑盒/validate 全绿）；增益：relative to 第一批
+  common −30.5%、L09 自有语料 −19.8%、Eq 阶梯单文件 −16.2%。
+
+### 6.2 合入：重定义报错（L07/L08/L13 语义）
+
+- 顶层 `def`/`enum` 重名（含撞 `Cxt::new` 内建、撞构造子裸名）→
+  `redefine {名}`；顺序 = 先检查类型、后查重定义（与 L07/L08/L13 同序）。
+  参考版与孪生同轮同步（twin 的 `prime_round` 把内建注册在 `global_names`，
+  同表判定）。
+- `tests/l09_blackbox.rs` 的 `bb_redefinition_silent_overwrite` 翻面为
+  `bb_redefinition_rejected`（5 个反向用例：同名 def / 撞 enum / 撞构造子裸名 /
+  撞内建 String / enum 撞先前 def）；README §1/§6 同步。
+
+### 6.3 不合入（判定与证据）
+
+| 候选项 | 判定 | 证据/理由 |
+|---|---|---|
+| B `ty_precheck`（L08 类型注解预检） | **不合（性能项）** | L08 `ty_precheck`（elab:150-183）是零副作用**诊断预检**，`check_ty` 预检后仍完整 `check`——不存在"跳过推断的快路径"；common 1.43× 的第二批归因已证实是 G3，与预检无关。仅可作 P3 诊断移植（不宣称性能收益） |
+| C PrimFunc/eta（L08 builtin 机制） | **不合** | `eta` 在 L08 参考版是只写不读的死字段（真正生效的是 `prim_names` 的 quote η 展开）；L09 载体无名字键 decl 表/全局层级值表，移植需新增 `Val::Prim(name, spine)` + registry + prim_reduce（8+ 文件、20+ 匹配臂、翻 golden），并推翻 A4-R2 §2-2「Prim 无 spine 故无 fuel 宿主」论证；而 strchain 已 1.15× L07 / 1.06× L08，主体是 O(n²) 字符串拷贝 |
+| E L08 builtin/可变全局/文件 IO 语言面 | **不合（语言面）** | A4-R2 正式登记为「再定基层刻意保留的时代缺口」；L10 README 明写「与 L09 相同，不修」；L09/L10 语料零依赖；L11+ 以新特性（`Tm::Prim(typ, PrimFunc)` 口径）恢复，不是 L09 该继承的机制 |
+
+### 6.4 最终 A/B（4 轮 HEAD↔NEW2 交替、逐项 min；`ab_recheck2/`）
+
+| 场景 | HEAD `ae8ccb6c` | NEW2 | 变化 | 相对 L07/L08 |
+|---|---:|---:|---:|---|
+| L09 common（6 文件） | 115.321 ms | **67.055 ms** | −41.9% | L09/L07=1.007×、L09/L08=0.981× |
+| L09 自有语料（34 文件） | 1763.739 ms | **9.116 ms** | **193.5×** | — |
+| Eq 阶梯单文件（801 decls） | 1678.524 ms | **2.988 ms** | **561.8×** | 1.199× L07（原 660×） |
+| strchain k=11 | 65.033 ms | **9.106 ms** | 7.14× | 1.15× L07 / 1.06× L08 |
+| church k=11 | 2.461 ms | **1.367 ms** | 1.80× | 0.95× L07 |
+| natadd k=11 | 4.221 ms | **3.360 ms** | 1.26× | 0.97× L07 |
+| enum k=9 | 0.677 ms | **0.222 ms** | 3.05× | 1.33× L07 |
+| struct k=10 / universe k=11 | — | 6.286 / 4.541 ms | — | 1.12× L08（struct） |
+
+- 测试：HEAD 46/82/17 → NEW2 **46/82/17，全绿**；validate 8 条一致
+  （L09 common 6/0、L09 自有语料 34/0）；控制层 L07/L08/L10 无变慢
+  （−4.2%~+0.8%），其中 L07 common −2.8%、L10 单文件 −4.2% 为「新版更快」的
+  重建布局效应，已接受（非回退）。
+- 结论：**L08→L09 的机制继承补齐完成**；L09 参考版性能回到 L07/L08 量级
+  （common 1.01×、单文件 1.20×、church/natadd ≤1.0×），量级差距清零。
+

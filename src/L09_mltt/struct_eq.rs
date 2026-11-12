@@ -248,7 +248,7 @@ fn eq_run(first: EqTask<'_>) -> bool {
                         if i != j {
                             return false;
                         }
-                        stack.push(EqTask::T(x, y));
+                        stack.push(EqTask::T(&**x, &**y));
                     }
                     (Tm::U(x), Tm::U(y)) => {
                         if x != y {
@@ -259,13 +259,13 @@ fn eq_run(first: EqTask<'_>) -> bool {
                         if i != j {
                             return false;
                         }
-                        stack.push(EqTask::T(xb, yb));
-                        stack.push(EqTask::T(xa, ya));
+                        stack.push(EqTask::T(&**xb, &**yb));
+                        stack.push(EqTask::T(&**xa, &**ya));
                     }
                     (Tm::Let(_, xa, xb, xc), Tm::Let(_, ya, yb, yc)) => {
                         stack.push(EqTask::T(xc, yc));
-                        stack.push(EqTask::T(xb, yb));
-                        stack.push(EqTask::T(xa, ya));
+                        stack.push(EqTask::T(&**xb, &**yb));
+                        stack.push(EqTask::T(&**xa, &**ya));
                     }
                     (Tm::Meta(x), Tm::Meta(y)) => {
                         if x != y {

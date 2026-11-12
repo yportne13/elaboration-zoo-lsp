@@ -320,7 +320,7 @@ impl Infer {
                     *t,
                     self.closure_apply(&b_closure, Val::vvar(cxt.lvl)),
                 )?;
-                Ok(Tm::Lam(x, i_t, Box::new(body)))
+                Ok(Tm::Lam(x, i_t, Rc::new(body)))
             }
             (t, Val::Pi(x, Icit::Impl, a, b_closure)) => {
                 let body = self.check(
@@ -328,7 +328,7 @@ impl Infer {
                     t,
                     self.closure_apply(&b_closure, Val::vvar(cxt.lvl)),
                 )?;
-                Ok(Tm::Lam(x, Icit::Impl, Box::new(body)))
+                Ok(Tm::Lam(x, Icit::Impl, Rc::new(body)))
             }
             // Check let bindings
             (Raw::Let(x, a, t, u), a_prime) => {
@@ -410,6 +410,16 @@ impl Infer {
                     //println!("------------------->");
                     //println!("{:?}", vtyp);
                     //println!("-------------------<");
+                    // 重定义检查（从 L07/L08 继承；L13 `fake_bind` 前传）：
+                    // 名字已被内建 / 先前 def / enum / 构造子占用 → 定向报错，
+                    // 不再静默覆盖。**先类型后重定义**（与 L07/L08/L13 同序）。
+                    if ret_cxt.src_names.get(&name.data).is_some()
+                        || self.global_names.contains_key(&name.data)
+                    {
+                        return Err(Error(
+                            name.clone().map(|_| format!("redefine {}", name.data)),
+                        ));
+                    }
                     let fake_cxt = self.fake_bind(ret_cxt, name.clone(), vtyp.clone(), global_idx);
                     self.global.insert(global_idx, Val::vvar(global_idx + 1919810));
                     let t_tm = self.check(&fake_cxt, bod, vtyp.clone())?;
@@ -518,6 +528,14 @@ impl Infer {
                     let global_idx = Lvl(self.global.len() as u32);
                     let (typ_tm, _) = self.check_universe(cxt, typ)?;
                     let vtyp = self.eval(&cxt.env, typ_tm.clone());
+                    // 重定义检查（同 def 臂；从 L07/L08 继承，先类型后重定义）
+                    if cxt.src_names.get(&name.data).is_some()
+                        || self.global_names.contains_key(&name.data)
+                    {
+                        return Err(Error(
+                            name.clone().map(|_| format!("redefine {}", name.data)),
+                        ));
+                    }
                     let fake_cxt = self.fake_bind(cxt, name.clone(), vtyp.clone(), global_idx);
                     self.global.insert(global_idx, Val::vvar(global_idx + 1919810));
                     let t_tm = self.check(&fake_cxt, bod, vtyp.clone())?;
@@ -785,7 +803,7 @@ impl Infer {
                 let (t_inferred, b) = self.insert(&new_cxt, infered)?;
                 let b_closure = self.close_val(cxt, b);
                 Ok((
-                    Tm::Lam(x.clone(), i, Box::new(t_inferred)),
+                    Tm::Lam(x.clone(), i, Rc::new(t_inferred)),
                     Val::Pi(x, i, Rc::new(a), b_closure),
                 ))
             }
@@ -870,7 +888,7 @@ impl Infer {
                 )?;
                 universe = max(universe, lvl);
                 Ok((
-                    Tm::Pi(x, i, Box::new(a_checked), Box::new(b_checked)),
+                    Tm::Pi(x, i, Rc::new(a_checked), Rc::new(b_checked)),
                     Val::U(universe),
                 ))
             }

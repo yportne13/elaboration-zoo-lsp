@@ -131,7 +131,7 @@ impl Infer {
                 let a = self.rename(pren, (*a).clone())?;
                 let b = self.closure_apply(&b, Val::vvar(pren.cod));
                 let b = self.prune_ty_go(rest, &lift(pren), b)?;
-                Ok(Tm::Pi(x, i, Box::new(a), Box::new(b)))
+                Ok(Tm::Pi(x, i, Rc::new(a), Rc::new(b)))
             }
             (Some((None, rest)), Val::Pi(x, i, _, b)) => {
                 let b = self.closure_apply(&b, Val::vvar(pren.cod));
@@ -506,7 +506,7 @@ impl Infer {
                     &lift(pren),
                     self.closure_apply(&closure, Val::vvar(pren.cod)),
                 )?;
-                Ok(Tm::Lam(x, i, Box::new(t)))
+                Ok(Tm::Lam(x, i, Rc::new(t)))
             }
             Val::Pi(x, i, a, closure) => {
                 let a = self.rename(pren, (*a).clone())?;
@@ -514,7 +514,7 @@ impl Infer {
                     &lift(pren),
                     self.closure_apply(&closure, Val::vvar(pren.cod)),
                 )?;
-                Ok(Tm::Pi(x, i, Box::new(a), Box::new(b)))
+                Ok(Tm::Pi(x, i, Rc::new(a), Rc::new(b)))
             }
             Val::U(x) => Ok(Tm::U(x)),
             Val::LiteralType => Ok(Tm::LiteralType),
@@ -592,7 +592,7 @@ impl Infer {
                     Tm::Lam(
                         empty_span(var_name),
                         icit,
-                        Box::new(self.lams_go(
+                        Rc::new(self.lams_go(
                             l,
                             t,
                             self.closure_apply(&closure, Val::Rigid(l_prime, List::new())),
@@ -603,7 +603,7 @@ impl Infer {
                 Val::Pi(span, icit, val, closure) => Tm::Lam(
                     span,
                     icit,
-                    Box::new(self.lams_go(
+                    Rc::new(self.lams_go(
                         l,
                         t,
                         self.closure_apply(&closure, Val::Rigid(l_prime, List::new())),

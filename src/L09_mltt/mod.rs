@@ -73,11 +73,13 @@ pub enum Tm {
     /// 与旧版「env 槽引用」同语义——中性视图下照常展开。
     Global(Ix),
     Obj(Box<Tm>, Span<String>),
-    Lam(Span<String>, Icit, Box<Tm>),
+    /// λ 体用 `Rc<Tm>`（继承 L07/L08 表示：借用版 eval 建 Closure 时只加引用
+    /// 计数，不再深拷整棵体项——2026-11-13 从 L08 合入）。
+    Lam(Span<String>, Icit, Rc<Tm>),
     App(Box<Tm>, Box<Tm>, Icit),
     AppPruning(Box<Tm>, Pruning),
     U(u32),
-    Pi(Span<String>, Icit, Box<Ty>, Box<Ty>),
+    Pi(Span<String>, Icit, Rc<Ty>, Rc<Ty>),
     Let(Span<String>, Box<Ty>, Box<Tm>, Box<Tm>),
     Meta(MetaVar),
     LiteralType,
@@ -1003,16 +1005,16 @@ impl Infer {
         }
     }
 
-    /// 拥有版 eval（入口）：顶层 `Lam`/`Pi` 直接把 Box 体 move 进 `Closure`
+    /// 拥有版 eval（入口）：顶层 `Lam`/`Pi` 直接把 `Rc` 体交给 `Closure`
     /// （零克隆）；其余形态委托 [`Self::eval_ref`] 只读遍历。
     fn eval(&self, env: &Env, tm: Tm) -> Val {
         match tm {
-            Tm::Lam(x, i, t) => Val::Lam(x, i, Closure(env.clone(), Rc::new(*t))),
+            Tm::Lam(x, i, t) => Val::Lam(x, i, Closure(env.clone(), t)),
             Tm::Pi(x, i, a, b) => Val::Pi(
                 x,
                 i,
-                Rc::new(self.eval(env, *a)),
-                Closure(env.clone(), Rc::new(*b)),
+                Rc::new(self.eval(env, (*a).clone())),
+                Closure(env.clone(), b),
             ),
             // 拥有 cases 的入口：选中臂借用求值（不拷分支体），卡住时 cases
             // 直接 move 进 Val::Match（借用路径才需要 clone，见 eval_ref）。
@@ -1097,16 +1099,12 @@ impl Infer {
                 }
             }
             Tm::App(t, u, i) => self.v_app(self.eval_ref(env, t), self.eval_ref(env, u), *i),
-            Tm::Lam(x, i, t) => Val::Lam(
-                x.clone(),
-                *i,
-                Closure(env.clone(), Rc::new((**t).clone())),
-            ),
+            Tm::Lam(x, i, t) => Val::Lam(x.clone(), *i, Closure(env.clone(), t.clone())),
             Tm::Pi(x, i, a, b) => Val::Pi(
                 x.clone(),
                 *i,
                 Rc::new(self.eval_ref(env, a)),
-                Closure(env.clone(), Rc::new((**b).clone())),
+                Closure(env.clone(), b.clone()),
             ),
             Tm::Let(_, _, t, u) => {
                 let t_val = self.eval_ref(env, t);
@@ -1442,13 +1440,13 @@ impl Infer {
             Val::Lam(x, i, closure) => Tm::Lam(
                 x,
                 i,
-                Box::new(self.quote(l + 1, self.closure_apply(&closure, Val::vvar(l)))),
+                Rc::new(self.quote(l + 1, self.closure_apply(&closure, Val::vvar(l)))),
             ),
             Val::Pi(x, i, a, closure) => Tm::Pi(
                 x,
                 i,
-                Box::new(self.quote(l, (*a).clone())),
-                Box::new(self.quote(l + 1, self.closure_apply(&closure, Val::vvar(l)))),
+                Rc::new(self.quote(l, (*a).clone())),
+                Rc::new(self.quote(l + 1, self.closure_apply(&closure, Val::vvar(l)))),
             ),
             Val::U(x) => Tm::U(x),
             Val::LiteralIntro(x) => Tm::LiteralIntro(x),
@@ -1584,7 +1582,7 @@ fn tm_size_ref(t: &Tm) -> u64 {
             Tm::Var(_) | Tm::Global(_) | Tm::U(_) | Tm::Meta(_) | Tm::LiteralType
             | Tm::LiteralIntro(_) | Tm::Prim => {}
             Tm::Obj(h, _) => stack.push(h),
-            Tm::Lam(_, _, b) => stack.push(b),
+            Tm::Lam(_, _, b) => stack.push(&**b),
             Tm::App(f, a, _) => {
                 stack.push(f);
                 stack.push(a);
@@ -1594,8 +1592,8 @@ fn tm_size_ref(t: &Tm) -> u64 {
                 n += pr.len() as u64;
             }
             Tm::Pi(_, _, a, b) => {
-                stack.push(a);
-                stack.push(b);
+                stack.push(&**a);
+                stack.push(&**b);
             }
             Tm::Let(_, a, t, u) => {
                 stack.push(a);

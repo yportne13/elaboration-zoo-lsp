@@ -465,12 +465,32 @@ fn bb_ctor_wf_rebind_ok() {
     );
 }
 
-/// 重定义静默覆盖：同名 def 后定义覆盖先定义，不报 redefine。
+/// 重定义报错（从 L07/L08 继承，L13 `fake_bind` 前传）：先前 def / enum /
+/// 构造子裸名 / `Cxt::new` 内建已被占用 → `redefine {名}` 定向报错，
+/// 不再静默覆盖。先类型后重定义（与 L07/L08/L13 同序）。
 #[test]
-fn bb_redefinition_silent_overwrite() {
-    assert_lines(
-        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\ndef f: Nat = zero\nprintln f\ndef f: Nat = succ zero\nprintln f\n",
-        &["Nat::zero", nat_succs(1).as_str()],
+fn bb_redefinition_rejected() {
+    // 同名 def
+    assert_err(
+        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\ndef f: Nat = zero\ndef f: Nat = succ zero\n",
+        &["redefine", "f"],
+    );
+    // def 撞 enum 名
+    assert_err(
+        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\ndef Nat: Type 1 = Type 0\n",
+        &["redefine", "Nat"],
+    );
+    // def 撞构造子裸名
+    assert_err(
+        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\ndef zero: Nat = zero\n",
+        &["redefine", "zero"],
+    );
+    // def 撞内建（Cxt::new 的 String）
+    assert_err("def String: Type 1 = Type 0\n", &["redefine", "String"]);
+    // enum 撞先前 def
+    assert_err(
+        "def Nat: Type 1 = Type 0\n\nenum Nat {\n    zero\n}\n",
+        &["redefine", "Nat"],
     );
 }
 

@@ -57,10 +57,10 @@ impl Cxt {
                 Tm::Lam(
                     empty_span("x".to_owned()),
                     Icit::Expl,
-                    Box::new(Tm::Lam(
+                    Rc::new(Tm::Lam(
                         empty_span("y".to_owned()),
                         Icit::Expl,
-                        Box::new(Tm::Prim),
+                        Rc::new(Tm::Prim),
                     )),
                 ),
                 Val::Lam(
@@ -71,19 +71,19 @@ impl Cxt {
                         Rc::new(Tm::Lam(
                             empty_span("y".to_owned()),
                             Icit::Expl,
-                            Box::new(Tm::Prim),
+                            Rc::new(Tm::Prim),
                         )),
                     ),
                 ),
                 Tm::Pi(
                     empty_span("x".to_owned()),
                     Icit::Expl,
-                    Box::new(Tm::Var(Ix(0))),
-                    Box::new(Tm::Pi(
+                    Rc::new(Tm::Var(Ix(0))),
+                    Rc::new(Tm::Pi(
                         empty_span("y".to_owned()),
                         Icit::Expl,
-                        Box::new(Tm::Var(Ix(1))),
-                        Box::new(Tm::Var(Ix(2))),
+                        Rc::new(Tm::Var(Ix(1))),
+                        Rc::new(Tm::Var(Ix(2))),
                     )),
                 ),
                 Val::Pi(
@@ -95,8 +95,8 @@ impl Cxt {
                         Rc::new(Tm::Pi(
                             empty_span("y".to_owned()),
                             Icit::Expl,
-                            Box::new(Tm::Var(Ix(1))),
-                            Box::new(Tm::Var(Ix(2))),
+                            Rc::new(Tm::Var(Ix(1))),
+                            Rc::new(Tm::Var(Ix(2))),
                         )),
                     ),
                 ),
