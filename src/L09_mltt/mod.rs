@@ -64,6 +64,14 @@ pub enum DeclTm {
 #[derive(Debug, Clone)]
 pub enum Tm {
     Var(Ix),
+    /// 顶层声明引用（已定名全局，编码 `global_idx + 1919810`）：`eval` 直查
+    /// [`Infer::global`] O(1)（2026-11-12 载体切换）。
+    ///
+    /// 与 `Var(大下标)` 的分工：`Var(大下标)` 只表示**递归定义检查期间**的
+    /// 自身占位引用（旧版 `fake_bind` 哨兵；中性全局视图会把这类引用
+    /// 中和成 rigid，避免递归展开）；`Global` 是已登记全局的普通引用，
+    /// 与旧版「env 槽引用」同语义——中性视图下照常展开。
+    Global(Ix),
     Obj(Box<Tm>, Span<String>),
     Lam(Span<String>, Icit, Box<Tm>),
     App(Box<Tm>, Box<Tm>, Icit),
@@ -517,7 +525,7 @@ use std::{
     rc::Rc,
 };
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 #[derive(Debug)]
 struct UnifyError;
@@ -577,6 +585,9 @@ pub struct Error(pub Span<String>);
 #[derive(Clone)]
 pub struct Infer {
     meta: Vec<MetaEntry>,
+    /// 顶层声明值表（键 = `global_idx`，即登记序）：值都是终值（递归 def 在
+    /// 体检查期间先放 `Rigid(global_idx + 1919810)` 占位、检查完覆盖）。引用
+    /// 方按哨兵大下标直查本表——等价 L07/L08 的名字键 decl 表（O(1)）。
     global: FxHashMap<Lvl, VTy>,
     /// 顶层名字表（名字 → (层级, 类型值)）：**append-only，随 Infer 存续、
     /// 不随 Cxt 克隆**——顶层 def/enum/构造子的真名与 `fake_bind` 的递归
@@ -612,6 +623,11 @@ pub struct Infer {
     /// 正在展开的 meta 链（跨 meta 环守卫，P5）：force 展开已解 meta 时压栈，
     /// 同一 meta 再次出现即判定环，返回卡住的 Flex，不再递归烧 fuel。
     meta_expanding: RefCell<Vec<MetaVar>>,
+    /// **递归定义检查期间**的全局 id 集合（`fake_bind` 插入、`define_global`
+    /// 移除）：这些名字在体内被引用时必须编成 `Tm::Var(哨兵大下标)`（旧版
+    /// 哨兵语义——中性视图会中和它，防递归展开）；其余已定名全局编成
+    /// `Tm::Global(哨兵大下标)`（中性视图照常展开，与旧版 env 槽引用一致）。
+    in_progress_globals: FxHashSet<Lvl>,
 }
 
 /// 燃料池容量（对齐 L07 蓝本）。
@@ -628,6 +644,7 @@ impl Infer {
             match_cmp_budget: Cell::new(MATCH_CMP_BUDGET),
             unify_kind: Cell::new(UnifyKind::Absurd),
             meta_expanding: RefCell::new(Vec::new()),
+            in_progress_globals: FxHashSet::default(),
         }
     }
     /// 顶层名的局部影子：`Cxt::new` 的两个内建（`String` /
@@ -647,6 +664,7 @@ impl Infer {
     fn fake_bind(&mut self, cxt: &Cxt, x: Span<String>, a: VTy, global_idx: Lvl) -> Cxt {
         //println!("{} {x:?} {a:?} at {}", "bind".bright_purple(), cxt.lvl.0);
         let lvl = global_idx + 1919810;
+        self.in_progress_globals.insert(global_idx);
         let a = Rc::new(a);
         self.global_names.insert(x.data.clone(), (lvl, a.clone()));
         let mut out = cxt.clone();
@@ -654,22 +672,25 @@ impl Infer {
         out
     }
     /// 顶层 define（`Decl::Def` / `Decl::Enum` / 构造子登记）：真名进
-    /// [`Self::global_names`]（append-only，不随 Cxt 克隆），槽位照旧——env
-    /// 压值、lvl +1、telescope 压 `Define` 槽、pruning 记 `None`。局部表
-    /// 不增长，故本次返回的 Cxt 克隆是 O(1)（孪生 `define_name_in` 同款）。
-    fn define_global(&mut self, cxt: &Cxt, x: Span<String>, t: Tm, vt: Val, a: Ty, va: VTy) -> Cxt {
-        //println!("{} {}\n{t:?}\n{vt:?}\n{a:?}\n{va:?}", "define_global".bright_purple(), x.data);
+    /// [`Self::global_names`]（append-only，不随 Cxt 克隆），值进
+    /// [`Self::global`]（键 = `global_idx`）。**顶层声明不再压进 Cxt**：
+    /// env / lvl / locals / pruning 一概不动（L07/L08 decl 表载体的等价物，
+    /// 2026-11-12 载体切换）。
+    ///
+    /// 动机：旧设计把每个顶层 def/enum/构造子作为上下文条目（env 槽 + lvl+1
+    /// + `Locals::Define` + pruning None），于是 ①`eval` 的 de Bruijn 下标
+    /// 查 env（Rc 单链 `iter().nth`）随声明数线性增长 → 每次引用老全局
+    /// O(D)；②`fresh_meta` 的 `close_ty(&cxt.locals, …)` 链长 = D → 每建一个
+    /// 隐式 meta O(D²)。改用哨兵大下标 + 全局表直查后两处都是 O(1)，语义
+    /// 逐值不变（局部表不增长，返回的 Cxt 克隆是 O(1)）。
+    fn define_global(&mut self, cxt: &Cxt, x: Span<String>, global_idx: Lvl, vt: Val, va: VTy) -> Cxt {
+        let lvl = global_idx + 1919810;
+        self.in_progress_globals.remove(&global_idx);
+        self.global.insert(global_idx, vt);
         let va = Rc::new(va);
-        self.global_names
-            .insert(x.data.clone(), (cxt.lvl, va.clone()));
-        let mut out = Cxt {
-            env: cxt.env.prepend(vt),
-            lvl: cxt.lvl + 1,
-            locals: Rc::new(Locals::Define(cxt.locals.clone(), x.clone(), a, t)),
-            pruning: cxt.pruning.prepend(None),
-            src_names: cxt.src_names.clone(),
-        };
-        Self::shadow_local(&mut out, &x, cxt.lvl, &va);
+        self.global_names.insert(x.data.clone(), (lvl, va.clone()));
+        let mut out = cxt.clone();
+        Self::shadow_local(&mut out, &x, lvl, &va);
         out
     }
     /// 给精化展开的燃料池充值（外部合一 / 求值入口调用）。
@@ -1020,17 +1041,27 @@ impl Infer {
     /// 再出现 λ 字面量"的形态，不是每步 β 的热路径。
     fn eval_ref(&self, env: &Env, tm: &Tm) -> Val {
         match tm {
-            Tm::Var(x) => match env.iter().nth(x.0 as usize) {
-                Some(v) => v.clone(),
-                None => {
+            // 全局引用（哨兵大下标）：先判哨兵直查全局表 O(1)，**不再先扫
+            // env**——顶层声明不进上下文后，env 只含局部 binder/内建，扫它
+            // 对全局引用是纯浪费（旧实现 `env.iter().nth(大下标)` 会走完整条
+            // env 才落到这里的 None 分支）。
+            // `Var(大下标)` = 递归检查期自身占位（中性视图中和成 rigid）；
+            // `Global(大下标)` = 已定名全局引用（照常展开，同旧版 env 槽）。
+            Tm::Global(x) => self.global.get(&Lvl(x.0 - 1919810)).unwrap().clone(),
+            Tm::Var(x) => {
+                if x.0 >= 1919810 {
                     let v = self.global.get(&Lvl(x.0 - 1919810)).unwrap();
-                    if self.neutral_globals.get() {
+                    return if self.neutral_globals.get() {
                         Val::vvar(Lvl(x.0))
                     } else {
                         v.clone()
-                    }
+                    };
                 }
-            },
+                match env.iter().nth(x.0 as usize) {
+                    Some(v) => v.clone(),
+                    None => panic!("unbound de Bruijn index {x:?}"),
+                }
+            }
             Tm::Obj(tm, name) => {
                 let recv = self.eval_ref(env, tm);
                 // 精化包裹的接收者（subst_cxt 包裹的 env 槽会以 VSub 流出）
@@ -1550,8 +1581,8 @@ fn tm_size_ref(t: &Tm) -> u64 {
     while let Some(x) = stack.pop() {
         n += 1;
         match x {
-            Tm::Var(_) | Tm::U(_) | Tm::Meta(_) | Tm::LiteralType | Tm::LiteralIntro(_)
-            | Tm::Prim => {}
+            Tm::Var(_) | Tm::Global(_) | Tm::U(_) | Tm::Meta(_) | Tm::LiteralType
+            | Tm::LiteralIntro(_) | Tm::Prim => {}
             Tm::Obj(h, _) => stack.push(h),
             Tm::Lam(_, _, b) => stack.push(b),
             Tm::App(f, a, _) => {
@@ -1608,20 +1639,22 @@ pub(crate) fn bench_check(decls: &[parser::syntax::Decl]) -> bool {
     true
 }
 
-/// 参考版基准口径：check + nf——取**最后一个 def** 的登记值（define 链的
-/// env 槽顶）空层级引读并数节点（深 Box 树的递归析构会爆栈，`mem::forget`）。
+/// 参考版基准口径：check + nf——取**最后一个 def** 的登记值（全局表末条；
+/// 顶层声明不再占 env 槽）空层级引读并数节点（深 Box 树的递归析构会爆栈，
+/// `mem::forget`）。
 pub(crate) fn bench_check_nf(decls: &[parser::syntax::Decl]) -> u64 {
     let mut infer = Infer::new();
     let mut cxt = Cxt::new();
     let mut last: Option<Val> = None;
     for d in decls {
         let is_def = matches!(d, parser::syntax::Decl::Def { .. });
+        let n_globals = infer.global.len();
         match infer.infer(&cxt, d.clone()) {
             Ok((_, _, nc)) => cxt = nc,
             Err(_) => return 0,
         }
         if is_def {
-            last = cxt.env.head().cloned();
+            last = infer.global.get(&Lvl(n_globals as u32)).cloned();
         }
     }
     let Some(v) = last else { return 0 };

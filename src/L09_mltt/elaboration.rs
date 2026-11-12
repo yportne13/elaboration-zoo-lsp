@@ -5,7 +5,7 @@ use crate::{list::List, parser_lib::Span};
 
 use super::{
     Closure, Cxt, DeclTm, Error, Infer, Subst, Tm, VTy, Val,
-    Lvl,
+    Lvl, Ix,
     empty_span, lvl2ix, val_mentions_lvl, wrap_sub,
     parser::syntax::{Decl, Either, Icit, Raw},
     pattern_match::Compiler, pretty::pretty_tm, MetaEntry,
@@ -13,6 +13,16 @@ use super::{
 };
 
 impl Infer {
+    /// 错误文案里显示**未 quote 的项**：全局引用是哨兵大下标，需要反查
+    /// `global_names` 才能显示成名字（载体切换后旧版经 cxt.names() 的显示
+    /// 路径不再覆盖全局）。只在错误路径调用，O(D) 反查可接受。
+    fn pretty_term(&self, cxt: &Cxt, tm: &Tm) -> String {
+        let gn: Vec<(String, u32)> = self
+            .global_names
+            .iter()
+            .map(|(n, (l, _))| (n.clone(), l.0))
+            .collect();
+        super::pretty::pretty_tm_g(0, cxt.names(), tm, &gn)    }
     fn insert_go(&mut self, cxt: &Cxt, t: Tm, va: Val) -> (Tm, VTy) {
         match self.force(va) {
             Val::Pi(_, Icit::Impl, a, b) => {
@@ -405,8 +415,9 @@ impl Infer {
                     let t_tm = self.check(&fake_cxt, bod, vtyp.clone())?;
                     //println!("begin vt {}", "------".green());
                     let vt = self.eval(&fake_cxt.env, t_tm.clone());
-                    self.global.insert(global_idx, vt.clone());
-                    self.define_global(ret_cxt, name.clone(), t_tm, vt, typ_tm, vtyp)
+                    // 顶层声明不再压进 Cxt（define_global 只登记名字+值），
+                    // 返回的 Cxt 与 ret_cxt 同构（O(1) 克隆）。
+                    self.define_global(ret_cxt, name.clone(), global_idx, vt, vtyp)
                 };
                 Ok((
                     DeclTm::Def {
@@ -511,8 +522,7 @@ impl Infer {
                     self.global.insert(global_idx, Val::vvar(global_idx + 1919810));
                     let t_tm = self.check(&fake_cxt, bod, vtyp.clone())?;
                     let vt = self.eval(&fake_cxt.env, t_tm.clone());
-                    self.global.insert(global_idx, vt.clone());
-                    self.define_global(cxt, name.clone(), t_tm, vt, typ_tm, vtyp)
+                    self.define_global(cxt, name.clone(), global_idx, vt, vtyp)
                 };
                 for (c, typ) in cases.iter().zip(new_cases.clone().into_iter()) {
                     let body_ret_type = Raw::SumCase {
@@ -554,7 +564,9 @@ impl Infer {
                         self.check_ctor_wf(&cxt, &name.data, &c.0.data, &vtyp)?;
                         let t_tm = self.check(&cxt, bod, vtyp.clone())?;
                         let vt = self.eval(&cxt.env, t_tm.clone());
-                        self.define_global(&cxt, c.0.clone(), t_tm, vt, typ_tm, vtyp)
+                        // 构造子也是顶层声明（不占 Cxt）：分配新 global id 并登记。
+                        let ctor_idx = Lvl(self.global.len() as u32);
+                        self.define_global(&cxt, c.0.clone(), ctor_idx, vt, vtyp)
                     };
                 }
                 Ok((DeclTm::Enum {}, Val::U(0), cxt))
@@ -646,7 +658,23 @@ impl Infer {
                 .get(&x.data)
                 .or_else(|| self.global_names.get(&x.data).map(|(l, t)| (l, t)))
             {
-                Some((x, a)) => Ok((Tm::Var(lvl2ix(cxt.lvl, *x)), (**a).clone())),
+                Some((level, a)) => {
+                    // 三态编码：局部 binder/内建 → `Var(小下标)`；递归定义体
+                    // 检查期间的自引用 → `Var(哨兵大下标)`（旧 fake_bind 哨兵，
+                    // 中性视图会中和）；已定名全局 → `Global(哨兵大下标)`
+                    // （O(1) 直查 + 中性视图照常展开，等价旧 env 槽引用）。
+                    let tm = if level.0 >= 1919810 {
+                        let id = Lvl(level.0 - 1919810);
+                        if self.in_progress_globals.contains(&id) {
+                            Tm::Var(Ix(level.0))
+                        } else {
+                            Tm::Global(Ix(level.0))
+                        }
+                    } else {
+                        Tm::Var(lvl2ix(cxt.lvl, *level))
+                    };
+                    Ok((tm, (**a).clone()))
+                }
                 None => Err(Error(x.map(|x| format!("error name not in scope: {}", x)))),
             },
 
@@ -699,6 +727,7 @@ impl Infer {
                                 }
                             }
                         }
+                        let recv_disp = self.pretty_term(cxt, &tm);
                         Ok((
                             Tm::Obj(Box::new(tm.clone()), t.clone()),
                             c.and_then(|params| {
@@ -713,13 +742,14 @@ impl Infer {
                             )
                                 .ok_or_else(|| Error(t.map(|t| format!(
                                     "`{}`: {:?} has no object `{}`",
-                                    super::pretty_tm(0, cxt.names(), &tm),
+                                    recv_disp,
                                     a,
                                     t,
                                 ))))?
                         ))
                     }
                     (tm, Val::SumCase { datas: params, .. }) => {
+                        let recv_disp = self.pretty_term(cxt, &tm);
                         Ok((
                             Tm::Obj(Box::new(tm.clone()), t.clone()),
                             params
@@ -728,17 +758,20 @@ impl Infer {
                                 .map(|p| super::rc_take(p.1.clone()))
                                 .ok_or_else(|| Error(t.map(|t| format!(
                                     "`{}`: {:?} has no object `{}`",
-                                    super::pretty_tm(0, cxt.names(), &tm),
+                                    recv_disp,
                                     a,
                                     t,
                                 ))))?
                         ))
                     }
-                    (tm, _) => Err(Error(t.map(|t| format!(
-                        "`{}` has no object `{}`",
-                        super::pretty_tm(0, cxt.names(), &tm),
-                        t,
-                    )))),
+                    (tm, _) => {
+                        let recv_disp = self.pretty_term(cxt, &tm);
+                        Err(Error(t.map(|t| format!(
+                            "`{}` has no object `{}`",
+                            recv_disp,
+                            t,
+                        ))))
+                    }
                 }
             },
 

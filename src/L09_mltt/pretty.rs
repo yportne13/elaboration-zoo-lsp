@@ -7,6 +7,20 @@ use super::Tm;
 
 type ShowS = Box<dyn FnOnce(&mut String)>;
 
+/// 全局名解析表（名字, 哨兵层级 `global_idx + 1919810`）。
+///
+/// 2026-11-12 载体切换后，项里对顶层声明的引用是 `Tm::Var(哨兵大下标)`；
+/// 旧版这些引用是普通层级、经 `cxt.names()` 显示成名字。错误文案对**未
+/// quote 的项**做 pretty（如 `_.foo` / 洞接收者）时若不反查，会退化成
+/// `recursive_N`，与孪生/旧版显示不一致（parity 正文会分叉）。此处提供
+/// 显式反查；普通值 display 路径传空表、行为不变。
+pub type GlobalNames<'a> = &'a [(String, u32)];
+
+fn resolve_global(g: GlobalNames<'_>, ix: u32) -> Option<String> {
+    g.iter().find(|(_, l)| *l == ix).map(|(n, _)| n.clone())
+}
+
+
 /// 显示层递归深度上限（移植 L07 P11/2026-09-18 深值轮的"定深截断"路线）。
 ///
 /// `pretty_tm` 对 `Tm` 结构递归；深值（`succ^N zero` 经 quote 得到 10^5 层
@@ -75,7 +89,7 @@ fn go_ix(ns: List<String>, ix: u32) -> String {
 /// **未 quote 的**推断项调用 `pretty_tm`（如 `_.foo` 的洞接收者），必须
 /// 兜底。掩码槽位与名字表按位置配对，保留槽打印 binder 名（`_` 槽退化
 /// `@序号`），名字表不足时退化位置占位（L06 `go_app_pruning` 同款，不 panic）。
-fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &Pruning) -> String {
+fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &Pruning, gn: GlobalNames<'_>) -> String {
     fn go_pr_inner(
         p: i32,
         top_ns: &List<String>,
@@ -83,10 +97,11 @@ fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &P
         t: &Tm,
         mut pr: Pruning,
         arg_index: u32,
+        gn: GlobalNames<'_>,
     ) -> String {
         loop {
             match (ns.split(), pr.split()) {
-                ((None, _), (None, _)) => return pretty_tm(p, top_ns.clone(), t),
+                ((None, _), (None, _)) => return pretty_tm_g(p, top_ns.clone(), t, gn),
                 ((Some(n), rest_ns), (Some(prune), rest_pr)) => {
                     if let Some(i) = prune {
                         let need_paren = p > APPP;
@@ -99,7 +114,7 @@ fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &P
                             Icit::Expl => arg_str,
                             Icit::Impl => format!("[{arg_str}]"),
                         };
-                        let inner = go_pr_inner(APPP, top_ns, rest_ns, t, rest_pr, arg_index + 1);
+                        let inner = go_pr_inner(APPP, top_ns, rest_ns, t, rest_pr, arg_index + 1, gn);
                         let result = format!("{} {}", inner, arg_display);
                         return if need_paren { paren(result) } else { result };
                     } else {
@@ -117,7 +132,7 @@ fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &P
                             Icit::Expl => arg_str,
                             Icit::Impl => format!("[{arg_str}]"),
                         };
-                        let inner = go_pr_inner(APPP, top_ns, ns.clone(), t, rest_pr, arg_index + 1);
+                        let inner = go_pr_inner(APPP, top_ns, ns.clone(), t, rest_pr, arg_index + 1, gn);
                         let result = format!("{} {}", inner, arg_display);
                         return if need_paren { paren(result) } else { result };
                     } else {
@@ -131,10 +146,16 @@ fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &P
         }
     }
 
-    go_pr_inner(p, &top_ns, ns, t, pr.clone(), 0)
+    go_pr_inner(p, &top_ns, ns, t, pr.clone(), 0, gn)
 }
 
 pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {
+    pretty_tm_g(prec, ns, tm, &[])
+}
+
+/// 带全局名反查的 pretty（仅错误文案等「未 quote 项」显示用；见
+/// [`GlobalNames`]）。`pretty_tm` 等价于传空表。
+pub fn pretty_tm_g(prec: i32, ns: List<String>, tm: &Tm, gn: GlobalNames<'_>) -> String {
     // 显示层定深截断：深值不爆栈（见 `MAX_DEPTH`）
     let depth = DEPTH.with(|d| d.get());
     if depth >= MAX_DEPTH {
@@ -142,19 +163,23 @@ pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {
     }
     DEPTH.with(|d| d.set(depth + 1));
     let _guard = DepthGuard;
-    pretty_tm_inner(prec, ns, tm)
+    pretty_tm_inner(prec, ns, tm, gn)
 }
 
-fn pretty_tm_inner(prec: i32, ns: List<String>, tm: &Tm) -> String {
+fn pretty_tm_inner(prec: i32, ns: List<String>, tm: &Tm, gn: GlobalNames<'_>) -> String {
     match tm {
-        Tm::Var(ix) => if ix.0 >= 1919810 {format!("recursive_{}", ix.0 - 1919810)} else {go_ix(ns, ix.0)},
-        Tm::Obj(x, name) => format!("{}.{}", pretty_tm(prec, ns, x), name.data),
+        Tm::Var(ix) => if ix.0 >= 1919810 {
+            format!("recursive_{}", ix.0 - 1919810)
+        } else { go_ix(ns, ix.0) },
+        Tm::Global(ix) => resolve_global(gn, ix.0)
+            .unwrap_or_else(|| format!("recursive_{}", ix.0 - 1919810)),
+        Tm::Obj(x, name) => format!("{}.{}", pretty_tm_g(prec, ns, x, gn), name.data),
         Tm::App(t, u, i) => {
             let need_paren = prec > APPP;
-            let f_t = pretty_tm(APPP, ns.clone(), t);
+            let f_t = pretty_tm_g(APPP, ns.clone(), t, gn);
             let f_u = match i {
-                Icit::Expl => pretty_tm(ATP, ns, u),
-                Icit::Impl => bracket(pretty_tm(ATP, ns, u)),
+                Icit::Expl => pretty_tm_g(ATP, ns, u, gn),
+                Icit::Impl => bracket(pretty_tm_g(ATP, ns, u, gn)),
             };
             if need_paren {
                 format!("{{{f_t} {f_u}}}")
@@ -172,7 +197,7 @@ fn pretty_tm_inner(prec: i32, ns: List<String>, tm: &Tm) -> String {
                 Icit::Impl => bracket(x),
             };
 
-            let body_printer = format!(" => {}", pretty_tm(LETP, new_ns, body));
+            let body_printer = format!(" => {}", pretty_tm_g(LETP, new_ns, body, gn));
 
             let ret = format!("{binder}{body_printer}");
             if need_paren {
@@ -186,8 +211,8 @@ fn pretty_tm_inner(prec: i32, ns: List<String>, tm: &Tm) -> String {
             let need_paren = prec > PIP;
             let is_anonymous = name_span.data == "_" || matches!(i, Icit::Impl);
             if is_anonymous {
-                let f_a = pretty_tm(APPP, ns.clone(), a);
-                let f_b = pretty_tm(PIP, ns.prepend("_".to_owned()), b);
+                let f_a = pretty_tm_g(APPP, ns.clone(), a, gn);
+                let f_b = pretty_tm_g(PIP, ns.prepend("_".to_owned()), b, gn);
                 let ret = format!("{f_a} → {f_b}");
                 if need_paren {
                     paren(ret)
@@ -198,10 +223,10 @@ fn pretty_tm_inner(prec: i32, ns: List<String>, tm: &Tm) -> String {
                 let x = fresh(ns.clone(), &name_span.data);
                 let new_ns = ns.prepend(x.clone());
                 let binder = match i {
-                    Icit::Expl => paren(format!("{x}: {}", pretty_tm(LETP, ns, a))),
-                    Icit::Impl => bracket(format!("{x}: {}", pretty_tm(LETP, ns, a))),
+                    Icit::Expl => paren(format!("{x}: {}", pretty_tm_g(LETP, ns, a, gn))),
+                    Icit::Impl => bracket(format!("{x}: {}", pretty_tm_g(LETP, ns, a, gn))),
                 };
-                let f_b = pretty_tm(PIP, new_ns, b);
+                let f_b = pretty_tm_g(PIP, new_ns, b, gn);
                 let ret = format!("{binder} → {f_b}");
                 if need_paren {
                     paren(ret)
@@ -216,9 +241,9 @@ fn pretty_tm_inner(prec: i32, ns: List<String>, tm: &Tm) -> String {
             let new_ns = ns.prepend(x.clone());
             let ret = format!(
                 "let {x}: {} = {};\n\n{}",
-                pretty_tm(LETP, ns.clone(), a),
-                pretty_tm(LETP, ns, t),
-                pretty_tm(LETP, new_ns, u),
+                pretty_tm_g(LETP, ns.clone(), a, gn),
+                pretty_tm_g(LETP, ns, t, gn),
+                pretty_tm_g(LETP, new_ns, u, gn),
             );
             if need_paren { 
                 paren(ret)
@@ -227,7 +252,7 @@ fn pretty_tm_inner(prec: i32, ns: List<String>, tm: &Tm) -> String {
             }
         }
         Tm::Meta(m) => format!("?{}", m.0),
-        Tm::AppPruning(t, pr) => go_app_pruning(prec, ns.clone(), ns, t, pr),
+        Tm::AppPruning(t, pr) => go_app_pruning(prec, ns.clone(), ns, t, pr, gn),
         Tm::LiteralType => "String".to_owned(),
         Tm::LiteralIntro(span) => span.data.clone(),
         Tm::Prim => "Prim Func".to_owned(),
@@ -235,7 +260,7 @@ fn pretty_tm_inner(prec: i32, ns: List<String>, tm: &Tm) -> String {
             "{}{}",
             span.data,
             tms.iter()
-                .map(|tm| pretty_tm(prec, ns.clone(), &tm.1))
+                .map(|tm| pretty_tm_g(prec, ns.clone(), &tm.1, gn))
                 .reduce(|acc, x| acc + ", " + &x)
                 .map(|x| format!("[{x}]"))
                 .unwrap_or("".to_owned()),
@@ -249,14 +274,14 @@ fn pretty_tm_inner(prec: i32, ns: List<String>, tm: &Tm) -> String {
             case_name.data,
             params
                 .iter()
-                .map(|tm| pretty_tm(prec, ns.clone(), &tm.1))
+                .map(|tm| pretty_tm_g(prec, ns.clone(), &tm.1, gn))
                 .reduce(|acc, x| acc + ", " + &x)
                 .map(|x| format!("({x})"))
                 .unwrap_or("".to_owned()),
         ),
         Tm::Match(tm, _) => format!(
             "(unsolved match {})",
-            pretty_tm(prec, ns, tm),
+            pretty_tm_g(prec, ns, tm, gn),
         ),
     }
 }

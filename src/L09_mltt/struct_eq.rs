@@ -219,6 +219,18 @@ fn eq_run(first: EqTask<'_>) -> bool {
                             return false;
                         }
                     }
+                    (Tm::Global(x), Tm::Global(y)) => {
+                        if x.0 != y.0 {
+                            return false;
+                        }
+                    }
+                    // 同一全局常量的两种项编码（递归占位 Var 哨兵 vs 定名
+                    // Global 哨兵）：层级相同即同一常量。
+                    (Tm::Var(x), Tm::Global(y)) | (Tm::Global(x), Tm::Var(y)) => {
+                        if x.0 != y.0 {
+                            return false;
+                        }
+                    }
                     (Tm::Obj(x, n), Tm::Obj(y, m)) => {
                         if n != m {
                             return false;

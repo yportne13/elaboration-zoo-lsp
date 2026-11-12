@@ -107,32 +107,46 @@ def refl[A, x: A]: Eq[A] x x = _ => px => px
   `recursive_N`（`pretty.rs:119`）。`SumCase.typ` 非 Sum 头时沿 App
   链找头名、找不到退化 `?` 不 panic（`sum_head_name`）。
 
-## 2. 核心数据结构：层级化全局表（无 decl 表）
+## 2. 核心数据结构：全局值表（id 键，无名字键 decl 表）
 
-- **登记分两路**。def / enum **本名**：`fake_bind` 把名字插入
-  `src_names` 为 `(global_idx + 1919810, 类型)` 占位（`cxt.rs:111`），
-  值进 `Infer.global: HashMap<Lvl, VTy>`（键 = `global_idx`，即登记时
-  的表长，`elaboration.rs:393`）；项层引用是
-  `Tm::Var(Ix(global_idx + 1919810))`（哨兵 `GLOBAL_BASE = 1919810`）。
-  **构造子**：`Cxt::define` 登记——值进 env 的 define 槽，
-  `src_names` 记 (局部层级, 类型)（`elaboration.rs:544-554`），不经
-  global 表。
+- **两层表**：`Infer.global: FxHashMap<Lvl, VTy>`（键 = `global_idx`，值为
+  终值；递归 def 在体检查期间先放 `Val::vvar(global_idx + 1919810)` 占位、
+  检查完覆盖）+ `Infer.global_names: FxHashMap<String, (Lvl, Rc<VTy>)>`
+  （真名 → (哨兵层级, 类型)，append-only、不随 Cxt 克隆）。**名字键的 decl
+  表不存在**——L07/L08 的 `decl_get` 直查在本层的等价物是「名字 →
+  `global_names` → 哨兵层级 → `global` 表」两次 O(1) 查。
+- **顶层声明不占类型检查上下文（2026-11-12 载体切换）**：`define_global`
+  只写上面两张表（+ `shadow_local`），**不再** `env.prepend` / `lvl+1` /
+  `locals::Define` / `pruning.prepend(None)`。因此 `Cxt` 的
+  env/lvl/locals/pruning 长度只随**局部 binder** 增长。旧设计随声明数 D
+  增长：全局引用按 de Bruijn 下标在 Rc 单链 env 上 `iter().nth` 线性找
+  （每次 O(D)）、`fresh_meta` 的 `close_ty(&cxt.locals, …)` 要包 D 层 Let
+  并重求值（每次 O(D²)），strchain/struct/Eq 证明阶梯因此超线性（诊断与
+  实测见 `docs/l09-perf-gap-2026-11-12.md`）。
+- **项层引用两种编码**：已定名全局 → `Tm::Global(Ix(global_idx +
+  1919810))`；递归定义体检查期间的**自身占位**引用 → `Tm::Var(Ix(global_idx
+  + 1919810))`（旧 `fake_bind` 哨兵，代码里以 `in_progress_globals` 集合
+  区分）。`eval` 的 Var 臂**先判哨兵**直查 `Infer.global` O(1)，不扫 env。
+  中性全局视图（quote/rename/Match 合一的分支体重求值）只中和
+  `Var(哨兵)`（递归占位），`Global` 照常展开——与旧版「哨兵 vs env 槽」的
+  两分法逐点一致（`Tm::Global` 对应旧版的 env 槽引用语义，parity/黑盒
+  文案逐字节对齐）。
 - **哨兵边界必须是 `>=`**：`lvl2ix` 对 `x.0 >= 1919810` 原样放行——
   0 号全局恰等于 1919810，用 `>` 会让首个声明的自引用走 `l - x - 1`
-  下溢（`mod.rs:398-408`；off-by-one 修复见 `fd25b74`）。eval 的 Var
-  臂越过哨兵查 global 表（`mod.rs:689-692`）；quote / rename 对越过
-  哨兵的 Rigid 原样产出大下标 Var。
-- **名字解析只走 `src_names`**（BiMap 名字 ↔ (层级, 类型)，`cxt.rs:14`）：
-  `infer_expr(Var)` 一次查表同时覆盖局部 binder、define 槽与哨兵
-  全局（`elaboration.rs:633`）。**global 表只存值，类型事实全在
-  src_names**——这就是"按层级存、无名字键 decl 表"的完整含义，也是
-  模式编译器（§3）取构造子类型必须绕道 `infer_expr(Var(名))` 的原因
-  （L07/L08 有 `decl_get` 直查，本层没有同构物）。
-- **递归 def**：`fake_bind` 占名 → global 表先插指向自身的卡住 Rigid
-  `Val::vvar(global_idx + 1919810)` → 体检查 → 用真值覆盖同一条目
-  （`elaboration.rs:393-405`；enum 本体 `503-511`）。值层无 unfold
-  算子——global 表存的都是终值，故 L06–L08 fuel 的"decl 展开"烧点
-  在本层无宿主。
+  下溢（`mod.rs` 的 `lvl2ix`；off-by-one 修复见 `fd25b74`）。quote /
+  rename 对越过哨兵的 Rigid 原样产出大下标 Var。
+- **名字解析两表**（`src_names` 局部 + `global_names` 全局）：`infer_expr(Var)`
+  先查 `cxt.src_names`（BiMap 名字 ↔ (层级, 类型)：`Cxt::new` 的两个内建 +
+  当前 def 内的 binder/let，局部优先遮蔽），回落 `global_names`。
+  **global 表只存值，类型事实在两张名字表**；模式编译器（§3）取构造子
+  类型仍绕道 `infer_expr(Var(名))`——与 L07/L08 的 `decl_get` 两次 O(1)
+  查等价（历史注：载体切换前构造子类型取出还要付上下文线性代价）。
+- **递归 def**：`fake_bind` 占名（插入 `global_names` 哨兵层级 + 标记
+  `in_progress_globals`，不改 Cxt）→ global 表先插指向自身的卡住 Rigid
+  `Val::vvar(global_idx + 1919810)` → 体检查（自身引用编成
+  `Tm::Var(哨兵)`）→ `define_global` 用真值覆盖同一条目、登记哨兵名字、
+  移出 in_progress（enum 本体 / 构造子同路）。值层无 unfold 算子——
+  global 表存的都是终值，故 L06–L08 fuel 的"decl 展开"烧点在本层无宿主。
 - **卡住 match 是中性值，pending splice 已回灌**：eval 的 `Tm::Match`
   臂把 scrutinee force 后是构造子值即 `eval_aux` 首匹配选臂，否则整体
   卡成 `Val::Match(scrutinee, env, arms, pending)`。`v_app` 把后续实参
@@ -258,6 +272,12 @@ L08 冠军配方（bump arena + 打包值 + 迭代内核 + 复合环境 + 记忆
   同款机制的移植，`fast_substv_reclaimed_across_rounds` 钉住
   （`SUBSTV_ALIVE` 计数连跑两轮后回落基线）。
 
+- **参考版 ↔ 孪生载体对齐（2026-11-12）**：参考版把全局值/名字搬出 Cxt
+  （`Infer.global` 值表 + `global_names` 名表 + `Tm::Global` 哨兵直查），
+  与孪生的 `globals: Vec<V>` + `global_names` 同构。此前参考版把顶层声明
+  做成上下文条目（env/lvl/locals/pruning 随 D 增长），strchain/struct/Eq
+  证明阶梯是 O(D²)；载体切换后参考版回到 L07/L08 量级（§5）。
+
 Ok 输出与参考版**逐字节一致**。已知偏差仅错误消息内容：快版错误里
 内嵌的 Debug-Val/Tm 的名字 Span 全零（参考版携带源码偏移），parity
 比对前按 `start_offset/end_offset/path_id` 归一化。
@@ -276,37 +296,41 @@ cargo run --release --bin l09bench -- --workload all --max-k 11
 点数闭式：church = 2n + 4、strchain = 1、struct = 2；match / enum /
 universe 无闭式，以双实现互检代替。
 
-矩阵数据（`docs/bench-matrix-2026-09-18.md` §3 的 L09 行；隔离进程、
-`--max-k 11`（`enum` 取 k=9）、`--rounds 3`、每格 min；Windows 10，
-release）：
+矩阵数据（**2026-11-13 载体切换后复测**；隔离进程、`--max-k 11`（`enum`
+取 k=9）、`--rounds 3`、每格 min；Windows 10 release；参考版 `basic` 与
+同窗口 L07/L08 对照——L09 多出的部分是宇宙机制/per-decl 常数，非载体）：
 
-| 负载 | k | basic (ms) | fast_ss (ms) | basic/fast_ss |
+| 负载 | k | L09 参考版 basic (ms) | L07 | L08 |
 |---|---|---|---|---|
-| church | 11 | 4.464 | 0.331 | 13.5× |
-| strchain | 11 | 2717.255 | 3.105 | 875.1× |
-| match（移植前） | 11 | 2.163 | 0.966 | 2.2× |
-| enum（移植前） | 9 | 13.268 | 1.619 | 8.2× |
-| struct | 11 | 4506.220 | 3.791 | 1188.7× |
-| universe | 11 | 3271.889 | 1.763 | 1855.9× |
+| church | 11 | 2.45 | 1.44 | 1.43 |
+| strchain | 11 | **8.93** | 7.9 | 8.6 |
+| match | 11 | 0.105 | 0.095 | 0.096 |
+| enum | 9 | 0.283 | 0.167 | 0.168 |
+| struct | 10 | 6.50 | — | 5.60 |
+| universe | 11 | 4.62 | — | — |
+| natadd | 11 | 4.28 | 3.46 | 3.32 |
 
-**逐臂下钻移植后**（`09b9ee8`，2026-09-19 补测，同文档 §0 / §0.1）：
+`strchain` k=9→12 曲线 1.90 / 4.01 / 8.93 / 21.2 ms（≈线性，与 L07/L08
+一样只剩 `string_concat` 负载本身的 O(n²) 字节拷贝）；`struct` k=10 从
+载体切换前的 48.1 ms 降到 6.50 ms。
 
-- **match**：参考版 basic 2.175 → 0.570 ms（3.8×），孪生 fast_ss
-  0.457 → 0.048 ms（9.5×）。孪生对参考的领先从首测的 2.2× 扩大到约
-  一个量级（矩阵 §0 表记 0.11×，与 L10–L12 同档）；分析文档 §0.0 记
-  9.6×（2.215→0.576 / 0.469→0.049）——窗口间绝对数漂移、比值一致。
-- **enum**：**两侧都能跑**且快 ~10×（basic 13.268 ms / 孪生移植后
-  1.37 ms）。首测"enum 孪生判型失败"是 L11/L12 的事，本层从未不可跑
-  （首测 13.3 ms）。
-- 其余负载 0.96–1.07×（只换了 match 编译器，非 match 路径不变）。
+真实语料（`tools/bench_corpus/L09`，34 文件，min-of-3 `basic`）：
 
-**参考引擎地板（诚实清单）**：本层参考版的非 match 负载本就系统性慢
-L10 参考版 2.5–4.5×（分析文档 §0.0 的定位），match 移植后的参考版
-残差同源。表中 basic 列的大比值（strchain 875×、struct 1189×、
-universe 1856×）以这个更慢的参考版为基数，跨层比较应以 L10 行为
-参照；成因与参考版 `Cxt::define` 逐 decl 克隆 `src_names`（名字表
-不搬出上下文，孪生侧已由 `global_names` 规避，§4）相关的部分**未
-单独测量核实**。
+| 口径 | 载体切换前（2026-11-12） | 切换后（2026-11-13） | 对照 |
+|---|---:|---:|---|
+| L09 自有语料整目录 | 1778.2 ms | **11.36 ms** | — |
+| Eq 证明阶梯单文件（801 decls） | 1717.3 ms | **3.66 ms** | L07 2.52 / L08 2.58（1.45×/1.42×） |
+| common 6 文件（L07 风格代码） | 113.8 ms | **97.0 ms** | L07 66.1 / L08 65.8（1.47×） |
+
+> 历史注：`docs/bench-matrix-2026-09-18.md` 的 2717ms（strchain）/4506ms
+> （struct）/3271ms（universe）等是 2026-09-20 `866f23e5` 修复前的旧机数据，
+> 只可作历史；`参考引擎地板`（旧版 §5 末段）已随 2026-11-12 载体切换消除。
+
+**仍存的常数级差距**（非主因，待后续）：church 1.7×、enum 1.7×、common
+1.47×——来源是 `check_universe` 在每份类型注解上的额外推断（宇宙语义的
+固有成本之一）、`Tm::Lam/Pi` 体仍是 `Box`（L07/L08 已 `Rc`，借用版
+`eval_ref` 建 Closure 时深拷）以及内建走普通 β 归约（无 PrimFunc/eta）。
+
 
 ## 6. 已知限制（诚实清单）
 
@@ -404,6 +428,9 @@ universe 1856×）以这个更慢的参考版为基数，跨层比较应以 L10 
 - `docs/l09l13-match-compiler-analysis-2026-09-17.md`（决策树 → 逐臂
   的算法级诊断与五层移植记录）；
 - `docs/bench-matrix-2026-09-17.md` / `docs/bench-matrix-2026-09-18.md`
-  （本层全部基准数字的来源）；
+  （本层历史基准数字的来源；2026-09-20 前的旧机数据）；
+- `docs/l09-perf-gap-2026-11-12.md`（参考版 vs L07/L08 的差距定位与
+  G1/G2 根因）与 `docs/l09-carrier-switch-2026-11-12.md`（2026-11-12
+  载体切换：全局移出 Cxt、`Tm::Global` 三态编码、A/B 验收）；
 - [elaboration-zoo](https://github.com/AndrasKovacs/elaboration-zoo)
   （MLTT 教学章：宇宙层级 + 和类型 / match 的切片原型）。
