@@ -1960,6 +1960,24 @@ println str_id
     println!("success");
 }
 
+/// 重定义报错（2026-11-13 从 L07/L08/L09 继承，L13 `fake_bind` 前传）：
+/// 同名 def / def 撞 enum / def 撞构造子裸名 / def 撞内建 → `redefine {名}`
+/// （先类型后重定义；参考版与孪生同口径）。
+#[test]
+fn test_redefine_rejected() {
+    let err = |src: &str| format!("{:?}", run(src, 0).unwrap_err());
+    assert!(
+        err("enum Nat {\n    zero\n    succ(x: Nat)\n}\n\ndef f: Nat = zero\ndef f: Nat = succ zero\n")
+            .contains("redefine f")
+    );
+    assert!(err("enum Nat {\n    zero\n    succ(x: Nat)\n}\n\ndef Nat: Type 1 = Type 0\n")
+        .contains("redefine Nat"));
+    assert!(err("enum Nat {\n    zero\n    succ(x: Nat)\n}\n\ndef zero: Nat = zero\n")
+        .contains("redefine zero"));
+    assert!(err("def String: Type 1 = Type 0\n").contains("redefine String"));
+    assert!(err("def Nat: Type 1 = Type 0\n\nenum Nat {\n    zero\n}\n").contains("redefine Nat"));
+}
+
 // --------------------------------------------------------------------------------
 // 2026-09-18 评审回归钉（L07 修复轮移植）：嵌套模式覆盖检查 / 构造子良构性。
 // 文案与 L07 同款；孪生版同款钉在 tests/l10_fast_parity.rs 的

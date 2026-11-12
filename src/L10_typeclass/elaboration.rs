@@ -354,6 +354,16 @@ impl Infer {
                     let global_idx = Lvl(self.global.len() as u32);
                     let (typ_tm, _) = self.check_universe(ret_cxt, typ)?;
                     let vtyp = self.eval(&ret_cxt.env, &typ_tm);
+                    // 重定义检查（2026-11-13 从 L07/L08/L09 继承，L13 `fake_bind`
+                    // 前传）：名字已被内建 / 先前 def / enum / 构造子占用 →
+                    // 定向报错，不再静默覆盖。**先类型后重定义**（同序）。
+                    if ret_cxt.src_names.get(&name.data).is_some()
+                        || self.global_names.contains_key(&name.data)
+                    {
+                        return Err(Error(
+                            name.clone().map(|_| format!("redefine {}", name.data)),
+                        ));
+                    }
                     //println!("------------------->");
                     //println!("{:?}", vtyp);
                     //println!("-------------------<");
@@ -479,6 +489,14 @@ impl Infer {
                     let global_idx = Lvl(self.global.len() as u32);
                     let (typ_tm, _) = self.check_universe(cxt, typ)?;
                     let vtyp = self.eval(&cxt.env, &typ_tm);
+                    // 重定义检查（同 def 臂；2026-11-13 从 L07/L08/L09 继承）
+                    if cxt.src_names.get(&name.data).is_some()
+                        || self.global_names.contains_key(&name.data)
+                    {
+                        return Err(Error(
+                            name.clone().map(|_| format!("redefine {}", name.data)),
+                        ));
+                    }
                     let fake_cxt = self.fake_bind(cxt, name.clone(), vtyp.clone(), global_idx);
                     self.global.insert(global_idx, Val::vvar(global_idx + 1919810).into());
                     let t_tm = self.check(&fake_cxt, bod, &vtyp)?;

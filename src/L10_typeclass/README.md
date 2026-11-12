@@ -93,7 +93,9 @@ waiters/answers，**顺带是答案缓存**——重复子目标直接取已有�
   与 `src/L13_namespace/legacy_tests.rs:604`）。卡住 match 显示保留
   `(unsolved match …)` 简形（同 L09，刻意分歧，l10 golden 锚定）。
 - 构造子只以**裸名**登记（无 L07 的 `Enum.case` 限定名别名）；
-  **重定义静默覆盖**（参考版无 L07/L11 的 `redefine` 检查）。
+  **重定义报错（2026-11-13 从 L07/L08/L09 继承）**：顶层 def / enum 重名
+（含撞内建、撞构造子裸名）→ `redefine {名}`；参考版与孪生同口径，
+顺序与 L07/L08/L09/L13 一致（先类型后重定义）。
 
 ## 2. 全局名字：`Infer.global` 按层级存
 
