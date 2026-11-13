@@ -642,3 +642,18 @@ k=13  n=16384   fast_ss=0.053ms      basic=0.177ms      (≈3×)
   留待后续。
 - **frcs_env 闭包 env 逐槽包裹走链**：与 subst_cxt 平坦区同形态的
   遗留优化点（~L2030），待负载画像。
+
+## 11. 2026-11-13 增补：Val 名字 span 句柄化（VSpan）
+
+参考版 `Val` 的 Obj 字段名 / Lam·Pi binder / LiteralIntro / Sum 头+参数+cases /
+SumCase 名+datas 改为 `VSpan(Rc<Span<String>>)`（`Deref` 透明、跨表示比较只比
+名字、`Debug` 委托内层 Span 以保 parity）。动机：common ladder 单文件每轮百万级
+Val 克隆，旧实现每次克隆都复制名字 String；句柄化后只剩引用计数。
+
+实测（同机 min-of-3，`--only basic`）：`realbench` common **69.55→50.87 ms
+（−26.8%）**、本层自有语料 **75.64→59.23 ms（−21.7%）**、church k11 −11.3%、
+natadd −14.9%、strchain −8.5%、match −6.0%、enum −3.4%；`global` 负载
+（名字走 SmolStr 的 `Decl`）不变。测试 97/48+1 ignored/70 全绿。
+
+跨层对比（合入 L08/L09 后）：`docs/bench-crosslayer-vspan-2026-11-13.md`；
+同机制 L09 的实现与实验：`docs/l09-value-span-rc-2026-11-13.md`。

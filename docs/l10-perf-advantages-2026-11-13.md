@@ -80,6 +80,8 @@ L10 38.6 → L12 42.0 → L11 47.8 → L13 57.8 → L07 62.3 → L08 63.8 → **
 | 形状（同文件四引擎） | L09-new | L10 | L10/L09 | 读法 |
 |---|---:|---:|---:|---|
 | common ladder_l07_large（798 decls，大量 ctor + eval 应用 + 逐 stage 增长的 Nat 累积） | 64.0 ms | **38.1 ms** | **0.60×** | L10 唯一的大幅胜项（ladder small/medium/large 比值恒定 0.62–0.67×） |
+
+> 2026-11-13 晚补：VSpan 合入 L09（并随后合入 L07/L08）后，该文件 L09 46.4 ms、L07 46.7 ms、L08 47.3 ms，L10 仍 37.9–38.1 ms（约 1.22× 快）；即 VSpan 吃掉了此前约一半的「值克隆」差额，剩余为 L10 整机 Rc<Val> 的世代差。
 | `unfold_probe` 16/18/20（`a_i = a_{i-1} (a_{i-1} x)` 指数 δ 展开/共享子项） | 7.4–121 ms | 3.3–54.8 ms | **0.38–0.45×** | 第二大胜项：Rc 句柄共享/避免重复 quote |
 | plain_defs_1600（纯小 def） | 1.21 ms | 5.85 ms | 4.8× 慢 | L10 旧载体 O(D) 全局引用惩罚 |
 | old_global_1600 / ctor_refs_1600 | 2.42 / 2.40 ms | 14.7 / 14.9 ms | 6.1× / 6.2× 慢 | 同上，且随引用距离放大（200→1600：1.03→6.09×） |
@@ -145,7 +147,7 @@ proofs 100→400 ≈2.9 次幂），L07/L08/L09-new 全部线性。
 - ②`Val` 名字 span 句柄化（`VSpan = Rc<Span<String>>`）：**采纳，收益显著**——
   `realbench` L09 common 67.06→**50.39 ms（−24.9%）**、l09bench strchain −17.6%、
   natadd −21.0%、struct k10 −20.8%、match −13.6%、enum −6.3%、universe −9.0%、
-  church 持平；L09 在 common/strchain/natadd/struct/match 上已持平或反超 L07/L08。
+  church 持平；同日该 VSpan 机制也已合入 L07/L08，三层在 common 上收敛到 50.3–51.1 ms（见 `docs/bench-crosslayer-vspan-2026-11-13.md`）。
 - ③整机 `Rc<Val>` 仍不推荐（成本高）；但 ② 证明「名字 span 句柄化」这一廉价子集
   已能吃到该项机制的大部分日常收益。
 

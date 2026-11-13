@@ -79,7 +79,7 @@ impl Infer {
         match (t, self.force(decl, a)) {
             // λ 检查：命名隐式 `[x = e]` 对准同名隐式 Π；显式对显式
             (Raw::Lam(x, i, t), Val::Pi(x_t, i_t, a, b_closure))
-                if (i.clone(), i_t) == (Either::Name(x_t.clone()), Icit::Impl)
+                if (i_t == Icit::Impl && matches!(&i, Either::Name(n) if n == &x_t))
                     || i == Either::Icit(i_t) =>
             {
                 let body = self.check(
@@ -92,11 +92,11 @@ impl Infer {
             // 非 λ 项 against 隐式 Π：插入一个隐式绑定器
             (t, Val::Pi(x, Icit::Impl, a, b_closure)) => {
                 let body = self.check(
-                    &cxt.new_binder(x.clone(), self.quote(decl, cxt.lvl, (*a).clone())),
+                    &cxt.new_binder(super::tmspan(&x), self.quote(decl, cxt.lvl, (*a).clone())),
                     t,
                     self.closure_apply(decl, &b_closure, Val::vvar(cxt.lvl)),
                 )?;
-                Ok(Tm::Lam(x, Icit::Impl, Rc::new(body)))
+                Ok(Tm::Lam(super::tmspan(&x), Icit::Impl, Rc::new(body)))
             }
             // let
             (Raw::Let(x, a, t, u), a_prime) => {
@@ -594,7 +594,7 @@ impl Infer {
                 let b_closure = self.close_val(decl, cxt, b);
                 Ok((
                     Tm::Lam(x.clone(), i, Rc::new(t_inferred)),
-                    Val::Pi(x, i, Rc::new(a), b_closure),
+                    Val::Pi(super::vspan(x), i, Rc::new(a), b_closure),
                 ))
             }
 
@@ -645,7 +645,7 @@ impl Infer {
                             decl,
                             cxt,
                             Val::Pi(
-                                empty_span("x".to_string()),
+                                super::vspan(empty_span("x".to_string())),
                                 i,
                                 Rc::new(a.clone()),
                                 b_closure.clone(),

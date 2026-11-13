@@ -105,9 +105,12 @@ L10 41.49→40.79（−1.7%）——全部无变慢（差异为重建二进制�
   `Span<String>`（名字 String 堆分配）；`Rc` 句柄后克隆只是引用计数递增。
 - 这与 L10 参考版快 1.67× 是**同一机制的廉价子集**：L10 整机 `Rc<Val>`（全值句柄），
   本项只把名字 span 句柄化，就吃到 ladder −24.9%、strchain/natadd/struct −18~21%。
-- L09 现在明显快过 L07/L08 的格子：common（50.4 vs 65.1/65.0）、strchain
-  （7.50 vs L07 7.91）、natadd（2.65 vs L07 3.46）、struct（4.98 vs L08 5.60）、
-  match/church 基本持平；残留：enum 1.25× L07、Eq 阶梯单文件 1.10× L07。
+- 注：上面「vs L07/L08」的数字是**合入 L07/L08 之前**的对照；同日稍后已把同一
+  VSpan 机制**移植到 L07/L08 参考引擎**（见
+  [bench-crosslayer-vspan-2026-11-13.md](bench-crosslayer-vspan-2026-11-13.md)），
+  三层在 common 上收敛到 50.3–51.1 ms（彼此差 ≤1.6%），L09 用同一份 common
+  代码从 67.06→50.35 ms。跨层定位改为：L07→L09 同水位；L10 仍是 40.97 ms
+  （1.23×，整机 `Rc<Val>` 世代差），但旧载体在 801-decl ladder 上慢 454×。
 
 ## 4. 实验 ①+② 合起来
 

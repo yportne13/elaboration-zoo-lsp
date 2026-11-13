@@ -396,3 +396,17 @@ builtin 注册表 / decl 表 / 可变全局 / 文件 IO / Error Display、无性
   上游 08 是 Sigma 类型（`Sig` 与 `Pi` 对偶 + `Fst/Snd` 投影）；本层
   的"积"走记录式具名字段 + 脱糖路线，语义面不同（无匿名 pair、投影
   按名、struct 即单 case enum）。
+
+## 增补（2026-11-13）：Val 名字 span 句柄化（VSpan）
+
+参考版 `Val` 的 5 类名字 span（Obj 字段 / Lam·Pi binder / LiteralIntro /
+Sum 头+参数+cases / SumCase 名+datas）改为 `VSpan(Rc<Span<String>>)`
+（`Deref` 透明、跨表示比较只比名字、`Debug` 委托内层 Span 以保 parity）。
+动机：common ladder 单文件每轮百万级 Val 克隆，旧实现每次复制名字 String。
+
+实测（同机 min-of-3）：`realbench` common **69.03→51.14 ms（−25.9%）**、
+本层自有语料 **29.83→27.05 ms（−9.3%）**、church k11 −14.3%、struct k10
+−12.6%、natadd −10.9%、strchain −2.9%、match −3.1%；`global` 负载不变。
+测试 116/57+1 ignored/81 全绿。
+
+跨层对比：`docs/bench-crosslayer-vspan-2026-11-13.md`（L07–L10）。

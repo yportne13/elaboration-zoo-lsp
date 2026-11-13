@@ -573,7 +573,7 @@ impl Compiler {
         let mut sub_queue: Vec<Pattern> = subs;
         let mut details: Vec<PatternDetail> = Vec::new();
         // 构造子自身绑定器的值（写入头部精化时用）
-        let mut ctor_datas: Vec<(Span<String>, Rc<Val>, Icit)> = Vec::new();
+        let mut ctor_datas: Vec<(super::VSpan, Rc<Val>, Icit)> = Vec::new();
         let ret = loop {
             match infer.force(cxt.decl(), wrap_sub(&self.sub, ty)) {
                 Val::Pi(bname, bicit, dom, closure) => {
@@ -616,7 +616,7 @@ impl Compiler {
                             let lvl = cxt.lvl;
                             let dom_v = wrap_sub(&self.sub, dom.clone());
                             let c = cxt.bind(
-                                bname.clone().map(|n| format!("_{n}")),
+                                super::tmspan(&bname).map(|n| format!("_{n}")),
                                 infer.quote(cxt.decl(), cxt.lvl, dom_v.clone()),
                                 dom_v,
                             );
@@ -734,7 +734,7 @@ impl Compiler {
             if sp.is_empty() && x.0 < cxt.lvl.0 && self.solvable.contains(x) && !self.sub.has(*x) {
                 let ctor_val = Val::SumCase {
                     typ: Rc::new(head_sum.clone()),
-                    case_name: name.clone(),
+                    case_name: super::vspan(name.clone()),
                     datas: Rc::new(ctor_datas),
                 };
                 // 环守卫（浅 occurs）失败时跳过精化，不阻断分支检查
@@ -843,7 +843,7 @@ fn is_catch_all(pat: &Pattern, ctor_names: &[String]) -> bool {
 impl Val {
     fn sum_cases(&self) -> Vec<Span<String>> {
         match self {
-            Val::Sum(_, _, cases) => cases.as_ref().clone(),
+            Val::Sum(_, _, cases) => cases.iter().map(super::tmspan).collect(),
             _ => vec![],
         }
     }
