@@ -284,6 +284,16 @@ L08 冠军配方（bump arena + 打包值 + 迭代内核 + 复合环境 + 记忆
   `rename`/`lams_go`/`struct_eq`/`tm_size`/孪生 CTm 导出逐点同步。语义
   零变化（parity 46/82 绿），但 common/church/natadd 的常数差距随之抹平
   （§5：载体切换后 common 96.5 → **67.1 ms**，与 L07/L08 持平）。
+- **`Val` 名字 span 句柄化（2026-11-13，`VSpan = Rc<Span<String>>`）**：
+  `Val` 的构造子/绑定器/投影字段名等 5 类 span 由 `Span<String>` 改为
+  `Rc` 句柄（`Deref` 保持 `.data`/显示透明；跨表示比较只看名字；`Debug`
+  与内层 `Span<String>` 同形以保 parity 错误正文）。动机：common ladder
+  单文件 **1.17M 次 Val 克隆**（SumCase 666k/Sum 303k/Lam 192k），每次
+  克隆旧实现都复制一个名字 String；句柄化后只是引用计数递增。收益：
+  common 67.1→**50.4 ms（−24.9%）**、strchain −17.6%、natadd −21.0%、
+  struct k10 −20.8%、match −13.6%、enum −6.3%、universe −9.0%（church
+  持平），见 `docs/l09-value-span-rc-2026-11-13.md`（含同轮否决的
+  `rc_take` unique-move 实验：实测 ≈0，rc_take 仅 1405 次/轮）。
 
 Ok 输出与参考版**逐字节一致**。已知偏差仅错误消息内容：快版错误里
 内嵌的 Debug-Val/Tm 的名字 Span 全零（参考版携带源码偏移），parity
@@ -303,43 +313,48 @@ cargo run --release --bin l09bench -- --workload all --max-k 11
 点数闭式：church = 2n + 4、strchain = 1、struct = 2；match / enum /
 universe 无闭式，以双实现互检代替。
 
-矩阵数据（**2026-11-13 最终复测**：载体切换 + `Tm::Lam/Pi` Rc 继承后；
-隔离进程、`--max-k 11`（`enum` 取 k=9）、`--rounds 3`、每格 min；
-Windows 10 release；参考版 `basic`）：
+矩阵数据（**2026-11-13 最终复测**：载体切换 + `Tm::Lam/Pi` Rc + `Val`
+名字 span 句柄化后；隔离进程、`--max-k 11`（`enum` 取 k=9）、`--rounds 3`、
+每格 min；Windows 10 release；参考版 `basic`）：
 
-| 负载 | k | L09 参考版 basic (ms) | L07 | L08 | L09/L07 |
+| 负载 | k | L09 参考版 basic (ms) | L07 | L08 | L09/对照 |
 |---|---|---|---|---|---|
-| church | 11 | **1.367** | 1.435 | 1.427 | 0.95× |
-| strchain | 11 | **9.106** | 7.907 | 8.596 | 1.15× |
-| match | 11 | 0.103 | 0.095 | 0.096 | 1.08× |
-| enum | 9 | 0.222 | 0.167 | 0.168 | 1.33× |
-| struct | 10 | 6.286 | — | 5.604 | — |
-| universe | 11 | 4.541 | — | — | — |
-| natadd | 11 | **3.360** | 3.455 | 3.320 | 0.97× |
+| church | 11 | **1.39** | 1.435 | 1.427 | 0.97× |
+| strchain | 11 | **7.502** | 7.907 | 8.596 | 0.95× L07 / 0.87× L08 |
+| match | 11 | 0.089 | 0.095 | 0.096 | 0.94× |
+| enum | 9 | 0.208 | 0.167 | 0.168 | 1.25× |
+| struct | 10 | **4.980** | — | 5.604 | 0.89× L08 |
+| universe | 11 | 4.130 | — | — | — |
+| natadd | 11 | **2.654** | 3.455 | 3.320 | 0.77× / 0.80× |
+
+> 至此 L09 在 common/strchain/natadd/struct/match/church 上已与 L07/L08 持平
+> 或反超；残留常数只余 enum 1.25×、Eq 阶梯单文件 1.10×（宇宙/构造子检查常数）。
 
 `strchain` k=9→12 曲线 1.90 / 4.01 / 8.93 / 21.2 ms（≈线性，与 L07/L08
-一样只剩 `string_concat` 负载本身的 O(n²) 字节拷贝）。
+一样只剩 `string_concat` 负载本身的 O(n²) 字节拷贝；句柄化后 k=11 绝对值降到
+7.50 ms）。
 
-真实语料与跨层对照（4 轮 HEAD↔NEW 交替复测取 min；
-`target/perf09/baseline/ab_recheck2/`）：
+真实语料与跨层对照（`realbench --rounds 3 --only basic`，min；跨层对照取
+round-2 的 4 轮交替基线和本窗口单测）：
 
 | 口径 | 载体切换前（2026-11-12） | 最终（2026-11-13） | 加速 | 同窗口对照 |
 |---|---:|---:|---:|---|
-| L09 自有语料整目录（34 文件） | 1763.7 ms | **9.12 ms** | **193.5×** | — |
-| Eq 证明阶梯单文件（801 decls） | 1678.5 ms | **2.99 ms** | **561.8×** | L07 2.49 / L08 2.49（**1.20×**） |
-| common 6 文件（L07 风格代码） | 115.3 ms | **67.06 ms** | 1.72× | L07 66.6 / L08 68.4（**1.01× / 0.98×**） |
+| L09 自有语料整目录（34 文件） | 1763.7 ms | **8.94 ms** | **197×** | — |
+| Eq 证明阶梯单文件（801 decls） | 1678.5 ms | **2.74 ms** | **613×** | L07 2.49 / L08 2.49（**1.10×**） |
+| common 6 文件（L07 风格代码） | 115.3 ms | **50.39 ms** | 2.29× | L07 65.1 / L08 65.0（**0.77×**） |
 
 > 历史注：`docs/bench-matrix-2026-09-18.md` 的 2717ms（strchain）/4506ms
 > （struct）/3271ms（universe）等是 2026-09-20 `866f23e5` 修复前的旧机数据，
-> 只可作历史；`参考引擎地板`（旧版 §5 末段）已随 2026-11-12 载体切换与
-> 2026-11-13 `Tm` Rc 继承消除——**L09 参考版已回到 L07/L08 量级**.
+> 只可作历史；`参考引擎地板`（旧版 §5 末段）已随 2026-11-12 载体切换、
+> 2026-11-13 `Tm` Rc 继承与 `Val` 名字 span 句柄化消除——**L09 参考版不仅回到
+> L07/L08 量级，在 common/strchain/natadd/struct/match/church 上已持平或反超**。
 
-**仍存的常数级差距**（都不构成数量级问题）：enum 1.33×（固定小源的宇宙
-层级/构造子检查常数）、strchain 1.15×（内建走普通 β + `Tm::Prim`，无
-PrimFunc/eta，主体是 O(n²) 字符串拷贝）、match 1.08×；common/单文件
-1.0–1.2× 属 `check_universe` 每注解完整推断 + 宇宙语义的固有成本。
-按 L08→L09 继承判定，这些不值得再引入 PrimFunc/eta 或牺牲 A4-R2 的
-宇宙/fuel 论证（见 `docs/l09-carrier-switch-2026-11-12.md` §6）。
+**仍存的常数级差距**（都不构成数量级问题）：enum 1.25×（固定小源的宇宙
+层级/构造子检查常数）、Eq 阶梯单文件 1.10×（宇宙/构造子检查每 decl 的成本）、
+内建 `string_concat` 仍走普通 β + `Tm::Prim`（无 PrimFunc/eta，但 strchain
+句柄化后已 0.95× L07）。这些不值得再引入 PrimFunc/eta 或牺牲 A4-R2 的
+宇宙/fuel 论证（见 `docs/l09-carrier-switch-2026-11-12.md` §6 与
+`docs/l09-value-span-rc-2026-11-13.md`）。
 
 
 ## 6. 已知限制（诚实清单）

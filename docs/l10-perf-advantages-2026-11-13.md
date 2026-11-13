@@ -137,14 +137,17 @@ proofs 100→400 ≈2.9 次幂），L07/L08/L09-new 全部线性。
 「L10 唯一独有差异 = 全 Rc 句柄化」自洽。δ-unfold/shared-subterm 的 0.38–0.45×
 同源：Rc 句柄共享避免重复 quote/重建。
 
-**可选的 L09 低成本改进（未做，供排期）**：L09 若要部分吃到这笔收益，可设法把
-match 抽取的 `rc_take` 深拷路径降常——
-①`Val::SumCase.datas: Rc<Vec<(.., Rc<Val>, ..)>>` 在 `Rc` 独占时（`try_unwrap` 成功）
-直接 move 字段、避免深拷；
-②把 `Val` 内频繁克隆的 `Span<String>` 换成 `Rc<Span<String>>`/`SmolStr`，让「每次 Val
-复制一次 String 分配」降为 Rc 递增；
-③彻底方案仍是 L10 的整机 `Rc<Val>`（成本高，不推荐）。
-前两条属后续实验项（需 parity/黑盒/基准 A/B 验收）。
+**L09 低成本改进：已实测（2026-11-13 晚，见 [l09-value-span-rc-2026-11-13.md](l09-value-span-rc-2026-11-13.md)）**
+
+- ①`rc_take` unique-move（`datas: Rc<Vec>` 独占时 move 字段）：**实测收益 ≈0**
+  （ladder 上 `rc_take` 仅 1405 次/轮、独占 0 次，而 `Val::clone` 1.17M 次；
+  改后各负载在 ±2% 噪声内），已否决回退。
+- ②`Val` 名字 span 句柄化（`VSpan = Rc<Span<String>>`）：**采纳，收益显著**——
+  `realbench` L09 common 67.06→**50.39 ms（−24.9%）**、l09bench strchain −17.6%、
+  natadd −21.0%、struct k10 −20.8%、match −13.6%、enum −6.3%、universe −9.0%、
+  church 持平；L09 在 common/strchain/natadd/struct/match 上已持平或反超 L07/L08。
+- ③整机 `Rc<Val>` 仍不推荐（成本高）；但 ② 证明「名字 span 句柄化」这一廉价子集
+  已能吃到该项机制的大部分日常收益。
 
 
 

@@ -64,7 +64,7 @@ impl Cxt {
                     )),
                 ),
                 Val::Lam(
-                    empty_span("x".to_owned()),
+                    super::vspan(empty_span("x".to_owned())),
                     Icit::Expl,
                     Closure(
                         List::new().prepend(Val::LiteralType),
@@ -87,7 +87,7 @@ impl Cxt {
                     )),
                 ),
                 Val::Pi(
-                    empty_span("x".to_owned()),
+                    super::vspan(empty_span("x".to_owned())),
                     Icit::Expl,
                     Rc::new(Val::LiteralType),
                     Closure(

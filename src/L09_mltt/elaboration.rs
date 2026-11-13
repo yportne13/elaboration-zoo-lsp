@@ -312,7 +312,7 @@ impl Infer {
         match (t, self.force(a)) {
             // Check lambda expressions
             (Raw::Lam(x, i, t), Val::Pi(x_t, i_t, a, b_closure))
-                if (i.clone(), i_t) == (Either::Name(x_t.clone()), Icit::Impl)
+                if (i_t == Icit::Impl && matches!(&i, Either::Name(n) if n == &x_t))
                     || i == Either::Icit(i_t) =>
             {
                 let body = self.check(
@@ -324,11 +324,11 @@ impl Infer {
             }
             (t, Val::Pi(x, Icit::Impl, a, b_closure)) => {
                 let body = self.check(
-                    &cxt.new_binder(x.clone(), self.quote(cxt.lvl, (*a).clone())),
+                    &cxt.new_binder(super::tmspan(&x), self.quote(cxt.lvl, (*a).clone())),
                     t,
                     self.closure_apply(&b_closure, Val::vvar(cxt.lvl)),
                 )?;
-                Ok(Tm::Lam(x, Icit::Impl, Rc::new(body)))
+                Ok(Tm::Lam(super::tmspan(&x), Icit::Impl, Rc::new(body)))
             }
             // Check let bindings
             (Raw::Let(x, a, t, u), a_prime) => {
@@ -709,7 +709,7 @@ impl Infer {
                         if cases.len() == 1 {
                             if let Some(case) = cases.first() {
                                 if case.data.contains(".mk") {
-                                    let (_, case_typ) = self.infer_expr(cxt, Raw::Var(case.clone()))?;
+                                    let (_, case_typ) = self.infer_expr(cxt, Raw::Var(super::tmspan(&case)))?;
                                     let mut ret = vec![];
                                     let mut typ = case_typ;
                                     // struct 隐式参数的实例值（按声明序；只取
@@ -730,7 +730,7 @@ impl Infer {
                                         if icit == Icit::Expl {
                                             let val = self.eval(
                                                 &cxt.env,
-                                                Tm::Obj(Box::new(tm.clone()), name.clone()),
+                                                Tm::Obj(Box::new(tm.clone()), super::tmspan(&name)),
                                             );
                                             ret.push((name, (*ty).clone()));
                                             typ = self.closure_apply(&closure, val);
@@ -804,7 +804,7 @@ impl Infer {
                 let b_closure = self.close_val(cxt, b);
                 Ok((
                     Tm::Lam(x.clone(), i, Rc::new(t_inferred)),
-                    Val::Pi(x, i, Rc::new(a), b_closure),
+                    Val::Pi(super::vspan(x), i, Rc::new(a), b_closure),
                 ))
             }
 
@@ -855,7 +855,7 @@ impl Infer {
                         self.unify_catch(
                             cxt,
                             Val::Pi(
-                                empty_span("x".to_string()),
+                                super::vspan(empty_span("x".to_string())),
                                 i,
                                 Rc::new(a.clone()),
                                 b_closure.clone(),

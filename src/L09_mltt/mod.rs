@@ -179,26 +179,65 @@ impl std::fmt::Debug for Closure {
     }
 }
 
+/// Val 里的名字 span 用 `Rc<Span<String>>` 句柄（实验 B）：Val 克隆热路径
+/// （Nat 大值递归/match 抽取每步若干次）不再为构造子/绑定器名做 String 堆分配，
+/// 只加一次引用计数。Tm 侧仍用 `Span<String>`（项层克隆不在热路径）。
+#[derive(Clone)]
+pub(crate) struct VSpan(pub Rc<Span<String>>);
+
+impl std::ops::Deref for VSpan {
+    type Target = Span<String>;
+    fn deref(&self) -> &Span<String> { &self.0 }
+}
+
+impl VSpan {
+    pub(crate) fn new(s: Span<String>) -> Self { VSpan(Rc::new(s)) }
+}
+
+/// Debug 与内层 `Span<String>` 同形：错误正文/Debug 打印（含 parity 归一化口径）
+/// 依赖 `"name" @ off` 形态，不能出现包装层名。
+impl std::fmt::Debug for VSpan {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&self.0, f)
+    }
+}
+
+pub(crate) fn vspan(s: Span<String>) -> VSpan { VSpan::new(s) }
+
+/// VSpan → Tm 侧 `Span<String>`（名字/显示/错误用；不在克隆热路径）。
+pub(crate) fn tmspan(s: &VSpan) -> Span<String> { (*s.0).clone() }
+
+/// 跨表示名比较（Val 的 VSpan ↔ Tm/ Raw 的 Span<String>）：只看名字，偏移无关。
+impl PartialEq for VSpan {
+    fn eq(&self, other: &VSpan) -> bool { self.0.data == other.0.data }
+}
+impl PartialEq<Span<String>> for VSpan {
+    fn eq(&self, other: &Span<String>) -> bool { self.0.data == other.data }
+}
+impl PartialEq<VSpan> for Span<String> {
+    fn eq(&self, other: &VSpan) -> bool { self.data == other.0.data }
+}
+
 #[derive(Debug, Clone)]
 pub enum Val {
     Flex(MetaVar, Spine),
     Rigid(Lvl, Spine),
-    Obj(Rc<Val>, Span<String>, Spine),
-    Lam(Span<String>, Icit, Closure),
-    Pi(Span<String>, Icit, Rc<VTy>, Closure),
+    Obj(Rc<Val>, VSpan, Spine),
+    Lam(VSpan, Icit, Closure),
+    Pi(VSpan, Icit, Rc<VTy>, Closure),
     U(u32),
     LiteralType,
-    LiteralIntro(Span<String>),
+    LiteralIntro(VSpan),
     Prim,
     Sum(
-        Span<String>,
-        Rc<Vec<(Span<String>, Rc<Val>, Rc<VTy>, Icit)>>,
-        Rc<Vec<Span<String>>>,
+        VSpan,
+        Rc<Vec<(VSpan, Rc<Val>, Rc<VTy>, Icit)>>,
+        Rc<Vec<VSpan>>,
     ),
     SumCase {
         typ: Rc<Val>,
-        case_name: Span<String>,
-        datas: Rc<Vec<(Span<String>, Rc<Val>, Icit)>>,
+        case_name: VSpan,
+        datas: Rc<Vec<(VSpan, Rc<Val>, Icit)>>,
     },
     /// 卡住的 match：scrutinee 不是构造子值，等待 scrutinee 归约后再选分支。
     /// 第 4 字段 `pending` = 卡住期间累积的应用实参（值层保存，分支选中后
@@ -1009,9 +1048,9 @@ impl Infer {
     /// （零克隆）；其余形态委托 [`Self::eval_ref`] 只读遍历。
     fn eval(&self, env: &Env, tm: Tm) -> Val {
         match tm {
-            Tm::Lam(x, i, t) => Val::Lam(x, i, Closure(env.clone(), t)),
+            Tm::Lam(x, i, t) => Val::Lam(vspan(x), i, Closure(env.clone(), t)),
             Tm::Pi(x, i, a, b) => Val::Pi(
-                x,
+                vspan(x),
                 i,
                 Rc::new(self.eval(env, (*a).clone())),
                 Closure(env.clone(), b),
@@ -1093,15 +1132,15 @@ impl Infer {
                             .unwrap()
                     },
                     x @ Val::Rigid(_, _) => {
-                        Val::Obj(Rc::new(x), name.clone(), List::new())
+                        Val::Obj(Rc::new(x), vspan(name.clone()), List::new())
                     }
                     x => panic!("impossible {x:?}"),
                 }
             }
             Tm::App(t, u, i) => self.v_app(self.eval_ref(env, t), self.eval_ref(env, u), *i),
-            Tm::Lam(x, i, t) => Val::Lam(x.clone(), *i, Closure(env.clone(), t.clone())),
+            Tm::Lam(x, i, t) => Val::Lam(vspan(x.clone()), *i, Closure(env.clone(), t.clone())),
             Tm::Pi(x, i, a, b) => Val::Pi(
-                x.clone(),
+                vspan(x.clone()),
                 *i,
                 Rc::new(self.eval_ref(env, a)),
                 Closure(env.clone(), b.clone()),
@@ -1113,7 +1152,7 @@ impl Infer {
             Tm::U(x) => Val::U(*x),
             Tm::Meta(m) => self.v_meta(*m),
             Tm::AppPruning(t, pr) => self.v_app_pruning(env, self.eval_ref(env, t), pr),
-            Tm::LiteralIntro(x) => Val::LiteralIntro(x.clone()),
+            Tm::LiteralIntro(x) => Val::LiteralIntro(vspan(x.clone())),
             Tm::LiteralType => Val::LiteralType,
             Tm::Prim => {
                 // 实参槽可能被 subst_cxt 包成 VSub——先 force 推开再判字面量
@@ -1121,7 +1160,7 @@ impl Infer {
                 let b0 = self.force(env.iter().nth(0).unwrap().clone());
                 match (a0, b0) {
                     (Val::LiteralIntro(a), Val::LiteralIntro(b)) => {
-                        Val::LiteralIntro(a.map(|x| format!("{x}{}", b.data)))
+                        Val::LiteralIntro(vspan(tmspan(&a).map(|x| format!("{x}{}", b.data))))
                     }
                     _ => Val::Prim,
                 }
@@ -1131,14 +1170,14 @@ impl Infer {
                     .iter()
                     .map(|x| {
                         (
-                            x.0.clone(),
+                            vspan(x.0.clone()),
                             Rc::new(self.eval_ref(env, &x.1)),
                             Rc::new(self.eval_ref(env, &x.2)),
                             x.3,
                         )
                     })
                     .collect();
-                Val::Sum(name.clone(), Rc::new(new_params), Rc::new(cases.clone()))
+                Val::Sum(vspan(name.clone()), Rc::new(new_params), Rc::new(cases.iter().map(|s| vspan(s.clone())).collect()))
             }
             Tm::SumCase {
                 typ,
@@ -1147,12 +1186,12 @@ impl Infer {
             } => {
                 let datas = datas
                     .iter()
-                    .map(|p| (p.0.clone(), Rc::new(self.eval_ref(env, &p.1)), p.2))
+                    .map(|p| (vspan(p.0.clone()), Rc::new(self.eval_ref(env, &p.1)), p.2))
                     .collect();
                 let typ = self.eval_ref(env, typ);
                 Val::SumCase {
                     typ: Rc::new(typ),
-                    case_name: case_name.clone(),
+                    case_name: vspan(case_name.clone()),
                     datas: Rc::new(datas),
                 }
             }
@@ -1227,16 +1266,16 @@ impl Infer {
     fn quote_deep(&self, l: Lvl, root: Val) -> Tm {
         enum FrameKind {
             Sum {
-                name: Span<String>,
-                cases: Vec<Span<String>>,
-                metas: Vec<(Span<String>, Icit)>,
+                name: VSpan,
+                cases: Vec<VSpan>,
+                metas: Vec<(VSpan, Icit)>,
             },
             SumCase {
-                case_name: Span<String>,
-                datas_metas: Vec<(Span<String>, Icit)>,
+                case_name: VSpan,
+                datas_metas: Vec<(VSpan, Icit)>,
             },
             Obj {
-                name: Span<String>,
+                name: VSpan,
             },
         }
         struct Frame {
@@ -1326,10 +1365,10 @@ impl Infer {
                         .map(|(n, i)| {
                             let v = it.next().unwrap();
                             let t = it.next().unwrap();
-                            (n, v, t, i)
+                            (tmspan(&n), v, t, i)
                         })
                         .collect();
-                    Tm::Sum(name, params, cases)
+                    Tm::Sum(tmspan(&name), params, cases.iter().map(tmspan).collect())
                 }
                 FrameKind::SumCase {
                     case_name,
@@ -1339,17 +1378,17 @@ impl Infer {
                     let typ = it.next().unwrap();
                     let datas = datas_metas
                         .into_iter()
-                        .map(|(n, i)| (n, it.next().unwrap(), i))
+                        .map(|(n, i)| (tmspan(&n), it.next().unwrap(), i))
                         .collect();
                     Tm::SumCase {
                         typ: Box::new(typ),
-                        case_name,
+                        case_name: tmspan(&case_name),
                         datas,
                     }
                 }
                 FrameKind::Obj { name } => {
                     let mut it = frame.done.into_iter();
-                    let head = Tm::Obj(Box::new(it.next().unwrap()), name);
+                    let head = Tm::Obj(Box::new(it.next().unwrap()), tmspan(&name));
                     let args: Vec<Tm> = it.collect();
                     let mut acc = head;
                     // spine 头 = 最后应用 ⇒ 逆序折叠（与 quote_sp 应用序一致）
@@ -1405,20 +1444,20 @@ impl Infer {
         match t {
             Val::VSub(v, _) => self.quote(l, (*v).clone()),
             Val::Obj(x, name, sp) => self
-                .quote_sp(l, Tm::Obj(Box::new(self.quote(l, (*x).clone())), name), sp),
+                .quote_sp(l, Tm::Obj(Box::new(self.quote(l, (*x).clone())), tmspan(&name)), sp),
             Val::Sum(name, params, cases) => {
                 let new_params = params
                     .iter()
                     .map(|x| {
                         (
-                            x.0.clone(),
+                            tmspan(&x.0),
                             self.quote(l, rc_take(x.1.clone())),
                             self.quote(l, rc_take(x.2.clone())),
                             x.3,
                         )
                     })
                     .collect();
-                Tm::Sum(name, new_params, (*cases).clone())
+                Tm::Sum(tmspan(&name), new_params, cases.iter().map(tmspan).collect())
             }
             Val::SumCase {
                 typ,
@@ -1427,29 +1466,29 @@ impl Infer {
             } => {
                 let datas = datas
                     .iter()
-                    .map(|p| (p.0.clone(), self.quote(l, rc_take(p.1.clone())), p.2))
+                    .map(|p| (tmspan(&p.0), self.quote(l, rc_take(p.1.clone())), p.2))
                     .collect();
                 Tm::SumCase {
                     typ: Box::new(self.quote(l, rc_take(typ))),
-                    case_name,
+                    case_name: tmspan(&case_name),
                     datas,
                 }
             }
             Val::Flex(m, sp) => self.quote_sp(l, Tm::Meta(m), sp),
             Val::Rigid(x, sp) => self.quote_sp(l, Tm::Var(lvl2ix(l, x)), sp),
             Val::Lam(x, i, closure) => Tm::Lam(
-                x,
+                tmspan(&x),
                 i,
                 Rc::new(self.quote(l + 1, self.closure_apply(&closure, Val::vvar(l)))),
             ),
             Val::Pi(x, i, a, closure) => Tm::Pi(
-                x,
+                tmspan(&x),
                 i,
                 Rc::new(self.quote(l, (*a).clone())),
                 Rc::new(self.quote(l + 1, self.closure_apply(&closure, Val::vvar(l)))),
             ),
             Val::U(x) => Tm::U(x),
-            Val::LiteralIntro(x) => Tm::LiteralIntro(x),
+            Val::LiteralIntro(x) => Tm::LiteralIntro(tmspan(&x)),
             Val::LiteralType => Tm::LiteralType,
             Val::Prim => Tm::Prim,
             Val::Match(val, env, cases, pending) => {
@@ -1640,6 +1679,9 @@ pub(crate) fn bench_check(decls: &[parser::syntax::Decl]) -> bool {
 /// 参考版基准口径：check + nf——取**最后一个 def** 的登记值（全局表末条；
 /// 顶层声明不再占 env 槽）空层级引读并数节点（深 Box 树的递归析构会爆栈，
 /// `mem::forget`）。
+// ── 临时实验探针（l09probe 用；实验结束删除）────────────────────────────
+pub fn stats_reset() {}
+pub fn stats_print(_label: &str) {}
 pub(crate) fn bench_check_nf(decls: &[parser::syntax::Decl]) -> u64 {
     let mut infer = Infer::new();
     let mut cxt = Cxt::new();
@@ -2059,11 +2101,11 @@ mod tests {
 
     fn nat_sum() -> Val {
         Val::Sum(
-            empty_span("Nat".to_string()),
+            vspan(empty_span("Nat".to_string())),
             Rc::new(vec![]),
             Rc::new(vec![
-                empty_span("zero".to_string()),
-                empty_span("succ".to_string()),
+                vspan(empty_span("zero".to_string())),
+                vspan(empty_span("succ".to_string())),
             ]),
         )
     }
@@ -2071,7 +2113,7 @@ mod tests {
     fn zero_of(typ: &Rc<Val>) -> Val {
         Val::SumCase {
             typ: Rc::clone(typ),
-            case_name: empty_span("zero".to_string()),
+            case_name: vspan(empty_span("zero".to_string())),
             datas: Rc::new(vec![]),
         }
     }
@@ -2079,8 +2121,8 @@ mod tests {
     fn succ_of(typ: &Rc<Val>, prev: Val) -> Val {
         Val::SumCase {
             typ: Rc::clone(typ),
-            case_name: empty_span("succ".to_string()),
-            datas: Rc::new(vec![(empty_span("x".to_string()), Rc::new(prev), Icit::Expl)]),
+            case_name: vspan(empty_span("succ".to_string())),
+            datas: Rc::new(vec![(vspan(empty_span("x".to_string())), Rc::new(prev), Icit::Expl)]),
         }
     }
 

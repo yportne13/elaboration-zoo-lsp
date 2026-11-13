@@ -131,7 +131,7 @@ impl Infer {
                 let a = self.rename(pren, (*a).clone())?;
                 let b = self.closure_apply(&b, Val::vvar(pren.cod));
                 let b = self.prune_ty_go(rest, &lift(pren), b)?;
-                Ok(Tm::Pi(x, i, Rc::new(a), Rc::new(b)))
+                Ok(Tm::Pi(super::tmspan(&x), i, Rc::new(a), Rc::new(b)))
             }
             (Some((None, rest)), Val::Pi(x, i, _, b)) => {
                 let b = self.closure_apply(&b, Val::vvar(pren.cod));
@@ -293,16 +293,16 @@ impl Infer {
     fn rename_deep(&mut self, pren: &PartialRenaming, root: Val) -> Result<Tm, UnifyError> {
         enum FrameKind {
             Sum {
-                name: Span<String>,
-                cases: Vec<Span<String>>,
-                metas: Vec<(Span<String>, Icit)>,
+                name: super::VSpan,
+                cases: Vec<super::VSpan>,
+                metas: Vec<(super::VSpan, Icit)>,
             },
             SumCase {
-                case_name: Span<String>,
-                datas_metas: Vec<(Span<String>, Icit)>,
+                case_name: super::VSpan,
+                datas_metas: Vec<(super::VSpan, Icit)>,
             },
             Obj {
-                name: Span<String>,
+                name: super::VSpan,
             },
         }
         struct Frame {
@@ -394,10 +394,10 @@ impl Infer {
                         .map(|(n, i)| {
                             let v = it.next().unwrap();
                             let t = it.next().unwrap();
-                            (n, v, t, i)
+                            (super::tmspan(&n), v, t, i)
                         })
                         .collect();
-                    Tm::Sum(name, params, cases)
+                    Tm::Sum(super::tmspan(&name), params, cases.iter().map(super::tmspan).collect())
                 }
                 FrameKind::SumCase {
                     case_name,
@@ -407,17 +407,17 @@ impl Infer {
                     let typ = it.next().unwrap();
                     let datas = datas_metas
                         .into_iter()
-                        .map(|(n, i)| (n, it.next().unwrap(), i))
+                        .map(|(n, i)| (super::tmspan(&n), it.next().unwrap(), i))
                         .collect();
                     Tm::SumCase {
                         typ: Box::new(typ),
-                        case_name,
+                        case_name: super::tmspan(&case_name),
                         datas,
                     }
                 }
                 FrameKind::Obj { name } => {
                     let mut it = frame.done.into_iter();
-                    let head = Tm::Obj(Box::new(it.next().unwrap()), name);
+                    let head = Tm::Obj(Box::new(it.next().unwrap()), super::tmspan(&name));
                     let args: Vec<Tm> = it.collect();
                     let mut acc = head;
                     for (u, i) in args.into_iter().zip(frame.icits).rev() {
@@ -498,7 +498,7 @@ impl Infer {
             },
             Val::Obj(x, name, sp) => {
                 let t = self.rename(pren, (*x).clone())?;
-                let t = Tm::Obj(Box::new(t), name.clone());
+                let t = Tm::Obj(Box::new(t), super::tmspan(&name));
                 self.rename_sp(pren, t, &sp)
             },
             Val::Lam(x, i, closure) => {
@@ -506,7 +506,7 @@ impl Infer {
                     &lift(pren),
                     self.closure_apply(&closure, Val::vvar(pren.cod)),
                 )?;
-                Ok(Tm::Lam(x, i, Rc::new(t)))
+                Ok(Tm::Lam(super::tmspan(&x), i, Rc::new(t)))
             }
             Val::Pi(x, i, a, closure) => {
                 let a = self.rename(pren, (*a).clone())?;
@@ -514,11 +514,11 @@ impl Infer {
                     &lift(pren),
                     self.closure_apply(&closure, Val::vvar(pren.cod)),
                 )?;
-                Ok(Tm::Pi(x, i, Rc::new(a), Rc::new(b)))
+                Ok(Tm::Pi(super::tmspan(&x), i, Rc::new(a), Rc::new(b)))
             }
             Val::U(x) => Ok(Tm::U(x)),
             Val::LiteralType => Ok(Tm::LiteralType),
-            Val::LiteralIntro(x) => Ok(Tm::LiteralIntro(x.clone())),
+            Val::LiteralIntro(x) => Ok(Tm::LiteralIntro(super::tmspan(&x))),
             Val::Prim => Ok(Tm::Prim),
             Val::Sum(x, params, cases) => {
                 let new_params = params
@@ -528,12 +528,12 @@ impl Infer {
                             self.rename(pren, super::rc_take(x.1.clone())),
                             self.rename(pren, super::rc_take(x.2.clone())),
                         ) {
-                            (Ok(a), Ok(b)) => Ok((x.0.clone(), a, b, x.3)),
+                            (Ok(a), Ok(b)) => Ok((super::tmspan(&x.0), a, b, x.3)),
                             (Err(x), _) | (_, Err(x)) => Err(x),
                         }
                     })
                     .collect::<Result<_, _>>()?;
-                Ok(Tm::Sum(x, new_params, cases.to_vec()))
+                Ok(Tm::Sum(super::tmspan(&x), new_params, cases.iter().map(super::tmspan).collect()))
             }
             Val::SumCase {
                 typ,
@@ -545,12 +545,12 @@ impl Infer {
                     .iter()
                     .map(|p| {
                         let z = self.rename(pren, super::rc_take(p.1.clone()))?;
-                        Ok((p.0.clone(), z, p.2))
+                        Ok((super::tmspan(&p.0), z, p.2))
                     })
                     .collect::<Result<_, _>>()?;
                 Ok(Tm::SumCase {
                     typ: Box::new(typ),
-                    case_name,
+                    case_name: super::tmspan(&case_name),
                     datas: params,
                 })
             }
@@ -601,7 +601,7 @@ impl Infer {
                     )
                 }
                 Val::Pi(span, icit, val, closure) => Tm::Lam(
-                    span,
+                    super::tmspan(&span),
                     icit,
                     Rc::new(self.lams_go(
                         l,
@@ -801,7 +801,7 @@ impl Infer {
                     // 的不变式在那里就会破——用 cxt.lvl quote 会把 `Rigid(l)`
                     // 打越界（lvl2ix 下溢）。cxt 只服务显示名字表，名字对不上
                     // 时 go_ix 有 `@i` 兜底。（L08 评审修复回移，见其 README §5。）
-                    &cxt.bind(x.clone(), self.quote(l, (**a).clone()), (**a).clone()),
+                    &cxt.bind(super::tmspan(&x), self.quote(l, (**a).clone()), (**a).clone()),
                     self.closure_apply(b, Val::vvar(l)),
                     self.closure_apply(b_prime, Val::vvar(l)),
                     spec.as_deref_mut(),

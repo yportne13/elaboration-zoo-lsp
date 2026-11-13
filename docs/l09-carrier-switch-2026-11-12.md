@@ -157,4 +157,9 @@
   重建布局效应，已接受（非回退）。
 - 结论：**L08→L09 的机制继承补齐完成**；L09 参考版性能回到 L07/L08 量级
   （common 1.01×、单文件 1.20×、church/natadd ≤1.0×），量级差距清零。
+- **后续（2026-11-13 晚）**：又按「L10 快在哪」的分析实测并采纳了 `Val` 名字 span
+  句柄化（`VSpan = Rc<Span<String>>`）：common 67.1→**50.4 ms（−24.9%）**，
+  strchain/natadd/struct −18~21%，L09 在多数负载上反超 L07/L08；同轮否决
+  `rc_take` unique-move（实测 ≈0）。详见
+  [l09-value-span-rc-2026-11-13.md](l09-value-span-rc-2026-11-13.md)。
 
