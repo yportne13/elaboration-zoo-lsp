@@ -376,3 +376,21 @@ q 的自由变量下标按保留槽位重编号（`remap_free_vars`）。正确�
   `docs/l09l13-match-compiler-analysis-2026-09-17.md`（决策树诊断与
   收窄登记）、`docs/bench-matrix-2026-09-18.md`（基准口径与全表）、
   `docs/archive/review-continuity/a4-r1.md`（跨章连贯性登记）
+
+## 9. 增补（2026-11-14）：参考版载体切换（P0）
+
+参考版顶层声明不再压进 `Cxt`（对齐 L09 `568c65c5`）：新增 `Tm::Global(Ix)`
+三态引用（局部 `Var(小下标)` / 递归检查期自引用 `Var(哨兵)` / 已定名全局
+`Global(哨兵)`，`Infer.in_progress_globals` 区分），`fake_bind` 只登记名字占位，
+`define_global` 只写 `Infer.global`/`global_names` 并返回 O(1) 克隆 Cxt。
+配套：`fresh_meta` 的 L06 `close_meta_ty` 快路径、`force`-Obj `Rc::ptr_eq` 早退、
+`pretty_tm_g` 全局名反查、`bench_check_nf` 末值从 global 表取。
+typeclass 面零额外注册点（`TraitDecl`/`ImplDecl` 复用 def/enum 路径）。
+唯一 parity 适配：错误正文 `Lvl(n)` 的 `display_val` 平移（仅显示；孪生仍旧口径）。
+
+实测（同机 min-of-3，`--only basic`）：common 40.97→**32.11 ms（−21.6%）**、
+自有语料 16.42→**5.25 ms（−68%）**、Eq 阶梯单文件 1078.9→**2.13 ms（507×）**、
+同文件 L09 语料 1103.7→**4.04 ms（273×）**；common/Eq 阶梯上已为 L07–L10 最快。
+测试 47/26 全绿、validate 22/0 与 25/9 同基线。详见
+`docs/l10-carrier-switch-2026-11-14.md`（含剩余 L10 实现债：l10bench
+strchain/struct、enum nf-parity panic、traitchain 慢）。

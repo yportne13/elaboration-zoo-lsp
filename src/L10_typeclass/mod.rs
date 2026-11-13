@@ -57,6 +57,14 @@ pub enum DeclTm {
 #[derive(Debug, Clone)]
 pub enum Tm {
     Var(Ix),
+    /// 顶层声明引用（已定名全局，编码 `global_idx + 1919810`）：`eval` 直查
+    /// [`Infer::global`] O(1)（2026-11-14 载体切换，对齐 L09 `568c65c5`）。
+    ///
+    /// 与 `Var(大下标)` 的分工：`Var(大下标)` 只表示**递归定义检查期间**的
+    /// 自身占位引用（旧版 `fake_bind` 哨兵；中性全局视图会把这类引用中和成
+    /// rigid，避免递归展开）；`Global` 是已登记全局的普通引用，与旧版
+    /// 「env 槽引用」同语义——中性视图下照常展开。
+    Global(Ix),
     Obj(Rc<Tm>, Span<String>),
     Lam(Span<String>, Icit, Rc<Tm>),
     App(Rc<Tm>, Rc<Tm>, Icit),
@@ -424,7 +432,7 @@ use std::{
     ops::{Add, Sub}, rc::Rc,
 };
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 #[derive(Debug)]
 enum UnifyError {
@@ -443,6 +451,44 @@ fn empty_span<T>(data: T) -> Span<T> {
 
 #[derive(Debug)]
 pub struct Error(pub Span<String>);
+
+/// `Locals` 链是否**全为 define 槽**（无 Bind）——`close_meta_ty` 快捷的
+/// 守卫：Bind 槽会把闭类型多出一层显式 Π，结果类型本身不同，不能跳过构造。
+pub(crate) fn all_define_slots(mut l: &Locals) -> bool {
+    loop {
+        match l {
+            Locals::Here => return true,
+            Locals::Bind(..) => return false,
+            Locals::Define(next, ..) => l = next,
+        }
+    }
+}
+
+/// `q` 的求值是否与 env / 全局表**都**无关（`close_meta_ty` 快捷的第二半
+/// 守卫）：无 `Var`（de Bruijn 查 env）、无 `AppPruning`（按 scope 掩码应用，
+/// 同样读 env）、无 `Global`（查全局表，且登记值在递归检查期是占位）⇒
+/// `eval env q` 对任何 env 同值。保守起见任何 `Var`/`AppPruning`/`Global`
+/// 都算不纯，宁可回落全构造。
+pub(crate) fn env_independent(t: &Tm) -> bool {
+    match t {
+        Tm::Var(_) | Tm::AppPruning(..) | Tm::Global(_) => false,
+        Tm::U(_) | Tm::Meta(_) | Tm::LiteralType | Tm::LiteralIntro(_) | Tm::Prim => true,
+        Tm::Lam(_, _, b) => env_independent(b),
+        Tm::Obj(h, _) => env_independent(h),
+        Tm::App(f, a, _) => env_independent(f) && env_independent(a),
+        Tm::Pi(_, _, a, b) => env_independent(a) && env_independent(b),
+        Tm::Let(_, a, t, u) => env_independent(a) && env_independent(t) && env_independent(u),
+        Tm::Sum(_, params, _, _) => params
+            .iter()
+            .all(|(_, v, t, _)| env_independent(v) && env_independent(t)),
+        Tm::SumCase { typ, datas, .. } => {
+            env_independent(typ) && datas.iter().all(|(_, v, _)| env_independent(v))
+        }
+        Tm::Match(s, cases) => {
+            env_independent(s) && cases.iter().all(|(_, b)| env_independent(b))
+        }
+    }
+}
 
 /// unify/force 的共享递归 fuel 池容量（L08 护栏前向传播：L09 重写时
 /// 丢失，L10 恢复；防 meta 解链环的无限展开与深递归栈溢出）。
@@ -482,6 +528,11 @@ pub struct Infer {
     /// 充值；`unify` 递归与 `force` 的 meta 展开各烧 1，耗尽时 unify 按
     /// 不可合一失败、force 停止展开按未解处理。
     unify_fuel: std::cell::Cell<u32>,
+    /// **递归定义检查期间**的全局 id 集合（`fake_bind` 插入、`define_global`
+    /// 移除）：这些名字在体内被引用时必须编成 `Tm::Var(哨兵大下标)`（旧版
+    /// 哨兵语义——中性视图会中和它，防递归展开）；其余已定名全局编成
+    /// `Tm::Global(哨兵大下标)`（中性视图照常展开，与旧版 env 槽引用一致）。
+    in_progress_globals: FxHashSet<Lvl>,
 }
 
 impl Infer {
@@ -495,6 +546,7 @@ impl Infer {
             trait_out_param: Default::default(),
             neutral_globals: std::cell::Cell::new(false),
             unify_fuel: std::cell::Cell::new(UNIFY_FUEL),
+            in_progress_globals: FxHashSet::default(),
         }
     }
     /// 顶层名的局部影子：`Cxt::new` 的两个内建（`String` /
@@ -514,34 +566,37 @@ impl Infer {
     fn fake_bind(&mut self, cxt: &Cxt, x: Span<String>, a: Rc<VTy>, global_idx: Lvl) -> Cxt {
         //println!("{} {x:?} {a:?} at {}", "bind".bright_purple(), cxt.lvl.0);
         let lvl = global_idx + 1919810;
+        self.in_progress_globals.insert(global_idx);
         self.global_names.insert(x.data.clone(), (lvl, a.clone()));
         let mut out = cxt.clone();
         Self::shadow_local(&mut out, &x, lvl, &a);
         out
     }
     /// 顶层 define（`Decl::Def` / `Decl::Enum` / 构造子登记）：真名进
-    /// [`Self::global_names`]（append-only，不随 Cxt 克隆），槽位照旧——env
-    /// 压值、lvl +1、telescope 压 `Define` 槽、pruning 记 `None`。局部表
-    /// 不增长，故本次返回的 Cxt 克隆是 O(1)（孪生 `define_name_in` 同款）。
+    /// [`Self::global_names`]（append-only，不随 Cxt 克隆），值进
+    /// [`Self::global`]（键 = `global_idx`）。**顶层声明不再压进 Cxt**：
+    /// env / lvl / locals / pruning 一概不动（L07/L08/L09 `568c65c5` 载体
+    /// 切换的等价物，2026-11-14）。
+    ///
+    /// 动机：旧设计把每个顶层 def/enum/构造子作为上下文条目记入 env/lvl/
+    /// locals/pruning，于是 ①`eval` 的 de Bruijn 下标查 env（Rc 单链
+    /// `iter().nth`）随声明数线性增长 → 每次引用老全局 O(D)；②`fresh_meta`
+    /// 的 `close_ty(&cxt.locals, …)` 链长 = D → 每建一个隐式 meta O(D²)。
+    /// 改用哨兵大下标 + 全局表直查后两处都是 O(1)，语义逐值不变。
     fn define_global(
         &mut self,
         cxt: &Cxt,
         x: Span<String>,
-        t: Rc<Tm>,
+        global_idx: Lvl,
         vt: Rc<Val>,
-        a: Rc<Ty>,
         va: Rc<VTy>,
     ) -> Cxt {
-        //println!("{} {}\n{t:?}\n{vt:?}\n{a:?}\n{va:?}", "define_global".bright_purple(), x.data);
-        self.global_names.insert(x.data.clone(), (cxt.lvl, va.clone()));
-        let mut out = Cxt {
-            env: cxt.env.prepend(vt),
-            lvl: cxt.lvl + 1,
-            locals: Rc::new(Locals::Define(cxt.locals.clone(), x.clone(), a, t)),
-            pruning: cxt.pruning.prepend(None),
-            src_names: cxt.src_names.clone(),
-        };
-        Self::shadow_local(&mut out, &x, cxt.lvl, &va);
+        let lvl = global_idx + 1919810;
+        self.in_progress_globals.remove(&global_idx);
+        self.global.insert(global_idx, vt);
+        self.global_names.insert(x.data.clone(), (lvl, va.clone()));
+        let mut out = cxt.clone();
+        Self::shadow_local(&mut out, &x, lvl, &va);
         out
     }
     /// 烧 1 格 fuel；池空返回 `false`（调用方按各自失败语义降级）。
@@ -576,12 +631,27 @@ impl Infer {
             let m = self.new_meta(a);
             Tm::Meta(MetaVar(m)).into()
         } else {
-            let closed = self.eval(
-                &List::new(),
-                &close_ty(&cxt.locals, self.quote(cxt.lvl, &a)),
-            );
+            let q = self.quote(cxt.lvl, &a);
+            let closed = self.close_meta_ty(cxt, q);
             let m = self.new_meta(closed);
             Tm::AppPruning(Tm::Meta(MetaVar(m)).into(), cxt.pruning.clone()).into()
+        }
+    }
+
+    /// `eval [] (close_ty locals q)` 的**等价快捷**（L06 `close_meta_ty` 的
+    /// L10 适配）：`locals` 全为 define 槽 ⇒ `close_ty` 只产生 Let 层；q 的
+    /// 求值不读 env 也不查全局/触发 prim（`env_independent`）⇒ 每层 Let 压进
+    /// env 的新变量都不被读取，整条链对 q 的求值完全透明 ⇒ 结果就是
+    /// `eval [] q`。省掉每次 `fresh_meta` 的 O(D) 闭项构造 + O(D²) 链求值。
+    ///
+    /// 载体切换后 `locals` 只随**局部** binder 增长（顶层声明已不进 Cxt），
+    /// 故本层链通常很短——快路径是 L10 剩余局部 let/隐式洞场景的护栏，
+    /// 语义与全构造逐值一致（有 Bind 槽时必须全构造：Π 改变结果类型本身）。
+    fn close_meta_ty(&self, cxt: &Cxt, q: Rc<Tm>) -> Rc<VTy> {
+        if all_define_slots(&cxt.locals) && env_independent(&q) {
+            self.eval(&List::new(), &q)
+        } else {
+            self.eval(&List::new(), &close_ty(&cxt.locals, q))
         }
     }
     fn lookup_meta(&self, m: MetaVar) -> &MetaEntry {
@@ -604,7 +674,14 @@ impl Infer {
             // 时代"读到被解槽才展开"的燃烧剖面；包裹/组合的机械开销免费。
             Val::VSub(v, sub) => self.frcs(sub, v.clone()),
             Val::Obj(x, a, b) => {
-                Val::Obj(self.force(x), a.clone(), b.clone()).into()
+                // 便宜项（L07/L13 `35a3734c` 口径）：内层未变（同 Rc 实例）
+                // 则原样返回，省掉每步重建 Obj 的分配。
+                let x2 = self.force(x);
+                if Rc::ptr_eq(&x2, x) {
+                    t.clone()
+                } else {
+                    Val::Obj(x2, a.clone(), b.clone()).into()
+                }
             }
             _ => t.clone(),
         }
@@ -854,17 +931,26 @@ impl Infer {
     fn eval(&self, env: &Env, tm: &Rc<Tm>) -> Rc<Val> {
         //println!("{} {:?}", "eval".yellow(), tm);
         match tm.as_ref() {
-            Tm::Var(x) => match env.iter().nth(x.0 as usize) {
-                Some(v) => v.clone(),
-                None => {
+            // 全局引用（哨兵大下标）：先判哨兵直查全局表 O(1)，**不再先扫
+            // env**——顶层声明不进上下文后，env 只含局部 binder/内建，扫它
+            // 对全局引用是纯浪费。`Var(大下标)` = 递归检查期自身占位（中性
+            // 视图中和成 rigid）；`Global(大下标)` = 已定名全局引用（照常
+            // 展开，同旧版 env 槽）。
+            Tm::Global(x) => self.global.get(&Lvl(x.0 - 1919810)).unwrap().clone(),
+            Tm::Var(x) => {
+                if x.0 >= 1919810 {
                     let v = self.global.get(&Lvl(x.0 - 1919810)).unwrap();
-                    if self.neutral_globals.get() {
+                    return if self.neutral_globals.get() {
                         Val::vvar(Lvl(x.0)).into()
                     } else {
                         v.clone()
-                    }
+                    };
                 }
-            },
+                match env.iter().nth(x.0 as usize) {
+                    Some(v) => v.clone(),
+                    None => panic!("unbound de Bruijn index {x:?}"),
+                }
+            }
             Tm::Obj(tm, name) => {
                 let a = self.eval(env, tm);
                 let a = self.force(&a);
@@ -1164,8 +1250,8 @@ fn tm_size_ref(t: &Tm) -> u64 {
     while let Some(x) = stack.pop() {
         n += 1;
         match x {
-            Tm::Var(_) | Tm::U(_) | Tm::Meta(_) | Tm::LiteralType | Tm::LiteralIntro(_)
-            | Tm::Prim => {}
+            Tm::Var(_) | Tm::Global(_) | Tm::U(_) | Tm::Meta(_) | Tm::LiteralType
+            | Tm::LiteralIntro(_) | Tm::Prim => {}
             Tm::Obj(h, _) => stack.push(h),
             Tm::Lam(_, _, b) => stack.push(b),
             Tm::App(f, a, _) => {
@@ -1222,20 +1308,22 @@ pub(crate) fn bench_check(decls: &[parser::syntax::Decl]) -> bool {
     true
 }
 
-/// 参考版基准口径：check + nf——取**最后一个 def** 的登记值（define 链的
-/// env 槽顶）空层级引读并数节点（深 Box 树的递归析构会爆栈，`mem::forget`）。
+/// 参考版基准口径：check + nf——取**最后一个 def** 的登记值（全局表末条；
+/// 顶层声明不再占 env 槽）空层级引读并数节点（深 Box 树的递归析构会爆栈，
+/// `mem::forget`）。
 pub(crate) fn bench_check_nf(decls: &[parser::syntax::Decl]) -> u64 {
     let mut infer = Infer::new();
     let mut cxt = Cxt::new();
     let mut last: Option<Rc<Val>> = None;
     for d in decls {
         let is_def = matches!(d, parser::syntax::Decl::Def { .. });
+        let n_globals = infer.global.len();
         match infer.infer(&cxt, d.clone()) {
             Ok((_, _, nc)) => cxt = nc,
             Err(_) => return 0,
         }
         if is_def {
-            last = cxt.env.head().cloned();
+            last = infer.global.get(&Lvl(n_globals as u32)).cloned();
         }
     }
     let Some(v) = last else { return 0 };

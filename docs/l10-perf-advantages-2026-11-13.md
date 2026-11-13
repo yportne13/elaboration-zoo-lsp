@@ -193,18 +193,24 @@ proofs 100→400 ≈2.9 次幂），L07/L08/L09-new 全部线性。
    （独占 `Rc<Vec>` 时 move 字段；`Span<String>` → `Rc`/`SmolStr`），不需要整机
    `Rc<Val>` 重写，预期只改善值增长类负载（ladder/natadd）；需 parity/黑盒/基准验收。
 4. **L10–L12 重定基排期**（已获用户批准，分阶段，不阻塞本轮 L09 提交）：
-   - **P0（L10，先做，1 个 session）**：把 L09 现有成果继承到 L10 参考版：
-     ①顶层声明移出 Cxt（载体切换，复用 `568c65c5` 的 `Tm::Global` 三态编码方案）；
-     ②`close_meta_ty` fresh_meta 快路径；③`force`-Obj 早退；
-     ④`struct_eq`/pending/深链帧式化（11-11 已回灌 L09 的机制，照搬对位）；
-     ⑤重定义检查（**已在本轮 L10 落地**，参考版+孪生+lib 测试）；验收：`l10_fast_parity`
-     全绿 + 跨层同文件基准（L10 的 strchain/struct/Eq 阶梯从 6–345× 落后回到 L09-old 量级）。
+   - **P0（L10）——已完成（2026-11-14）**：见
+     [l10-carrier-switch-2026-11-14.md](l10-carrier-switch-2026-11-14.md)。
+     ①顶层声明移出 Cxt（载体切换，复用 `568c65c5` 的 `Tm::Global` 三态编码）；
+     ②`close_meta_ty` fresh_meta 快路径；③`force`-Obj 早退；⑤重定义检查；
+     ④`struct_eq`/pending/深链帧式化未做（L10 参考版无 struct_eq，留 P0.5）。
+     验收全绿（parity 47 / lib 26 / validate 22+25 同基线），实测：common
+     40.97→**32.11 ms（−21.6%，全场最快）**、自有语料 16.42→**5.25 ms（−68%）**、
+     Eq 阶梯 1078.9→**2.13 ms（507×）**、同文件 L09 语料 1103.7→**4.04 ms（273×）**；
+     proofs/let/meta/proj/type0 等 cause fixture 提升 161–1146×（D 超线性全部消失）。
+     剩余 L10 实现债（非 P0 回归）：l10bench strchain/struct 仍慢、enum nf-parity
+     panic、traitchain k9 25.5s，见该文档 §4。
    - **P1（L11/L12，各 1 个 session）**：同剧本逐层继承（L11/L12 已是 Rc 世代，
      重点在载体切换 + 匹配/meta 路径的 L09 回灌项 + 各自真实语料验收）。
    - **P2（可选）**：若要让 L09 也吃到整机 Rc 世代红利，另立「L09 值/项全 Rc 化」实验
-     分支（高成本高风控，需 parity/黑盒/validate 全量重跑；不建议与本链清理同轮做）。
-5. **本轮 L10 的最小继承**：重定义检查（与 L09 同口径）已落地并配 lib 测试；
-   其余 P0 项在下一轮按上述排期执行。
+     分支（高成本高风控，需 parity/黑盒/validate 全量重跑；L09 已做过 hybrid spike：
+     共享子项 −43% 但 strchain/struct/universe 回退 11–20%，净不划算，见
+     `.deltawork/perf09/l09rc_experiment_result.md`）。
+5. **L10 现状**：重定义检查与载体切换均已落地；下一步 P1 = L11/L12 同剧本继承。
 
 ## 6. 证据与复现
 
