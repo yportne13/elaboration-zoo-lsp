@@ -681,6 +681,19 @@ pub struct Infer {
 
 const UNIFY_FUEL: u32 = 4096;
 
+/// 基准专用燃料覆盖：环境变量 `TYPORT_UNIFY_FUEL`（缺省 = [`UNIFY_FUEL`]）。
+/// smalltt 迁移基准（NatConv / TreeConv 等 1e6 级 β 步的转换检查）远超 4096；
+/// 显式设置该变量可放大单次合一池。未设置时行为与原来逐位一致。
+fn unify_fuel_budget() -> u32 {
+    static BUDGET: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *BUDGET.get_or_init(|| {
+        std::env::var("TYPORT_UNIFY_FUEL")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(UNIFY_FUEL)
+    })
+}
+
 /// 卡住 match 相等性比较的**总次数**上限（每个顶层合一入口一份）。
 ///
 /// 口径（2026-11-08 review R3/R8 修正）：结构快路径**先试**，只有快路径失效、
@@ -710,7 +723,7 @@ impl Infer {
             meta_undo: vec![],
             mutable_map: RefCell::new(FxHashMap::default()),
             simpl_cache: RefCell::new(FxHashMap::default()),
-            unify_fuel: std::cell::Cell::new(UNIFY_FUEL),
+            unify_fuel: std::cell::Cell::new(unify_fuel_budget()),
             match_cmp_budget: std::cell::Cell::new(MATCH_CMP_BUDGET),
             unify_kind: std::cell::Cell::new(UnifyKind::Absurd),
             meta_expanding: RefCell::new(Vec::new()),
@@ -771,7 +784,7 @@ impl Infer {
 
     /// 给 unify/force 的共享 fuel 池充值（外层合一入口调用）。
     pub(crate) fn meta_refuel(&self) {
-        self.unify_fuel.set(UNIFY_FUEL);
+        self.unify_fuel.set(unify_fuel_budget());
     }
 
     /// fuel 是否已耗尽（本编译单元的共享池）。错误诊断用：特化方程失败
@@ -1825,7 +1838,7 @@ impl Infer {
 
     pub fn nf(&self, decl: &Decls, env: &Env, t: Tm) -> Tm {
         // quote → eval 会 force；一次 nf 充值 fuel 防循环解
-        self.unify_fuel.set(UNIFY_FUEL);
+        self.unify_fuel.set(unify_fuel_budget());
         let l = Lvl(env.len() as u32);
         self.quote(decl, l, self.eval(decl, env, &t))
     }
@@ -1835,7 +1848,7 @@ impl Infer {
     }
 
     fn unify_catch(&mut self, decl: &Decls, cxt: &Cxt, t: Val, t_prime: Val) -> Result<(), Error> {
-        self.unify_fuel.set(UNIFY_FUEL);
+        self.unify_fuel.set(unify_fuel_budget());
         self.reset_match_cmp_budget();
         self.reset_unify_kind();
         self.unify(decl, cxt.lvl, cxt, t.clone(), t_prime.clone(), None)

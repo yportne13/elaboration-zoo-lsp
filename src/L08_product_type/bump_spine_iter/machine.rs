@@ -19,7 +19,7 @@ use super::entry::{export, NO_NAME_MAP};
 use super::env::{EMPTY_ENV, Env, env_ext, env_ext_defs, env_len, env_nth, PiCell};
 use super::eval::{eval_iter, W};
 use super::force::{force, frcs_env};
-use super::prim::{DeclEntryF, Fuel, MutableMap, UNIFY_FUEL};
+use super::prim::{DeclEntryF, Fuel, MutableMap, unify_fuel_budget};
 use super::quote::{QJob, quote_iter, QuoteMemo};
 use super::rename::RenBuf;
 use super::spine::{is_flex, MetaEntry, Spine};
@@ -175,7 +175,7 @@ impl Machine {
             name_map: FxHashMap::default(),
             name_trail: Vec::new(),
             mutable_map: RefCell::new(FxHashMap::default()),
-            fuel: Cell::new(UNIFY_FUEL),
+            fuel: Cell::new(unify_fuel_budget()),
             eval_work: Vec::new(),
             quote_tasks: Vec::new(),
             quote_done: Vec::new(),
@@ -200,7 +200,7 @@ impl Machine {
         self.defs.clear();
         self.mutable_map.borrow_mut().clear();
         let _ = self.spine.stack.reclaim(SPINE_SHRINK_MIN_ENTRIES);
-        self.fuel.set(UNIFY_FUEL);
+        self.fuel.set(unify_fuel_budget());
         // 与三处 bump.reset() 严格伴生：归还 arena 内 σ 克隆的强引用
         // （Rc 节点在全局堆上，reset 不动其数据；见 VSUB_REGS 的 SAFETY 注释）
         vsub_reclaim();
@@ -692,7 +692,7 @@ impl Machine {
     /// 尾巴；快版导出项的 Span 全零，消息内容与参考版同构）。
     fn unify_catch(&mut self, bump: &Bump, cxt: &Cxt<'_>, t: V, t_prime: V) -> Result<(), Error> {
         let decls = cxt.decl.borrow();
-        self.fuel.set(UNIFY_FUEL);
+        self.fuel.set(unify_fuel_budget());
         if self.unify(bump, &decls, cxt.lvl, t, t_prime) {
             Ok(())
         } else {

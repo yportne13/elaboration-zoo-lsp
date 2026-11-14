@@ -12,7 +12,7 @@ use super::{cover_at, empty_span, Error, fmt_path, PatternDetail, PosCover};
 use super::env::env_ext;
 use super::force::val_mentions_lvl;
 use super::machine::{bind_slots, Cxt, Machine, subst_cxt};
-use super::prim::UNIFY_FUEL;
+use super::prim::unify_fuel_budget;
 use super::subst::{SpecSolve, SubstV, wrap_sub};
 use super::syntax::{SumDataV, Tm, V, v_lvl, v_lvl_of, v_pi_of, v_tag, v_xcell, v_xcell_of, XCell};
 
@@ -130,7 +130,7 @@ impl<'a> Compiler<'a> {
         // 写入精化替换（见 walk_con 末尾）
         let head_val = mach.eval(bump, &decls, cxt.env, scrut);
         // 编译期间的所有合一共享一个 fuel 池（深层递归防护）
-        mach.fuel.set(UNIFY_FUEL);
+        mach.fuel.set(unify_fuel_budget());
         let head_sum = mach.force_v(bump, &decls, scrut_ty);
         if !(v_tag(head_sum) == 7 && matches!(v_xcell_of(head_sum), XCell::Sum { .. })) {
             return Err(Error::new("match 的对象必须是和类型（enum）".to_owned()));
@@ -314,7 +314,7 @@ impl<'a> Compiler<'a> {
         };
         // 每个探测独立充值（参考版 probe_accessible 同点）：多构造子枚举
         // 的逐 ctor 探测不互相挤占共享池，避免后探的 ctor 假 absurd。
-        mach.fuel.set(UNIFY_FUEL);
+        mach.fuel.set(unify_fuel_budget());
         let snap = mach.metas.clone();
         let decl = cxt.decl.borrow();
         let mut solvable = base_solvable.to_vec();

@@ -63,6 +63,18 @@ pub(crate) type Fuel = Cell<u32>;
 
 pub(super) const UNIFY_FUEL: u32 = 4096;
 
+/// 基准专用燃料覆盖：环境变量 `TYPORT_UNIFY_FUEL`（缺省 = [`UNIFY_FUEL`]）。
+/// 与参考版 `Infer::unify_fuel` 同一开关；未设置时行为不变。
+pub(super) fn unify_fuel_budget() -> u32 {
+    static BUDGET: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *BUDGET.get_or_init(|| {
+        std::env::var("TYPORT_UNIFY_FUEL")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(UNIFY_FUEL)
+    })
+}
+
 /// 消耗 1 燃料；耗尽即 false（调用方把值当未解处理 / Err）。
 #[inline]
 pub(super) fn burn(fuel: &Fuel) -> bool {

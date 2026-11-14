@@ -14,7 +14,7 @@ use super::{empty_span, Error, Ix, MetaVar, PatternDetail};
 use crate::L08_product_type::Tm as CTm;
 
 use super::machine::{DeclOut, Machine, types_names_list};
-use super::prim::UNIFY_FUEL;
+use super::prim::unify_fuel_budget;
 use super::subst::vsub_reclaim;
 use super::syntax::{SumDataT, SumParamT, Tm};
 
@@ -291,7 +291,7 @@ impl Tycker {
             if let DeclOut::Println(t) = out {
                 let decls = cxt.decl.borrow();
                 // nf 入口充值 fuel（参考版 `Infer::nf` 同款）
-                self.machine.fuel.set(UNIFY_FUEL);
+                self.machine.fuel.set(unify_fuel_budget());
                 let v = self.machine.eval(bump, &decls, cxt.env, t);
                 let q = self.machine.quote_memo(bump, &decls, cxt.lvl, v);
                 let names = types_names_list(cxt.types);

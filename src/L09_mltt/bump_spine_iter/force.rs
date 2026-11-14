@@ -100,12 +100,24 @@ pub(super) fn val_mentions_lvl(spine: &Spine, defs: &[V], v: V, x: u32) -> bool 
 /// `Infer::unify_fuel` 的"每次运行新建"口径一致）。仅 frcs 的 lookup 命中
 /// 点燃烧；外部入口（unify_catch / nf / check_pm / 模式编译）充值。
 const UNIFY_FUEL: u32 = 4096;
+
+/// 基准专用燃料覆盖：环境变量 `TYPORT_UNIFY_FUEL`（缺省 = `UNIFY_FUEL`）。
+/// 与参考版同开关；未设置时行为不变。
+fn unify_fuel_budget() -> u32 {
+    static BUDGET: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *BUDGET.get_or_init(|| {
+        std::env::var("TYPORT_UNIFY_FUEL")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(UNIFY_FUEL)
+    })
+}
 thread_local! {
-    static PM_FUEL: std::cell::Cell<u32> = const { std::cell::Cell::new(UNIFY_FUEL) };
+    static PM_FUEL: std::cell::Cell<u32> = std::cell::Cell::new(unify_fuel_budget());
 }
 
 pub(super) fn refuel() {
-    PM_FUEL.with(|c| c.set(UNIFY_FUEL));
+    PM_FUEL.with(|c| c.set(unify_fuel_budget()));
 }
 
 /// 燃料池是否已耗尽（探测失败侧的观察口：fuel 耗尽的失败是预算问题而非

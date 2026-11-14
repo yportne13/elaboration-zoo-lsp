@@ -674,6 +674,19 @@ pub struct Infer {
 /// 燃料池容量（对齐 L07 蓝本）。
 const UNIFY_FUEL: u32 = 4096;
 
+/// 基准专用燃料覆盖：环境变量 `TYPORT_UNIFY_FUEL`（缺省 = [`UNIFY_FUEL`]）。
+/// smalltt 迁移基准（NatConv / TreeConv 等 1e6 级 β 步的转换检查）远超 4096；
+/// 显式设置该变量可放大单次合一池。未设置时行为与原来逐位一致。
+fn unify_fuel_budget() -> u32 {
+    static BUDGET: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *BUDGET.get_or_init(|| {
+        std::env::var("TYPORT_UNIFY_FUEL")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(UNIFY_FUEL)
+    })
+}
+
 impl Infer {
     pub fn new() -> Self {
         Self {
@@ -681,7 +694,7 @@ impl Infer {
             global: FxHashMap::default(),
             global_names: FxHashMap::default(),
             neutral_globals: Cell::new(false),
-            unify_fuel: Cell::new(UNIFY_FUEL),
+            unify_fuel: Cell::new(unify_fuel_budget()),
             match_cmp_budget: Cell::new(MATCH_CMP_BUDGET),
             unify_kind: Cell::new(UnifyKind::Absurd),
             meta_expanding: RefCell::new(Vec::new()),
@@ -736,7 +749,7 @@ impl Infer {
     }
     /// 给精化展开的燃料池充值（外部合一 / 求值入口调用）。
     pub(crate) fn meta_refuel(&self) {
-        self.unify_fuel.set(UNIFY_FUEL);
+        self.unify_fuel.set(unify_fuel_budget());
     }
     /// 燃料池是否已耗尽（探测失败侧的观察口：fuel 耗尽的失败是预算问题
     /// 而非结构冲突——probe_accessible 尾部据此把失败按"可达"处理，保守

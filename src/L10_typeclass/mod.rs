@@ -494,6 +494,19 @@ pub(crate) fn env_independent(t: &Tm) -> bool {
 /// 丢失，L10 恢复；防 meta 解链环的无限展开与深递归栈溢出）。
 const UNIFY_FUEL: u32 = 4096;
 
+/// 基准专用燃料覆盖：环境变量 `TYPORT_UNIFY_FUEL`（缺省 = [`UNIFY_FUEL`]）。
+/// smalltt 迁移基准（NatConv / TreeConv 等 1e6 级 β 步的转换检查）远超 4096；
+/// 显式设置该变量可放大单次合一池。未设置时行为与原来逐位一致。
+fn unify_fuel_budget() -> u32 {
+    static BUDGET: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *BUDGET.get_or_init(|| {
+        std::env::var("TYPORT_UNIFY_FUEL")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(UNIFY_FUEL)
+    })
+}
+
 #[derive(Clone)]
 pub struct Infer {
     meta: Vec<MetaEntry>,
@@ -545,7 +558,7 @@ impl Infer {
             trait_definition: Default::default(),
             trait_out_param: Default::default(),
             neutral_globals: std::cell::Cell::new(false),
-            unify_fuel: std::cell::Cell::new(UNIFY_FUEL),
+            unify_fuel: std::cell::Cell::new(unify_fuel_budget()),
             in_progress_globals: FxHashSet::default(),
         }
     }
@@ -610,7 +623,7 @@ impl Infer {
     }
     /// 外层入口充值（L08 `meta_refuel` 同款纪律）。
     fn refuel(&self) {
-        self.unify_fuel.set(UNIFY_FUEL);
+        self.unify_fuel.set(unify_fuel_budget());
     }
     /// fuel 是否已耗尽（L07 同款观察口）：可达性探测在合一失败后用它区分
     /// "结构冲突"与"预算耗尽的假 absurd"——后者按可达处理（保守要求覆盖）。
