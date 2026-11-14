@@ -1,0 +1,27 @@
+-- smalltt 的 cabal.project（对应其 stack.yaml 的 lts-21.17 / GHC 9.4.8）。
+-- 本机 hackage index 不可用（cabal update 卡住），因此所有依赖本地化：
+--   1) 三个 git pin（与 stack.yaml extra-deps 一致）
+--   2) 仅有的两个 Hackage 依赖 flatparse / utf8-string 解包到 vendor/ 后作为 local packages
+-- 使用前把本文件复制为 smalltt 根目录的 cabal.project，并把 ../vendor/* 改成实际路径。
+-- 同时需在 cabal 全局 config 中禁用远端仓库（见 tools/smalltt_ref/README.md §2）。
+
+active-repositories: :none
+
+packages: .
+          ../vendor/flatparse-0.5.0.1
+          ../vendor/utf8-string-1.0.2
+
+source-repository-package
+  type: git
+  location: https://github.com/AndrasKovacs/dynamic-array.git
+  tag: de37f8ba3b7186414aac5bd878f44b70b694890f
+
+source-repository-package
+  type: git
+  location: https://github.com/AndrasKovacs/primdata.git
+  tag: 488d38201d0845a0e4e9e80ce78126ebae77350f
+
+source-repository-package
+  type: git
+  location: https://github.com/AndrasKovacs/ghc-strict-implicit-params.git
+  tag: 9097efc8860553f5d0189acc9bc56479c71c2125
