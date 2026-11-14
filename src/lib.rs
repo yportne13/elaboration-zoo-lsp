@@ -3079,26 +3079,6 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                         Range::new(start_position, end_position),
                     )
                 ))
-            })
-            .or({
-                let rope = self.document_map.get(uri.as_str())?;
-                let ret: Vec<Location> = hover_entries
-                    .iter()
-                    .filter(|x| x.1.contains(offset))
-                    .map(|x| x.0)
-                    .flat_map(|x| Some(Location::new(
-                        uri.clone(),
-                        Range::new(
-                            offset_to_position(x.start_offset as usize, &rope)?,
-                            offset_to_position(x.end_offset as usize, &rope)?,
-                        )
-                    )))
-                    .collect();
-                if ret.is_empty() {
-                    None
-                } else {
-                    Some(GotoDefinitionResponse::Array(ret))
-                }
             });
         if interval.is_some() {
             return interval;

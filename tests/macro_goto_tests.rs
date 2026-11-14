@@ -375,3 +375,116 @@ module arithmeticUInt {
     assert_eq!((start3, end3), (exp_op_start, exp_op_end),
         "must target the `+^` name token of `def +^`");
 }
+
+/// Regression for the goto-definition def-span coincidence hijack (NEW-1 in
+/// docs/l13-bugs-2026-08-08.md, fixed on branch task/l13-bugs2 by 32d8d221).
+///
+/// Step 2 of `goto_definition_at` used to end with an `.or({ ... })` fallback
+/// that matched *hover-table entries whose DEF span contains the cursor
+/// offset* (`Span::contains` ignores `path_id`) and then returned the entry's
+/// USE span as the jump target. The two span families live in different files,
+/// so a cursor byte in this file could byte-coincide with the def span of a
+/// prelude declaration and silently jump to an unrelated use site in this
+/// file:
+///
+///   use [581..584] (this file)  ->  def [549..552] (nat.typort, `Nat`)
+///   click at 549/550/551 (bytes 7-9 of `macro_rules`) ->
+///       Array([581..584])   // pre-fix: jumps to the `Nat` use site
+///       None                // post-fix: no goto target
+///
+/// The fallback was removed: use-span hits are already resolved by the main
+/// branch, and a def-span hit returning use sites is `references` semantics,
+/// not `goto`. Non-semantic offsets now fall through to the macro-invocation
+/// fallback or return `None`.
+#[test]
+fn goto_keyword_interior_not_hijacked_by_def_span_coincidence() {
+    let (b, _hdl_macros) = setup();
+    let body = "macro_rules foo { () => { 1 } }\ndef x: Nat = foo()\n";
+
+    // (a) The original repro layout: `macro_rules` starts at offset 0, so the
+    // keyword's bytes 7-9 are the file's offsets 7-9. On the current prelude
+    // revision no def span starts this early (`Nat` is declared at [549..552]
+    // in nat.typort, not [7..10] as in the 2026-08 prelude), so this exact
+    // layout is already immune; pin the intended behaviour anyway.
+    let plain_uri = Url::parse("file:///goto_probe_plain.typort").unwrap();
+    b.process_file(&plain_uri, body, Some(1));
+    for k in 7..=9 {
+        assert!(
+            b.goto_definition_at(&plain_uri, k).is_none(),
+            "byte {k} of `macro_rules` (offset {k}) is not a semantic token and must not resolve"
+        );
+    }
+
+    // (b) Deliberate byte-offset coincidence: pad the file with a comment so
+    // that bytes 7-9 of the `macro_rules` keyword land exactly inside the DEF
+    // span of the prelude `Nat`. This is the same mechanism as the original
+    // report, just aligned with the def span of the current prelude (comments
+    // are stripped byte-preservingly, so the padding does not change any
+    // semantic span, and the coincidence offsets are derived from the hover
+    // table rather than hardcoded, keeping the test valid if the prelude
+    // shifts).
+    let uri = Url::parse("file:///goto_probe_aligned.typort").unwrap();
+    b.process_file(&uri, "def probe_nat: Nat = 1\n", Some(1));
+    let nat_id = *b
+        .document_id
+        .get("builtin:///nat.typort")
+        .expect("the nat prelude is loaded");
+    let nat_def = b
+        .hover_entries(uri.as_str())
+        .into_iter()
+        .find(|(_, def, _)| def.path_id == nat_id)
+        .map(|(_, def, _)| def)
+        .expect("a `Nat` use must carry a def span into nat.typort");
+    let pad_len = nat_def.start_offset as usize - 7;
+    assert!(pad_len > 2, "Nat def span {nat_def:?} is too small to align");
+    let mut src = String::from("//");
+    while src.len() < pad_len - 1 {
+        src.push(' ');
+    }
+    src.push('\n');
+    src.push_str(body);
+    assert_eq!(src.len(), pad_len + body.len());
+    assert_eq!(&src[pad_len..pad_len + "macro_rules".len()], "macro_rules");
+    b.process_file(&uri, &src, Some(2));
+
+    // Positive control: the `Nat` use itself still resolves to the prelude
+    // declaration the def span points at (the fix only drops the fallback).
+    let local_id = *b.document_id.get(uri.as_str()).unwrap();
+    let (nat_use, nat_def_now) = b
+        .hover_entries(uri.as_str())
+        .into_iter()
+        .find(|(u, d, _)| u.path_id == local_id && d.path_id == nat_id)
+        .map(|(u, d, _)| (u, d))
+        .expect("the padded file still holds a `Nat` use entry");
+    assert_eq!((nat_def_now.start_offset, nat_def_now.end_offset),
+               (nat_def.start_offset, nat_def.end_offset),
+               "padding must not move the prelude def span");
+    let loc = match b.goto_definition_at(&uri, nat_use.start_offset as usize) {
+        Some(GotoDefinitionResponse::Scalar(loc)) => loc,
+        _ => panic!("a `Nat` use must resolve to the prelude declaration"),
+    };
+    assert_eq!(loc.uri.as_str(), "builtin:///nat.typort");
+    let def_rope = b.document_map.get(loc.uri.as_str()).unwrap();
+    assert_eq!(
+        position_to_offset(loc.range.start, &def_rope).unwrap(),
+        nat_def.start_offset as usize,
+        "goto must land on the `Nat` name token of `enum Nat`"
+    );
+
+    // The hijack: keyword bytes 7-9 coincide with `Nat`'s def span [549..552].
+    // Pre-fix each returned `Array([<the Nat use span>])`; post-fix `None`.
+    for k in 7..=9 {
+        let off = pad_len + k;
+        assert!(
+            off >= nat_def.start_offset as usize && off < nat_def.end_offset as usize,
+            "offset {off} must fall inside the Nat def span [{start}..{end}) for this test to exercise the coincidence",
+            start = nat_def.start_offset,
+            end = nat_def.end_offset,
+        );
+        assert!(
+            b.goto_definition_at(&uri, off).is_none(),
+            "byte {k} of `macro_rules` (offset {off}) byte-coincides with the def span of the prelude `Nat`; \
+             goto-definition must not hijack it into the local `Nat` use site"
+        );
+    }
+}
