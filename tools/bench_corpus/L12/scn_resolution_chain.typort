@@ -1,0 +1,57 @@
+def outParam[A](a: A): A = a
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+trait Show {
+    def show: String
+}
+
+impl Show for Bool {
+    def show: String =
+        match this {
+            case true => "true"
+            case false => "false"
+        }
+}
+
+impl Show for Nat {
+    def show: String =
+        match this {
+            case zero => "0"
+            case succ(n) => "n"
+        }
+}
+
+def render[T][s: Show[T]](x: T): String = s.show x
+
+def c0 : String = render true
+
+def c1 : String = render zero
+
+def c2 : String = render false
+
+def c3 : String = render (succ zero)
+
+def c4 : String = render true
+
+def c5 : String = render zero
+
+println c0
+
+println c1
+
+println c2
+
+println c3
+
+println c4
+
+println c5

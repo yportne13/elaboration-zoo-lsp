@@ -1,0 +1,13 @@
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def f(n: Nat): Nat -> Nat =
+    match n {
+        case zero => succ
+        case succ(k) => succ
+    }
+
+println f

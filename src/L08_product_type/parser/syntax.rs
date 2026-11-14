@@ -1,4 +1,4 @@
-use crate::{list::List, parser_lib::Span};
+use crate::parser_lib::Span;
 
 #[derive(Clone, Debug, Copy, PartialEq, Eq, Hash)]
 pub enum Icit {
@@ -26,10 +26,10 @@ impl Pattern {
         }
     }
 
-    /// 错误文案用的模式渲染：Con 递归成 name(sub, ...)，Any 成 _。
+    /// 错误文案用的模式渲染：`Con` 递归成 `name(sub, ...)`，`Any` 成 `_`。
     ///
-    /// 诊断里不要用 {:?}——它会泄漏内部表示（Con("refl" @ 166,170, ...)），
-    /// 对 IDE / 终端用户都不可读（L07 同款修复的 L08 迁移）。
+    /// 诊断里**不要**用 `{:?}`——它会泄漏内部表示（`Con("refl" @ 166,170, …)`），
+    /// 对 IDE / 终端用户都不可读。
     pub fn pretty(&self) -> String {
         match self {
             Pattern::Any(..) => "_".to_owned(),

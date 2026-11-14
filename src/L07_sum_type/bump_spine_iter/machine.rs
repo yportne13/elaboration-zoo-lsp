@@ -19,7 +19,7 @@ use super::entry::export;
 use super::env::{env_ext, env_ext_defs, env_len, env_nth, EMPTY_ENV, Env, PiCell};
 use super::eval::{eval_iter, W};
 use super::force::force;
-use super::prim::{DeclEntryF, Fuel, MutableMap, UNIFY_FUEL};
+use super::prim::{DeclEntryF, Fuel, MutableMap, unify_fuel_budget};
 use super::quote::{quote_iter, QJob, QuoteMemo};
 use super::rename::RenBuf;
 use super::spine::{is_flex, MetaEntry, Spine};
@@ -174,7 +174,7 @@ impl Machine {
             name_map: FxHashMap::default(),
             name_trail: Vec::new(),
             mutable_map: RefCell::new(FxHashMap::default()),
-            fuel: Cell::new(UNIFY_FUEL),
+            fuel: Cell::new(unify_fuel_budget()),
             workbuf: Vec::new(),
             unifybuf: Vec::new(),
             qtasks: Vec::new(),
@@ -194,7 +194,7 @@ impl Machine {
         self.defs.clear();
         self.mutable_map.borrow_mut().clear();
         self.spine.clear();
-        self.fuel.set(UNIFY_FUEL);
+        self.fuel.set(unify_fuel_budget());
         // simpl_decl 旁路缓存：条目的 Decl 单元引用本轮 bump，跨轮悬垂，
         // 与 bump.reset() 伴生失效（见 simpl_decl 的缓存论证）
         simpl_cache_invalidate();
@@ -617,7 +617,7 @@ impl Machine {
     /// 尾巴；快版导出项的 Span 全零，消息内容与参考版同构）。
     fn unify_catch(&mut self, bump: &Bump, cxt: &Cxt<'_>, t: V, t_prime: V) -> Result<(), Error> {
         let decls = cxt.decl.borrow();
-        self.fuel.set(UNIFY_FUEL);
+        self.fuel.set(unify_fuel_budget());
         if self.unify(bump, &decls, cxt.lvl, t, t_prime) {
             Ok(())
         } else {

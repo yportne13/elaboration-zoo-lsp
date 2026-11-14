@@ -17,6 +17,31 @@ A4 登记（锚点见 `docs/archive/review-continuity/a4-r1.md`、`a4-r2.md`；�
   口径的逐臂实现（参考版 + 孪生同步，L10–L13 随后跟进），match 负载
   孪生 9.5×、参考版 3.8×（§5）。
 
+**2026-11-11 参考版加固回灌（本轮）**：参考版补齐 L07 的 P1–P11 适用子集，
+此前登记为"时代缺口"的以下各项已落地（孪生版本轮**未**移植，见 §6）：
+
+- **深值栈安全（P11 + 09-18 深值轮）**：`quote` 改迭代 `quote_deep`
+  （Frame 显式任务栈 + `InlineStack`）、`rename` 改 `rename_deep`
+  （Sum/SumCase/Obj 深链帧式收集）、`val_mentions_lvl` 迭代化、`pretty`
+  加 `MAX_DEPTH` 定深截断；新增 `struct_eq.rs`（`EqTask`/`InlineStack`
+  迭代结构相等 + 预算），并接回 `unify(Match, Match)` 结构快路径
+  （中性 global 视图保留为 fallback）。
+- **卡住 match 的 pending splice（L07 S1）**：`Val::Match` 恢复第 4 字段
+  `Rc<Vec<(Rc<Val>, Icit)>>`，`v_app` 从 panic 改为累积实参、分支选中后
+  在值层逐个应用；`force`/`quote`/`rename`/`unify`/`struct_eq` 全链适配。
+- **P2 卡住 match 比较总预算**：`MATCH_CMP_BUDGET = 64`（每顶层合一入口
+  一份，结构快路径之后计数）。
+- **P3 三档诊断**：`UnifyKind{Absurd, Undecided, Fuel}` + `Infer` 上
+  `unify_kind: Cell`，失败臂按 L07 口径 note；覆盖探测对 `Undecided`
+  保守判可达（不再把"判不出"当"分支不可达"）。
+- **P5 跨 meta 环守卫**：`meta_expanding: RefCell<Vec<MetaVar>>`，`force`
+  展开已解 meta 时压栈、同 meta 再现返回卡住 Flex（L09 原实现无 fuel 也无
+  守卫，跨 meta 环会栈溢出）。
+- **P0-2 判定**：L09 的探测回滚不走整表 `meta.clone()` 的路径，暂不引入
+  undo-log（记录为 N/A）。
+- **P8 / P1-2 判定**：依赖 decl 表（L09 无名字键表 / 无 registered-prim
+  守卫面），记录为 N/A。
+
 ## 1. 语言特性（分层宇宙）
 
 ```text
@@ -68,10 +93,11 @@ def refl[A, x: A]: Eq[A] x x = _ => px => px
 - **隐式实参逗号合写**：`f[A, B]` ≡ `f[A][B]`（`e2d04bb`，2026-09-19
   自 L11 形态回移植；命名隐式 `[A = x, B = y]` 与拖尾逗号同口径，
   展开的 Raw::App 链完全同构）。
-- **重定义静默覆盖**：顶层 def / enum 重名不报 `redefine`（L13
-  `fake_bind` 前传的 L07+ 检查未回灌本层，时代缺口）；构造子只以
-  **裸名**经 `define` 登记（无 `Enum.case` 限定别名；struct 的 case
-  名本身是 `{Name}.mk`）。
+- **重定义报错（2026-11-13 从 L07/L08 继承）**：顶层 `def` / `enum` 重名
+  （含撞 `Cxt::new` 内建、撞构造子裸名）→ `redefine {名}` 定向报错，
+  不再静默覆盖；顺序与 L07/L08/L13 一致（先检查类型、后查重定义）。
+  构造子只以**裸名**登记（无 `Enum.case` 限定别名；struct 的 case
+  名本身是 `{Name}.mk`）——这条与 L08 相同。
 - **显示形态（A4-R3 定案）**：构造子值打印为 L09–L13 的 comma 血统
   `头名::分支名(实参, …)`（`pretty.rs:212`；终点章锚点
   `src/L13_namespace/legacy_tests.rs:604`、`src/L12_canonical/mod.rs:1479`）。
@@ -82,40 +108,52 @@ def refl[A, x: A]: Eq[A] x x = _ => px => px
   `recursive_N`（`pretty.rs:119`）。`SumCase.typ` 非 Sum 头时沿 App
   链找头名、找不到退化 `?` 不 panic（`sum_head_name`）。
 
-## 2. 核心数据结构：层级化全局表（无 decl 表）
+## 2. 核心数据结构：全局值表（id 键，无名字键 decl 表）
 
-- **登记分两路**。def / enum **本名**：`fake_bind` 把名字插入
-  `src_names` 为 `(global_idx + 1919810, 类型)` 占位（`cxt.rs:111`），
-  值进 `Infer.global: HashMap<Lvl, VTy>`（键 = `global_idx`，即登记时
-  的表长，`elaboration.rs:393`）；项层引用是
-  `Tm::Var(Ix(global_idx + 1919810))`（哨兵 `GLOBAL_BASE = 1919810`）。
-  **构造子**：`Cxt::define` 登记——值进 env 的 define 槽，
-  `src_names` 记 (局部层级, 类型)（`elaboration.rs:544-554`），不经
-  global 表。
+- **两层表**：`Infer.global: FxHashMap<Lvl, VTy>`（键 = `global_idx`，值为
+  终值；递归 def 在体检查期间先放 `Val::vvar(global_idx + 1919810)` 占位、
+  检查完覆盖）+ `Infer.global_names: FxHashMap<String, (Lvl, Rc<VTy>)>`
+  （真名 → (哨兵层级, 类型)，append-only、不随 Cxt 克隆）。**名字键的 decl
+  表不存在**——L07/L08 的 `decl_get` 直查在本层的等价物是「名字 →
+  `global_names` → 哨兵层级 → `global` 表」两次 O(1) 查。
+- **顶层声明不占类型检查上下文（2026-11-12 载体切换）**：`define_global`
+  只写上面两张表（+ `shadow_local`），**不再** `env.prepend` / `lvl+1` /
+  `locals::Define` / `pruning.prepend(None)`。因此 `Cxt` 的
+  env/lvl/locals/pruning 长度只随**局部 binder** 增长。旧设计随声明数 D
+  增长：全局引用按 de Bruijn 下标在 Rc 单链 env 上 `iter().nth` 线性找
+  （每次 O(D)）、`fresh_meta` 的 `close_ty(&cxt.locals, …)` 要包 D 层 Let
+  并重求值（每次 O(D²)），strchain/struct/Eq 证明阶梯因此超线性（诊断与
+  实测见 `docs/l09-perf-gap-2026-11-12.md`）。
+- **项层引用两种编码**：已定名全局 → `Tm::Global(Ix(global_idx +
+  1919810))`；递归定义体检查期间的**自身占位**引用 → `Tm::Var(Ix(global_idx
+  + 1919810))`（旧 `fake_bind` 哨兵，代码里以 `in_progress_globals` 集合
+  区分）。`eval` 的 Var 臂**先判哨兵**直查 `Infer.global` O(1)，不扫 env。
+  中性全局视图（quote/rename/Match 合一的分支体重求值）只中和
+  `Var(哨兵)`（递归占位），`Global` 照常展开——与旧版「哨兵 vs env 槽」的
+  两分法逐点一致（`Tm::Global` 对应旧版的 env 槽引用语义，parity/黑盒
+  文案逐字节对齐）。
 - **哨兵边界必须是 `>=`**：`lvl2ix` 对 `x.0 >= 1919810` 原样放行——
   0 号全局恰等于 1919810，用 `>` 会让首个声明的自引用走 `l - x - 1`
-  下溢（`mod.rs:398-408`；off-by-one 修复见 `fd25b74`）。eval 的 Var
-  臂越过哨兵查 global 表（`mod.rs:689-692`）；quote / rename 对越过
-  哨兵的 Rigid 原样产出大下标 Var。
-- **名字解析只走 `src_names`**（BiMap 名字 ↔ (层级, 类型)，`cxt.rs:14`）：
-  `infer_expr(Var)` 一次查表同时覆盖局部 binder、define 槽与哨兵
-  全局（`elaboration.rs:633`）。**global 表只存值，类型事实全在
-  src_names**——这就是"按层级存、无名字键 decl 表"的完整含义，也是
-  模式编译器（§3）取构造子类型必须绕道 `infer_expr(Var(名))` 的原因
-  （L07/L08 有 `decl_get` 直查，本层没有同构物）。
-- **递归 def**：`fake_bind` 占名 → global 表先插指向自身的卡住 Rigid
-  `Val::vvar(global_idx + 1919810)` → 体检查 → 用真值覆盖同一条目
-  （`elaboration.rs:393-405`；enum 本体 `503-511`）。值层无 unfold
-  算子——global 表存的都是终值，故 L06–L08 fuel 的"decl 展开"烧点
-  在本层无宿主。
-- **卡住 match 是中性值，但无 pending splice**：eval 的 `Tm::Match`
+  下溢（`mod.rs` 的 `lvl2ix`；off-by-one 修复见 `fd25b74`）。quote /
+  rename 对越过哨兵的 Rigid 原样产出大下标 Var。
+- **名字解析两表**（`src_names` 局部 + `global_names` 全局）：`infer_expr(Var)`
+  先查 `cxt.src_names`（BiMap 名字 ↔ (层级, 类型)：`Cxt::new` 的两个内建 +
+  当前 def 内的 binder/let，局部优先遮蔽），回落 `global_names`。
+  **global 表只存值，类型事实在两张名字表**；模式编译器（§3）取构造子
+  类型仍绕道 `infer_expr(Var(名))`——与 L07/L08 的 `decl_get` 两次 O(1)
+  查等价（历史注：载体切换前构造子类型取出还要付上下文线性代价）。
+- **递归 def**：`fake_bind` 占名（插入 `global_names` 哨兵层级 + 标记
+  `in_progress_globals`，不改 Cxt）→ global 表先插指向自身的卡住 Rigid
+  `Val::vvar(global_idx + 1919810)` → 体检查（自身引用编成
+  `Tm::Var(哨兵)`）→ `define_global` 用真值覆盖同一条目、登记哨兵名字、
+  移出 in_progress（enum 本体 / 构造子同路）。值层无 unfold 算子——
+  global 表存的都是终值，故 L06–L08 fuel 的"decl 展开"烧点在本层无宿主。
+- **卡住 match 是中性值，pending splice 已回灌**：eval 的 `Tm::Match`
   臂把 scrutinee force 后是构造子值即 `eval_aux` 首匹配选臂，否则整体
-  卡成 `Val::Match(scrutinee, env, arms)`（`mod.rs:783-795`）。`v_app`
-  对 Match **panic**（`mod.rs:641-657`）——"卡住 match 再被应用"是
-  时代缺口（L07 起以值层 splice 实现了该特性；本层参考版与快版同崩 +
-  parity 一致，模块头 `mod.rs:1-10`）。unify 的两个 η 臂已加
-  `v_applicable` 守卫（`mod.rs:323-331`）：卡住 match / 字面量一侧与
-  λ 比较时改判 Err 而非 panic。
+  卡成 `Val::Match(scrutinee, env, arms, pending)`。`v_app` 把后续实参
+  累积进 `pending`（值层保存；项层 splice 会把实参自由变量引到错误
+  上下文），分支选中后逐个应用——与 L07 S1 同构。`v_applicable` 守卫
+  继续把"卡住 match / 字面量与 λ 比较"改判 Err 而非 panic。
 - **force 只有两个展开臂**：Flex（meta 解）与 VSub（σ 推开，
   `mod.rs:486-499`）。没有 Match 重选、decl 展开、Prim 归约——精化
   传播进卡住 match 内部的机制不存在；match 的分支重选只发生在 eval
@@ -235,6 +273,28 @@ L08 冠军配方（bump arena + 打包值 + 迭代内核 + 复合环境 + 记忆
   同款机制的移植，`fast_substv_reclaimed_across_rounds` 钉住
   （`SUBSTV_ALIVE` 计数连跑两轮后回落基线）。
 
+- **参考版 ↔ 孪生载体对齐（2026-11-12）**：参考版把全局值/名字搬出 Cxt
+  （`Infer.global` 值表 + `global_names` 名表 + `Tm::Global` 哨兵直查），
+  与孪生的 `globals: Vec<V>` + `global_names` 同构。此前参考版把顶层声明
+  做成上下文条目（env/lvl/locals/pruning 随 D 增长），strchain/struct/Eq
+  证明阶梯是 O(D²)；载体切换后参考版回到 L07/L08 量级（§5）。
+- **`Tm::Lam/Pi` 体 Rc 表示（2026-11-13 从 L07/L08 继承，G3）**：参考版
+  `Tm` 的 λ 体与 Π 域/余域由 `Box` 改 `Rc`（与 L07/L08 一致）。借用版
+  `eval_ref` 建 `Closure` 只需 `Rc::clone`，不再深拷整棵体项；`quote`/
+  `rename`/`lams_go`/`struct_eq`/`tm_size`/孪生 CTm 导出逐点同步。语义
+  零变化（parity 46/82 绿），但 common/church/natadd 的常数差距随之抹平
+  （§5：载体切换后 common 96.5 → **67.1 ms**，与 L07/L08 持平）。
+- **`Val` 名字 span 句柄化（2026-11-13，`VSpan = Rc<Span<String>>`）**：
+  `Val` 的构造子/绑定器/投影字段名等 5 类 span 由 `Span<String>` 改为
+  `Rc` 句柄（`Deref` 保持 `.data`/显示透明；跨表示比较只看名字；`Debug`
+  与内层 `Span<String>` 同形以保 parity 错误正文）。动机：common ladder
+  单文件 **1.17M 次 Val 克隆**（SumCase 666k/Sum 303k/Lam 192k），每次
+  克隆旧实现都复制一个名字 String；句柄化后只是引用计数递增。收益：
+  common 67.1→**50.4 ms（−24.9%）**、strchain −17.6%、natadd −21.0%、
+  struct k10 −20.8%、match −13.6%、enum −6.3%、universe −9.0%（church
+  持平），见 `docs/l09-value-span-rc-2026-11-13.md`（含同轮否决的
+  `rc_take` unique-move 实验：实测 ≈0，rc_take 仅 1405 次/轮）。
+
 Ok 输出与参考版**逐字节一致**。已知偏差仅错误消息内容：快版错误里
 内嵌的 Debug-Val/Tm 的名字 Span 全零（参考版携带源码偏移），parity
 比对前按 `start_offset/end_offset/path_id` 归一化。
@@ -253,50 +313,68 @@ cargo run --release --bin l09bench -- --workload all --max-k 11
 点数闭式：church = 2n + 4、strchain = 1、struct = 2；match / enum /
 universe 无闭式，以双实现互检代替。
 
-矩阵数据（`docs/bench-matrix-2026-09-18.md` §3 的 L09 行；隔离进程、
-`--max-k 11`（`enum` 取 k=9）、`--rounds 3`、每格 min；Windows 10，
-release）：
+矩阵数据（**2026-11-13 最终复测**：载体切换 + `Tm::Lam/Pi` Rc + `Val`
+名字 span 句柄化后；隔离进程、`--max-k 11`（`enum` 取 k=9）、`--rounds 3`、
+每格 min；Windows 10 release；参考版 `basic`）：
 
-| 负载 | k | basic (ms) | fast_ss (ms) | basic/fast_ss |
-|---|---|---|---|---|
-| church | 11 | 4.464 | 0.331 | 13.5× |
-| strchain | 11 | 2717.255 | 3.105 | 875.1× |
-| match（移植前） | 11 | 2.163 | 0.966 | 2.2× |
-| enum（移植前） | 9 | 13.268 | 1.619 | 8.2× |
-| struct | 11 | 4506.220 | 3.791 | 1188.7× |
-| universe | 11 | 3271.889 | 1.763 | 1855.9× |
+| 负载 | k | L09 参考版 basic (ms) | L07 | L08 | L09/对照 |
+|---|---|---|---|---|---|
+| church | 11 | 1.427 | 1.307 | 1.323 | 1.09× / 1.08× |
+| strchain | 11 | 7.494 | 7.100 | 7.805 | 1.06× / 0.96× |
+| match | 11 | 0.093 | 0.094 | 0.095 | 0.99× / 0.98× |
+| enum | 9 | 0.215 | 0.173 | 0.176 | 1.24× / 1.22× |
+| struct | 10 | 5.117 | — | 4.967 | 1.03× |
+| universe | 11 | 4.006 | — | — | — |
+| natadd | 11 | **2.704** | 2.763 | 2.828 | 0.98× / 0.96× |
 
-**逐臂下钻移植后**（`09b9ee8`，2026-09-19 补测，同文档 §0 / §0.1）：
+> L07/L08 列是**同族但各自生成器**的数字（L09 后来也把 VSpan 合入了
+> L07/L08，见 `docs/bench-crosslayer-vspan-2026-11-13.md`）；严格同文件
+> 对照看下方真实语料表。L09 与 L07/L08 在 common 上已同水位（50.3 vs
+> 50.9/51.1 ms），残差为 enum 1.24×、church/strchain 1.06–1.09× 与 Eq 阶梯
+> 1.12×（宇宙/构造子检查的固定常数）。
 
-- **match**：参考版 basic 2.175 → 0.570 ms（3.8×），孪生 fast_ss
-  0.457 → 0.048 ms（9.5×）。孪生对参考的领先从首测的 2.2× 扩大到约
-  一个量级（矩阵 §0 表记 0.11×，与 L10–L12 同档）；分析文档 §0.0 记
-  9.6×（2.215→0.576 / 0.469→0.049）——窗口间绝对数漂移、比值一致。
-- **enum**：**两侧都能跑**且快 ~10×（basic 13.268 ms / 孪生移植后
-  1.37 ms）。首测"enum 孪生判型失败"是 L11/L12 的事，本层从未不可跑
-  （首测 13.3 ms）。
-- 其余负载 0.96–1.07×（只换了 match 编译器，非 match 路径不变）。
+`strchain` k=9→12 曲线 1.90 / 4.01 / 8.93 / 21.2 ms（≈线性，与 L07/L08
+一样只剩 `string_concat` 负载本身的 O(n²) 字节拷贝；句柄化后 k=11 绝对值降到
+7.49 ms）。
 
-**参考引擎地板（诚实清单）**：本层参考版的非 match 负载本就系统性慢
-L10 参考版 2.5–4.5×（分析文档 §0.0 的定位），match 移植后的参考版
-残差同源。表中 basic 列的大比值（strchain 875×、struct 1189×、
-universe 1856×）以这个更慢的参考版为基数，跨层比较应以 L10 行为
-参照；成因与参考版 `Cxt::define` 逐 decl 克隆 `src_names`（名字表
-不搬出上下文，孪生侧已由 `global_names` 规避，§4）相关的部分**未
-单独测量核实**。
+真实语料与跨层对照（`realbench --rounds 3 --only basic`，min；
+`target/perf09/crosslayer_vspan/after/`）：
+
+| 口径 | 载体切换前（2026-11-12） | 最终（2026-11-13） | 加速 | 同窗口对照 |
+|---|---:|---:|---:|---|
+| L09 自有语料整目录（34 文件） | 1763.7 ms | **8.68 ms** | **203×** | — |
+| Eq 证明阶梯单文件（801 decls） | 1678.5 ms | **2.66 ms** | **630×** | L07 2.38 / L08 2.38（**1.12×**） |
+| common 6 文件（L07 风格代码） | 115.3 ms | **50.35 ms** | 2.29× | L07 50.87 / L08 51.14（**0.99× / 0.98×**） |
+
+> 历史注：`docs/bench-matrix-2026-09-18.md` 的 2717ms（strchain）/4506ms
+> （struct）/3271ms（universe）等是 2026-09-20 `866f23e5` 修复前的旧机数据，
+> 只可作历史；`参考引擎地板`（旧版 §5 末段）已随 2026-11-12 载体切换、
+> 2026-11-13 `Tm` Rc 继承与 `Val` 名字 span 句柄化（随后也合入 L07/L08）
+> 消除——**L09 与 L07/L08 现已同水位（common 差 ≤1%）**，不再有链条上的
+> 性能断层。
+
+**仍存的常数级差距**（都不构成数量级问题）：enum 1.24×（固定小源的宇宙
+层级/构造子检查常数）、Eq 阶梯单文件 1.12×（宇宙/构造子检查每 decl 的成本）、
+church/strchain 1.06–1.09×（固定常数）；内建 `string_concat` 仍走普通 β +
+`Tm::Prim`（无 PrimFunc/eta，但 strchain 句柄化后已 0.96× L08）。这些不值得
+再引入 PrimFunc/eta 或牺牲 A4-R2 的宇宙/fuel 论证（见
+`docs/l09-carrier-switch-2026-11-12.md` §6、`docs/l09-value-span-rc-2026-11-13.md`
+与跨层对比 `docs/bench-crosslayer-vspan-2026-11-13.md`）。
+
 
 ## 6. 已知限制（诚实清单）
 
-1. **卡住 match 不可再被应用**：`v_app` 对 `Val::Match` panic；合法
-   源码（打印引用自递归卡住 match 的函数值）可触发，参考版与快版
-   同崩 + parity 一致，属时代缺口而非缺陷。修复需实参吸收并参考版 +
-   快版同步大改，刻意不修（模块头 `mod.rs:1-10`）；η 臂的
-   `v_applicable` 守卫已把"卡住 match / 字面量与 λ 比较"改判 Err。
-2. **无 Match 重选 / decl 展开 / Prim 归约 / struct_eq 快路径**：force
-   只有 Flex + VSub 臂，卡住 match 恒卡住；`unify(Match, Match)` 的
-   分支体在**中性 global 克隆**下重求值（`avoid_recursive` 全局 →
-   rigid 封口，`unification.rs:354-361/733-741`），与 L07/L08 的
-   `struct_eq` 结构快路径不同构（A4-R2 登记，刻意分歧）。
+1. **卡住 match 已可再被应用（2026-11-11 回灌）**：`Val::Match` 带第 4
+   字段 pending，`v_app` 累积实参、分支选中后在值层应用；参考版不再
+   panic。**孪生版未移植**（其 `XCell::Match` 仍是 3 字段 + 原 panic
+   路径）——两版在该行为上按文档化不对称处理，parity 对该族只钉参考版
+   行为。
+2. **struct_eq 快路径已回灌；Match 重选 / decl 展开 / Prim 归约仍无宿主**：
+   force 仍只有 Flex + VSub 臂（卡住 match 恒卡住；进 match 内部靠 σ 推开
+   scrutinee 后 eval 重选）；`unify(Match, Match)` 现在**先走 struct_eq
+   迭代结构快路径**（EqTask + 预算），失效后回落到中性 global 克隆重求值
+   （原路径保留，与 L07 同构）。decl 展开/Prim 归约在本层无宿主（global
+   存终值、Prim 无 spine），维持 A4-R2 论证。
 3. **fuel 的适用面（A4-R2 论证 + 显式替换后的现状）**：L08 fuel 的
    六个烧点中五个在本层无触发面——① meta 解链间接环（solve 的
    rename 带 `occ: Some(m)` 做逐 meta occurs check，解链无环）；
@@ -308,20 +386,23 @@ universe 1856×）以这个更慢的参考版为基数，跨层比较应以 L10 
    已以 `UNIFY_FUEL` 4096 有界（§2 末条）。注意：孪生模块头的
    "unify 无燃料"一行写于该移植之前，现状以本条与 §2 为准（源码
    注释待更新，本轮只改文档）。
-4. **重定义静默覆盖**（§1 已述）：顶层 def / enum 重名后定义覆盖
-   `src_names` 与 global 表条目，无 `redefine` 定向报错；构造子裸名
-   跨 enum 重复按最后注册解析。
-5. **显示形态刻意分歧**（A4-R3 定案，不修）：comma 血统 +
+4. **显示形态刻意分歧**（A4-R3 定案，不修）：comma 血统 +
    `(unsolved match n)`；与 L08 的 `.mk` 去重形态互不继承。
-6. **深值路径未做迭代化**：L07/L08 的 2026-09-18 深值栈安全轮
-   （occurs / 结构比较 / rename 的工作栈化与 σ 回收之外的其余项）
-   未移植本层；`quote` / `pretty` / 深值的递归 Drop 仍是按值深度的
-   递归路径。parity 与 bench 都在大栈线程里跑（parity 256 MB、bench
-   `L09_STACK_MB` 默认 128 MB），常规负载不触界；深值压测未做，
-   具体边界**未核实**。
-7. **pending σ 的跨轮回收已落地**（非缺口，防误报）：孪生 arena 内
+5. **深值路径已迭代化（2026-11-11 回灌）**：`quote` / `rename` /
+   `val_mentions_lvl` / `struct_eq` 走迭代实现、`pretty` 定深截断；
+   L07 的深值回归（10 万层 succ 链、默认栈）在参考版通过。仍为递归的：
+   深值 `Drop`（按值深度递归，未做 L13 式迭代 Drop）——parity/bench 的
+   大栈线程（256 MB / `L09_STACK_MB` 128 MB）继续兜底。**孪生版未移植
+   深值轮**（本轮只做参考版），深值负载在孪生上仍可能爆栈。
+6. **pending σ 的跨轮回收已落地**（非缺口，防误报）：孪生 arena 内
    `XCell::VSub` 持有的 `Rc<SubstV>` 克隆曾被 bump reset 跳过 Drop
    （跨轮慢泄漏）——`VSUB_REGS` 登记 + 轮界归还已修（§4 末条）。
+
+> 已从 L08 继承、不再列为缺口的项：重定义报错（2026-11-13）、
+> `Tm::Lam/Pi` 体 `Rc` 表示（2026-11-13，G3）、struct_eq / pending /
+> P2/P3/P5 / 深值轮（2026-11-11 回灌）。L09 时代刻意保留的差异只有
+> 语言面裁剪（无可变全局 / 文件 IO / builtin 注册表，A4-R2 登记）与
+> 显示形态（A4-R3）——这两项属章节设计，不是链断裂。
 
 ## 7. 测试
 
@@ -354,14 +435,22 @@ universe 1856×）以这个更慢的参考版为基数，跨层比较应以 L10 
     头名检查的正向对照）、`parity_stale_solvable_order_independent`
     （臂序无关：荒谬臂静默跳过后覆盖仍完备，臂交换两序输出一致）。
 
-  随 `#[path]` 编入本目标的还有模块内 5 个 lib 用例（即下条的 lib
-  全部），计入总运行数（L08 §8 同款结构；确切总数以 cargo test 输出
-  为准，本轮未跑）。
-- `cargo test --lib L09_mltt`：**5 个**（`mod.rs` 的 `test1` /
-  `test2`——DEMO 全串：宇宙塔 `HighLvl` / `HighLvl2` / `HighLvl3`、
-  `Eq` 教学编码、`Bits` struct 与 `refl` 传递；`parser/mod.rs` 的
-  `test` 与 `test_bad_decl_reported_prefix_kept`——resilient 解析：
-  坏 decl 报错且保留前缀；`parser/lex.rs` 的 `test`）。大栈线程。
+  随 `#[path]` 编入本目标的还有模块内 **17** 个 lib 用例（即下条的
+  lib 全部），计入总运行数：`cargo test --test l09_fast_parity` 实测
+  **46 passed / 0 failed**（29 自有 + 17 lib）。
+- `cargo test --lib L09_mltt`：**17 个** = 原有 10（`mod.rs` 的
+  `test1` / `test2` 与 5 个 pm 负例、`parser/mod.rs` 的 `test` 与
+  `test_bad_decl_reported_prefix_kept`、`parser/lex.rs` 的 `test`）
+  + 2026-11-11 回灌回归 7（`deep_value_iterative_under_default_stack`、
+  `cross_meta_cycle_force_is_bounded`、
+  `test_unify_kind_separates_absurd_from_undecided`、
+  `test_stuck_match_splice`、`test_stuck_match_applied_with_outer_binder`、
+  `test_stuck_match_equation_bounded`、
+  `struct_eq_compares_match_pending_values`）。实测 17 passed。
+- `cargo test --test l09_blackbox`：**65 个黑盒用例**（2026-11-11 新增，
+  10 个家族：输出/显示契约、求值/递归/高阶、和类型/索引/GADT、struct/new
+  脱糖、Type N 宇宙、构造子良构/重定义、覆盖诊断、错误/span、解析恢复、
+  负向事实）；随 `#[path]` 带入 17 个 lib 用例 → 实测 **82 passed / 0 failed**。
 
 ## 8. 参考资料
 
@@ -372,6 +461,9 @@ universe 1856×）以这个更慢的参考版为基数，跨层比较应以 L10 
 - `docs/l09l13-match-compiler-analysis-2026-09-17.md`（决策树 → 逐臂
   的算法级诊断与五层移植记录）；
 - `docs/bench-matrix-2026-09-17.md` / `docs/bench-matrix-2026-09-18.md`
-  （本层全部基准数字的来源）；
+  （本层历史基准数字的来源；2026-09-20 前的旧机数据）；
+- `docs/l09-perf-gap-2026-11-12.md`（参考版 vs L07/L08 的差距定位与
+  G1/G2 根因）与 `docs/l09-carrier-switch-2026-11-12.md`（2026-11-12
+  载体切换：全局移出 Cxt、`Tm::Global` 三态编码、A/B 验收）；
 - [elaboration-zoo](https://github.com/AndrasKovacs/elaboration-zoo)
   （MLTT 教学章：宇宙层级 + 和类型 / match 的切片原型）。

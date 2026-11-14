@@ -1,0 +1,30 @@
+
+def outParam[A](a: A): A = a
+
+enum Bool {
+    true
+    false
+}
+
+trait Show { def show: String }
+trait Get { def get: String }
+
+impl Show for Bool {
+    def show: String =
+        match this {
+            case true => "show:true"
+            case false => "show:false"
+        }
+}
+impl Get for Bool {
+    def get: String =
+        match this {
+            case true => "get:true"
+            case false => "get:false"
+        }
+}
+
+def test[T](x: T): String where T: Show + Get =
+    _show_T.show x
+
+println (test true)

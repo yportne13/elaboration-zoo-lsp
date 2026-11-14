@@ -93,7 +93,9 @@ waiters/answers，**顺带是答案缓存**——重复子目标直接取已有�
   与 `src/L13_namespace/legacy_tests.rs:604`）。卡住 match 显示保留
   `(unsolved match …)` 简形（同 L09，刻意分歧，l10 golden 锚定）。
 - 构造子只以**裸名**登记（无 L07 的 `Enum.case` 限定名别名）；
-  **重定义静默覆盖**（参考版无 L07/L11 的 `redefine` 检查）。
+  **重定义报错（2026-11-13 从 L07/L08/L09 继承）**：顶层 def / enum 重名
+（含撞内建、撞构造子裸名）→ `redefine {名}`；参考版与孪生同口径，
+顺序与 L07/L08/L09/L13 一致（先类型后重定义）。
 
 ## 2. 全局名字：`Infer.global` 按层级存
 
@@ -374,3 +376,24 @@ q 的自由变量下标按保留槽位重编号（`remap_free_vars`）。正确�
   `docs/l09l13-match-compiler-analysis-2026-09-17.md`（决策树诊断与
   收窄登记）、`docs/bench-matrix-2026-09-18.md`（基准口径与全表）、
   `docs/archive/review-continuity/a4-r1.md`（跨章连贯性登记）
+
+## 9. 增补（2026-11-14）：参考版载体切换（P0）
+
+参考版顶层声明不再压进 `Cxt`（对齐 L09 `568c65c5`）：新增 `Tm::Global(Ix)`
+三态引用（局部 `Var(小下标)` / 递归检查期自引用 `Var(哨兵)` / 已定名全局
+`Global(哨兵)`，`Infer.in_progress_globals` 区分），`fake_bind` 只登记名字占位，
+`define_global` 只写 `Infer.global`/`global_names` 并返回 O(1) 克隆 Cxt。
+配套：`fresh_meta` 的 L06 `close_meta_ty` 快路径、`force`-Obj `Rc::ptr_eq` 早退、
+`pretty_tm_g` 全局名反查、`bench_check_nf` 末值从 global 表取。
+typeclass 面零额外注册点（`TraitDecl`/`ImplDecl` 复用 def/enum 路径）。
+唯一 parity 适配：错误正文 `Lvl(n)` 的 `display_val` 平移（仅显示；孪生仍旧口径）。
+
+实测（同机 min-of-3，`--only basic`）：common 40.97→**32.11 ms（−21.6%）**、
+自有语料 16.42→**5.25 ms（−68%）**、Eq 阶梯单文件 1078.9→**2.13 ms（507×）**、
+同文件 L09 语料 1103.7→**4.04 ms（273×）**；common/Eq 阶梯上已为 L07–L10 最快。
+l10bench（**重建后**）：strchain k11 7.15ms、struct k11 6.96ms、traitchain k9
+20.4ms（P0 前旧二进制是 57.3/166.6/25.5s，过期读数已撤回）、church 1.40ms、
+match 0.081ms、natadd 2.04ms——均与 L09 同级或更快，仅 universe 慢 7.7%。
+测试 47/26 全绿、validate 22/0 与 25/9 同基线。剩余：l10bench enum 的
+ref/twin quote 发散（既有，nf ref=28/twin=6；L09 同源通过）、P0.5（struct_eq/
+深链帧式化）未做。详见 `docs/l10-carrier-switch-2026-11-14.md` §4。

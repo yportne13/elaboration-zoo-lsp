@@ -1,0 +1,123 @@
+// 项目级真实程序（手写）：栈式字节码解释器（小型 VM）。
+//
+// 真实场景：编译器的后端执行器——字节码序列 + 操作数栈，逐指令解释。
+// 覆盖特性（L07）：
+//   - enum Op / List[A] / Nat 组合的递归解释循环（run 尾递归风格）；
+//   - 多层嵌套 match：对指令、对栈顶两个操作数逐层匹配（nil/cons 两层）；
+//   - 程序即数据（List[Op]），指令序列构造 + 解释执行 + println 输出；
+//   - 一个用依赖模式匹配陈述的语义引理（run 对空程序恒等）。
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Op {
+    Push(n: Nat)
+    AddOp
+    MulOp
+    NegOp
+    Dup
+}
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def rfl[A][a: A]: Eq a a = refl a
+
+def add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def mul(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => zero
+        case succ(n) => add y (mul n y)
+    }
+
+def sub(x: Nat, y: Nat): Nat =
+    match y {
+        case zero => x
+        case succ(m) => match x {
+            case zero => zero
+            case succ(n) => sub n m
+        }
+    }
+
+// 单指令执行：操作数栈 → 新栈。栈空/不足时保持原栈（容错语义）。
+def exec_op(op: Op, stack: List[Nat]): List[Nat] =
+    match op {
+        case Push(n) => cons n stack
+        case Dup => match stack {
+            case nil => stack
+            case cons(a, rest) => cons a (cons a rest)
+        }
+        case NegOp => match stack {
+            case nil => stack
+            case cons(a, rest) => cons (sub zero a) rest
+        }
+        case AddOp => match stack {
+            case nil => stack
+            case cons(a, rest) => match rest {
+                case nil => stack
+                case cons(b, rest2) => cons (add b a) rest2
+            }
+        }
+        case MulOp => match stack {
+            case nil => stack
+            case cons(a, rest) => match rest {
+                case nil => stack
+                case cons(b, rest2) => cons (mul b a) rest2
+            }
+        }
+    }
+
+// 解释循环：逐条执行剩余指令。
+def run(prog: List[Op], stack: List[Nat]): List[Nat] =
+    match prog {
+        case nil => stack
+        case cons(op, rest) => run rest (exec_op op stack)
+    }
+
+// ── 示例字节码程序 ────────────────────────────────────────────────────────
+
+def one : Nat = succ zero
+def two : Nat = succ (succ zero)
+def three : Nat = succ (succ (succ zero))
+def four : Nat = succ (succ (succ (succ zero)))
+
+// (1 + 2) * 3
+def prog_add_mul : List[Op] = cons (Push one) (cons (Push two) (cons AddOp (cons (Push three) (cons MulOp nil))))
+
+// ((2 * 2) + (3 * 3))
+def prog_squares : List[Op] = cons (Push two) (cons (Push two) (cons MulOp (cons (Push three) (cons (Push three) (cons MulOp (cons AddOp nil))))))
+
+// dup / neg 的栈操作
+def prog_stack : List[Op] = cons (Push two) (cons Dup (cons AddOp (cons NegOp nil)))
+
+// 非法栈下溢：AddOp 在空栈上应保持空栈（容错分支）
+def prog_underflow : List[Op] = cons AddOp (cons (Push four) nil)
+
+def out_add_mul : List[Nat] = run prog_add_mul nil
+def out_squares : List[Nat] = run prog_squares nil
+def out_stack : List[Nat] = run prog_stack nil
+def out_underflow : List[Nat] = run prog_underflow nil
+
+println out_add_mul
+println out_squares
+println out_stack
+println out_underflow
+
+// 语义引理：空程序不改变栈。
+def run_nil(stack: List[Nat]): Eq (run nil stack) stack = rfl
+
+// 语义引理：单条 Push 指令后栈顶就是压入的值。
+def run_push(n: Nat, stack: List[Nat]): Eq (run (cons (Push n) nil) stack) (cons n stack) = rfl

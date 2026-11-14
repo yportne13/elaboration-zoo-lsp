@@ -1,0 +1,217 @@
+// 项目级真实程序（手写）：泛型记录代数库（Pair / Interval / Range / Wrapper）。
+//
+// 真实场景：调度系统里的区间与范围计算——泛型 Pair 容器、区间记录、
+// 步进范围记录，以及一组返回新记录的区间运算。
+// 覆盖特性（L08，product type 重点）：
+//   - 泛型 struct Pair[A, B] 与 new / Point.mk 两种构造路径；
+//   - 类型级投影（接收者只有类型）与值级投影（接收者是构造子值）混用；
+//   - 嵌套投影链 `w.interval.hi`、`r.inner.lo`（三层记录）；
+//   - 记录更新函数（shift / intersect / trim）返回新记录；
+//   - 递归 Nat 比较 + Bool 分支 + Option 返回。
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+enum Option[A] {
+    None
+    Some(value: A)
+}
+
+def add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def mul(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => zero
+        case succ(n) => add y (mul n y)
+    }
+
+def sub(x: Nat, y: Nat): Nat =
+    match y {
+        case zero => x
+        case succ(m) => match x {
+            case zero => zero
+            case succ(n) => sub n m
+        }
+    }
+
+def is_zero(x: Nat): Bool =
+    match x {
+        case zero => true
+        case succ(k) => false
+    }
+
+def le(x: Nat, y: Nat): Bool = is_zero (sub x y)
+
+def lt(x: Nat, y: Nat): Bool =
+    match le x y {
+        case true => is_zero (sub y x)
+        case false => false
+    }
+
+// ── 记录类型 ──────────────────────────────────────────────────────────────
+
+struct Pair[A, B] {
+    fst: A
+    snd: B
+}
+
+struct Interval {
+    lo: Nat
+    hi: Nat
+}
+
+struct Range {
+    start: Nat
+    stop: Nat
+    step: Nat
+}
+
+struct Wrapper {
+    inner: Interval
+    tag: String
+}
+
+// ── 泛型 Pair ─────────────────────────────────────────────────────────────
+
+def swap[A, B](p: Pair[A][B]): Pair[B][A] = new Pair(p.snd, p.fst)
+
+def fst_of[A, B](p: Pair[A][B]): A = p.fst
+
+def snd_of[A, B](p: Pair[A][B]): B = p.snd
+
+def pair_nat_bool : Pair[Nat][Bool] = new Pair(succ zero, true)
+def pair_swapped : Pair[Bool][Nat] = swap pair_nat_bool
+def pair_via_mk : Pair[Nat][Nat] = Pair.mk (succ zero) (succ (succ zero))
+
+def pnb_fst : Nat = fst_of pair_nat_bool
+def pnb_snd : Bool = snd_of pair_nat_bool
+def sw_fst : Bool = fst_of pair_swapped
+def sw_snd : Nat = snd_of pair_swapped
+def mk_fst : Nat = fst_of pair_via_mk
+
+// ── 区间运算 ──────────────────────────────────────────────────────────────
+
+def interval_len(i: Interval): Nat = sub i.hi i.lo
+
+def shift(i: Interval, d: Nat): Interval =
+    new Interval(add i.lo d, add i.hi d)
+
+// 区间交：起点取大、终点取小；不重叠时返回空区间（lo = hi = 0）。
+def intersect(a: Interval, b: Interval): Interval =
+    match le a.lo b.lo {
+        case true => match le b.lo a.hi {
+            case true => match le a.hi b.hi {
+                case true => new Interval(b.lo, a.hi)
+                case false => new Interval(b.lo, b.hi)
+            }
+            case false => new Interval(zero, zero)
+        }
+        case false => match le a.lo b.hi {
+            case true => match le a.hi b.hi {
+                case true => new Interval(a.lo, a.hi)
+                case false => new Interval(a.lo, b.hi)
+            }
+            case false => new Interval(zero, zero)
+        }
+    }
+
+// 裁剪到 [lo, hi]：越界部分饱和到端点。
+def trim(i: Interval, by: Nat): Interval =
+    new Interval(add i.lo by, sub i.hi by)
+
+def overlaps(a: Interval, b: Interval): Bool = is_zero (interval_len (intersect a b))
+
+// ── 范围（Range）──────────────────────────────────────────────────────────
+
+def range_len(r: Range): Nat = sub r.stop r.start
+
+def range_shift(r: Range, d: Nat): Range =
+    new Range(add r.start d, add r.stop d, r.step)
+
+def range_scale(r: Range, k: Nat): Range =
+    new Range(r.start, r.stop, mul r.step k)
+
+// 范围内的第 n 个元素（超界返回 None）
+def range_at(r: Range, n: Nat): Option[Nat] =
+    match le (mul r.step n) (range_len r) {
+        case true => Some (add r.start (mul r.step n))
+        case false => None
+    }
+
+// ── 包装记录（三层投影链）────────────────────────────────────────────────
+
+def wrapper_hi(w: Wrapper): Nat = w.inner.hi
+def wrapper_tag(w: Wrapper): String = w.tag
+def wrapper_shift(w: Wrapper, d: Nat): Wrapper = new Wrapper(shift w.inner d, w.tag)
+
+// ── 用例 ──────────────────────────────────────────────────────────────────
+
+def one : Nat = succ zero
+def two : Nat = succ (succ zero)
+def three : Nat = succ (succ (succ zero))
+def four : Nat = succ (succ (succ (succ zero)))
+def five : Nat = succ four
+def six : Nat = succ five
+def eight : Nat = succ (succ (succ (succ (succ (succ (succ (succ zero)))))))
+
+def i1 : Interval = new Interval(two, six)
+def i2 : Interval = new Interval(four, eight)
+def i3 : Interval = new Interval(zero, two)
+
+def i1_len : Nat = interval_len i1
+def i1_shift : Interval = shift i1 three
+def i12 : Interval = intersect i1 i2
+def i13 : Interval = intersect i1 i3
+def i12_len : Nat = interval_len i12
+def i12_overlaps : Bool = overlaps i1 i2
+def i13_overlaps : Bool = overlaps i1 i3
+def i1_trim : Interval = trim i1 one
+
+def rg : Range = new Range(two, eight, two)
+def rg_len : Nat = range_len rg
+def rg_shift : Range = range_shift rg two
+def rg_at0 : Option[Nat] = range_at rg zero
+def rg_at2 : Option[Nat] = range_at rg two
+def rg_at9 : Option[Nat] = range_at rg (add eight one)
+
+def w0 : Wrapper = new Wrapper(i1, "primary")
+def w1 : Wrapper = wrapper_shift w0 four
+def w0_hi : Nat = wrapper_hi w0
+def w1_hi : Nat = wrapper_hi w1
+def w0_tag : String = wrapper_tag w0
+
+// 值级深投影链（接收者是构造子值）
+def direct_hi : Nat = (new Wrapper(new Interval(one, five), "direct")).inner.hi
+
+println i1_len
+println i1_shift
+println i12
+println i12_len
+println i12_overlaps
+println i13_overlaps
+println i1_trim
+println rg_len
+println rg_shift
+println rg_at0
+println rg_at2
+println rg_at9
+println w0_hi
+println w1_hi
+println w0_tag
+println direct_hi
+println pnb_fst
+println pnb_snd
+println sw_fst
+println sw_snd
+println mk_fst

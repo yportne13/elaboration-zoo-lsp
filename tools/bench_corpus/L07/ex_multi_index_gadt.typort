@@ -1,0 +1,32 @@
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+enum Pack[A, B](x: A, y: B) {
+    p[A, B](a: A, b: B) -> Pack[A][B] a b
+}
+
+enum Pack2[A : U, B : U](x: A, y: B) {
+    p2[A, B](a: A, b: B) -> Pack2[A][B] a b
+}
+
+def sw: Pack[Nat][Bool] zero true = p[Nat][Bool] zero true
+
+println sw
+println sw.x
+println sw.y
+
+def un(p: Pack[Nat][Bool] zero true): Bool =
+    match p {
+        case p(a, b) => b
+    }
+println (un (p[Nat][Bool] zero true))
+
+println (p2 zero false).x

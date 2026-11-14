@@ -1,0 +1,34 @@
+﻿# cmd: F:/projects/hermes/ezl-gap-evidence/target/debug/deps/elaboration_zoo_lsp-647b90ef7f32ef90.exe L09_mltt::gap_tests::zz_gap_stuck_match_under_binder --exact --nocapture
+# exit: 101
+
+running 1 test
+> Nat
+> pick
+> test
+
+thread '<unnamed>' (73580) panicked at src\L09_mltt\mod.rs:731:18:
+impossible apply
+  Match(Rigid(Lvl(7), []), [Rigid(Lvl(7), []), Lam("x" @ 30,31, Expl, Closure(.., SumCase { typ: Var(Ix(2)), case_name: "succ" @ 25,29, datas: [("x" @ 30,31, Var(Ix(0)), Expl)] })), SumCase { typ: Sum("Nat" @ 6,9, [], ["zero" @ 16,20, "succ" @ 25,29]), case_name: "zero" @ 16,20, datas: [] }, Sum("Nat" @ 6,9, [], ["zero" @ 16,20, "succ" @ 25,29]), Lam("x" @ 0,0, Expl, Closure(.., Lam("y" @ 0,0, Expl, Prim))), LiteralType], [(Con("zero" @ 99,103, []), Lam("k" @ 107,108, Expl, Var(Ix(0)))), (Con("succ" @ 127,131, [Bind("k" @ 132,133)]), Lam("k" @ 138,139, Expl, App(Var(Ix(3)), Var(Ix(0)), Expl)))])
+to
+  Rigid(Lvl(8), [])
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+[L09 zz_gap_stuck_match_under_binder] PANIC: impossible apply
+  Match(Rigid(Lvl(7), []), [Rigid(Lvl(7), []), Lam("x" @ 30,31, Expl, Closure(.., SumCase { typ: Var(Ix(2)), case_name: "succ" @ 25,29, datas: [("x" @ 30,31, Var(Ix(0)), Expl)] })), SumCase { typ: Sum("Nat" @ 6,9, [], ["zero" @ 16,20, "succ" @ 25,29]), case_name: "zero" @ 16,20, datas: [] }, Sum("Nat" @ 6,9, [], ["zero" @ 16,20, "succ" @ 25,29]), Lam("x" @ 0,0, Expl, Closure(.., Lam("y" @ 0,0, Expl, Prim))), LiteralType], [(Con("zero" @ 99,103, []), Lam("k" @ 107,108, Expl, Var(Ix(0)))), (Con("succ" @ 127,131, [Bind("k" @ 132,133)]), Lam("k" @ 138,139, Expl, App(Var(Ix(3)), Var(Ix(0)), Expl)))])
+to
+  Rigid(Lvl(8), [])
+
+thread 'L09_mltt::gap_tests::zz_gap_stuck_match_under_binder' (76040) panicked at src\L09_mltt\gap_tests.rs:191:13:
+L09 stuck-match-under-binder v_app panic: impossible apply
+  Match(Rigid(Lvl(7), []), [Rigid(Lvl(7), []), Lam("x" @ 30,31, Expl, Closure(.., SumCase { typ: Var(Ix(2)), case_name: "succ" @ 25,29, datas: [("x" @ 30,31, Var(Ix(0)), Expl)] })), SumCase { typ: Sum("Nat" @ 6,9, [], ["zero" @ 16,20, "succ" @ 25,29]), case_name: "zero" @ 16,20, datas: [] }, Sum("Nat" @ 6,9, [], ["zero" @ 16,20, "succ" @ 25,29]), Lam("x" @ 0,0, Expl, Closure(.., Lam("y" @ 0,0, Expl, Prim))), LiteralType], [(Con("zero" @ 99,103, []), Lam("k" @ 107,108, Expl, Var(Ix(0)))), (Con("succ" @ 127,131, [Bind("k" @ 132,133)]), Lam("k" @ 138,139, Expl, App(Var(Ix(3)), Var(Ix(0)), Expl)))])
+to
+  Rigid(Lvl(8), [])
+test L09_mltt::gap_tests::zz_gap_stuck_match_under_binder ... FAILED
+
+failures:
+
+failures:
+    L09_mltt::gap_tests::zz_gap_stuck_match_under_binder
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1014 filtered out; finished in 0.00s
+
+

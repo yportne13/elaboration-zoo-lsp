@@ -1,0 +1,15 @@
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def two = succ (succ zero)
+
+struct Point {
+    x: Nat
+    y: Nat
+}
+
+println (new Point(two, zero))
+println two

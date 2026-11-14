@@ -1,0 +1,115 @@
+// HDL 位宽规格：struct 投影 + 位宽算术 + Bool 方向匹配，
+// 覆盖 canonical 形式下的结构计算（不依赖类型类）。
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+enum Bool {
+    true
+    false
+}
+
+def one = succ zero
+
+def two = succ one
+
+def four = succ (succ (succ (succ zero)))
+
+struct Bits {
+    name: String
+    width: Nat
+}
+
+struct Port {
+    name: String
+    bits: Bits
+    is_input: Bool
+}
+
+def bits_of(n: String, w: Nat): Bits = new Bits(n, w)
+
+def port_of(n: String, b: Bits, d: Bool): Port = new Port(n, b, d)
+
+def port_width(p: Port): Nat = p.bits.width
+
+def port_name(p: Port): String = p.bits.name
+
+def port_is_input(p: Port): Bool = p.is_input
+
+def width_pair(a: Port, b: Port): Nat = add (port_width a) (port_width b)
+
+def width_triple(a: Port, b: Port, c: Port): Nat =
+    add (width_pair a b) (port_width c)
+
+def flip(x: Bool): Bool =
+    match x {
+        case true => false
+        case false => true
+    }
+
+def mask_for(p: Port): Nat =
+    match port_is_input p {
+        case true => port_width p
+        case false => zero
+    }
+
+def bus_a = bits_of "a" four
+
+def bus_b = bits_of "b" two
+
+def bus_y = bits_of "y" four
+
+def in_a = port_of "a" bus_a true
+
+def in_b = port_of "b" bus_b true
+
+def out_y = port_of "y" bus_y false
+
+def pair_width = width_pair in_a in_b
+
+def triple_width = width_triple in_a in_b out_y
+
+def doubled_pair = add pair_width pair_width
+
+def input_mask = mask_for in_a
+
+def output_mask = mask_for out_y
+
+def flipped_a = flip true
+
+def flipped_b = flip false
+
+println pair_width
+
+println triple_width
+
+println doubled_pair
+
+println input_mask
+
+println output_mask
+
+println (add one one)
+
+println (add two two)
+
+println bus_a.name
+
+println bus_b.width
+
+println (port_name out_y)
+
+println port_is_input in_a
+
+println (mask_for in_b)
+
+println flipped_a
+
+println flipped_b

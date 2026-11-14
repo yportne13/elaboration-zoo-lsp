@@ -1,0 +1,229 @@
+// ladder_medium.typort
+// Scale ladder for L09: a 94-unit proof/literal registry (same skeleton at
+// every size; only the registry block grows). Shape: Nat literals + GADT
+// equality proofs + one length-indexed Vec snapshot + a Nat total.
+// Decl target: ~200 (actual: 201).
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl[a: A] -> Eq[A] a a
+}
+
+enum Vec[A](len: Nat) {
+    nil -> Vec[A] zero
+    cons[n: Nat](x: A, xs: Vec[A] n) -> Vec[A] (succ n)
+}
+
+def one: Nat = succ zero
+
+def two: Nat = succ one
+
+def vtwo: Vec[Nat] two = cons one (cons two nil)
+
+def nat_add_lit(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (nat_add_lit n y)
+    }
+def lit0: Nat = zero
+def proof0: Eq[Nat] lit0 lit0 = refl
+def lit1: Nat = one
+def proof1: Eq[Nat] lit1 lit1 = refl
+def lit2: Nat = two
+def proof2: Eq[Nat] lit2 lit2 = refl
+def lit3: Nat = zero
+def proof3: Eq[Nat] lit3 lit3 = refl
+def lit4: Nat = zero
+def proof4: Eq[Nat] lit4 lit4 = refl
+def lit5: Nat = one
+def proof5: Eq[Nat] lit5 lit5 = refl
+def lit6: Nat = two
+def proof6: Eq[Nat] lit6 lit6 = refl
+def lit7: Nat = zero
+def proof7: Eq[Nat] lit7 lit7 = refl
+def lit8: Nat = zero
+def proof8: Eq[Nat] lit8 lit8 = refl
+def lit9: Nat = one
+def proof9: Eq[Nat] lit9 lit9 = refl
+def lit10: Nat = two
+def proof10: Eq[Nat] lit10 lit10 = refl
+def lit11: Nat = zero
+def proof11: Eq[Nat] lit11 lit11 = refl
+def lit12: Nat = zero
+def proof12: Eq[Nat] lit12 lit12 = refl
+def lit13: Nat = one
+def proof13: Eq[Nat] lit13 lit13 = refl
+def lit14: Nat = two
+def proof14: Eq[Nat] lit14 lit14 = refl
+def lit15: Nat = zero
+def proof15: Eq[Nat] lit15 lit15 = refl
+def lit16: Nat = zero
+def proof16: Eq[Nat] lit16 lit16 = refl
+def lit17: Nat = one
+def proof17: Eq[Nat] lit17 lit17 = refl
+def lit18: Nat = two
+def proof18: Eq[Nat] lit18 lit18 = refl
+def lit19: Nat = zero
+def proof19: Eq[Nat] lit19 lit19 = refl
+def lit20: Nat = zero
+def proof20: Eq[Nat] lit20 lit20 = refl
+def lit21: Nat = one
+def proof21: Eq[Nat] lit21 lit21 = refl
+def lit22: Nat = two
+def proof22: Eq[Nat] lit22 lit22 = refl
+def lit23: Nat = zero
+def proof23: Eq[Nat] lit23 lit23 = refl
+def lit24: Nat = zero
+def proof24: Eq[Nat] lit24 lit24 = refl
+def lit25: Nat = one
+def proof25: Eq[Nat] lit25 lit25 = refl
+def lit26: Nat = two
+def proof26: Eq[Nat] lit26 lit26 = refl
+def lit27: Nat = zero
+def proof27: Eq[Nat] lit27 lit27 = refl
+def lit28: Nat = zero
+def proof28: Eq[Nat] lit28 lit28 = refl
+def lit29: Nat = one
+def proof29: Eq[Nat] lit29 lit29 = refl
+def lit30: Nat = two
+def proof30: Eq[Nat] lit30 lit30 = refl
+def lit31: Nat = zero
+def proof31: Eq[Nat] lit31 lit31 = refl
+def lit32: Nat = zero
+def proof32: Eq[Nat] lit32 lit32 = refl
+def lit33: Nat = one
+def proof33: Eq[Nat] lit33 lit33 = refl
+def lit34: Nat = two
+def proof34: Eq[Nat] lit34 lit34 = refl
+def lit35: Nat = zero
+def proof35: Eq[Nat] lit35 lit35 = refl
+def lit36: Nat = zero
+def proof36: Eq[Nat] lit36 lit36 = refl
+def lit37: Nat = one
+def proof37: Eq[Nat] lit37 lit37 = refl
+def lit38: Nat = two
+def proof38: Eq[Nat] lit38 lit38 = refl
+def lit39: Nat = zero
+def proof39: Eq[Nat] lit39 lit39 = refl
+def lit40: Nat = zero
+def proof40: Eq[Nat] lit40 lit40 = refl
+def lit41: Nat = one
+def proof41: Eq[Nat] lit41 lit41 = refl
+def lit42: Nat = two
+def proof42: Eq[Nat] lit42 lit42 = refl
+def lit43: Nat = zero
+def proof43: Eq[Nat] lit43 lit43 = refl
+def lit44: Nat = zero
+def proof44: Eq[Nat] lit44 lit44 = refl
+def lit45: Nat = one
+def proof45: Eq[Nat] lit45 lit45 = refl
+def lit46: Nat = two
+def proof46: Eq[Nat] lit46 lit46 = refl
+def lit47: Nat = zero
+def proof47: Eq[Nat] lit47 lit47 = refl
+def lit48: Nat = zero
+def proof48: Eq[Nat] lit48 lit48 = refl
+def lit49: Nat = one
+def proof49: Eq[Nat] lit49 lit49 = refl
+def lit50: Nat = two
+def proof50: Eq[Nat] lit50 lit50 = refl
+def lit51: Nat = zero
+def proof51: Eq[Nat] lit51 lit51 = refl
+def lit52: Nat = zero
+def proof52: Eq[Nat] lit52 lit52 = refl
+def lit53: Nat = one
+def proof53: Eq[Nat] lit53 lit53 = refl
+def lit54: Nat = two
+def proof54: Eq[Nat] lit54 lit54 = refl
+def lit55: Nat = zero
+def proof55: Eq[Nat] lit55 lit55 = refl
+def lit56: Nat = zero
+def proof56: Eq[Nat] lit56 lit56 = refl
+def lit57: Nat = one
+def proof57: Eq[Nat] lit57 lit57 = refl
+def lit58: Nat = two
+def proof58: Eq[Nat] lit58 lit58 = refl
+def lit59: Nat = zero
+def proof59: Eq[Nat] lit59 lit59 = refl
+def lit60: Nat = zero
+def proof60: Eq[Nat] lit60 lit60 = refl
+def lit61: Nat = one
+def proof61: Eq[Nat] lit61 lit61 = refl
+def lit62: Nat = two
+def proof62: Eq[Nat] lit62 lit62 = refl
+def lit63: Nat = zero
+def proof63: Eq[Nat] lit63 lit63 = refl
+def lit64: Nat = zero
+def proof64: Eq[Nat] lit64 lit64 = refl
+def lit65: Nat = one
+def proof65: Eq[Nat] lit65 lit65 = refl
+def lit66: Nat = two
+def proof66: Eq[Nat] lit66 lit66 = refl
+def lit67: Nat = zero
+def proof67: Eq[Nat] lit67 lit67 = refl
+def lit68: Nat = zero
+def proof68: Eq[Nat] lit68 lit68 = refl
+def lit69: Nat = one
+def proof69: Eq[Nat] lit69 lit69 = refl
+def lit70: Nat = two
+def proof70: Eq[Nat] lit70 lit70 = refl
+def lit71: Nat = zero
+def proof71: Eq[Nat] lit71 lit71 = refl
+def lit72: Nat = zero
+def proof72: Eq[Nat] lit72 lit72 = refl
+def lit73: Nat = one
+def proof73: Eq[Nat] lit73 lit73 = refl
+def lit74: Nat = two
+def proof74: Eq[Nat] lit74 lit74 = refl
+def lit75: Nat = zero
+def proof75: Eq[Nat] lit75 lit75 = refl
+def lit76: Nat = zero
+def proof76: Eq[Nat] lit76 lit76 = refl
+def lit77: Nat = one
+def proof77: Eq[Nat] lit77 lit77 = refl
+def lit78: Nat = two
+def proof78: Eq[Nat] lit78 lit78 = refl
+def lit79: Nat = zero
+def proof79: Eq[Nat] lit79 lit79 = refl
+def lit80: Nat = zero
+def proof80: Eq[Nat] lit80 lit80 = refl
+def lit81: Nat = one
+def proof81: Eq[Nat] lit81 lit81 = refl
+def lit82: Nat = two
+def proof82: Eq[Nat] lit82 lit82 = refl
+def lit83: Nat = zero
+def proof83: Eq[Nat] lit83 lit83 = refl
+def lit84: Nat = zero
+def proof84: Eq[Nat] lit84 lit84 = refl
+def lit85: Nat = one
+def proof85: Eq[Nat] lit85 lit85 = refl
+def lit86: Nat = two
+def proof86: Eq[Nat] lit86 lit86 = refl
+def lit87: Nat = zero
+def proof87: Eq[Nat] lit87 lit87 = refl
+def lit88: Nat = zero
+def proof88: Eq[Nat] lit88 lit88 = refl
+def lit89: Nat = one
+def proof89: Eq[Nat] lit89 lit89 = refl
+def lit90: Nat = two
+def proof90: Eq[Nat] lit90 lit90 = refl
+def lit91: Nat = zero
+def proof91: Eq[Nat] lit91 lit91 = refl
+def lit92: Nat = zero
+def proof92: Eq[Nat] lit92 lit92 = refl
+def lit93: Nat = one
+def proof93: Eq[Nat] lit93 lit93 = refl
+
+def last_lit: Nat = lit93
+
+def ladder_vec: Vec[Nat] two = cons last_lit (cons one nil)
+
+def ladder_total: Nat = nat_add_lit last_lit last_lit
+
+println last_lit
+println ladder_total
+println vtwo

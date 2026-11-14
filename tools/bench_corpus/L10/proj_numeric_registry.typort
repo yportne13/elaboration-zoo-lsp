@@ -1,0 +1,157 @@
+// numeric_registry.typort
+// A realistic trait-instance registry: numeric classes plus tagged registers.
+//
+// Real-world analogue: a generated peripheral / register description library
+// where every register kind carries a `Tag` instance and numeric types form a
+// small class tower.
+//
+// Covered features:
+//   * outParam Add with instances on Nat and a scalar/vector pair
+//   * generic numeric helpers with a dictionary parameter (`sum3`, `twice`)
+//   * trait + blanket-style default renderer taking the Tag dictionary
+//   * generated-looking registry types, one Tag instance each
+//   * dictionary dispatch through dot-calls and through explicit dictionaries
+
+def outParam[A](a: A): A = a
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def one: Nat = succ zero
+def two: Nat = succ one
+def three: Nat = succ two
+def four: Nat = succ three
+
+def nat_add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (nat_add n y)
+    }
+
+// ------------------------------------------------------------- numeric classes
+
+trait Add[T, O: outParam(Type 0)] {
+    def add(that: T): O
+}
+
+impl Add[Nat, Nat] for Nat {
+    def add(that: Nat): Nat = nat_add this that
+}
+
+struct Money {
+    amount: Nat
+}
+
+impl Add[Money, Money] for Money {
+    def add(that: Money): Money = new Money(nat_add this.amount that.amount)
+}
+
+impl Add[Nat, Money] for Money {
+    def add(that: Nat): Money = new Money(nat_add this.amount that)
+}
+
+// Generic numeric helpers: the instance is passed explicitly as a dictionary.
+def sum3[T][a: Add[T, T]](x: T, y: T, z: T): T = a.add (a.add x y) z
+
+def twice[T][a: Add[T, T]](x: T): T = a.add x x
+
+def nat_total: Nat = sum3 one two three
+
+def money_total: Money = sum3 (new Money(one)) (new Money(two)) (new Money(three))
+
+def eight: Nat = twice four
+
+// ------------------------------------------------------------- tag registry
+
+trait Tag {
+    def tag: String
+}
+
+impl Tag for Nat {
+    def tag: String = "nat"
+}
+
+// Default-style renderer: takes the Tag dictionary of the element type.
+def default_render[T][t: Tag[T]](x: T): String =
+    string_concat "render(" (string_concat (t.tag x) ")")
+
+struct Reg0 {
+    width: Nat
+}
+
+impl Tag for Reg0 {
+    def tag: String = "reg0"
+}
+
+struct Reg1 {
+    width: Nat
+}
+
+impl Tag for Reg1 {
+    def tag: String = "reg1"
+}
+
+struct Reg2 {
+    width: Nat
+}
+
+impl Tag for Reg2 {
+    def tag: String = "reg2"
+}
+
+struct Reg3 {
+    width: Nat
+}
+
+impl Tag for Reg3 {
+    def tag: String = "reg3"
+}
+
+def r0 = new Reg0(two)
+
+def r3 = new Reg3(four)
+
+def nat_tag: String = (two).tag
+
+def r0_render: String = default_render r0
+
+def r3_render: String = default_render r3
+
+// A second trait layered over Tag: report = tag + width bucket.
+trait Report {
+    def report: String
+}
+
+def default_report[T][t: Tag[T]](x: T): String =
+    string_concat "report:" (t.tag x)
+
+impl Report for Reg0 {
+    def report: String = default_report this
+}
+
+impl Report for Reg1 {
+    def report: String = default_report this
+}
+
+def r0_report: String = (r0).report
+
+def r3_tag: String = (r3).tag
+
+def money_add_scalar: Money = (new Money(two)).add two
+
+def nat_add_total: Nat = two.add two
+
+def last_check: Nat = nat_add two two
+
+println nat_total
+println money_total
+println eight
+println nat_tag
+println r0_render
+println r3_render
+println r0_report
+println r3_tag
+println money_add_scalar
+println nat_add_total

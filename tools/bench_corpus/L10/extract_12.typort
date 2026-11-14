@@ -1,0 +1,13 @@
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+enum Bool {
+    true
+    false
+}
+enum P1[A, B] {
+    p1[A, B](a: A, b: B) -> P1[A][B]
+}
+def s1: P1[Nat][Bool] = p1[Nat][Bool][Nat][Bool] zero true
+println s1

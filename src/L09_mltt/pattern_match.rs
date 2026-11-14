@@ -135,11 +135,13 @@ impl Compiler {
                 }
                 _ => {
                     break Self::unify_indices(infer, cxt, &sum_name, &head_params, &tyf, init_sub)
-                        // fuel 耗尽的失败是预算问题而非结构冲突：按可达处理
-                        // （保守地要求覆盖）。反方向（判不可达 → 覆盖检查放
-                        // 过该构造子）会让深负载下的非穷尽 match 被静默接受
-                        // （L07 同款方向纠偏，2026-09-18 评审修复 2）。
+                        // 预算耗尽 / 判不出来（P3 三档）的失败不是结构冲突：
+                        // 按**可达**处理（保守地要求覆盖）。反方向（判不可达 →
+                        // 覆盖检查放过该构造子）会让深负载下的非穷尽 match 被
+                        // 静默接受（L07 同款方向纠偏，2026-09-18 评审修复 2；
+                        // P3 后口径从"仅 fuel 耗尽"扩到 Undecided/Fuel 两档）。
                         || infer.fuel_exhausted()
+                        || infer.unify_kind() != super::UnifyKind::Absurd
                 }
             }
         };
@@ -202,7 +204,7 @@ impl Compiler {
         let typ = infer.force(typ);
         let (constrs, ctor_names): (Vec<Constructor>, Vec<String>) = match typ.clone() {
             Val::Sum(_, _, cases) => (
-                (*cases).clone(),
+                cases.iter().map(super::tmspan).collect(),
                 cases.iter().map(|c| c.data.clone()).collect(),
             ),
             _ => (vec![], vec![]),
@@ -346,7 +348,7 @@ impl Compiler {
             // 长度 l := succ n）在 σ 里，推开后的 Sum 才是探测该用的类型
             let field_sum = infer.force(wrap_sub(&nc.sub, nc.field_sum.clone()));
             let ctor_cases: Vec<Span<String>> = match &field_sum {
-                Val::Sum(_, _, cs) => (**cs).clone(),
+                Val::Sum(_, _, cs) => cs.iter().map(super::tmspan).collect(),
                 _ => continue,
             };
             for ctor in ctor_cases {
@@ -417,7 +419,7 @@ impl Compiler {
                     // 模式都按变量模式绑定整个头（保守兼容），这里保持一致。
                     _ => return Some(cxt.prepend(heads.clone())),
                 };
-                if !constrs_name.contains(constr_) {
+                if !constrs_name.iter().any(|c| c == constr_) {
                     // 不是该类型的构造子名 → 变量模式（保守兼容）
                     return Some(cxt.prepend(heads.clone()));
                 }

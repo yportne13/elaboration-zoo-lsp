@@ -1,0 +1,16 @@
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def symm[A, x, y: A](e: Eq[A] x y): Eq[A] y x =
+    match e {
+        case refl(a) => refl[A] a
+    }
+
+println "done"

@@ -1,0 +1,48 @@
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+enum Vec[A](len: Nat) {
+    nil -> Vec[A] zero
+    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl[a: A] -> Eq[A] a a
+}
+
+def two = succ (succ zero)
+
+def t = cons zero (cons two nil)
+
+println t.len
+
+def ok : Eq two two = refl
+
+def length[T, l: Nat](x: Vec[T] l): Nat =
+    match x {
+        case nil => zero
+        case cons(_, xs) => succ (length xs)
+    }
+
+println (length t)
+
+def add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def rep[n: Nat](x: Vec[Nat] n): Nat =
+    match x {
+        case nil => zero
+        case cons(h, xs) => add h (rep xs)
+    }
+
+println (rep (cons two (cons two nil)))

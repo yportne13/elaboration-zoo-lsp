@@ -1,0 +1,9 @@
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+enum Q[A : Type 0](a: A) {
+    q[A](a: A) -> Q[A] a
+}
+def t: Q[Nat] zero = q[Nat] zero
+println t

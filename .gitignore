@@ -63,3 +63,7 @@ lean/.lake/
 
 # Local agent scratch (P1 cleanup, 2026-11-09)
 .commandcode/
+
+# realbench 真实语料候选池：由 tools/bench_corpus/extract_tests.py 从测试源码
+# 再生成（含大量故意写错的程序），最终语料在 tools/bench_corpus/L*/ 下入库。
+/tools/bench_corpus/raw/

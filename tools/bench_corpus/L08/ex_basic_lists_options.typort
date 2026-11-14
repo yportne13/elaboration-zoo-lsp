@@ -1,0 +1,79 @@
+
+enum Bool {
+    true
+    false
+}
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+def listid(x: List[Bool]): List[Bool] = x
+
+def create0: List[Bool] = nil
+
+def create1: List[Bool] = cons true nil
+
+def create2: List[Bool] = cons true (cons false nil)
+
+def two = succ (succ zero)
+
+def not(x: Bool): Bool =
+    match x {
+        case true => false
+        case false => true
+    }
+
+println (not true)
+
+def add(x: Nat, y: Nat) =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def mul(x: Nat, y: Nat) =
+    match x {
+        case zero => zero
+        case succ(n) => add y (mul n y)
+    }
+
+def four = add two two
+
+println four
+
+def is_zero(x: Nat): Bool =
+    match x {
+        case zero => true
+        case succ(n) => false
+    }
+
+println (is_zero zero)
+
+println (is_zero four)
+
+enum Option[T] {
+    Some(t: T)
+    None
+}
+
+def map[R, X](x: Option[R], f: R -> X): Option[X] =
+    match x {
+        case None => None
+        case Some(t) => Some (f t)
+    }
+
+def some_four = Some four
+
+def is_false = map (some_four) (x => is_zero x)
+
+println "Option(false) is"
+println is_false
+
+println (mul two four)

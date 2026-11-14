@@ -1,0 +1,27 @@
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+def V(n: Nat): U =
+    match n {
+        case zero => Bool
+        case succ(m) => Bool
+    }
+
+def useV(n: Nat)(x: V n): V n = x
+
+def intoV(n: Nat): V n =
+    match n {
+        case zero => true
+        case succ(m) => false
+    }
+
+println (useV zero (intoV zero))
+println (useV (succ zero) (intoV (succ zero)))

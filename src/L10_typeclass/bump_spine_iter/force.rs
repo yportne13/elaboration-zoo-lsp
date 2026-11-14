@@ -153,12 +153,24 @@ pub(super) fn vapp_ok(v: V) -> bool {
 // 与 Match 重选燃烧；外部入口（unify_catch / check_pm / check_pm_final /
 // nf / bench_nf）充值。
 const UNIFY_FUEL: u32 = 4096;
+
+/// 基准专用燃料覆盖：环境变量 `TYPORT_UNIFY_FUEL`（缺省 = `UNIFY_FUEL`）。
+/// 与参考版同开关；未设置时行为不变。
+fn unify_fuel_budget() -> u32 {
+    static BUDGET: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *BUDGET.get_or_init(|| {
+        std::env::var("TYPORT_UNIFY_FUEL")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(UNIFY_FUEL)
+    })
+}
 thread_local! {
-    pub(super) static PM_FUEL: std::cell::Cell<u32> = const { std::cell::Cell::new(UNIFY_FUEL) };
+    pub(super) static PM_FUEL: std::cell::Cell<u32> = std::cell::Cell::new(unify_fuel_budget());
 }
 
 pub(super) fn refuel() {
-    PM_FUEL.with(|c| c.set(UNIFY_FUEL));
+    PM_FUEL.with(|c| c.set(unify_fuel_budget()));
 }
 
 #[inline]

@@ -1,0 +1,32 @@
+
+def Eq[A : U](x: A, y: A): U = (P : A -> U) -> P x -> P y
+def rfl[A : U, x: A]: Eq[A] x x = _ => px => px
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def two = succ (succ zero)
+
+struct Bits {
+    name: String
+    size: Nat
+}
+
+def get_name(x: Bits) = x.name
+def sigA = new Bits("A", two)
+println (get_name sigA)
+println sigA
+
+struct Exists[A: U, P: A -> U] {
+    witness: A
+    proof: (P witness)
+}
+
+def exists_two: Exists[Nat][x => Eq x two] =
+    Exists.mk[Nat][x => Eq x two] two rfl
+
+println exists_two
+def w : Nat = exists_two.witness
+println w

@@ -1,0 +1,25 @@
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+struct Point {
+    x: Nat
+    y: Nat
+}
+
+struct Line {
+    a: Point
+    b: Point
+}
+
+def far(l: Line): Nat = l.a.x
+
+def l = new Line((new Point(zero, succ zero)), (new Point(succ zero, zero)))
+println (far l)
+println l.b.x
+
+def part = new Point(zero)
+println (part (succ zero))
+println Point.mk

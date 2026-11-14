@@ -405,34 +405,43 @@ def d : U = file_delete "l07_v2_bb_new.txt"
 }
 
 #[test]
-fn v2_file_read_missing_panics() {
+fn v2_file_read_missing_stays_stuck() {
+    // L07 加固回灌后的口径（2026-11-11）：文件 IO 失败不再 panic，而是让内建
+    // 保持卡住（与 get_global 未命中同一条"无副作用/无进程 abort"纪律）；
+    // 旧 L08 的 panic 契约（"file_read_all_text: failed to read"）随 L07 P1–P11
+    // 加固一起退役——黑盒按新契约钉住卡住值的显示形态。
     let _io = FILE_IO_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let msg = check_panic(r#"
+    let out = check(r#"
 def r : String = file_read_all_text "l07_v2_bb_no_such.txt"
-"#)
-    .expect("file_read_all_text on missing path must panic");
-    assert!(msg.contains("file_read_all_text: failed to read"), "panic msg: {msg}");
-    assert!(msg.contains("l07_v2_bb_no_such.txt"), "panic msg: {msg}");
+println r
+"#);
+    assert_eq!(out, "file_read_all_text l07_v2_bb_no_such.txt
+");
 }
 
 #[test]
-fn v2_file_delete_missing_panics() {
+fn v2_file_delete_missing_is_noop() {
+    // L07 加固回灌后：删除不存在的文件不再 panic（remove_file 失败 -> 卡住值），
+    // 文件仍不存在（副作用未发生）。
     let _io = FILE_IO_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let msg = check_panic(r#"
+    let out = check(r#"
 def d : U = file_delete "l07_v2_bb_no_such_zzz.txt"
-"#)
-    .expect("file_delete on missing path must panic");
-    assert!(msg.contains("file_delete: failed to delete"), "panic msg: {msg}");
+println (file_exists "l07_v2_bb_no_such_zzz.txt")
+"#);
+    assert_eq!(out, "false
+");
 }
 
 #[test]
-fn v2_file_write_bad_path_panics() {
+fn v2_file_write_bad_path_stays_stuck() {
+    // L07 加固回灌后：写失败不再 panic，内建保持卡住并按值层显示。
     let _io = FILE_IO_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let msg = check_panic(r#"
+    let out = check(r#"
 def w : U = file_write_all_text "l07_v2_bb_no_dir/sub.txt" "x"
-"#)
-    .expect("file_write_all_text into missing dir must panic");
-    assert!(msg.contains("file_write_all_text: failed to write"), "panic msg: {msg}");
+println w
+"#);
+    assert_eq!(out, "file_write_all_text l07_v2_bb_no_dir/sub.txt x
+");
 }
 
 #[test]
@@ -916,3 +925,4 @@ fn v2_probe_change_mutable() {
         println!("{}", probe_run(&src));
     }
 }
+

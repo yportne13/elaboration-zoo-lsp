@@ -1,0 +1,73 @@
+// 规模阶梯（L11 宏代码生成）：声明级宏 svc 每个调用生成一个业务函数，
+// 函数体经表达式级宏 addtwo 展开；链式引用形成 service pipeline。
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+macro_rules addtwo {
+    ($x: raw) => { succ (succ $x) }
+}
+
+macro_rules svc {
+    ($name: ident $prev: raw) => {
+        def $name : Nat = addtwo $prev
+    }
+}
+
+def stage_base : Nat = zero
+svc stage_000 stage_base
+svc stage_001 stage_000
+svc stage_002 stage_001
+svc stage_003 stage_002
+svc stage_004 stage_003
+svc stage_005 stage_004
+svc stage_006 stage_005
+svc stage_007 stage_006
+svc stage_008 stage_007
+svc stage_009 stage_008
+svc stage_010 stage_009
+svc stage_011 stage_010
+svc stage_012 stage_011
+svc stage_013 stage_012
+svc stage_014 stage_013
+svc stage_015 stage_014
+svc stage_016 stage_015
+svc stage_017 stage_016
+svc stage_018 stage_017
+svc stage_019 stage_018
+svc stage_020 stage_019
+svc stage_021 stage_020
+svc stage_022 stage_021
+svc stage_023 stage_022
+svc stage_024 stage_023
+svc stage_025 stage_024
+svc stage_026 stage_025
+svc stage_027 stage_026
+svc stage_028 stage_027
+svc stage_029 stage_028
+svc stage_030 stage_029
+svc stage_031 stage_030
+svc stage_032 stage_031
+svc stage_033 stage_032
+svc stage_034 stage_033
+svc stage_035 stage_034
+svc stage_036 stage_035
+svc stage_037 stage_036
+svc stage_038 stage_037
+svc stage_039 stage_038
+svc stage_040 stage_039
+svc stage_041 stage_040
+svc stage_042 stage_041
+svc stage_043 stage_042
+svc stage_044 stage_043
+svc stage_045 stage_044
+
+println stage_045
+println (add stage_045 stage_base)

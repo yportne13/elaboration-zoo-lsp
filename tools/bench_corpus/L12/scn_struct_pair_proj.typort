@@ -1,0 +1,10 @@
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+struct Pair[A, B] {
+    fst: A
+    snd: B
+}
+def p = new Pair(succ zero, zero)
+println p.fst

@@ -1,0 +1,28 @@
+
+def outParam[A](a: A): A = a
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+trait Add[T, O: outParam(Type 0)] {
+    def +(that: T): O
+}
+
+def nat_add_helper(x: Nat, y: Nat): Nat =
+    match y {
+        case zero => x
+        case succ(n) => succ (nat_add_helper x n)
+    }
+
+impl Add[Nat, Nat] for Nat {
+    def +(that: Nat): Nat =
+        nat_add_helper this that
+}
+
+enum Fin(len: Nat) {
+    fzero[n: Nat] -> Fin (succ n)
+    fsucc[n: Nat](i: Fin n) -> Fin (succ n)
+}
+

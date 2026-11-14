@@ -1,0 +1,19 @@
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+def f(x: List[Nat]): Nat =
+    match x {
+        case nil => zero
+        case cons(h, nil) => h
+        case cons(h, cons(h2, t)) => h2
+    }
+
+println (f (cons zero (cons (succ zero) nil)))

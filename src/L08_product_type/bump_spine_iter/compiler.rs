@@ -12,7 +12,7 @@ use super::{cover_at, empty_span, Error, fmt_path, PatternDetail, PosCover};
 use super::env::env_ext;
 use super::force::val_mentions_lvl;
 use super::machine::{bind_slots, Cxt, Machine, subst_cxt};
-use super::prim::UNIFY_FUEL;
+use super::prim::unify_fuel_budget;
 use super::subst::{SpecSolve, SubstV, wrap_sub};
 use super::syntax::{SumDataV, Tm, V, v_lvl, v_lvl_of, v_pi_of, v_tag, v_xcell, v_xcell_of, XCell};
 
@@ -130,10 +130,10 @@ impl<'a> Compiler<'a> {
         // 写入精化替换（见 walk_con 末尾）
         let head_val = mach.eval(bump, &decls, cxt.env, scrut);
         // 编译期间的所有合一共享一个 fuel 池（深层递归防护）
-        mach.fuel.set(UNIFY_FUEL);
+        mach.fuel.set(unify_fuel_budget());
         let head_sum = mach.force_v(bump, &decls, scrut_ty);
         if !(v_tag(head_sum) == 7 && matches!(v_xcell_of(head_sum), XCell::Sum { .. })) {
-            return Err(Error("match 的对象必须是和类型（enum）".to_owned()));
+            return Err(Error::new("match 的对象必须是和类型（enum）".to_owned()));
         }
         let ctor_names = sum_case_names(head_sum);
         // 可解集基线：当前上下文的全部 bind 槽（def 参数 / λ 参数 / 外层
@@ -276,7 +276,7 @@ impl<'a> Compiler<'a> {
         if self.errors.is_empty() {
             Ok(())
         } else {
-            Err(Error(self.errors.join("\n")))
+            Err(Error::new(self.errors.join("\n")))
         }
     }
 
@@ -314,7 +314,7 @@ impl<'a> Compiler<'a> {
         };
         // 每个探测独立充值（参考版 probe_accessible 同点）：多构造子枚举
         // 的逐 ctor 探测不互相挤占共享池，避免后探的 ctor 假 absurd。
-        mach.fuel.set(UNIFY_FUEL);
+        mach.fuel.set(unify_fuel_budget());
         let snap = mach.metas.clone();
         let decl = cxt.decl.borrow();
         let mut solvable = base_solvable.to_vec();
@@ -379,10 +379,10 @@ impl<'a> Compiler<'a> {
     ) -> Result<(), Error> {
         let (hp, rp) = match (v_xcell_of(head_sum), v_xcell_of(ret_sum)) {
             (XCell::Sum { params: p1, .. }, XCell::Sum { params: p2, .. }) => (p1, p2),
-            _ => return Err(Error(format!("构造子 {} 的返回类型不是和类型", ctor))),
+            _ => return Err(Error::new(format!("构造子 {} 的返回类型不是和类型", ctor))),
         };
         if hp.len() != rp.len() {
-            return Err(Error(format!(
+            return Err(Error::new(format!(
                 "构造子 {} 与被匹配类型的参数数不一致",
                 ctor
             )));
@@ -397,7 +397,7 @@ impl<'a> Compiler<'a> {
                 } else {
                     ""
                 };
-                return Err(Error(format!(
+                return Err(Error::new(format!(
                     "构造子 {} 与被匹配类型不相容（分支不可达）{fuel_note}",
                     ctor
                 )));
@@ -455,7 +455,7 @@ impl<'a> Compiler<'a> {
         if !(v_tag(head_sum) == 7 && matches!(v_xcell_of(head_sum), XCell::Sum { .. })) {
             // 非和类型头部：只能当变量绑定
             if !subs.is_empty() {
-                return Err(Error(format!(
+                return Err(Error::new(format!(
                     "`{}` 不是构造子，不能带子模式解构",
                     name.data
                 )));
@@ -478,7 +478,7 @@ impl<'a> Compiler<'a> {
         if !is_ctor {
             // 不是该类型的构造子 → 变量绑定
             if !subs.is_empty() {
-                return Err(Error(format!(
+                return Err(Error::new(format!(
                     "`{}` 不是 {} 的构造子，不能带子模式解构",
                     name.data, sum_name
                 )));
@@ -493,7 +493,7 @@ impl<'a> Compiler<'a> {
             .decl
             .borrow()
             .get(&format!("{}.{}", sum_name, name.data))
-            .ok_or_else(|| Error(format!("找不到构造子 {}.{}", sum_name, name.data)))?;
+            .ok_or_else(|| Error::new(format!("找不到构造子 {}.{}", sum_name, name.data)))?;
         // head 槽：Con 模式自身占一槽。运行时 eval_aux 的 Con 路径把被匹配
         // 值 prepend 进 env，三方（编译期绑定 / 运行时 prepend / bind_count）
         // 同序同数。
@@ -543,7 +543,7 @@ impl<'a> Compiler<'a> {
                     Icit::Expl => match sub_queue.first() {
                         Some(p2) if p2.get_icit() == Icit::Expl => Some(sub_queue.remove(0)),
                         _ => {
-                            return Err(Error(format!(
+                            return Err(Error::new(format!(
                                 "构造子 {} 缺少字段 {} 的模式",
                                 name.data, bname
                             )))
@@ -600,7 +600,7 @@ impl<'a> Compiler<'a> {
                             }
                         } else {
                             if !csubs.is_empty() {
-                                return Err(Error(format!(
+                                return Err(Error::new(format!(
                                     "`{}` 不是构造子，不能带子模式解构",
                                     cn.data
                                 )));
@@ -628,7 +628,7 @@ impl<'a> Compiler<'a> {
             }
         };
         if !sub_queue.is_empty() {
-            return Err(Error(format!(
+            return Err(Error::new(format!(
                 "构造子 {} 的模式多了 {} 个子模式",
                 name.data,
                 sub_queue.len()
@@ -639,7 +639,7 @@ impl<'a> Compiler<'a> {
         // （臂边界由 compile 的快照回滚）。
         let ret_sum = mach.force_v(bump, &decls, wrap_sub(bump, &self.sub, ret));
         if !(v_tag(ret_sum) == 7 && matches!(v_xcell_of(ret_sum), XCell::Sum { .. })) {
-            return Err(Error(format!(
+            return Err(Error::new(format!(
                 "构造子 {} 的返回类型不是和类型",
                 name.data
             )));

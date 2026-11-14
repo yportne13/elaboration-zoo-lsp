@@ -1,0 +1,150 @@
+// universe_stack.typort
+// A universe-stratification library for the L09 MLTT slice.
+//
+// Real-world analogue: a tiny type-code registry where "types of types" are
+// first-class values, alongside a dependent record used as a witness bundle.
+//
+// Covered features:
+//   * Type 1 / Type 2 levels and Pi-space codes (Type 1 -> Type 0)
+//   * higher-universe enums (constructor fields living at Type 2)
+//   * nested Type level: an enum whose parameter is annotated at Type 2
+//   * stratified identity/const (universe-polymorphic by duplication)
+//   * dependent struct field: a later field's type mentions an earlier one
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+def one: Nat = succ zero
+def two: Nat = succ one
+
+def nat_add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (nat_add n y)
+    }
+
+// ---------------------------------------------------------------- Universe tower
+
+// Type 1 is the universe of Type 0 codes.
+def test0: Type 1 = Type 0
+
+// Type 2 is the universe of Type 1 codes; a Pi space over Type 1 lives here.
+def test1: Type 2 = Type 1 -> Type 0
+
+// A function value that is itself a code: Type 1 -> Type 0.
+def code_fun: Type 1 -> Type 0 = t => Nat
+
+def code_fun_ty: Type 2 = Type 1 -> Type 0
+
+// Stratified identity: one per universe level (universe polymorphism by
+// duplication, the L09 way).
+def id_type0[A: Type 0](x: A): A = x
+
+def id_type1[A: Type 1](x: A): A = x
+
+def const_type0[A: Type 0, B: Type 0](x: A, y: B): A = x
+
+def apply_code(f: Type 1 -> Type 0, a: Type 1): Type 0 = f a
+
+def nat_code: Type 0 = Nat
+
+def bool_code: Type 0 = Bool
+
+def applied: Type 0 = apply_code code_fun (Type 0)
+
+// ------------------------------------------------------------ Higher-universe enums
+
+// HighLvl's second constructor stores a Type 2 code, so the enum itself lives
+// at Type 2 even though A is a Type 0 parameter.
+enum HighLvl[A] {
+    case1(a: A)
+    case2(a: test1)
+}
+
+def high_nat: HighLvl[Nat] = case1 zero
+
+def high_bool: HighLvl[Bool] = case1 true
+
+def high_code: HighLvl[Nat] = case2 code_fun
+
+def high_ty: Type 2 = HighLvl[Nat]
+
+// Nested Type level: the enum parameter itself is annotated at Type 2.
+enum HighLvl2[A: Type 2] {
+    case2_1(x: A)
+    case2_2(x: Nat)
+}
+
+def packed_high: HighLvl2[HighLvl[Nat]] = case2_1 high_nat
+
+def packed_nat: HighLvl2[HighLvl[Nat]] = case2_2 two
+
+def packed_ty: Type 2 = HighLvl2[HighLvl[Nat]]
+
+// A three-level enum: parameter at Type 2, field at Type 2.
+enum HighLvl3[A: Type 2] {
+    case3_1
+    case3_2(x: Type 1)
+}
+
+def high3_pack: HighLvl3[HighLvl2[HighLvl[Nat]]] = case3_1
+
+def high3_code: HighLvl3[HighLvl2[HighLvl[Nat]]] = case3_2 test0
+
+def high3_ty: Type 2 = HighLvl3[HighLvl2[HighLvl[Nat]]]
+
+// ---------------------------------------------------------------- Struct at Type 1
+
+struct Wrapped[A: Type 1] {
+    inner: A
+}
+
+def wrapped_nat: Wrapped[Type 0] = new Wrapped(Nat)
+
+def wrapped_univ: Wrapped[Type 0] = new Wrapped(Bool)
+
+def wrapped_inner(w: Wrapped[Type 0]): Type 0 = w.inner
+
+def nat_again: Type 0 = wrapped_inner wrapped_nat
+
+// ------------------------------------------------ Dependent record (witness bundle)
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+struct Witness {
+    value: Nat
+    proof: Eq[Nat] value two
+}
+
+def two_two: Eq[Nat] two two = refl two
+
+def witness_two: Witness = Witness.mk two two_two
+
+def witness_proof(w: Witness): Eq[Nat] w.value two = w.proof
+
+// Client checks
+def nat_is_nat: Bool =
+    match witness_proof witness_two {
+        case refl(_) => true
+    }
+
+def sum_ok: Nat = nat_add two two
+
+println test0
+println test1
+println high_ty
+println packed_ty
+println high3_ty
+println nat_again
+println sum_ok
+println nat_is_nat
+println (high3_code)

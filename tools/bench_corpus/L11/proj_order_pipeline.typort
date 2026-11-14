@@ -1,0 +1,122 @@
+// 订单流水线：宏生成状态枚举 / Describe 实现 / 构造子工具函数，
+// 再用表达式级宏把业务步骤串起来，并配一个可变全局计数器。
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def one = succ zero
+
+def two = succ one
+
+trait Describe {
+    def describe: String
+}
+
+// 声明级宏：一次调用生成一个状态枚举。
+macro_rules make_status {
+    ($name: ident $a: ident $b: ident) => {
+        enum $name {
+            $a
+            $b
+        }
+    }
+}
+
+// derive 风格宏：为枚举生成 Describe 实现（Show 派生）。
+macro_rules derive_describe {
+    ($t: ident $c1: ident $c2: ident) => {
+        impl Describe for $t {
+            def describe: String =
+                match this {
+                    case $c1 => stringify $c1
+                    case $c2 => stringify $c2
+                }
+        }
+    }
+}
+
+// 构造子工具函数：把裸构造子包成有名字的 def。
+macro_rules make_ctor {
+    ($fn: ident $t: ident $c: ident) => {
+        def $fn : $t = $c
+    }
+}
+
+make_status OrderStatus pending shipped
+
+derive_describe OrderStatus pending shipped
+
+make_ctor order_initial OrderStatus pending
+
+make_ctor order_done OrderStatus shipped
+
+make_status PaymentState unpaid paid
+
+derive_describe PaymentState unpaid paid
+
+make_ctor payment_initial PaymentState unpaid
+
+def order_one = order_initial
+
+def payment_one = payment_initial
+
+println order_one.describe
+
+println payment_one.describe
+
+println order_done.describe
+
+// 表达式级宏：每个业务步骤把订单计数推进一步。
+macro_rules step {
+    ($x: raw) => { succ $x }
+}
+
+macro_rules step2 {
+    ($x: raw) => { step (step $x) }
+}
+
+def register_order =
+    let counter = create_global "Nat" zero;
+    get_global "Nat"
+
+def bump_order =
+    let changed = change_mutable("Nat", n => succ n);
+    get_global "Nat"
+
+def count_after_first = step register_order
+
+def count_after_second = step2 count_after_first
+
+println count_after_first
+
+println count_after_second
+
+def bump_again =
+    let changed2 = change_mutable("Nat", n => succ n);
+    get_global "Nat"
+
+println bump_again
+
+// 宏生成的批处理步骤：嵌套宏调用（step2 内层展开 step）。
+macro_rules batch_step {
+    ($name: ident $x: raw) => {
+        def $name : Nat = step2 $x
+    }
+}
+
+batch_step process_invoice count_after_second
+
+batch_step process_shipment process_invoice
+
+batch_step process_audit process_shipment
+
+println process_audit
+
+println (add process_audit two)

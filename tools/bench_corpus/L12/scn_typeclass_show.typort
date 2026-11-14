@@ -1,0 +1,46 @@
+
+def outParam[A](a: A): A = a
+
+enum Bool {
+    true
+    false
+}
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+trait Show {
+    def show: String
+}
+
+impl Show for Bool {
+    def show: String =
+        match this {
+            case true => "bool:true"
+            case false => "bool:false"
+        }
+}
+
+impl Show for Nat {
+    def show: String =
+        match this {
+            case zero => "nat:0"
+            case succ(n) => "nat:>0"
+        }
+}
+
+// 显式 trait 参数 + Rigid 类型
+def print_it[T][s: Show[T]](x: T): String = s.show x
+println (print_it true)
+println (print_it (succ (succ zero)))
+
+// 零参数 trait 方法点号调用
+println (true.show)
+
+// 不同 span 来源的字段访问：两次引用
+def a: String = true.show
+def b: String = true.show
+println a
+println b

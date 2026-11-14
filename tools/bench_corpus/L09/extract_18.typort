@@ -1,0 +1,33 @@
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+def two = succ (succ zero)
+
+def add(x: Nat, y: Nat) =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def four = add two two
+
+def even(n: Nat): Bool =
+    match n {
+        case zero => true
+        case succ(m) => match m {
+            case zero => false
+            case succ(k) => even k
+        }
+    }
+
+println four
+println (even four)
+println (even (succ zero))

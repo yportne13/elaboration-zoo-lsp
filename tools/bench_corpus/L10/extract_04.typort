@@ -1,0 +1,38 @@
+
+enum Bool {
+    true
+    false
+}
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+trait ToString {
+    def to_string: String
+}
+
+impl ToString for Bool {
+    def to_string: String =
+        match this {
+            case true => "true"
+            case false => "false"
+        }
+}
+
+def t[T][s: ToString[T]](x: T): String =
+    s.to_string x
+
+println (t true)
+println (t false)
+
+trait Say {
+    def say(x: Nat): String
+}
+
+impl[T] Say for T {
+    def say(x: Nat): String = "hello"
+}
+
+println (zero.say zero)

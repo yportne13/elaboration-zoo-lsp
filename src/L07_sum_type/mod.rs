@@ -180,6 +180,61 @@ impl std::fmt::Debug for Closure {
     }
 }
 
+/// Val 里的名字 span 用 `Rc<Span<String>>` 句柄（继承 L09 2026-11-13 实验 B）：
+/// Val 克隆热路径（Nat 大值递归 / match 抽取每步若干次）不再为构造子/绑定器名
+/// 做 String 堆分配，只加一次引用计数。Tm 侧仍用 `Span<String>`（项层克隆不在
+/// 热路径）；twin `bump_spine_iter` 的 CTm 保持原表示，Debug 委托内层保证
+/// parity 误差正文逐字节不变。
+#[derive(Clone)]
+pub struct VSpan(pub Rc<Span<String>>);
+
+impl std::ops::Deref for VSpan {
+    type Target = Span<String>;
+    fn deref(&self) -> &Span<String> {
+        &self.0
+    }
+}
+
+impl VSpan {
+    pub fn new(s: Span<String>) -> Self {
+        VSpan(Rc::new(s))
+    }
+}
+
+/// Debug 与内层 `Span<String>` 同形：错误正文/Debug 打印（含 parity 归一化口径）
+/// 依赖 `"name" @ off` 形态，不能出现包装层名。
+impl std::fmt::Debug for VSpan {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&self.0, f)
+    }
+}
+
+pub fn vspan(s: Span<String>) -> VSpan {
+    VSpan::new(s)
+}
+
+/// VSpan → Tm 侧 `Span<String>`（名字/显示/错误用；不在克隆热路径）。
+pub fn tmspan(s: &VSpan) -> Span<String> {
+    (*s.0).clone()
+}
+
+/// 跨表示名比较（Val 的 VSpan ↔ Tm/Raw 的 Span<String>）：只看名字，偏移无关。
+impl PartialEq for VSpan {
+    fn eq(&self, other: &VSpan) -> bool {
+        self.0.data == other.0.data
+    }
+}
+impl PartialEq<Span<String>> for VSpan {
+    fn eq(&self, other: &Span<String>) -> bool {
+        self.0.data == other.data
+    }
+}
+impl PartialEq<VSpan> for Span<String> {
+    fn eq(&self, other: &VSpan) -> bool {
+        self.data == other.0.data
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Val {
     Flex(MetaVar, Spine),
@@ -187,26 +242,26 @@ pub enum Val {
     /// 未展开的全局引用（递归定义的占位 / simplify 后的 decl 表）。
     Decl(SmolStr, Spine),
     /// 卡住的投影（被投影者还不是构造子值 / Sum 类型）。
-    Obj(Rc<Val>, Span<String>, Spine),
-    Lam(Span<String>, Icit, Closure),
-    Pi(Span<String>, Icit, Rc<VTy>, Closure),
+    Obj(Rc<Val>, VSpan, Spine),
+    Lam(VSpan, Icit, Closure),
+    Pi(VSpan, Icit, Rc<VTy>, Closure),
     U,
     LiteralType,
-    LiteralIntro(Span<String>),
+    LiteralIntro(VSpan),
     /// 卡住的内建应用：名字 + 已收实参 spine（头 = 最后应用的实参）。
     /// 全部实参字面量时在 `force` 归约（目前仅 string_concat），否则保持
     /// 中性参与 unify / quote / rename（名字 + 实参不可丢——丢实参的单元
     /// `Prim` 会把 `x ++ y ≡ x ++ z` 判成相等）。
     Prim(SmolStr, Spine),
     Sum(
-        Span<String>,
-        Rc<Vec<(Span<String>, Rc<Val>, Rc<VTy>, Icit)>>, // (参数名, 实参值, 实参的类型, icit)
-        Rc<Vec<Span<String>>>,
+        VSpan,
+        Rc<Vec<(VSpan, Rc<Val>, Rc<VTy>, Icit)>>, // (参数名, 实参值, 实参的类型, icit)
+        Rc<Vec<VSpan>>,
     ),
     SumCase {
         typ: Rc<Val>,
-        case_name: Span<String>,
-        datas: Rc<Vec<(Span<String>, Rc<Val>, Icit)>>,
+        case_name: VSpan,
+        datas: Rc<Vec<(VSpan, Rc<Val>, Icit)>>,
     },
     /// 卡住的 match：scrutinee 不是构造子值，等待 scrutinee 归约后再选分支。
     /// `pending` = 卡住期间累积的应用实参（值层保存，分支选中后在值层应用
@@ -626,6 +681,19 @@ pub struct Infer {
 
 const UNIFY_FUEL: u32 = 4096;
 
+/// 基准专用燃料覆盖：环境变量 `TYPORT_UNIFY_FUEL`（缺省 = [`UNIFY_FUEL`]）。
+/// smalltt 迁移基准（NatConv / TreeConv 等 1e6 级 β 步的转换检查）远超 4096；
+/// 显式设置该变量可放大单次合一池。未设置时行为与原来逐位一致。
+fn unify_fuel_budget() -> u32 {
+    static BUDGET: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *BUDGET.get_or_init(|| {
+        std::env::var("TYPORT_UNIFY_FUEL")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(UNIFY_FUEL)
+    })
+}
+
 /// 卡住 match 相等性比较的**总次数**上限（每个顶层合一入口一份）。
 ///
 /// 口径（2026-11-08 review R3/R8 修正）：结构快路径**先试**，只有快路径失效、
@@ -655,7 +723,7 @@ impl Infer {
             meta_undo: vec![],
             mutable_map: RefCell::new(FxHashMap::default()),
             simpl_cache: RefCell::new(FxHashMap::default()),
-            unify_fuel: std::cell::Cell::new(UNIFY_FUEL),
+            unify_fuel: std::cell::Cell::new(unify_fuel_budget()),
             match_cmp_budget: std::cell::Cell::new(MATCH_CMP_BUDGET),
             unify_kind: std::cell::Cell::new(UnifyKind::Absurd),
             meta_expanding: RefCell::new(Vec::new()),
@@ -716,7 +784,7 @@ impl Infer {
 
     /// 给 unify/force 的共享 fuel 池充值（外层合一入口调用）。
     pub(crate) fn meta_refuel(&self) {
-        self.unify_fuel.set(UNIFY_FUEL);
+        self.unify_fuel.set(unify_fuel_budget());
     }
 
     /// fuel 是否已耗尽（本编译单元的共享池）。错误诊断用：特化方程失败
@@ -1060,9 +1128,9 @@ impl Infer {
                     return None;
                 }
                 match (&args[0], &args[1]) {
-                    (Val::LiteralIntro(a), Val::LiteralIntro(b)) => Some(Val::LiteralIntro(
-                        a.clone().map(|x| format!("{x}{}", b.data)),
-                    )),
+                    (Val::LiteralIntro(a), Val::LiteralIntro(b)) => Some(Val::LiteralIntro(vspan(
+                        tmspan(&a).map(|x| format!("{x}{}", b.data)),
+                    ))),
                     _ => None,
                 }
             }
@@ -1073,7 +1141,7 @@ impl Infer {
                 match (lit(&args[0]), lit(&args[1])) {
                     (Some(a), Some(b)) => {
                         let s = if a == b { "true" } else { "false" };
-                        Some(Val::LiteralIntro(empty_span(s.to_string())))
+                        Some(Val::LiteralIntro(vspan(empty_span(s.to_string()))))
                     }
                     _ => None,
                 }
@@ -1083,7 +1151,7 @@ impl Infer {
                     return None;
                 }
                 match lit(&args[0]) {
-                    Some(s) => Some(Val::LiteralIntro(empty_span(s.replace('\n', "\n  ")))),
+                    Some(s) => Some(Val::LiteralIntro(vspan(empty_span(s.replace('\n', "\n  "))))),
                     None => None,
                 }
             }
@@ -1108,7 +1176,7 @@ impl Infer {
                     } else {
                         format!("{}\n{}", existing, line)
                     };
-                    map.insert("CheckIssues".into(), Val::LiteralIntro(empty_span(next)));
+                    map.insert("CheckIssues".into(), Val::LiteralIntro(vspan(empty_span(next))));
                 }
                 Some(Val::U)
             }
@@ -1210,7 +1278,7 @@ impl Infer {
                 match lit(&args[0]) {
                     Some(path) => std::fs::read_to_string(&path)
                         .ok()
-                        .map(|content| Val::LiteralIntro(empty_span(content))),
+                        .map(|content| Val::LiteralIntro(vspan(empty_span(content)))),
                     None => None,
                 }
             }
@@ -1250,11 +1318,11 @@ impl Infer {
                 match lit(&args[0]) {
                     Some(path) => {
                         let exists = std::path::Path::new(&path).exists();
-                        Some(Val::LiteralIntro(empty_span(if exists {
+                        Some(Val::LiteralIntro(vspan(empty_span(if exists {
                             "true".to_string()
                         } else {
                             "false".to_string()
-                        })))
+                        }))))
                     }
                     None => None,
                 }
@@ -1359,7 +1427,7 @@ impl Infer {
                 let v = self.eval(decl, env, tm);
                 match project(&v, name) {
                     Some(p) => p,
-                    None => Val::Obj(Rc::new(v), name.clone(), List::new()),
+                    None => Val::Obj(Rc::new(v), vspan(name.clone()), List::new()),
                 }
             }
             Tm::App(t, u, i) => {
@@ -1368,10 +1436,10 @@ impl Infer {
             }
             Tm::Lam(x, i, t) => {
                 // body 已是 Rc：closure 直接共享，不再深拷剩余 λ 链（O(n²)）。
-                Val::Lam(x.clone(), *i, Closure(env.clone(), t.clone()))
+                Val::Lam(vspan(x.clone()), *i, Closure(env.clone(), t.clone()))
             }
             Tm::Pi(x, i, a, b) => Val::Pi(
-                x.clone(),
+                vspan(x.clone()),
                 *i,
                 Rc::new(self.eval(decl, env, a)),
                 Closure(env.clone(), b.clone()),
@@ -1383,7 +1451,7 @@ impl Infer {
             Tm::U => Val::U,
             Tm::Meta(m) => self.v_meta(*m),
             Tm::AppPruning(t, pr) => self.v_app_pruning(decl, env, self.eval(decl, env, t), pr),
-            Tm::LiteralIntro(x) => Val::LiteralIntro(x.clone()),
+            Tm::LiteralIntro(x) => Val::LiteralIntro(vspan(x.clone())),
             Tm::LiteralType => Val::LiteralType,
             Tm::Prim(name) => {
                 // 零元卡住头：实参一律经 App 到达（builtin 值的 λ 链体是
@@ -1400,14 +1468,18 @@ impl Infer {
                     .iter()
                     .map(|(n, v, t, i)| {
                         (
-                            n.clone(),
+                            vspan(n.clone()),
                             Rc::new(self.eval(decl, env, v)),
                             Rc::new(self.eval(decl, env, t)),
                             *i,
                         )
                     })
                     .collect();
-                Val::Sum(name.clone(), Rc::new(new_params), Rc::new(cases.clone()))
+                Val::Sum(
+                    vspan(name.clone()),
+                    Rc::new(new_params),
+                    Rc::new(cases.iter().map(|c| vspan(c.clone())).collect()),
+                )
             }
             Tm::SumCase {
                 typ,
@@ -1417,11 +1489,11 @@ impl Infer {
                 let typ = self.eval(decl, env, typ);
                 let datas = datas
                     .iter()
-                    .map(|(n, v, i)| (n.clone(), Rc::new(self.eval(decl, env, v)), *i))
+                    .map(|(n, v, i)| (vspan(n.clone()), Rc::new(self.eval(decl, env, v)), *i))
                     .collect();
                 Val::SumCase {
                     typ: Rc::new(typ),
-                    case_name: case_name.clone(),
+                    case_name: vspan(case_name.clone()),
                     datas: Rc::new(datas),
                 }
             }
@@ -1487,16 +1559,16 @@ impl Infer {
     fn quote_deep(&self, decl: &Decls, l: Lvl, root: Val) -> Tm {
         enum FrameKind {
             Sum {
-                name: Span<String>,
-                cases: Vec<Span<String>>,
-                metas: Vec<(Span<String>, Icit)>,
+                name: VSpan,
+                cases: Vec<VSpan>,
+                metas: Vec<(VSpan, Icit)>,
             },
             SumCase {
-                case_name: Span<String>,
-                datas_metas: Vec<(Span<String>, Icit)>,
+                case_name: VSpan,
+                datas_metas: Vec<(VSpan, Icit)>,
             },
             Obj {
-                name: Span<String>,
+                name: VSpan,
             },
         }
         struct Frame {
@@ -1578,10 +1650,10 @@ impl Infer {
                         .map(|(n, i)| {
                             let v = it.next().unwrap();
                             let t = it.next().unwrap();
-                            (n, v, t, i)
+                            (tmspan(&n), v, t, i)
                         })
                         .collect();
-                    Tm::Sum(name, params, cases)
+                    Tm::Sum(tmspan(&name), params, cases.iter().map(tmspan).collect())
                 }
                 FrameKind::SumCase {
                     case_name,
@@ -1591,17 +1663,17 @@ impl Infer {
                     let typ = it.next().unwrap();
                     let datas = datas_metas
                         .into_iter()
-                        .map(|(n, i)| (n, it.next().unwrap(), i))
+                        .map(|(n, i)| (tmspan(&n), it.next().unwrap(), i))
                         .collect();
                     Tm::SumCase {
                         typ: Box::new(typ),
-                        case_name,
+                        case_name: tmspan(&case_name),
                         datas,
                     }
                 }
                 FrameKind::Obj { name } => {
                     let mut it = frame.done.into_iter();
-                    let head = Tm::Obj(Box::new(it.next().unwrap()), name);
+                    let head = Tm::Obj(Box::new(it.next().unwrap()), tmspan(&name));
                     let args: Vec<Tm> = it.collect();
                     let mut acc = head;
                     // spine 头 = 最后应用 ⇒ 逆序折叠（与 quote_sp 应用序一致）
@@ -1687,37 +1759,37 @@ impl Infer {
                 self.quote_sp(decl, l, Tm::Decl(name), sp)
             }
             Val::Obj(v, name, sp) => {
-                self.quote_sp(decl, l, Tm::Obj(Box::new(self.quote(decl, l, (*v).clone())), name), sp)
+                self.quote_sp(decl, l, Tm::Obj(Box::new(self.quote(decl, l, (*v).clone())), tmspan(&name)), sp)
             }
             Val::Lam(x, i, closure) => Tm::Lam(
-                x,
+                tmspan(&x),
                 i,
                 Rc::new(self.quote(decl, l + 1, self.closure_apply(decl, &closure, Val::vvar(l)))),
             ),
             Val::Pi(x, i, a, closure) => Tm::Pi(
-                x,
+                tmspan(&x),
                 i,
                 Rc::new(self.quote(decl, l, (*a).clone())),
                 Rc::new(self.quote(decl, l + 1, self.closure_apply(decl, &closure, Val::vvar(l)))),
             ),
             Val::U => Tm::U,
-            Val::LiteralIntro(x) => Tm::LiteralIntro(x),
+            Val::LiteralIntro(x) => Tm::LiteralIntro(tmspan(&x)),
             Val::LiteralType => Tm::LiteralType,
             Val::Prim(name, sp) => self.quote_sp(decl, l, Tm::Prim(name), sp),
             Val::Sum(name, params, cases) => Tm::Sum(
-                name,
+                tmspan(&name),
                 params
                     .iter()
                     .map(|(n, v, t, i)| {
                         (
-                            n.clone(),
+                            tmspan(&n),
                             self.quote(decl, l, rc_take(v.clone())),
                             self.quote(decl, l, rc_take(t.clone())),
                             *i,
                         )
                     })
                     .collect(),
-                (*cases).clone(),
+                cases.iter().map(tmspan).collect(),
             ),
             Val::SumCase {
                 typ,
@@ -1725,11 +1797,11 @@ impl Infer {
                 datas,
             } => Tm::SumCase {
                 typ: Box::new(self.quote(decl, l, rc_take(typ))),
-                case_name,
+                case_name: tmspan(&case_name),
                 datas: datas
                     .iter()
                     .map(|(n, v, i)| {
-                        (n.clone(), self.quote(decl, l, rc_take(v.clone())), *i)
+                        (tmspan(&n), self.quote(decl, l, rc_take(v.clone())), *i)
                     })
                     .collect(),
             },
@@ -1766,7 +1838,7 @@ impl Infer {
 
     pub fn nf(&self, decl: &Decls, env: &Env, t: Tm) -> Tm {
         // quote → eval 会 force；一次 nf 充值 fuel 防循环解
-        self.unify_fuel.set(UNIFY_FUEL);
+        self.unify_fuel.set(unify_fuel_budget());
         let l = Lvl(env.len() as u32);
         self.quote(decl, l, self.eval(decl, env, &t))
     }
@@ -1776,7 +1848,7 @@ impl Infer {
     }
 
     fn unify_catch(&mut self, decl: &Decls, cxt: &Cxt, t: Val, t_prime: Val) -> Result<(), Error> {
-        self.unify_fuel.set(UNIFY_FUEL);
+        self.unify_fuel.set(unify_fuel_budget());
         self.reset_match_cmp_budget();
         self.reset_unify_kind();
         self.unify(decl, cxt.lvl, cxt, t.clone(), t_prime.clone(), None)

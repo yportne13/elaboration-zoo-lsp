@@ -1,0 +1,29 @@
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+def two = succ (succ zero)
+
+def not(x: Bool): Bool =
+    match x {
+        case true => false
+        case false => true
+    }
+
+struct Point {
+    x: Nat
+    y: Nat
+}
+
+def p = new Point(two, zero)
+
+println (not true)
+println p
+println p.x

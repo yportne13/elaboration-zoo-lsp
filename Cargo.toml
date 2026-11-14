@@ -85,6 +85,21 @@ name = "l13bench"
 path = "src/bin/l13bench.rs"
 test = false
 
+# 真实语料基准（L07–L12）：`#[path]` 直编六层源码，跑 tools/bench_corpus/
+# 下经语义验证的真实程序，参考版 vs 孪生版。语料驱动见 tools/run_realistic_bench.ps1。
+[[bin]]
+name = "realbench"
+path = "src/bin/realbench.rs"
+test = false
+
+# smalltt 基准迁移驱动：把 smalltt bench/ 的 conv_eval / asymptotics / stlc
+# 用例翻译成 typort 源码，在 L07–L10 上测参考版/孪生版耗时。见
+# src/bin/smallttbench.rs 与 src/bin/smalltt_cases/。
+[[bin]]
+name = "smallttbench"
+path = "src/bin/smallttbench.rs"
+test = false
+
 # LSP-kick 采样归因口（只依赖库，故 `--features sampler` 下可单独构建——
 # 其它 bin 用 `#[path]` 直编 L13/L10 源码、未包含 sampler.rs，包级开该
 # feature 会编译失败）。见 src/bin/l13lspsample.rs 的文件头。

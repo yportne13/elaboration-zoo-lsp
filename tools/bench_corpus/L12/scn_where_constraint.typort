@@ -1,0 +1,24 @@
+
+def outParam[A](a: A): A = a
+
+enum Bool {
+    true
+    false
+}
+
+trait Show {
+    def show: String
+}
+
+impl Show for Bool {
+    def show: String =
+        match this {
+            case true => "true"
+            case false => "false"
+        }
+}
+
+def print_it[T](x: T): String where T: Show =
+    _show_T.show x
+
+println (print_it true)

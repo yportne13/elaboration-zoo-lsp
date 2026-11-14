@@ -1,0 +1,24 @@
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+enum P {
+    mk(a: Bool, b: Bool)
+}
+
+def g(p: P): Bool =
+    match p {
+        case mk(true, true) => true
+        case mk(true, false) => false
+        case mk(false, true) => false
+        case mk(false, false) => true
+    }
+
+println (g (mk true false))

@@ -1,0 +1,21 @@
+
+def outParam[A](a: A): A = a
+
+enum Bool {
+    true
+    false
+}
+
+trait ToString {
+    def to_string: String
+}
+
+impl ToString for Bool {
+    def to_string: String =
+        match this {
+            case true => "true"
+            case false => "false"
+        }
+}
+
+println (true.to_string)

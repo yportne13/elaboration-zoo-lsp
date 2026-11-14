@@ -1,0 +1,14 @@
+
+package mylib
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def add(x: Nat, y: Nat): Nat = match x {
+    case zero => y
+    case succ(n) => succ(add n y)
+}
+def one: Nat = succ zero
+def two: Nat = succ one

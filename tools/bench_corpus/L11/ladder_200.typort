@@ -1,0 +1,223 @@
+// 规模阶梯（L11 宏代码生成）：声明级宏 svc 每个调用生成一个业务函数，
+// 函数体经表达式级宏 addtwo 展开；链式引用形成 service pipeline。
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+macro_rules addtwo {
+    ($x: raw) => { succ (succ $x) }
+}
+
+macro_rules svc {
+    ($name: ident $prev: raw) => {
+        def $name : Nat = addtwo $prev
+    }
+}
+
+def stage_base : Nat = zero
+svc stage_000 stage_base
+svc stage_001 stage_000
+svc stage_002 stage_001
+svc stage_003 stage_002
+svc stage_004 stage_003
+svc stage_005 stage_004
+svc stage_006 stage_005
+svc stage_007 stage_006
+svc stage_008 stage_007
+svc stage_009 stage_008
+svc stage_010 stage_009
+svc stage_011 stage_010
+svc stage_012 stage_011
+svc stage_013 stage_012
+svc stage_014 stage_013
+svc stage_015 stage_014
+svc stage_016 stage_015
+svc stage_017 stage_016
+svc stage_018 stage_017
+svc stage_019 stage_018
+svc stage_020 stage_019
+svc stage_021 stage_020
+svc stage_022 stage_021
+svc stage_023 stage_022
+svc stage_024 stage_023
+svc stage_025 stage_024
+svc stage_026 stage_025
+svc stage_027 stage_026
+svc stage_028 stage_027
+svc stage_029 stage_028
+svc stage_030 stage_029
+svc stage_031 stage_030
+svc stage_032 stage_031
+svc stage_033 stage_032
+svc stage_034 stage_033
+svc stage_035 stage_034
+svc stage_036 stage_035
+svc stage_037 stage_036
+svc stage_038 stage_037
+svc stage_039 stage_038
+svc stage_040 stage_039
+svc stage_041 stage_040
+svc stage_042 stage_041
+svc stage_043 stage_042
+svc stage_044 stage_043
+svc stage_045 stage_044
+svc stage_046 stage_045
+svc stage_047 stage_046
+svc stage_048 stage_047
+svc stage_049 stage_048
+svc stage_050 stage_049
+svc stage_051 stage_050
+svc stage_052 stage_051
+svc stage_053 stage_052
+svc stage_054 stage_053
+svc stage_055 stage_054
+svc stage_056 stage_055
+svc stage_057 stage_056
+svc stage_058 stage_057
+svc stage_059 stage_058
+svc stage_060 stage_059
+svc stage_061 stage_060
+svc stage_062 stage_061
+svc stage_063 stage_062
+svc stage_064 stage_063
+svc stage_065 stage_064
+svc stage_066 stage_065
+svc stage_067 stage_066
+svc stage_068 stage_067
+svc stage_069 stage_068
+svc stage_070 stage_069
+svc stage_071 stage_070
+svc stage_072 stage_071
+svc stage_073 stage_072
+svc stage_074 stage_073
+svc stage_075 stage_074
+svc stage_076 stage_075
+svc stage_077 stage_076
+svc stage_078 stage_077
+svc stage_079 stage_078
+svc stage_080 stage_079
+svc stage_081 stage_080
+svc stage_082 stage_081
+svc stage_083 stage_082
+svc stage_084 stage_083
+svc stage_085 stage_084
+svc stage_086 stage_085
+svc stage_087 stage_086
+svc stage_088 stage_087
+svc stage_089 stage_088
+svc stage_090 stage_089
+svc stage_091 stage_090
+svc stage_092 stage_091
+svc stage_093 stage_092
+svc stage_094 stage_093
+svc stage_095 stage_094
+svc stage_096 stage_095
+svc stage_097 stage_096
+svc stage_098 stage_097
+svc stage_099 stage_098
+svc stage_100 stage_099
+svc stage_101 stage_100
+svc stage_102 stage_101
+svc stage_103 stage_102
+svc stage_104 stage_103
+svc stage_105 stage_104
+svc stage_106 stage_105
+svc stage_107 stage_106
+svc stage_108 stage_107
+svc stage_109 stage_108
+svc stage_110 stage_109
+svc stage_111 stage_110
+svc stage_112 stage_111
+svc stage_113 stage_112
+svc stage_114 stage_113
+svc stage_115 stage_114
+svc stage_116 stage_115
+svc stage_117 stage_116
+svc stage_118 stage_117
+svc stage_119 stage_118
+svc stage_120 stage_119
+svc stage_121 stage_120
+svc stage_122 stage_121
+svc stage_123 stage_122
+svc stage_124 stage_123
+svc stage_125 stage_124
+svc stage_126 stage_125
+svc stage_127 stage_126
+svc stage_128 stage_127
+svc stage_129 stage_128
+svc stage_130 stage_129
+svc stage_131 stage_130
+svc stage_132 stage_131
+svc stage_133 stage_132
+svc stage_134 stage_133
+svc stage_135 stage_134
+svc stage_136 stage_135
+svc stage_137 stage_136
+svc stage_138 stage_137
+svc stage_139 stage_138
+svc stage_140 stage_139
+svc stage_141 stage_140
+svc stage_142 stage_141
+svc stage_143 stage_142
+svc stage_144 stage_143
+svc stage_145 stage_144
+svc stage_146 stage_145
+svc stage_147 stage_146
+svc stage_148 stage_147
+svc stage_149 stage_148
+svc stage_150 stage_149
+svc stage_151 stage_150
+svc stage_152 stage_151
+svc stage_153 stage_152
+svc stage_154 stage_153
+svc stage_155 stage_154
+svc stage_156 stage_155
+svc stage_157 stage_156
+svc stage_158 stage_157
+svc stage_159 stage_158
+svc stage_160 stage_159
+svc stage_161 stage_160
+svc stage_162 stage_161
+svc stage_163 stage_162
+svc stage_164 stage_163
+svc stage_165 stage_164
+svc stage_166 stage_165
+svc stage_167 stage_166
+svc stage_168 stage_167
+svc stage_169 stage_168
+svc stage_170 stage_169
+svc stage_171 stage_170
+svc stage_172 stage_171
+svc stage_173 stage_172
+svc stage_174 stage_173
+svc stage_175 stage_174
+svc stage_176 stage_175
+svc stage_177 stage_176
+svc stage_178 stage_177
+svc stage_179 stage_178
+svc stage_180 stage_179
+svc stage_181 stage_180
+svc stage_182 stage_181
+svc stage_183 stage_182
+svc stage_184 stage_183
+svc stage_185 stage_184
+svc stage_186 stage_185
+svc stage_187 stage_186
+svc stage_188 stage_187
+svc stage_189 stage_188
+svc stage_190 stage_189
+svc stage_191 stage_190
+svc stage_192 stage_191
+svc stage_193 stage_192
+svc stage_194 stage_193
+svc stage_195 stage_194
+
+println stage_195
+println (add stage_195 stage_base)

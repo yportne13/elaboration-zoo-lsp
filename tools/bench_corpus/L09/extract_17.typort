@@ -1,0 +1,14 @@
+
+def test0: Type 1 = Type 0
+
+def test1: Type 2 = Type 1 -> Type 0
+
+println test0
+println test1
+
+def mystr = "hello world"
+
+def stuck_concat = string_concat mystr
+
+println stuck_concat
+println (stuck_concat "!")

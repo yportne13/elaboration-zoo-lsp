@@ -4,7 +4,7 @@ use crate::{list::List, parser_lib::{Span, ToSpan}};
 
 use super::{
     Closure, Cxt, DeclTm, Error, Infer, Subst, Tm, VTy, Val,
-    Lvl,
+    Lvl, Ix,
     empty_span, lvl2ix, val_mentions_lvl, wrap_sub,
     parser::syntax::{Decl, Either, Icit, Raw},
     pattern_match::Compiler, MetaEntry,
@@ -23,6 +23,50 @@ pub(crate) struct SpecSolve {
 }
 
 impl Infer {
+    /// 错误文案里显示**未 quote 的项**：全局引用是哨兵大下标，需要反查
+    /// `global_names` 才能显示成名字（载体切换后旧版经 cxt.names() 的显示
+    /// 路径不再覆盖全局）。只在错误路径调用，O(D) 反查可接受。
+    fn pretty_term(&self, cxt: &Cxt, tm: &Tm) -> String {
+        let gn: Vec<(String, u32)> = self
+            .global_names
+            .iter()
+            .map(|(n, (l, _))| (n.clone(), l.0))
+            .collect();
+        super::pretty::pretty_tm_g(0, cxt.names(), tm, &gn)
+    }
+    /// 错误文案里 `{:?}` 一个**值**时，把层级编号平移回孪生的旧载体口径。
+    ///
+    /// 载体切换后 Cxt 的 lvl 只计局部 binder（L09 `568c65c5`），而孪生 `Machine`
+    /// 仍用旧口径（层级 = 已登记全局数 + 局部深度）。Debug 文本逐字节 parity
+    /// 比较会因 `Rigid(Lvl(N), [])` 的 N 分叉；这里把文本里的 `Lvl(n)` 统一
+    /// 加上「已登记全局数（扣除递归检查期的占位数）」，恢复旧编号。只服务
+    /// 错误正文（值本身仍是新口径，语义不受影响）。
+    fn display_val(&self, v: &Rc<Val>) -> String {
+        let base = self
+            .global
+            .len()
+            .saturating_sub(self.in_progress_globals.len()) as u32;
+        let s = format!("{:?}", v);
+        if base == 0 {
+            return s;
+        }
+        let mut out = String::with_capacity(s.len() + 8);
+        let mut rest: &str = &s;
+        while let Some(pos) = rest.find("Lvl(") {
+            out.push_str(&rest[..pos + 4]);
+            rest = &rest[pos + 4..];
+            let end = rest.find(')').unwrap_or(rest.len());
+            let inner = &rest[..end];
+            if let Ok(n) = inner.parse::<u32>() {
+                out.push_str(&format!("{}", n + base));
+            } else {
+                out.push_str(inner);
+            }
+            rest = &rest[end..];
+        }
+        out.push_str(rest);
+        out
+    }
     fn insert_go(&mut self, cxt: &Cxt, t: Rc<Tm>, va: Rc<Val>) -> (Rc<Tm>, Rc<VTy>) {
         let va = self.force(&va);
         match va.as_ref() {
@@ -237,7 +281,9 @@ impl Infer {
                         },
                         _ => {
                             let err_typ = self.force(&mty);
-                            Err(Error(t_span.map(|_|  format!("meta type {:?} is not a universe", err_typ))))
+                            Err(Error(t_span.map(|_| {
+                                format!("meta type {} is not a universe", self.display_val(&err_typ))
+                            })))
                         },
                     }
                 } else {
@@ -255,7 +301,9 @@ impl Infer {
                     //Err(Error(format!("when check universe, get pren {}", pren.dom.0)))
                 }
             }
-            _ => Err(Error(t_span.map(|_| format!("expected universe, got {:?}", inferred_type)))),
+            _ => Err(Error(t_span.map(|_| {
+                format!("expected universe, got {}", self.display_val(&inferred_type))
+            }))),
         }
     }
     pub fn check(&mut self, cxt: &Cxt, t: Raw, a: &Rc<Val>) -> Result<Rc<Tm>, Error> {
@@ -354,6 +402,16 @@ impl Infer {
                     let global_idx = Lvl(self.global.len() as u32);
                     let (typ_tm, _) = self.check_universe(ret_cxt, typ)?;
                     let vtyp = self.eval(&ret_cxt.env, &typ_tm);
+                    // 重定义检查（2026-11-13 从 L07/L08/L09 继承，L13 `fake_bind`
+                    // 前传）：名字已被内建 / 先前 def / enum / 构造子占用 →
+                    // 定向报错，不再静默覆盖。**先类型后重定义**（同序）。
+                    if ret_cxt.src_names.get(&name.data).is_some()
+                        || self.global_names.contains_key(&name.data)
+                    {
+                        return Err(Error(
+                            name.clone().map(|_| format!("redefine {}", name.data)),
+                        ));
+                    }
                     //println!("------------------->");
                     //println!("{:?}", vtyp);
                     //println!("-------------------<");
@@ -368,9 +426,10 @@ impl Infer {
                         .map_err(|e| Error(name.to_span().map(|_| format!("{:?}", e))))?;
                     //println!("begin vt {}", "------".green());
                     let vt = self.eval(&fake_cxt.env, &t_tm);
-                    self.global.insert(global_idx, vt.clone());
+                    // 顶层声明不再压进 Cxt（define_global 只登记名字+值），
+                    // 返回的 Cxt 与 ret_cxt 同构（O(1) 克隆）。
                     (
-                        self.define_global(ret_cxt, name.clone(), t_tm, vt.clone(), typ_tm, vtyp.clone()),
+                        self.define_global(ret_cxt, name.clone(), global_idx, vt.clone(), vtyp.clone()),
                         vtyp,
                         vt,
                     )
@@ -479,12 +538,19 @@ impl Infer {
                     let global_idx = Lvl(self.global.len() as u32);
                     let (typ_tm, _) = self.check_universe(cxt, typ)?;
                     let vtyp = self.eval(&cxt.env, &typ_tm);
+                    // 重定义检查（同 def 臂；2026-11-13 从 L07/L08/L09 继承）
+                    if cxt.src_names.get(&name.data).is_some()
+                        || self.global_names.contains_key(&name.data)
+                    {
+                        return Err(Error(
+                            name.clone().map(|_| format!("redefine {}", name.data)),
+                        ));
+                    }
                     let fake_cxt = self.fake_bind(cxt, name.clone(), vtyp.clone(), global_idx);
                     self.global.insert(global_idx, Val::vvar(global_idx + 1919810).into());
                     let t_tm = self.check(&fake_cxt, bod, &vtyp)?;
                     let vt = self.eval(&fake_cxt.env, &t_tm);
-                    self.global.insert(global_idx, vt.clone());
-                    self.define_global(&cxt, name.clone(), t_tm, vt, typ_tm, vtyp)
+                    self.define_global(&cxt, name.clone(), global_idx, vt, vtyp)
                 };
                 for (c, typ) in cases.iter().zip(new_cases.clone().into_iter()) {
                     let body_ret_type = Raw::SumCase {
@@ -527,7 +593,9 @@ impl Infer {
                         self.check_ctor_wf(&cxt, &name.data, &c.0.data, vtyp.clone())?;
                         let t_tm = self.check(&cxt, bod, &vtyp)?;
                         let vt = self.eval(&cxt.env, &t_tm);
-                        self.define_global(&cxt, c.0.clone(), t_tm, vt, typ_tm, vtyp)
+                        // 构造子也是顶层声明（不占 Cxt）：分配新 global id 并登记。
+                        let ctor_idx = Lvl(self.global.len() as u32);
+                        self.define_global(&cxt, c.0.clone(), ctor_idx, vt, vtyp)
                     };
                 }
                 Ok((DeclTm::Enum {}, Val::U(0).into(), cxt))
@@ -742,7 +810,23 @@ impl Infer {
                 .get(&x.data)
                 .or_else(|| self.global_names.get(&x.data).map(|(l, t)| (l, t)))
             {
-                Some((x, a)) => Ok((Tm::Var(lvl2ix(cxt.lvl, *x)).into(), a.clone())),
+                Some((level, a)) => {
+                    // 三态编码：局部 binder/内建 → `Var(小下标)`；递归定义体
+                    // 检查期间的自引用 → `Var(哨兵大下标)`（旧 fake_bind 哨兵，
+                    // 中性视图会中和）；已定名全局 → `Global(哨兵大下标)`
+                    // （O(1) 直查 + 中性视图照常展开，等价旧 env 槽引用）。
+                    let tm = if level.0 >= 1919810 {
+                        let id = Lvl(level.0 - 1919810);
+                        if self.in_progress_globals.contains(&id) {
+                            Tm::Var(Ix(level.0))
+                        } else {
+                            Tm::Global(Ix(level.0))
+                        }
+                    } else {
+                        Tm::Var(lvl2ix(cxt.lvl, *level))
+                    };
+                    Ok((tm.into(), a.clone()))
+                }
                 None => Err(Error(x.map(|x| format!("error name not in scope: {}", x)))),
             },
 
@@ -1085,18 +1169,20 @@ impl Infer {
                 //println!("{}", super::pretty_tm(0, cxt.names(), &ret.0));
                 Ok(ret)
             } else {
+                let recv_disp = self.pretty_term(cxt, &tm);
                 Err(Error(t.clone().map(|t| format!(
-                    "`{}`: {:?} has no object `{}`",
-                    super::pretty_tm(0, cxt.names(), &tm),
-                    a,
+                    "`{}`: {} has no object `{}`",
+                    recv_disp,
+                    self.display_val(&a),
                     t,
                 ))))
             }
         } else {
+            let recv_disp = self.pretty_term(cxt, &tm);
             Err(Error(t.clone().map(|t| format!(
-                "`{}`: {:?} has no object `{}`",
-                super::pretty_tm(0, cxt.names(), &tm),
-                a,
+                "`{}`: {} has no object `{}`",
+                recv_disp,
+                self.display_val(&a),
                 t,
             ))))
         }

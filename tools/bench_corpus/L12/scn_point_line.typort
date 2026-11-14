@@ -1,0 +1,21 @@
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def two = succ (succ zero)
+
+struct Point {
+    x: Nat
+    y: Nat
+}
+
+struct Line {
+    a: Point
+    b: Point
+}
+
+def headX(l: Line): Nat = l.a.x
+
+println headX

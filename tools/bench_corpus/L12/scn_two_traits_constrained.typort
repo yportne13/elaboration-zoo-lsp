@@ -1,0 +1,29 @@
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+trait Show {
+    def show: String
+}
+
+trait Describe {
+    def describe(x: Bool): String
+}
+
+impl Show for Bool {
+    def show: String = "bool"
+}
+
+impl Describe for Nat {
+    def describe(x: Bool): String = "nat"
+}
+
+def summary[T][s: Show[T]](x: T): String = s.show x
+
+println (summary true)

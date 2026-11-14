@@ -1,0 +1,7 @@
+﻿# cmd: F:/projects/hermes/ezl-gap-evidence/target/debug/deps/elaboration_zoo_lsp-647b90ef7f32ef90.exe L09_mltt::gap_tests::zz_gap_p11_occurs_deep_1mb --exact --nocapture
+# exit: -1073741571
+
+running 1 test
+
+thread '<unknown>' (29080) has overflowed its stack
+

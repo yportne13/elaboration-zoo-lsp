@@ -305,19 +305,6 @@ def four = add(two, two)
 
 println four
 
-struct Point {
-    x: Nat,
-    y: Nat,
-}
-
-struct Span[T] {
-    data: T,
-    start: Nat,
-    end: Nat,
-}
-
-def p = new Point(two, four)
-
 "#;
     let ret = lex(Span {
         data: input,

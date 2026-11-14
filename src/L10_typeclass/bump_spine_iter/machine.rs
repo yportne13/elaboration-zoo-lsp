@@ -2833,6 +2833,14 @@ impl Machine {
                 let global_idx = self.globals.len() as u32;
                 let (typ_tm, _) = self.check_universe(bump, cxt, &typ)?;
                 let vtyp = self.eval(bump, cxt.env, typ_tm);
+                // 重定义检查（与参考版同口径；2026-11-13 从 L07/L08/L09 继承，
+                // 内建经 prime_round 登记在 global_names，同表判定）。
+                if cxt.names.by_name.contains_key(name.data.as_str())
+                    || self.global_names.contains_key(name.data.as_str())
+                {
+                    let msg = format!("redefine {}", name.data);
+                    return Err(Error(name.clone().map(|_| msg.clone())));
+                }
                 // 递归：先把名字登记成指向自身的大层级占位（src_names +
                 // global 表），检查体，再用真实值覆盖。
                 let fake = self.fake_bind(cxt, &name.data, vtyp, global_idx);
@@ -2954,6 +2962,13 @@ impl Machine {
                 let global_idx = self.globals.len() as u32;
                 let (typ_tm, _) = self.check_universe(bump, cxt, &typ)?;
                 let vtyp = self.eval(bump, cxt.env, typ_tm);
+                // 重定义检查（同参考版 def 臂）
+                if cxt.names.by_name.contains_key(name.data.as_str())
+                    || self.global_names.contains_key(name.data.as_str())
+                {
+                    let msg = format!("redefine {}", name.data);
+                    return Err(Error(name.clone().map(|_| msg.clone())));
+                }
                 let fake = self.fake_bind(cxt, &name.data, vtyp, global_idx);
                 self.globals.push(v_lvl(global_idx + GLOBAL_BASE));
                 self.neutral.push(v_lvl(global_idx + GLOBAL_BASE));

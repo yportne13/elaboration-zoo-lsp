@@ -1,0 +1,173 @@
+// 项目级真实程序（手写）：多态列表库 + 长度引理。
+//
+// 真实场景：函数式集合库的核心模块（length / map / fold / append / reverse /
+// filter / repeat / 计数），并给出“map 保长”“append 长度可加”两条归纳引理。
+// 覆盖特性（L07）：
+//   - 多态 enum List[A] 与递归函数（隐式类型参数、A -> B 高阶参数）；
+//   - 多层 match、嵌套 match（filter 对谓词结果分支）、lambda 作为实参；
+//   - Eq GADT 依赖模式匹配归纳证明（cong_succ / refl 精化）；
+//   - let 绑定与 println 求值输出。
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def rfl[A][a: A]: Eq a a = refl a
+
+def add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def mul(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => zero
+        case succ(n) => add y (mul n y)
+    }
+
+def nat_eq(x: Nat, y: Nat): Bool =
+    match x {
+        case zero => match y {
+            case zero => true
+            case succ(m) => false
+        }
+        case succ(n) => match y {
+            case zero => false
+            case succ(m) => nat_eq n m
+        }
+    }
+
+// ── 列表库 ────────────────────────────────────────────────────────────────
+
+def length[A](xs: List[A]): Nat =
+    match xs {
+        case nil => zero
+        case cons(h, t) => succ (length t)
+    }
+
+def map[A, B](f: A -> B, xs: List[A]): List[B] =
+    match xs {
+        case nil => nil
+        case cons(h, t) => cons (f h) (map f t)
+    }
+
+def fold[A, B](f: B -> A -> B, init: B, xs: List[A]): B =
+    match xs {
+        case nil => init
+        case cons(h, t) => fold f (f init h) t
+    }
+
+def append[A](xs: List[A], ys: List[A]): List[A] =
+    match xs {
+        case nil => ys
+        case cons(h, t) => cons h (append t ys)
+    }
+
+def reverse[A](xs: List[A]): List[A] =
+    fold (acc => x => cons x acc) nil xs
+
+def filter[A](p: A -> Bool, xs: List[A]): List[A] =
+    match xs {
+        case nil => nil
+        case cons(h, t) => match p h {
+            case true => cons h (filter p t)
+            case false => filter p t
+        }
+    }
+
+def repeat[A](x: A, n: Nat): List[A] =
+    match n {
+        case zero => nil
+        case succ(k) => cons x (repeat x k)
+    }
+
+def sum(xs: List[Nat]): Nat =
+    fold (acc => x => add x acc) zero xs
+
+def count_eq(xs: List[Nat], target: Nat): Nat =
+    fold (acc => x => match nat_eq x target {
+        case true => succ acc
+        case false => acc
+    }) zero xs
+
+// ── 示例数据 ──────────────────────────────────────────────────────────────
+
+def one : Nat = succ zero
+def two : Nat = succ (succ zero)
+def three : Nat = succ (succ (succ zero))
+
+def xs : List[Nat] = cons one (cons two (cons three nil))
+def ys : List[Nat] = cons two (cons two nil)
+
+def inc : Nat -> Nat = x => succ x
+def double : Nat -> Nat = x => add x x
+def is_two : Nat -> Bool = x => nat_eq x two
+
+def n_xs : Nat = length xs
+def mapped : List[Nat] = map inc xs
+def doubled : List[Nat] = map double xs
+def reversed : List[Nat] = reverse xs
+def appended : List[Nat] = append xs ys
+def filtered : List[Nat] = filter is_two xs
+def repeated : List[Nat] = repeat one three
+def total : Nat = sum xs
+def twos : Nat = count_eq xs two
+def folded : Nat = fold (acc => x => add acc x) zero xs
+
+println n_xs
+println mapped
+println doubled
+println reversed
+println appended
+println filtered
+println repeated
+println total
+println twos
+println folded
+
+// ── 归纳引理（Eq GADT 精化）───────────────────────────────────────────────
+
+def cong[A, B, f: A -> B, x: A, y: A](e: Eq x y): Eq (f x) (f y) =
+    match e {
+        case refl(a) => refl (f a)
+    }
+
+def cong_succ[x: Nat, y: Nat](e: Eq x y): Eq (succ x) (succ y) =
+    cong[Nat][Nat][succ][x][y] e
+
+// length (map f xs) = length xs
+def length_map[A, B](f: A -> B, xs: List[A]): Eq (length (map f xs)) (length xs) =
+    match xs {
+        case nil => refl zero
+        case cons(h, t) => cong_succ (length_map f t)
+    }
+
+// length (append xs ys) = add (length xs) (length ys)
+def length_append[A](xs: List[A], ys: List[A]): Eq (length (append xs ys)) (add (length xs) (length ys)) =
+    match xs {
+        case nil => refl (length ys)
+        case cons(h, t) => cong_succ (length_append t ys)
+    }
+
+// length (repeat x n) = n
+def length_repeat[A](x: A, n: Nat): Eq (length (repeat x n)) n =
+    match n {
+        case zero => refl zero
+        case succ(k) => cong_succ (length_repeat x k)
+    }

@@ -226,32 +226,23 @@ strchain/global/struct 的 basic 分钟级格子已被 decl 条目 Rc 化消除�
 
 ### 已知偏差（与参考版）
 
-同 L07 的 span / 文案类偏差：`Error` 仍是单字段（**P10 Error span 未迁移**），
-错误消息 span 全零；unify_catch 文案带 pretty 项 + `(fuel exhausted)` 尾注，
-span 数字两版不同。
+**2026-11-11 参考版回灌（本轮）**：参考版文件已重建为「L07 参考版 HEAD
++ 本层积类型增量」，L07 P1–P11 全部加固（含 2026-09-19 深值栈安全轮、
+P0-2 MetaSnapshot undo-log、P1-2 decl 简化表缓存、P3 三档 `UnifyKind`、
+P5 跨 meta 环守卫、P8 宽松合一收窄、P10 `Error(String, Option<Span<()>>)`
+与 parse span、P11 迭代 quote + 定深 pretty）**不再缺失**；`l08_fast_parity`
+中因 P3 分档文案产生的已知不对称按 `assert_parity_err_kind_divergent`
+显式登记（参考版「无法判定」vs 孪生「分支不可达」）。
 
-**迁移现状（2026-11-08 review 修复轮）**：
+**孪生版现状（未回灌，用户明确先不动孪生）**：`bump_spine_iter` 仍是
+2026-11-08 轮镜像（P1/P2/P9 已镜像；P3/P10/P11 未镜像，失败文案与 span
+可能不同）；参考版回灌后两引擎的差异面**只增不减**，parity 判据保持
+「Ok 逐字节 + Err 判定一致」，病理用例的 Err 正文按上述 helper 放宽。
 
-- **参考版已迁** P9（模式 `Pattern::pretty` 渲染）/ P2（卡住 match 比较
-  次数预算，本轮统一为 **64 次 / 顶层合一入口、结构快路径后计数**）/
-  P1（`occurs_transitive` 传递 occurs；**含与 L07 相同的 VSub 嵌套已知
-  限制**——外层 σ 不可见，review R2）；
-- **孪生版 P1 / P2 已在本轮镜像**：`bump_spine_iter/subst.rs` 补
-  `occurs_transitive`、`unify.rs` 补 `MATCH_CMP_BUDGET = 64`（`struct_val_eq`
-  结构快路径**之后**计数，每 `unify_iter` 一份）；`l08_fast_parity` 增加
-  c1 / c2 的 verdict + 计时守卫（`parity_l08_occurs_transitive_chain` /
-  `parity_l08_stuck_match_equation_bounded`，用 `assert_both_err_within`
-  同时钉"两侧都 Err"与耗时上界）——两侧判定分裂不再能靠"93 绿"掩盖
-  （review R4）；
-- **仍未迁移**：**P3 三档判定**（L08 参考版 / 孪生版都还是旧口径——预算
-  耗尽或判不出时仍报「分支不可达」，L07 已报「无法判定」；**层间**语义
-  不同，不是引擎间差异）、**P11 quote/pretty 深值**（`quote` 仍按值深
-  递归、`pretty` 无 `MAX_DEPTH` 截断）、**P10 Error span**（参考版
-  `Error(String)` 单字段）、**P5 / P8**（跨 meta 环守卫 / 宽松合一收窄：
-  L08 的 `loose_string` 判据仍是「名字是否在 decl 表登记」）；
-- **P9 的 `no named implicit arg` Span Debug 泄漏已在 L08 两引擎修掉**
-  （参考版 `elaboration.rs` / 孪生版 `machine.rs` 均改为 `{}` 直出名字，
-  与 L07 诊断口径对齐；review R5）。
+- 参考版 `Error` 已是两字段（文案 + 可选源码 span）；孪生版错误仍走
+  `Error::new`（span 全零）——属文档化引擎间偏差。
+- P9 的 `no named implicit arg` Span Debug 泄漏已在 L08 两引擎修掉
+  （参考版 `elaboration.rs` / 孪生版 `machine.rs` 均改为 `{}` 直出名字）。
 
 ## 7. 已知限制（诚实清单）
 
@@ -318,7 +309,9 @@ span 数字两版不同。
 旧 L08 建在重构前的 L07 基线上（决策树式模式编译 + 改写式精化、无
 builtin 注册表 / decl 表 / 可变全局 / 文件 IO / Error Display、无性能
 孪生、println 走 `{:?}`）。本次重构 = **现行 L07 全量继承** +
-§1–§4 的积类型层，另附：
+§1–§4 的积类型层；**2026-11-11 参考版再次以 L07 HEAD 重建**，把 2026-09-19
+深值轮与 2026-10-31～11-08 的 P1–P11 加固一次性补齐（此前只有 P1/P2/P9
+在 11-08 轮局部迁移）。另附：
 
 - §3 投影链扩展（旧不支持 `x.y.z`）；§4 显示去重（旧打印
   `Point::Point.mk(...)`）；
@@ -403,3 +396,17 @@ builtin 注册表 / decl 表 / 可变全局 / 文件 IO / Error Display、无性
   上游 08 是 Sigma 类型（`Sig` 与 `Pi` 对偶 + `Fst/Snd` 投影）；本层
   的"积"走记录式具名字段 + 脱糖路线，语义面不同（无匿名 pair、投影
   按名、struct 即单 case enum）。
+
+## 增补（2026-11-13）：Val 名字 span 句柄化（VSpan）
+
+参考版 `Val` 的 5 类名字 span（Obj 字段 / Lam·Pi binder / LiteralIntro /
+Sum 头+参数+cases / SumCase 名+datas）改为 `VSpan(Rc<Span<String>>)`
+（`Deref` 透明、跨表示比较只比名字、`Debug` 委托内层 Span 以保 parity）。
+动机：common ladder 单文件每轮百万级 Val 克隆，旧实现每次复制名字 String。
+
+实测（同机 min-of-3）：`realbench` common **69.03→51.14 ms（−25.9%）**、
+本层自有语料 **29.83→27.05 ms（−9.3%）**、church k11 −14.3%、struct k10
+−12.6%、natadd −10.9%、strchain −2.9%、match −3.1%；`global` 负载不变。
+测试 116/57+1 ignored/81 全绿。
+
+跨层对比：`docs/bench-crosslayer-vspan-2026-11-13.md`（L07–L10）。

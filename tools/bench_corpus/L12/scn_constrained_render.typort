@@ -1,0 +1,21 @@
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+trait Show {
+    def show: String
+}
+
+impl Show for Bool {
+    def show: String = "bool"
+}
+
+def render[T][s: Show[T]](x: T): String = s.show x
+
+println (render true)

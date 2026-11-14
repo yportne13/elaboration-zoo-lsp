@@ -1,0 +1,7 @@
+﻿# cmd: F:\projects\hermes\elaboration-zoo-lsp\target\release\l09bench.exe --only basic --workload universe --max-k 13 --rounds 5 # wall: 0.5s exit: 0 # host: DESKTOP-QRAP4BP 2026-11-11T23:38:55.0192653+08:00 ---
+== workload: universe ==
+k=9   n=1024     basic=     2.236ms*/     2.767
+k=10  n=2048     basic=     3.340ms*/     4.083
+k=11  n=4096     basic=     8.691ms*/    10.043
+k=12  n=8192     basic=    13.563ms*/    14.839
+k=13  n=16384    basic=    24.155ms*/    27.106

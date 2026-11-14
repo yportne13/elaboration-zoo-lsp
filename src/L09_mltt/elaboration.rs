@@ -5,7 +5,7 @@ use crate::{list::List, parser_lib::Span};
 
 use super::{
     Closure, Cxt, DeclTm, Error, Infer, Subst, Tm, VTy, Val,
-    Lvl,
+    Lvl, Ix,
     empty_span, lvl2ix, val_mentions_lvl, wrap_sub,
     parser::syntax::{Decl, Either, Icit, Raw},
     pattern_match::Compiler, pretty::pretty_tm, MetaEntry,
@@ -13,6 +13,16 @@ use super::{
 };
 
 impl Infer {
+    /// 错误文案里显示**未 quote 的项**：全局引用是哨兵大下标，需要反查
+    /// `global_names` 才能显示成名字（载体切换后旧版经 cxt.names() 的显示
+    /// 路径不再覆盖全局）。只在错误路径调用，O(D) 反查可接受。
+    fn pretty_term(&self, cxt: &Cxt, tm: &Tm) -> String {
+        let gn: Vec<(String, u32)> = self
+            .global_names
+            .iter()
+            .map(|(n, (l, _))| (n.clone(), l.0))
+            .collect();
+        super::pretty::pretty_tm_g(0, cxt.names(), tm, &gn)    }
     fn insert_go(&mut self, cxt: &Cxt, t: Tm, va: Val) -> (Tm, VTy) {
         match self.force(va) {
             Val::Pi(_, Icit::Impl, a, b) => {
@@ -132,6 +142,10 @@ impl Infer {
         t_span: Span<()>,
         spec: &mut SpecSolve<'_>,
     ) -> Result<(), Error> {
+        // 每条特化方程一个顶层合一入口：重置"卡住 match 比较"预算与失败
+        // 分档（P2/P3）。嵌套的 `unify` 递归不清——分档在整个方程内累积。
+        self.reset_match_cmp_budget();
+        self.reset_unify_kind();
         let mut f1 = self.force(t);
         let mut f2 = self.force(t_prime);
         // 方程两侧置于**当前已积累的解**之下再解释（dpm-nbe `subst ɑ vs`
@@ -298,7 +312,7 @@ impl Infer {
         match (t, self.force(a)) {
             // Check lambda expressions
             (Raw::Lam(x, i, t), Val::Pi(x_t, i_t, a, b_closure))
-                if (i.clone(), i_t) == (Either::Name(x_t.clone()), Icit::Impl)
+                if (i_t == Icit::Impl && matches!(&i, Either::Name(n) if n == &x_t))
                     || i == Either::Icit(i_t) =>
             {
                 let body = self.check(
@@ -306,15 +320,15 @@ impl Infer {
                     *t,
                     self.closure_apply(&b_closure, Val::vvar(cxt.lvl)),
                 )?;
-                Ok(Tm::Lam(x, i_t, Box::new(body)))
+                Ok(Tm::Lam(x, i_t, Rc::new(body)))
             }
             (t, Val::Pi(x, Icit::Impl, a, b_closure)) => {
                 let body = self.check(
-                    &cxt.new_binder(x.clone(), self.quote(cxt.lvl, (*a).clone())),
+                    &cxt.new_binder(super::tmspan(&x), self.quote(cxt.lvl, (*a).clone())),
                     t,
                     self.closure_apply(&b_closure, Val::vvar(cxt.lvl)),
                 )?;
-                Ok(Tm::Lam(x, Icit::Impl, Box::new(body)))
+                Ok(Tm::Lam(super::tmspan(&x), Icit::Impl, Rc::new(body)))
             }
             // Check let bindings
             (Raw::Let(x, a, t, u), a_prime) => {
@@ -396,13 +410,24 @@ impl Infer {
                     //println!("------------------->");
                     //println!("{:?}", vtyp);
                     //println!("-------------------<");
+                    // 重定义检查（从 L07/L08 继承；L13 `fake_bind` 前传）：
+                    // 名字已被内建 / 先前 def / enum / 构造子占用 → 定向报错，
+                    // 不再静默覆盖。**先类型后重定义**（与 L07/L08/L13 同序）。
+                    if ret_cxt.src_names.get(&name.data).is_some()
+                        || self.global_names.contains_key(&name.data)
+                    {
+                        return Err(Error(
+                            name.clone().map(|_| format!("redefine {}", name.data)),
+                        ));
+                    }
                     let fake_cxt = self.fake_bind(ret_cxt, name.clone(), vtyp.clone(), global_idx);
                     self.global.insert(global_idx, Val::vvar(global_idx + 1919810));
                     let t_tm = self.check(&fake_cxt, bod, vtyp.clone())?;
                     //println!("begin vt {}", "------".green());
                     let vt = self.eval(&fake_cxt.env, t_tm.clone());
-                    self.global.insert(global_idx, vt.clone());
-                    self.define_global(ret_cxt, name.clone(), t_tm, vt, typ_tm, vtyp)
+                    // 顶层声明不再压进 Cxt（define_global 只登记名字+值），
+                    // 返回的 Cxt 与 ret_cxt 同构（O(1) 克隆）。
+                    self.define_global(ret_cxt, name.clone(), global_idx, vt, vtyp)
                 };
                 Ok((
                     DeclTm::Def {
@@ -503,12 +528,19 @@ impl Infer {
                     let global_idx = Lvl(self.global.len() as u32);
                     let (typ_tm, _) = self.check_universe(cxt, typ)?;
                     let vtyp = self.eval(&cxt.env, typ_tm.clone());
+                    // 重定义检查（同 def 臂；从 L07/L08 继承，先类型后重定义）
+                    if cxt.src_names.get(&name.data).is_some()
+                        || self.global_names.contains_key(&name.data)
+                    {
+                        return Err(Error(
+                            name.clone().map(|_| format!("redefine {}", name.data)),
+                        ));
+                    }
                     let fake_cxt = self.fake_bind(cxt, name.clone(), vtyp.clone(), global_idx);
                     self.global.insert(global_idx, Val::vvar(global_idx + 1919810));
                     let t_tm = self.check(&fake_cxt, bod, vtyp.clone())?;
                     let vt = self.eval(&fake_cxt.env, t_tm.clone());
-                    self.global.insert(global_idx, vt.clone());
-                    self.define_global(cxt, name.clone(), t_tm, vt, typ_tm, vtyp)
+                    self.define_global(cxt, name.clone(), global_idx, vt, vtyp)
                 };
                 for (c, typ) in cases.iter().zip(new_cases.clone().into_iter()) {
                     let body_ret_type = Raw::SumCase {
@@ -550,7 +582,9 @@ impl Infer {
                         self.check_ctor_wf(&cxt, &name.data, &c.0.data, &vtyp)?;
                         let t_tm = self.check(&cxt, bod, vtyp.clone())?;
                         let vt = self.eval(&cxt.env, t_tm.clone());
-                        self.define_global(&cxt, c.0.clone(), t_tm, vt, typ_tm, vtyp)
+                        // 构造子也是顶层声明（不占 Cxt）：分配新 global id 并登记。
+                        let ctor_idx = Lvl(self.global.len() as u32);
+                        self.define_global(&cxt, c.0.clone(), ctor_idx, vt, vtyp)
                     };
                 }
                 Ok((DeclTm::Enum {}, Val::U(0), cxt))
@@ -642,7 +676,23 @@ impl Infer {
                 .get(&x.data)
                 .or_else(|| self.global_names.get(&x.data).map(|(l, t)| (l, t)))
             {
-                Some((x, a)) => Ok((Tm::Var(lvl2ix(cxt.lvl, *x)), (**a).clone())),
+                Some((level, a)) => {
+                    // 三态编码：局部 binder/内建 → `Var(小下标)`；递归定义体
+                    // 检查期间的自引用 → `Var(哨兵大下标)`（旧 fake_bind 哨兵，
+                    // 中性视图会中和）；已定名全局 → `Global(哨兵大下标)`
+                    // （O(1) 直查 + 中性视图照常展开，等价旧 env 槽引用）。
+                    let tm = if level.0 >= 1919810 {
+                        let id = Lvl(level.0 - 1919810);
+                        if self.in_progress_globals.contains(&id) {
+                            Tm::Var(Ix(level.0))
+                        } else {
+                            Tm::Global(Ix(level.0))
+                        }
+                    } else {
+                        Tm::Var(lvl2ix(cxt.lvl, *level))
+                    };
+                    Ok((tm, (**a).clone()))
+                }
                 None => Err(Error(x.map(|x| format!("error name not in scope: {}", x)))),
             },
 
@@ -659,7 +709,7 @@ impl Infer {
                         if cases.len() == 1 {
                             if let Some(case) = cases.first() {
                                 if case.data.contains(".mk") {
-                                    let (_, case_typ) = self.infer_expr(cxt, Raw::Var(case.clone()))?;
+                                    let (_, case_typ) = self.infer_expr(cxt, Raw::Var(super::tmspan(&case)))?;
                                     let mut ret = vec![];
                                     let mut typ = case_typ;
                                     // struct 隐式参数的实例值（按声明序；只取
@@ -680,7 +730,7 @@ impl Infer {
                                         if icit == Icit::Expl {
                                             let val = self.eval(
                                                 &cxt.env,
-                                                Tm::Obj(Box::new(tm.clone()), name.clone()),
+                                                Tm::Obj(Box::new(tm.clone()), super::tmspan(&name)),
                                             );
                                             ret.push((name, (*ty).clone()));
                                             typ = self.closure_apply(&closure, val);
@@ -695,6 +745,7 @@ impl Infer {
                                 }
                             }
                         }
+                        let recv_disp = self.pretty_term(cxt, &tm);
                         Ok((
                             Tm::Obj(Box::new(tm.clone()), t.clone()),
                             c.and_then(|params| {
@@ -709,13 +760,14 @@ impl Infer {
                             )
                                 .ok_or_else(|| Error(t.map(|t| format!(
                                     "`{}`: {:?} has no object `{}`",
-                                    super::pretty_tm(0, cxt.names(), &tm),
+                                    recv_disp,
                                     a,
                                     t,
                                 ))))?
                         ))
                     }
                     (tm, Val::SumCase { datas: params, .. }) => {
+                        let recv_disp = self.pretty_term(cxt, &tm);
                         Ok((
                             Tm::Obj(Box::new(tm.clone()), t.clone()),
                             params
@@ -724,17 +776,20 @@ impl Infer {
                                 .map(|p| super::rc_take(p.1.clone()))
                                 .ok_or_else(|| Error(t.map(|t| format!(
                                     "`{}`: {:?} has no object `{}`",
-                                    super::pretty_tm(0, cxt.names(), &tm),
+                                    recv_disp,
                                     a,
                                     t,
                                 ))))?
                         ))
                     }
-                    (tm, _) => Err(Error(t.map(|t| format!(
-                        "`{}` has no object `{}`",
-                        super::pretty_tm(0, cxt.names(), &tm),
-                        t,
-                    )))),
+                    (tm, _) => {
+                        let recv_disp = self.pretty_term(cxt, &tm);
+                        Err(Error(t.map(|t| format!(
+                            "`{}` has no object `{}`",
+                            recv_disp,
+                            t,
+                        ))))
+                    }
                 }
             },
 
@@ -748,8 +803,8 @@ impl Infer {
                 let (t_inferred, b) = self.insert(&new_cxt, infered)?;
                 let b_closure = self.close_val(cxt, b);
                 Ok((
-                    Tm::Lam(x.clone(), i, Box::new(t_inferred)),
-                    Val::Pi(x, i, Rc::new(a), b_closure),
+                    Tm::Lam(x.clone(), i, Rc::new(t_inferred)),
+                    Val::Pi(super::vspan(x), i, Rc::new(a), b_closure),
                 ))
             }
 
@@ -800,7 +855,7 @@ impl Infer {
                         self.unify_catch(
                             cxt,
                             Val::Pi(
-                                empty_span("x".to_string()),
+                                super::vspan(empty_span("x".to_string())),
                                 i,
                                 Rc::new(a.clone()),
                                 b_closure.clone(),
@@ -833,7 +888,7 @@ impl Infer {
                 )?;
                 universe = max(universe, lvl);
                 Ok((
-                    Tm::Pi(x, i, Box::new(a_checked), Box::new(b_checked)),
+                    Tm::Pi(x, i, Rc::new(a_checked), Rc::new(b_checked)),
                     Val::U(universe),
                 ))
             }

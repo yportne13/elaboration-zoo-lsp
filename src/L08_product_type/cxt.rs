@@ -7,7 +7,7 @@ use crate::{list::List, parser_lib::Span};
 use smol_str::SmolStr;
 
 use super::{
-    Closure, Env, Infer, Ix, Lvl, Tm, Ty, Val, VTy,
+    Env, Infer, Ix, Lvl, Tm, Ty, Val, VTy,
     empty_span,
     parser::syntax::Icit,
     syntax::{Locals, Pruning},
@@ -18,10 +18,54 @@ use super::{
 /// 顶层定义（def / enum / 构造子）都登记在这里；项层引用用 `Tm::Decl(名字)`，
 /// 求值时查表取缓存的 WHNF。递归通过"先插入指向自身的占位值、检查完再覆盖"实现。
 ///
-/// 条目按 `Rc` 共享（与 L07 同款）：`decl_insert` 的写时复制只需重建哈希桶 +
-/// 逐条 Rc 递增，不再深拷贝 `DeclEntry` 里的值（`Val` 的 clone 对 `Lam`/`Pi`
-/// 是整棵 `Box<Tm>` 闭包树的深拷贝、对 `LiteralIntro` 是 String 分配）。
-pub type Decls = FxHashMap<SmolStr, Rc<DeclEntry>>;
+/// 条目按 `Rc` 共享：`decl_insert` 的写时复制只需重建哈希桶 + 逐条 Rc 递增，
+/// 不再深拷贝 `DeclEntry` 里的值（`Val` 的 clone 对 `Lam`/`Pi` 是整棵
+/// `Box<Tm>` 闭包树的深拷贝、对 `LiteralIntro` 是 String 分配）。插入频次
+/// 随 decl 数增长（每 def 一次），值深拷贝是其中的主项——L07 的 `strchain`
+/// 参考版曾因此到 O(n²) 字节量级。
+///
+/// `ver` = 实例代数（性能评审 P1-2 的旁表缓存键）：`decl_insert` 每次 COW
+/// 出的新实例取全局单调的唯一代数——**同 ver ⟹ 同实例**（表创建后不可变，
+/// COW 只出新实例），`simpl_decl` 缓存以此判"同实例同内容"；`ver == 0` 的
+/// 手工空表内容恒等（空），命中同样安全。简化表继承源的 ver——`simpl` 对
+/// 自身幂等（非 Sum 条目归一为 `Decl(自身名, [])`），对简化表再简化内容
+/// 不变，命中缓存的简化表语义一致。
+#[derive(Debug, Clone, Default)]
+pub struct Decls {
+    /// crate 内可构造（mod.rs 的 simpl_decl 组装）；常规读写走 Deref(Mut)
+    /// 与 `decl_insert`。
+    pub(crate) map: FxHashMap<SmolStr, Rc<DeclEntry>>,
+    /// 实例代数（见上）：同 ver ⟹ 同实例同内容。crate 内可读
+    /// （simpl_decl 缓存键），写入只经 `decl_insert`。
+    pub(crate) ver: u64,
+}
+
+impl Decls {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl std::ops::Deref for Decls {
+    type Target = FxHashMap<SmolStr, Rc<DeclEntry>>;
+    fn deref(&self) -> &FxHashMap<SmolStr, Rc<DeclEntry>> {
+        &self.map
+    }
+}
+
+impl std::ops::DerefMut for Decls {
+    fn deref_mut(&mut self) -> &mut FxHashMap<SmolStr, Rc<DeclEntry>> {
+        &mut self.map
+    }
+}
+
+/// [`Decls`] 实例代数发生器（全局单调，进程级；单线程语义下仅用于保证
+/// ver 不重复）。
+static DECL_VERSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn next_decl_version() -> u64 {
+    std::sync::atomic::AtomicU64::fetch_add(&DECL_VERSION, 1, std::sync::atomic::Ordering::Relaxed) + 1
+}
 
 #[derive(Clone)]
 pub struct PrimFunc(pub Rc<dyn Fn(&Infer, &Decls, &[Val]) -> Option<Val>>);
@@ -36,7 +80,8 @@ impl std::fmt::Debug for PrimFunc {
 pub struct DeclEntry {
     pub ty: VTy,
     pub val: Val,
-    /// L13 式 prim：归约函数挂在 decl 条目上；force 的 Val::Decl 分支消费。
+    /// L13 式 prim：builtin 的归约函数挂在 decl 条目上，而不是
+    /// `Tm::Prim`/`Val::Prim` 特例。`force` 在 `Val::Decl` 上按 spine 调用。
     pub prim: Option<PrimFunc>,
     /// builtin 的 η 展示壳（仅 quote/pretty 用；不求值、不参与应用）。
     pub eta: Option<Tm>,
@@ -44,13 +89,12 @@ pub struct DeclEntry {
     pub prim_names: Option<Rc<Vec<Span<String>>>>,
 }
 
-/// 源码名表 + 撤销轨迹（L08 孪生 `bump_spine_iter` 的 `name_map` +
+/// 源码名表 + 撤销轨迹（L08 孪生 `bump_spine_iter.rs` 的 `name_map` +
 /// `name_trail` 的参考版对应物）。
 ///
-/// 旧实现是按值 `FxHashMap`（更早是 `Rc<HashMap>` 写时复制）：`bind`/`define`
-/// 每次 `clone()`/`Rc::make_mut` **深拷整张表**（逐键 String 分配 + 逐条
-/// 条目拷贝），n 个绑定器的精化是 O(n²)。本地表按值克隆时还会深拷每个
-/// 条目里的 `VTy`（`Val` 树）——lookup 侧更早的形态也有同类问题。
+/// 旧实现是 `Rc<FxHashMap>` 持久表：`bind` 里 `Rc::clone` + `Rc::make_mut`
+/// ——强计数恒为 2，`make_mut` 于是每次**深拷整张表**（逐键 String 分配 +
+/// 逐条 Rc 递增），n 个绑定器的精化是 O(n²)。
 ///
 /// 新实现改为"单张表 + 撤销轨迹 + 按 mark 惰性回退"：`bind`/`define` 只做
 /// 一次哈希插入 + 追加一条 (名字, 旧值) 轨迹，O(1)；上下文退出不显式
@@ -68,8 +112,8 @@ pub struct NameState {
 impl NameState {
     /// 把轨迹裁回 `mark`（= 某个上下文的基线）：逆序还原被覆盖/删除的
     /// 条目。调用方保证 `mark <= trail.len()`（mark 只会取自已发生过的
-    /// 轨迹长度；深度优先下不会出现"访问比自身更浅的上下文后再用更深
-    /// 上下文"——见 `Cxt::unwind_names` 的 debug_assert）。
+    /// 轨迹长度，且深度优先下不会访问比自身更浅的上下文之后再用更深上下文
+    /// ——见 `Cxt::unwind_names` 的 debug_assert）。
     fn unwind(&mut self, mark: u32) {
         debug_assert!(
             mark as usize <= self.trail.len(),
@@ -105,8 +149,7 @@ pub struct Cxt {
     pub pruning: Pruning, // 与 env 一一对应：Some(icit) = 该槽是待插入的隐式参数
     /// 源码变量名 → (绑定层级, 类型值)，共享可变表（见 [`NameState`]）。
     /// 每次访问前先把轨迹裁回 `name_mark`，因此本上下文看到的名字集合
-    /// 恒等于创建时的快照；`bind` 条目值仍是 `Rc<(Lvl, VTy)>`（O(1)，
-    /// 不深拷 `Val` 类型树）。
+    /// 恒等于创建时的快照；`bind` 条目值仍是 `Rc<(Lvl, VTy)>`（O(1)）。
     names: Rc<RefCell<NameState>>,
     /// 本上下文的名字表基线（轨迹长度）。
     name_mark: u32,
@@ -228,8 +271,10 @@ impl Cxt {
             .add_builtin(infer, "file_delete", str_pi(&["path"], Tm::U))
     }
 
-    /// 注册 builtin（L13 式）：类型与 `PrimFunc` 一起挂在 decl 条目上；
-    /// 值是 `Val::Decl(自身名)` 占位，应用实参由 force 的 spine 直接消费。
+    /// 注册一个 builtin（L13 式）：类型求值后挂在 decl 条目上，归约函数
+    /// `PrimFunc` 也挂在同一张表；值只是 `Val::Decl(自身名)` 的中性占位。
+    /// 应用后的实参由 spine 到达 `force`，由 `prim_reduce` 直接消费；
+    /// 不再生成 `Tm::Prim`/`Val::Prim` 特例。
     fn add_builtin(mut self, infer: &Infer, name: &str, ty_tm: Tm) -> Self {
         // Π 链参数名（η 展示壳用）先取出来。
         let mut names = Vec::new();
@@ -238,7 +283,7 @@ impl Cxt {
             names.push(n.clone());
             cur = body.as_ref();
         }
-        let ty = infer.eval(&self.decl, &List::new(), ty_tm);
+        let ty = infer.eval(&self.decl, &List::new(), &ty_tm);
         let nm = SmolStr::new(name);
         let prim_name = nm.clone();
         let prim = PrimFunc(Rc::new(move |infer: &Infer, decl: &Decls, args: &[Val]| {
@@ -272,7 +317,7 @@ impl Cxt {
             pruning: List::new(),
             names: Rc::new(RefCell::new(NameState::default())),
             name_mark: 0,
-            decl: Rc::new(FxHashMap::default()),
+            decl: Rc::new(Decls::new()),
         }
     }
 
@@ -306,19 +351,24 @@ impl Cxt {
         self.decl.get(k).map(|e| &**e)
     }
 
+    /// 写入一个 decl。写时复制：Rc 共享时才克隆整表，父上下文不受影响——
+    /// 这正是递归定义需要的"占位只对本定义的检查可见"。表克隆是逐条 `Rc`
+    /// 递增 + 重建哈希桶（条目本身共享，不深拷贝值）。新实例取唯一代数
+    /// （`ver`，见 [`Decls`] 文档）。
     /// 就地写入一个 decl（顺序声明路径专用）：调用方持有 `Cxt` 所有权，
     /// 表的 `Rc` 强计数为 1，`Rc::make_mut` 原地写，不深拷整表。
     ///
+    /// 这是 L13 参考版 `fake_bind`/`decl` 就地写模式在 L07 的对应物。
     /// 旧 [`Cxt::decl_insert`] 先 `self.decl.clone()` 再 `Rc::make_mut`，
-    /// 强计数恒为 2 ⇒ 每个顶层定义都深拷一次整张 decl 表（strchain/global/
-    /// struct 这类生成 2^(k+1) 个顶层 def 的负载上是 O(D²) 放大器）。
+    /// 强计数恒为 2 ⇒ 每个顶层 def 都深拷一次整张 decl 表（strchain/global
+    /// 这类每 k 翻倍生成 2^(k+1) 个 def 的负载上是 O(D²) 放大器）。
     pub fn decl_insert_mut(&mut self, k: impl Into<SmolStr>, e: DeclEntry) {
-        Rc::make_mut(&mut self.decl).insert(k.into(), Rc::new(e));
+        let d = Rc::make_mut(&mut self.decl);
+        d.ver = next_decl_version();
+        d.insert(k.into(), Rc::new(e));
     }
 
     /// 持久化插入包装（保持 `&Cxt` 调用方兼容）：浅克隆上下文后就地写。
-    /// 写时复制语义不变：Rc 共享时才克隆整表，父上下文不受影响——这正是
-    /// 递归定义需要的"占位只对本定义的检查可见"。
     pub fn decl_insert(&self, k: impl Into<SmolStr>, e: DeclEntry) -> Self {
         let mut cxt = self.clone();
         cxt.decl_insert_mut(k, e);
@@ -340,7 +390,8 @@ impl Cxt {
     ///
     /// 名字表 O(1)：先裁轨迹回本上下文基线（丢弃兄弟作用域残留），插入
     /// `(名字 → 本层级/类型)` 并把旧值追加进轨迹；子上下文只带新的
-    /// `name_mark`（= 轨迹长度）。条目值仍是共享 `Rc`，无 `Val` 深拷贝。
+    /// `name_mark`（= 轨迹长度）。语义等价于旧持久表（条目仍是共享 Rc，
+    /// 无 `Val` 深拷贝），但不再每次 `Rc::make_mut` 深拷整张表。
     pub fn bind(&self, x: Span<String>, a_quote: Tm, a: VTy) -> Self {
         let name_mark = {
             let mut s = self.names.borrow_mut();
@@ -441,7 +492,7 @@ impl Cxt {
             .filter_map(|(i, v)| {
                 let mut raw = v;
                 while let Val::VSub(inner, _) = raw {
-                    raw = &**inner;
+                    raw = inner;
                 }
                 match raw {
                     Val::Rigid(l, sp) if sp.is_empty() && l.0 + (i as u32) + 1 == n => Some(*l),

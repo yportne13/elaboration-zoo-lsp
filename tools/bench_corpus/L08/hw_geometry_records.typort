@@ -1,0 +1,180 @@
+// 项目级真实程序（手写）：二维几何库（点 / 尺寸 / 矩形）。
+//
+// 真实场景：CAD 前端里最小可用的几何记录库——记录构造、嵌套投影、
+// 记录更新（返回新记录）与派生度量。
+// 覆盖特性（L08，product type 重点）：
+//   - struct 声明 / new 构造 / 泛型 struct（Box[A]）；
+//   - 类型级投影链：`r.origin.x`、`r.size.w`（接收者只有类型时的 .mk 剥链）；
+//   - 值级投影链：`(new Rect(...)).size.h`（接收者是构造子值）；
+//   - 嵌套 new（`new Rect(new Point(...), new Size(...))`）；
+//   - 记录更新函数（translate / widen）返回新记录，配合递归 Nat 算术。
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+def add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def mul(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => zero
+        case succ(n) => add y (mul n y)
+    }
+
+def sub(x: Nat, y: Nat): Nat =
+    match y {
+        case zero => x
+        case succ(m) => match x {
+            case zero => zero
+            case succ(n) => sub n m
+        }
+    }
+
+def is_zero(x: Nat): Bool =
+    match x {
+        case zero => true
+        case succ(k) => false
+    }
+
+def le(x: Nat, y: Nat): Bool = is_zero (sub x y)
+
+// ── 记录类型 ──────────────────────────────────────────────────────────────
+
+struct Point {
+    x: Nat
+    y: Nat
+}
+
+struct Size {
+    w: Nat
+    h: Nat
+}
+
+struct Rect {
+    origin: Point
+    size: Size
+}
+
+struct Box[A] {
+    value: A
+}
+
+// 泛型访问器：类型级投影（接收者 p 只有类型 Box[A]）
+def unbox[A](b: Box[A]): A = b.value
+
+def box_nat : Box[Nat] = new Box(succ zero)
+def box_str : Box[String] = new Box("sensor")
+
+def unboxed_nat : Nat = unbox box_nat
+def unboxed_str : String = unbox box_str
+
+// ── 构造 ──────────────────────────────────────────────────────────────────
+
+def one : Nat = succ zero
+def two : Nat = succ (succ zero)
+def three : Nat = succ (succ (succ zero))
+def four : Nat = succ (succ (succ (succ zero)))
+
+def origin : Point = new Point(zero, zero)
+def unit_p : Point = new Point(one, one)
+def unit_size : Size = new Size(one, one)
+
+def p0 : Point = new Point(two, three)
+def s0 : Size = new Size(two, three)
+def r0 : Rect = new Rect(p0, s0)
+
+// 嵌套 new：实参里直接再 new
+def r1 : Rect = new Rect(new Point(one, four), new Size(three, two))
+
+// 值级投影链（接收者是构造子值）
+def vx : Nat = (new Point(two, four)).x
+def sy : Nat = (new Rect(new Point(one, two), new Size(three, four))).size.h
+def deep_v : Nat = (new Rect(new Point(one, two), new Size(three, four))).origin.y
+
+// 类型级投影链（接收者是变量，只有类型）
+def rect_x(r: Rect): Nat = r.origin.x
+def rect_y(r: Rect): Nat = r.origin.y
+def rect_w(r: Rect): Nat = r.size.w
+def rect_h(r: Rect): Nat = r.size.h
+def rect_area(r: Rect): Nat = mul r.size.w r.size.h
+def rect_perimeter(r: Rect): Nat = mul two (add r.size.w r.size.h)
+def rect_corner_x(r: Rect): Nat = add r.origin.x r.size.w
+def rect_corner_y(r: Rect): Nat = add r.origin.y r.size.h
+
+// ── 记录更新（返回新记录）─────────────────────────────────────────────────
+
+def translate(p: Point, dx: Nat, dy: Nat): Point =
+    new Point(add p.x dx, add p.y dy)
+
+def widen(r: Rect, d: Nat): Rect =
+    new Rect(r.origin, new Size(add r.size.w d, r.size.h))
+
+def stretch(r: Rect, dw: Nat, dh: Nat): Rect =
+    new Rect(r.origin, new Size(add r.size.w dw, add r.size.h dh))
+
+def move(r: Rect, dx: Nat, dy: Nat): Rect =
+    new Rect(translate r.origin dx dy, r.size)
+
+def box_up(r: Rect): Rect =
+    new Rect(r.origin, new Size(r.size.w, add r.size.h one))
+
+// ── 用例 ──────────────────────────────────────────────────────────────────
+
+def a0 : Nat = rect_area r0
+def p0p : Nat = rect_perimeter r0
+def cx0 : Nat = rect_corner_x r0
+def cy0 : Nat = rect_corner_y r0
+
+def r2 : Rect = widen r0 two
+def r3 : Rect = move r2 one one
+def r4 : Rect = box_up r3
+def r5 : Rect = stretch r4 three two
+
+def a5 : Nat = rect_area r5
+def w5 : Nat = rect_w r5
+def h5 : Nat = rect_h r5
+def ox5 : Nat = rect_x r5
+def oy5 : Nat = rect_y r5
+
+// 比较：矩形是否落在另一矩形内部（记录 + 递归 Nat 比较）
+def contains(outer: Rect, inner: Rect): Bool =
+    match le outer.origin.x inner.origin.x {
+        case true => match le outer.origin.y inner.origin.y {
+            case true => match le (rect_corner_x inner) (rect_corner_x outer) {
+                case true => le (rect_corner_y inner) (rect_corner_y outer)
+                case false => false
+            }
+            case false => false
+        }
+        case false => false
+    }
+
+def inside : Bool = contains r5 r0
+def inside_self : Bool = contains r5 r5
+
+println a0
+println p0p
+println cx0
+println cy0
+println a5
+println w5
+println h5
+println ox5
+println oy5
+println inside
+println inside_self
+println vx
+println sy
+println deep_v
+println unboxed_nat
+println unboxed_str

@@ -1,0 +1,17 @@
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Vec[A](len: Nat) {
+    nil -> Vec[A] zero
+    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
+}
+
+def f(v: Vec[Nat] (succ (succ zero))): Nat =
+    match v {
+        case nil => zero
+        case cons(h, nil) => h
+        case cons(h, cons(h2, t)) => h2
+    }

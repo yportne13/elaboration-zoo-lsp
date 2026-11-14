@@ -1,0 +1,23 @@
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+def len[A](xs: List[A]): Nat =
+    match xs {
+        case nil => zero
+        case cons(x, rest) => succ (len rest)
+    }
+
+def add(x: Nat, y: Nat) =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+println (add (len (cons zero nil)) (succ zero))

@@ -1,0 +1,11 @@
+
+enum Bool {
+    true
+    false
+}
+
+def ok(x: Bool): Bool =
+    match x {
+        case true => false
+        case _ => true
+    }

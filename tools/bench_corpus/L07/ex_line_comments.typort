@@ -1,0 +1,9 @@
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def two = succ (succ zero) // trailing comment
+
+println two

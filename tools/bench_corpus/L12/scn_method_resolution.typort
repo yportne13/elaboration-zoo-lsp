@@ -1,0 +1,25 @@
+
+def outParam[A](a: A): A = a
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+trait Foo {
+    def method: String
+}
+
+trait Bar {
+    def method: String
+}
+
+impl Foo for Nat {
+    def method: String = "foo_nat"
+}
+
+// Bar is NOT implemented for Nat
+// So method should resolve to Foo without ambiguity
+
+def two = succ (succ zero)
+println (two.method)

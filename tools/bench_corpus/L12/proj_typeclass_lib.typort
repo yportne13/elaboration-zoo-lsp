@@ -1,0 +1,103 @@
+// 类型类库：Show / Named / Tag 三个 trait 的多实例与泛型约束求解，
+// 调用点全部经隐式实例参数合成（实例解析密集）。
+def outParam[A](a: A): A = a
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+trait Show {
+    def show: String
+}
+
+trait Named {
+    def name(x: Nat): String
+}
+
+trait Tag {
+    def tag: String = "default"
+}
+
+impl Show for Bool {
+    def show: String =
+        match this {
+            case true => "true"
+            case false => "false"
+        }
+}
+
+impl Show for Nat {
+    def show: String =
+        match this {
+            case zero => "0"
+            case succ(n) => "n"
+        }
+}
+
+impl Named for Bool {
+    def name(x: Nat): String =
+        match x {
+            case zero => "bool"
+            case succ(k) => "bool+"
+        }
+}
+
+impl Named for Nat {
+    def name(x: Nat): String =
+        match x {
+            case zero => "nat"
+            case succ(k) => "nat+"
+        }
+}
+
+impl Tag for Bool {
+    def tag: String = "bool-tag"
+}
+
+def render[T][s: Show[T]](x: T): String = s.show x
+
+def named_as[T][n: Named[T]](x: T, k: Nat): String = n.name x k
+
+def tagged[T][t: Tag[T]](x: T): String = t.tag x
+
+def full_report[T][s: Show[T]][n: Named[T]](x: T): String =
+    string_concat (string_concat (s.show x) "/") (n.name x zero)
+
+def one = succ zero
+
+def two = succ one
+
+def show_bool = render true
+
+def show_zero = render zero
+
+def report_bool = full_report true
+
+def report_nat = full_report two
+
+def tag_bool = tagged true
+
+def named_two = named_as two two
+
+println show_bool
+
+println show_zero
+
+println report_bool
+
+println report_nat
+
+println tag_bool
+
+println named_two

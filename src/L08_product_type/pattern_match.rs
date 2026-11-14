@@ -68,6 +68,22 @@ pub struct Compiler {
     pending_pos: Vec<(Vec<(String, usize)>, Val)>,
     /// 当前下钻路径（根到当前字段的 ctor 选择链），臂内 push/pop 平衡。
     cur_path: Vec<(String, usize)>,
+    /// 第一条臂级错误对应的源码位置（P10）：`errors` 一次报全，位置取首条，
+    /// 供 LSP 把诊断指到出问题的模式上。
+    first_span: Option<Span<()>>,
+}
+
+/// 取模式的源码位置（用于错误定位）：`Any` 用自身 span，`Con` 用构造子名 span。
+fn pat_span(pat: &Pattern) -> Option<Span<()>> {
+    match pat {
+        Pattern::Any(s, _) => Some(*s),
+        Pattern::Con(name, _, _) => Some(Span {
+            data: (),
+            start_offset: name.start_offset,
+            end_offset: name.end_offset,
+            path_id: name.path_id,
+        }),
+    }
 }
 
 /// 一个嵌套拆分位置的记账：路径 = 根到被拆字段的 (构造子名, 字段下标)
@@ -84,15 +100,26 @@ struct NestedCheck {
 enum Walk {
     Matched(PatternDetail, Cxt),
     Unreachable,
+    /// P3：索引方程**无法判定**（卡住的 match 相等性预算耗尽 / fuel 耗尽）
+    /// ——既不是可达、也不是矛盾。不产生覆盖义务，但诊断必须与"不可达"分开。
+    Undecided,
 }
 
 impl Walk {
     fn matched(self) -> Option<(PatternDetail, Cxt)> {
         match self {
             Walk::Matched(d, c) => Some((d, c)),
-            Walk::Unreachable => None,
+            Walk::Unreachable | Walk::Undecided => None,
         }
     }
+}
+
+/// `unify_indices` 的失败形态：索引方程失败（带三档原因）或内部不变量错误。
+enum IndexUnify {
+    /// 合一失败：[Absurd] = 确定无解；[Undecided]/[Fuel] = 判不出来。
+    Kind(super::UnifyKind),
+    /// 构造子/类型形状不合约（内部不变量），不是合一结论。
+    Msg(String),
 }
 
 impl Compiler {
@@ -105,6 +132,7 @@ impl Compiler {
             nested_checks: Vec::new(),
             pending_pos: Vec::new(),
             cur_path: Vec::new(),
+            first_span: None,
         }
     }
 
@@ -119,12 +147,12 @@ impl Compiler {
     ) -> Result<(), Error> {
         // 被匹配对象的值（在 match 现场求值）：用于把"被匹配的变量本身"
         // 写入精化替换（见 walk_con 末尾）
-        let head_val = infer.eval(cxt.decl(), &cxt.env, scrut);
+        let head_val = infer.eval(cxt.decl(), &cxt.env, &scrut);
         // 编译期间的所有合一共享一个 fuel 池（深层递归防护）
         infer.meta_refuel();
         let head_sum = match infer.force(cxt.decl(), scrut_ty.clone()) {
             s @ Val::Sum(..) => s,
-            _ => return Err(Error("match 的对象必须是和类型（enum）".to_owned())),
+            _ => return Err(Error::new("match 的对象必须是和类型（enum）".to_owned())),
         };
         let ctor_names: Vec<String> = match &head_sum {
             Val::Sum(_, _, cases) => cases.iter().map(|c| c.data.clone()).collect(),
@@ -137,10 +165,12 @@ impl Compiler {
         // 覆盖检查：每个可达构造子必须被某个臂覆盖（通配臂覆盖全部）。
         // 可达性 = 在（meta + σ + 本地可解集）快照回滚下跑一次特化方程
         // （与臂内走查同一套判定）。
-        // 性能（U2，port L07 a78daec7）：probe_accessible 只用于"缺构造子"
-        // 报错；若所有构造子都已被某个臂覆盖（穷尽 match 的常态），整轮探测
-        // （每 ctor 一次 decl/meta 快照 + 特化方程）纯属浪费，直接跳过。
-        // 判据与循环体同源（同一个 covers），不改变判定。
+        //
+        // 性能（U2）：`probe_accessible` 的结果**只**用于"缺构造子"报错；若头部
+        // 和类型的每个构造子都已被某个臂覆盖（穷尽 match 的常态），下面的循环
+        // 不可能产生任何错误，整轮探测（每 ctor 一次 decl 表快照 + meta 快照 +
+        // 特化方程）纯属浪费，直接跳过。判据与循环体完全同源（同一个 `covers`），
+        // 不改变判定。
         let ctors = head_sum.sum_cases();
         let fully_covered = !ctors.is_empty()
             && ctors
@@ -166,6 +196,9 @@ impl Compiler {
                 // 被前面的通配臂遮蔽：运行时永不可达（首匹配语义）。
                 // owner 2026-09-20 口径：不可达的臂**报错**（与 Walk::Unreachable
                 // 的「分支不可达」同类），不静默跳过。
+                if self.first_span.is_none() {
+                    self.first_span = pat_span(pat);
+                }
                 self.errors
                     .push(format!("分支不可达：模式 {} 被前面的通配臂遮蔽", pat.pretty()));
                 continue;
@@ -202,7 +235,7 @@ impl Compiler {
                         t @ Val::Flex(..) => t,
                         t => {
                             let tm = infer.quote(cxt_arm.decl(), cxt_arm.lvl, t);
-                            infer.eval(cxt_arm.decl(), &cxt_arm.env, tm)
+                            infer.eval(cxt_arm.decl(), &cxt_arm.env, &tm)
                         }
                     };
                     let tm = infer.check(&cxt_arm, body.clone(), ret_type)?;
@@ -215,8 +248,27 @@ impl Compiler {
                     // 荒谬臂的嵌套位置不产生覆盖义务：臂本身的"分支不可达"
                     // 报错已承担语义（v3_absurd_nested_pattern_both_errors 钉）
                     self.pending_pos.clear();
+                    if self.first_span.is_none() {
+                        self.first_span = pat_span(pat);
+                    }
                     self.errors
                         .push(format!("分支不可达：模式 {} 与被匹配类型不相容", pat.pretty()));
+                }
+                Walk::Undecided => {
+                    // P3：判不出可达性 ≠ 不可达。不产生覆盖义务，但文案必须
+                    // 区分"矛盾"与"算不出来"——对齐 dpm 的 `UnifyRes::UIDK`
+                    // 与 Agda 的 "I am not sure if there should be a pattern …"。
+                    // 触发面不止卡住 match：rename/invert/solve 失败（作用域越界、
+                    // 剪枝失败）也归到这一档。
+                    // 本臂不检查分支体（与不可达臂同处置）。
+                    self.pending_pos.clear();
+                    if self.first_span.is_none() {
+                        self.first_span = pat_span(pat);
+                    }
+                    self.errors.push(format!(
+                        "无法判定：模式 {} 的索引方程无法判定（卡住的相等性，或无法解出替换/rename）",
+                        pat.pretty()
+                    ));
                 }
             }
             // 臂边界：回滚本臂的精化替换（O(1) 指针赋值）。本臂解出的
@@ -224,7 +276,7 @@ impl Compiler {
             // "烘焙"为无 def 形式）。solvable 同步回滚：上一臂多绑的槽若
             // 残留，会让后续臂特化方程中的瞬态 rigid（Λ 下钻产生的、超出
             // 本臂槽位的层级）被误判为可解——臂序依赖的可达性漂移
-            // （stale-solvable 污染，stale-solvable 回归钉）。
+            // （stale-solvable 污染，zz_stale_solvable_* 回归钉）。
             self.sub = sub_snap;
             self.solvable = solvable_snap;
             self.cur_path.clear();
@@ -273,7 +325,8 @@ impl Compiler {
         if self.errors.is_empty() {
             Ok(())
         } else {
-            Err(Error(self.errors.join("\n")))
+            // P10：文案不变（Display 只打文案），附加首条模式错误的 span
+            Err(Error(self.errors.join("\n"), self.first_span))
         }
     }
 
@@ -313,8 +366,9 @@ impl Compiler {
         // 会假 absurd，与臂内方程的判定不同步）。孪生版同点充值。
         infer.meta_refuel();
         let snap = infer.meta_snapshot();
-        // 性能（U1，port L07 a78daec7）：探测只读 decl 表，借用即可；旧实现
-        // 每个 (match × 构造子) 深拷整张 Decls。
+        // 性能（U1）：`probe_accessible` 只读 decl 表，借用即可；旧实现
+        // `cxt.decl().clone()` 是整张 `Decls` 的克隆（重建哈希桶 + 逐条
+        // `SmolStr`/`Rc` 递增），每 (match × 构造子) 一次 ⇒ O(matches×ctors×D)。
         let mut solvable = base_solvable.to_vec();
         let sub = init_sub.clone();
         let mut ty = entry.ty.clone();
@@ -345,12 +399,16 @@ impl Compiler {
                             solvable: &solvable,
                             acc: sub.clone(),
                         };
-                        // fuel 耗尽的失败是预算问题而非结构冲突：按可达处理
-                        // （保守地要求覆盖）。反方向（判不可达 → 覆盖检查放
-                        // 过该构造子）会让深负载下的非穷尽 match 被静默接受。
-                        Self::unify_indices(infer, cxt, lvl, &mut spec, head_sum, &ret_sum, &ctor.data)
-                            .is_ok()
-                            || infer.fuel_exhausted()
+                        // P3：只有**结构矛盾**才判不可达；"无法判定"与 fuel
+                        // 耗尽按可达处理（保守地要求覆盖）。反方向（判不可达 →
+                        // 覆盖检查放过该构造子）会让非穷尽 match 被静默接受。
+                        match Self::unify_indices(
+                            infer, cxt, lvl, &mut spec, head_sum, &ret_sum, &ctor.data,
+                        ) {
+                            Ok(()) => true,
+                            Err(IndexUnify::Kind(k)) => k != super::UnifyKind::Absurd,
+                            Err(IndexUnify::Msg(_)) => true,
+                        }
                     };
                 }
             }
@@ -373,19 +431,25 @@ impl Compiler {
         head_sum: &Val,
         ret_sum: &Val,
         ctor: &str,
-    ) -> Result<(), Error> {
+    ) -> Result<(), IndexUnify> {
         let (hp, rp) = match (head_sum, ret_sum) {
             (Val::Sum(_, p1, _), Val::Sum(_, p2, _)) => (p1, p2),
-            _ => return Err(Error(format!("构造子 {ctor} 的返回类型不是和类型"))),
+            _ => return Err(IndexUnify::Msg(format!("构造子 {ctor} 的返回类型不是和类型"))),
         };
         if hp.len() != rp.len() {
-            return Err(Error(format!("构造子 {ctor} 与被匹配类型的参数数不一致")));
+            return Err(IndexUnify::Msg(format!(
+                "构造子 {ctor} 与被匹配类型的参数数不一致"
+            )));
         }
         for (a, b) in hp.iter().zip(rp.iter()) {
-            // 卡住 match 比较次数预算按"每方程一份"重置（与 L07 参考版 /
-            // 孪生版每次 `unify_iter` 调用一份同口径，review R3/R8）。
+            // P3：每个方程独立记录失败原因。任一处"判不出 / 预算耗尽"都
+            // 说明整组方程不是**结构矛盾**——调用方据此报"无法判定"而非
+            // "不相容（分支不可达）"（对齐 dpm 的 `UnifyRes::UIDK`）。
+            infer.reset_unify_kind();
+            // 卡住 match 比较次数预算按"每方程一份"重置（与孪生版每次
+            // `unify_iter` 调用一份同口径，review R3/R8）。
             infer.reset_match_cmp_budget();
-            infer
+            if infer
                 .unify(
                     cxt.decl(),
                     lvl,
@@ -394,18 +458,10 @@ impl Compiler {
                     b.1.as_ref().clone(),
                     Some(spec),
                 )
-                .map_err(|_| {
-                    // fuel 耗尽的失败是"假 absurd"（预算问题非结构冲突），
-                    // 文案带尾注供诊断——与 unify_catch 的同名尾注一致
-                    let fuel_note = if infer.fuel_exhausted() {
-                        " (fuel exhausted)"
-                    } else {
-                        ""
-                    };
-                    Error(format!(
-                        "构造子 {ctor} 与被匹配类型不相容（分支不可达）{fuel_note}"
-                    ))
-                })?;
+                .is_err()
+            {
+                return Err(IndexUnify::Kind(infer.unify_kind()));
+            }
         }
         Ok(())
     }
@@ -457,7 +513,7 @@ impl Compiler {
             _ => {
                 // 非和类型头部：只能当变量绑定
                 if !subs.is_empty() {
-                    return Err(Error(format!(
+                    return Err(Error::new(format!(
                         "`{}` 不是构造子，不能带子模式解构",
                         name.data
                     )));
@@ -480,7 +536,7 @@ impl Compiler {
         if !is_ctor {
             // 不是该类型的构造子 → 变量绑定
             if !subs.is_empty() {
-                return Err(Error(format!(
+                return Err(Error::new(format!(
                     "`{}` 不是 {} 的构造子，不能带子模式解构",
                     name.data, sum_name.data
                 )));
@@ -496,7 +552,7 @@ impl Compiler {
         }
         let entry = cxt
             .decl_get(&format!("{}.{}", sum_name.data, name.data))
-            .ok_or_else(|| Error(format!("找不到构造子 {}.{}", sum_name.data, name.data)))?;
+            .ok_or_else(|| Error::new(format!("找不到构造子 {}.{}", sum_name.data, name.data)))?;
         // head 槽：Con 模式自身占一槽。运行时 eval_aux 的 Con 路径把被匹配值
         // prepend 进 env，三方（编译期绑定 / 运行时 prepend / bind_count）
         // 同序同数。
@@ -517,7 +573,7 @@ impl Compiler {
         let mut sub_queue: Vec<Pattern> = subs;
         let mut details: Vec<PatternDetail> = Vec::new();
         // 构造子自身绑定器的值（写入头部精化时用）
-        let mut ctor_datas: Vec<(Span<String>, Rc<Val>, Icit)> = Vec::new();
+        let mut ctor_datas: Vec<(super::VSpan, Rc<Val>, Icit)> = Vec::new();
         let ret = loop {
             match infer.force(cxt.decl(), wrap_sub(&self.sub, ty)) {
                 Val::Pi(bname, bicit, dom, closure) => {
@@ -546,7 +602,7 @@ impl Compiler {
                         Icit::Expl => match sub_queue.first() {
                             Some(p) if p.get_icit() == Icit::Expl => Some(sub_queue.remove(0)),
                             _ => {
-                                return Err(Error(format!(
+                                return Err(Error::new(format!(
                                     "构造子 {} 缺少字段 {} 的模式",
                                     name.data, bname.data
                                 )))
@@ -560,7 +616,7 @@ impl Compiler {
                             let lvl = cxt.lvl;
                             let dom_v = wrap_sub(&self.sub, dom.clone());
                             let c = cxt.bind(
-                                bname.clone().map(|n| format!("_{n}")),
+                                super::tmspan(&bname).map(|n| format!("_{n}")),
                                 infer.quote(cxt.decl(), cxt.lvl, dom_v.clone()),
                                 dom_v,
                             );
@@ -599,17 +655,17 @@ impl Compiler {
                                     field_sum.clone(),
                                 ));
                                 self.cur_path.push((name.data.clone(), details.len()));
-                                let walked = self
-                                    .walk_con(infer, cn, csubs, dom.clone(), u.clone(), &cxt)?
-                                    .matched();
+                                let walked =
+                                    self.walk_con(infer, cn, csubs, dom.clone(), u.clone(), &cxt)?;
                                 self.cur_path.pop();
                                 match walked {
-                                    Some(dc) => dc,
-                                    None => return Ok(Walk::Unreachable),
+                                    Walk::Matched(d, c) => (d, c),
+                                    Walk::Unreachable => return Ok(Walk::Unreachable),
+                                    Walk::Undecided => return Ok(Walk::Undecided),
                                 }
                             } else {
                                 if !csubs.is_empty() {
-                                    return Err(Error(format!(
+                                    return Err(Error::new(format!(
                                         "`{}` 不是构造子，不能带子模式解构",
                                         cn.data
                                     )));
@@ -635,7 +691,7 @@ impl Compiler {
             }
         };
         if !sub_queue.is_empty() {
-            return Err(Error(format!(
+            return Err(Error::new(format!(
                 "构造子 {} 的模式多了 {} 个子模式",
                 name.data,
                 sub_queue.len()
@@ -647,7 +703,7 @@ impl Compiler {
         let ret_sum = match infer.force(cxt.decl(), wrap_sub(&self.sub, ret)) {
             s @ Val::Sum(..) => s,
             _ => {
-                return Err(Error(format!(
+                return Err(Error::new(format!(
                     "构造子 {} 的返回类型不是和类型",
                     name.data
                 )))
@@ -657,10 +713,17 @@ impl Compiler {
             solvable: &self.solvable,
             acc: self.sub.clone(),
         };
-        let spec_res = Self::unify_indices(infer, &cxt, cxt.lvl, &mut spec, &head_sum, &ret_sum, &name.data);
+        let spec_res =
+            Self::unify_indices(infer, &cxt, cxt.lvl, &mut spec, &head_sum, &ret_sum, &name.data);
         self.sub = spec.acc;
-        if spec_res.is_err() {
-            return Ok(Walk::Unreachable);
+        match spec_res {
+            Ok(()) => {}
+            // 真矛盾：分支不可达（旧行为）
+            Err(IndexUnify::Kind(super::UnifyKind::Absurd)) => return Ok(Walk::Unreachable),
+            // 判不出来：不是矛盾，单独分流（P3）
+            Err(IndexUnify::Kind(_)) => return Ok(Walk::Undecided),
+            // 内部不变量错误：原样上报
+            Err(IndexUnify::Msg(m)) => return Err(Error::new(m)),
         }
         // 头部精化（无条件）：被匹配变量本身写入精化替换。`V a`、`add a zero`
         // 这类依赖被匹配变量的类型，要等 a := zero / a := succ t 之后才能
@@ -671,7 +734,7 @@ impl Compiler {
             if sp.is_empty() && x.0 < cxt.lvl.0 && self.solvable.contains(x) && !self.sub.has(*x) {
                 let ctor_val = Val::SumCase {
                     typ: Rc::new(head_sum.clone()),
-                    case_name: name.clone(),
+                    case_name: super::vspan(name.clone()),
                     datas: Rc::new(ctor_datas),
                 };
                 // 环守卫（浅 occurs）失败时跳过精化，不阻断分支检查
@@ -687,6 +750,11 @@ impl Compiler {
     /// 任何 head 都不会 panic——不命中就返回 None，由调用方停成 `Val::Match`。
     /// head 借用传入：构造子值迁 Rc 后 clone 是 O(1)（typ/datas 均为引用
     /// 计数），字段下钻直接透传借用，不再按值深拷贝剩余链。
+    ///
+    /// eval 借用化（性能评审 P0-1 第 2 步）：分支体以**借用**返回，调用方
+    /// `eval(&body)` 不再克隆。分支体在运行时只被原样透传（Any/Bind 直接
+    /// 返回、Con 下钻后仍是同一支体——旧实现递归时 `(body.clone(), env)`
+    /// 的 body 恒为入参本身），故递归下钻只需返回扩展 env。
     pub fn eval_aux<'a>(
         infer: &Infer,
         decl: &Decls,
@@ -703,7 +771,11 @@ impl Compiler {
         None
     }
 
-fn eval_aux_arm(
+    /// 单臂匹配（[`Self::eval_aux`] 的递归体）：head 命中 pat 时返回扩展后
+    /// 的 env；分支体由调用方持有，运行时不改写。语义与旧"单元素 cases 的
+    /// eval_aux 递归"逐点一致：字段值先 force（对齐旧递归入口的 force），
+    /// 构造子身份 / 字段数校验失败即本臂不命中。
+    fn eval_aux_arm(
         infer: &Infer,
         decl: &Decls,
         head: &Val,
@@ -750,7 +822,6 @@ fn eval_aux_arm(
             }
         }
     }
-
 }
 
 /// 顶层覆盖判定：通配 / 变量模式覆盖一切；Con 只覆盖同名构造子。
@@ -772,7 +843,7 @@ fn is_catch_all(pat: &Pattern, ctor_names: &[String]) -> bool {
 impl Val {
     fn sum_cases(&self) -> Vec<Span<String>> {
         match self {
-            Val::Sum(_, _, cases) => (**cases).clone(),
+            Val::Sum(_, _, cases) => cases.iter().map(super::tmspan).collect(),
             _ => vec![],
         }
     }

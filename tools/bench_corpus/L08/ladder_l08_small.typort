@@ -1,0 +1,187 @@
+// 规模阶梯（同形态，small/medium/large）：分层记录 schema。
+// 每层新增一个 struct 类型 + 一个嵌套记录值；层数即规模轴。
+// 末尾用一条与层数等长的投影链贯穿整条记录链。
+// 覆盖：struct 声明 / new 构造 / 类型级投影链 / 嵌套记录值。
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+struct R0 {
+    v: Nat
+}
+
+def val0 : R0 = new R0(zero)
+struct R1 {
+    v: Nat
+    inner: R0
+}
+
+def val1 : R1 = new R1(zero, val0)
+
+struct R2 {
+    v: Nat
+    inner: R1
+}
+
+def val2 : R2 = new R2(zero, val1)
+
+struct R3 {
+    v: Nat
+    inner: R2
+}
+
+def val3 : R3 = new R3(zero, val2)
+
+struct R4 {
+    v: Nat
+    inner: R3
+}
+
+def val4 : R4 = new R4(zero, val3)
+
+struct R5 {
+    v: Nat
+    inner: R4
+}
+
+def val5 : R5 = new R5(zero, val4)
+
+struct R6 {
+    v: Nat
+    inner: R5
+}
+
+def val6 : R6 = new R6(zero, val5)
+
+struct R7 {
+    v: Nat
+    inner: R6
+}
+
+def val7 : R7 = new R7(zero, val6)
+
+struct R8 {
+    v: Nat
+    inner: R7
+}
+
+def val8 : R8 = new R8(zero, val7)
+
+struct R9 {
+    v: Nat
+    inner: R8
+}
+
+def val9 : R9 = new R9(zero, val8)
+
+struct R10 {
+    v: Nat
+    inner: R9
+}
+
+def val10 : R10 = new R10(zero, val9)
+
+struct R11 {
+    v: Nat
+    inner: R10
+}
+
+def val11 : R11 = new R11(zero, val10)
+
+struct R12 {
+    v: Nat
+    inner: R11
+}
+
+def val12 : R12 = new R12(zero, val11)
+
+struct R13 {
+    v: Nat
+    inner: R12
+}
+
+def val13 : R13 = new R13(zero, val12)
+
+struct R14 {
+    v: Nat
+    inner: R13
+}
+
+def val14 : R14 = new R14(zero, val13)
+
+struct R15 {
+    v: Nat
+    inner: R14
+}
+
+def val15 : R15 = new R15(zero, val14)
+
+struct R16 {
+    v: Nat
+    inner: R15
+}
+
+def val16 : R16 = new R16(zero, val15)
+
+struct R17 {
+    v: Nat
+    inner: R16
+}
+
+def val17 : R17 = new R17(zero, val16)
+
+struct R18 {
+    v: Nat
+    inner: R17
+}
+
+def val18 : R18 = new R18(zero, val17)
+
+struct R19 {
+    v: Nat
+    inner: R18
+}
+
+def val19 : R19 = new R19(zero, val18)
+
+struct R20 {
+    v: Nat
+    inner: R19
+}
+
+def val20 : R20 = new R20(zero, val19)
+
+struct R21 {
+    v: Nat
+    inner: R20
+}
+
+def val21 : R21 = new R21(zero, val20)
+
+struct R22 {
+    v: Nat
+    inner: R21
+}
+
+def val22 : R22 = new R22(zero, val21)
+
+struct R23 {
+    v: Nat
+    inner: R22
+}
+
+def val23 : R23 = new R23(zero, val22)
+
+struct R24 {
+    v: Nat
+    inner: R23
+}
+
+def val24 : R24 = new R24(zero, val23)
+
+def deep : Nat = val24.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.v
+def deep2 : Nat = val24.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.v
+def deep3 : Nat = val24.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.v
+def deep4 : Nat = val24.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.v

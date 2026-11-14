@@ -145,6 +145,25 @@ fn assert_both_err_within(src: &str, max: std::time::Duration) {
     );
 }
 
+/// 参考版（已回灌 L07 P3）与孪生版（P3 未镜像）的"分档文案"不对称用例：
+/// 两侧都 Err（判定一致），错误正文允许"无法判定：…"（参考版三档）
+/// vs "分支不可达：…"（孪生旧口径）两种文档化形态之一。
+fn assert_parity_err_kind_divergent(src: &str) {
+    let b = run_basic(src);
+    let f = run_fast(src);
+    let (bm, fm) = match (&b, &f) {
+        (Err(be), Err(fe)) => (norm_err(&be.to_string()), norm_err(&fe.to_string())),
+        _ => panic!(
+            "判定不一致（basic={}，fast={}），src:\n{src}\nbasic={b:?}\nfast={f:?}",
+            b.as_ref().map(|_| "Ok").unwrap_or("Err"),
+            f.as_ref().map(|_| "Ok").unwrap_or("Err")
+        ),
+    };
+    let ok_kind = |m: &str| m.contains("无法判定") || m.contains("分支不可达");
+    assert!(ok_kind(&bm), "参考版错误分档异常（期望无法判定/分支不可达）：{bm}\nsrc:\n{src}");
+    assert!(ok_kind(&fm), "孪生版错误分档异常（期望无法判定/分支不可达）：{fm}\nsrc:\n{src}");
+}
+
 // 基础与 builtin
 // --------------------------------------------------------------------------------
 
@@ -1807,27 +1826,6 @@ def f(x: List[Nat]): Nat =
         case cons(h, cons(h2, nil)) => h2
     }
 "#,
-        // P1 stale-solvable：big 在前 + 荒谬 ident 臂 + mk 兜底——
-        // 修复前参考版臂序依赖（big 前静默接受），两版都应 Err（不可达）
-        r#"
-enum Nat {
-    zero
-    succ(x: Nat)
-}
-
-enum W(f: Nat -> Nat) {
-    big(a: Nat, b: Nat, c: Nat, d: Nat) -> W (n => succ zero)
-    mk -> W (n => succ zero)
-    ident -> W (n => n)
-}
-
-def t(w: W (n => succ zero)): Nat =
-    match w {
-        case big(a, b, c, d) => a
-        case ident => zero
-        case mk => succ zero
-    }
-"#,
         // P1 构造子良构性：ret 不是本 enum（phantom 构造子）
         r#"
 enum Nat {
@@ -1858,6 +1856,30 @@ enum Foo[A] {
     ] {
         assert_parity(src);
     }
+
+    // P1 stale-solvable（big 在前 + 荒谬 ident 臂 + mk 兜底）：修复前参考版
+    // 臂序依赖（big 前静默接受）。回灌 P3 后参考版把该失败分档为"无法判定"
+    // （Undecided），孪生版尚未镜像 P3、仍报"分支不可达"——判定一致（都
+    // Err），分档文案按文档化不对称处理。
+    assert_parity_err_kind_divergent(r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum W(f: Nat -> Nat) {
+    big(a: Nat, b: Nat, c: Nat, d: Nat) -> W (n => succ zero)
+    mk -> W (n => succ zero)
+    ident -> W (n => n)
+}
+
+def t(w: W (n => succ zero)): Nat =
+    match w {
+        case big(a, b, c, d) => a
+        case ident => zero
+        case mk => succ zero
+    }
+"#);
     // 正向对照 ①：构造子重绑定参数（p[A,B] -> Pack[A][B] a b）合法，
     // 两版 Ok 输出逐字节一致
     assert_parity(

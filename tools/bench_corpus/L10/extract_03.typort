@@ -1,0 +1,8 @@
+
+def Eq[A : Type 0](x : A, y : A) : Type 1 = (P : A -> Type 0) -> P x -> P y
+
+def refl[A : Type 0, x : A] : Eq[A] x x = P => px => px
+
+def m : (A : Type 0) -> (B : Type 0) -> (C : Type 0) -> (D : Type 0) -> D -> D = _
+
+def test (a : Type 0)(b : Type 0)(c : Type 0) : Eq (m a a b c) (d => d) = refl

@@ -1,0 +1,12 @@
+
+macro_rules make_bool {
+    (yes) => {
+        enum Yes { y }
+    }
+}
+
+make_bool yes
+
+def b = y
+
+println b

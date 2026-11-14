@@ -21,10 +21,22 @@ use super::{
 ///   `define` 每声明各克隆一次整表（表大小 O(D)），顶层循环总计 O(D²)。
 ///   本表现在只剩 `Cxt::new` 的两个内建 + 当前 def 内的 binder/let（个位数
 ///   条目）。查找顺序：本表优先（遮蔽），回落全局表——遮蔽序与旧单表一致。
+///
+/// **2026-11-12 载体切换（G1/G2 修复）**：顶层声明连值也搬出 Cxt——旧版
+/// `Infer::define_global` 还会 `env.prepend(值)` / `lvl+1` / `locals::Define`
+/// / `pruning.prepend(None)`，于是 env/lvl/locals/pruning 四条链都随声明数 D
+/// 增长：①引用老全局的 `eval` 在 Rc 单链 env 上 `iter().nth` 线性扫，每次
+/// O(D)；②`fresh_meta` 的 `close_ty(&cxt.locals, …)` 要包 D 层 Let 并重求值
+/// （每次 O(D²)）。现在全局值只在 `Infer::global`（键 = global_idx），项层
+/// 引用用哨兵大下标 `Tm::Var(Ix(global_idx + 1919810))`，`eval` 先判哨兵直查
+/// 全局表 O(1)（`mod.rs` 的 `eval_ref` 的 Var 臂）；Cxt 四条链只随**局部**
+/// binder 增长。语义逐值不变（全局仍是闭值常量，`quote`/`rename` 对哨兵
+/// Rigid 原样产出大下标），等价于 L07/L08 的「顶层声明只进 decl 表、不进
+/// 上下文」载体。
 #[derive(Debug, Clone)]
 pub struct Cxt {
-    pub env: Env, // Used for evaluation
-    pub lvl: Lvl, // Used for unification
+    pub env: Env, // Used for evaluation (局部 binder + Cxt::new 内建；不含顶层声明)
+    pub lvl: Lvl, // Used for unification (只计局部层级；顶层声明用哨兵层级)
     pub locals: Rc<Locals>,
     pub pruning: Pruning,
     pub src_names: BiMap<String, Lvl, Rc<VTy>>,
@@ -45,37 +57,37 @@ impl Cxt {
                 Tm::Lam(
                     empty_span("x".to_owned()),
                     Icit::Expl,
-                    Box::new(Tm::Lam(
+                    Rc::new(Tm::Lam(
                         empty_span("y".to_owned()),
                         Icit::Expl,
-                        Box::new(Tm::Prim),
+                        Rc::new(Tm::Prim),
                     )),
                 ),
                 Val::Lam(
-                    empty_span("x".to_owned()),
+                    super::vspan(empty_span("x".to_owned())),
                     Icit::Expl,
                     Closure(
                         List::new().prepend(Val::LiteralType),
                         Rc::new(Tm::Lam(
                             empty_span("y".to_owned()),
                             Icit::Expl,
-                            Box::new(Tm::Prim),
+                            Rc::new(Tm::Prim),
                         )),
                     ),
                 ),
                 Tm::Pi(
                     empty_span("x".to_owned()),
                     Icit::Expl,
-                    Box::new(Tm::Var(Ix(0))),
-                    Box::new(Tm::Pi(
+                    Rc::new(Tm::Var(Ix(0))),
+                    Rc::new(Tm::Pi(
                         empty_span("y".to_owned()),
                         Icit::Expl,
-                        Box::new(Tm::Var(Ix(1))),
-                        Box::new(Tm::Var(Ix(2))),
+                        Rc::new(Tm::Var(Ix(1))),
+                        Rc::new(Tm::Var(Ix(2))),
                     )),
                 ),
                 Val::Pi(
-                    empty_span("x".to_owned()),
+                    super::vspan(empty_span("x".to_owned())),
                     Icit::Expl,
                     Rc::new(Val::LiteralType),
                     Closure(
@@ -83,8 +95,8 @@ impl Cxt {
                         Rc::new(Tm::Pi(
                             empty_span("y".to_owned()),
                             Icit::Expl,
-                            Box::new(Tm::Var(Ix(1))),
-                            Box::new(Tm::Var(Ix(2))),
+                            Rc::new(Tm::Var(Ix(1))),
+                            Rc::new(Tm::Var(Ix(2))),
                         )),
                     ),
                 ),
