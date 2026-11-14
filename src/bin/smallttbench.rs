@@ -21,8 +21,63 @@
 
 #![allow(dead_code)]
 
+/// 可选分配计数（SMALLTTBENCH_ALLOC=1 时开启）：用于差距归因；
+/// 只在统计模式消耗原子操作，计时口径仍用默认（不设 env）的二进制。
+struct CountingAlloc;
+
+static ALLOC_COUNTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static ALLOC_N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static ALLOC_B: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static ALLOC_START_N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static ALLOC_START_B: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[inline]
+fn alloc_counting() -> bool {
+    ALLOC_COUNTING.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[inline]
+fn alloc_snapshot() -> (u64, u64) {
+    (
+        ALLOC_N.load(std::sync::atomic::Ordering::Relaxed),
+        ALLOC_B.load(std::sync::atomic::Ordering::Relaxed),
+    )
+}
+
+fn alloc_delta(s0: (u64, u64)) -> (u64, u64) {
+    let s1 = alloc_snapshot();
+    (s1.0 - s0.0, s1.1 - s0.1)
+}
+
+unsafe impl std::alloc::GlobalAlloc for CountingAlloc {
+    unsafe fn alloc(&self, l: std::alloc::Layout) -> *mut u8 {
+        if alloc_counting() {
+            ALLOC_N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            ALLOC_B.fetch_add(l.size() as u64, std::sync::atomic::Ordering::Relaxed);
+        }
+        unsafe { MiMalloc.alloc(l) }
+    }
+    unsafe fn dealloc(&self, p: *mut u8, l: std::alloc::Layout) {
+        unsafe { MiMalloc.dealloc(p, l) }
+    }
+    unsafe fn realloc(&self, p: *mut u8, l: std::alloc::Layout, new: usize) -> *mut u8 {
+        if alloc_counting() {
+            ALLOC_N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            ALLOC_B.fetch_add(new as u64, std::sync::atomic::Ordering::Relaxed);
+        }
+        unsafe { MiMalloc.realloc(p, l, new) }
+    }
+    unsafe fn alloc_zeroed(&self, l: std::alloc::Layout) -> *mut u8 {
+        if alloc_counting() {
+            ALLOC_N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            ALLOC_B.fetch_add(l.size() as u64, std::sync::atomic::Ordering::Relaxed);
+        }
+        unsafe { MiMalloc.alloc_zeroed(l) }
+    }
+}
+
 #[global_allocator]
-static ALLOC: mimalloc::MiMalloc = MiMalloc;
+static ALLOC: CountingAlloc = CountingAlloc;
 
 #[path = "../list.rs"]
 mod list;
@@ -139,6 +194,9 @@ fn measure<A>(
     let wrn = want(&cli.only, "ref_nf");
     let wt = want(&cli.only, "twin");
     let wtn = want(&cli.only, "twin_nf");
+    let alloc0 = alloc_snapshot();
+    ALLOC_START_N.store(alloc0.0, std::sync::atomic::Ordering::Relaxed);
+    ALLOC_START_B.store(alloc0.1, std::sync::atomic::Ordering::Relaxed);
     let mut ref_ok = true;
     let mut twin_ok = true;
     let mut nodes = 0u64;
@@ -203,6 +261,13 @@ fn print_case(
     twin_ok: bool,
     nodes: u64,
 ) {
+    if alloc_counting() {
+        let an = ALLOC_N.load(std::sync::atomic::Ordering::Relaxed)
+            - ALLOC_START_N.load(std::sync::atomic::Ordering::Relaxed);
+        let ab = ALLOC_B.load(std::sync::atomic::Ordering::Relaxed)
+            - ALLOC_START_B.load(std::sync::atomic::Ordering::Relaxed);
+        println!("ALLOC,{layer},{case},{size},{an},{ab}");
+    }
     let (rmin, rmed) = Times::stat(&t.ref_);
     let (rnmin, rnmed) = Times::stat(&t.ref_nf);
     let (tmin, tmed) = Times::stat(&t.twin);
@@ -563,6 +628,9 @@ fn run(cli: Cli) {
 
 fn main() {
     let cli = Cli::parse();
+    if matches!(std::env::var("SMALLTTBENCH_ALLOC").as_deref(), Ok("1")) {
+        ALLOC_COUNTING.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
     let stack_mb: usize = std::env::var("SMALLTTBENCH_STACK_MB")
         .ok()
         .and_then(|s| s.parse().ok())
