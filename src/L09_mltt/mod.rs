@@ -21,12 +21,16 @@ use crate::parser_lib::Span;
 
 mod cxt;
 mod elaboration;
-mod parser;
+// pub(crate)（parser/pretty）：tests/backport3_pretty_l0910.rs 以 #[path]
+// 把本模块编进测试 crate 后要直接调 pretty/parser 做方括号回归与回读断言
+// （L07/L08 的 parser 同款可见性；层模块本身在 lib.rs 里是私有的，不扩大
+// 对外 API）。
+pub(crate) mod parser;
 mod pattern_match;
 mod struct_eq;
 mod syntax;
 mod unification;
-mod pretty;
+pub(crate) mod pretty;
 pub(crate) mod bump_spine_iter;
 
 #[derive(Debug, Clone, Copy, PartialEq)]

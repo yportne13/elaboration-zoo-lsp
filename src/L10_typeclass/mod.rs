@@ -15,7 +15,10 @@ mod syntax;
 mod unification;
 mod typeclass;
 pub(crate) mod bump_spine_iter;
-mod pretty;
+// pub(crate)（pretty）：tests/backport3_pretty_l0910.rs 以 #[path] 把本模块
+// 编进测试 crate 后要直接调 pretty 做方括号回归与回读断言（parser 本就是
+// pub；层模块在 lib.rs 里私有，不扩大对外 API）。
+pub(crate) mod pretty;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MetaVar(u32);

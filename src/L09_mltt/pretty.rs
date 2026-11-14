@@ -46,10 +46,6 @@ const APPP: i32 = 2; // appp
 const PIP: i32 = 1;  // pip
 const LETP: i32 = 0; // letp
 
-fn bracket(s: String) -> String {
-    format!("{{{}}}", s)
-}
-
 fn paren(f: String) -> String {
     format!("({})", f)
 }
@@ -179,7 +175,9 @@ fn pretty_tm_inner(prec: i32, ns: List<String>, tm: &Tm, gn: GlobalNames<'_>) ->
             let f_t = pretty_tm_g(APPP, ns.clone(), t, gn);
             let f_u = match i {
                 Icit::Expl => pretty_tm_g(ATP, ns, u, gn),
-                Icit::Impl => bracket(pretty_tm_g(ATP, ns, u, gn)),
+                // 隐含实参用 parser 的 `f[x]` 语法；花括号只留给优先级分组
+                // （与 L11/L12/L13/L07 一致）。
+                Icit::Impl => format!("[{}]", pretty_tm_g(ATP, ns, u, gn)),
             };
             if need_paren {
                 format!("{{{f_t} {f_u}}}")
@@ -194,7 +192,8 @@ fn pretty_tm_inner(prec: i32, ns: List<String>, tm: &Tm, gn: GlobalNames<'_>) ->
 
             let binder = match i {
                 Icit::Expl => x,
-                Icit::Impl => bracket(x),
+                // 隐含 λ binder 用 parser 的 `[x] => ...` 语法。
+                Icit::Impl => format!("[{x}]"),
             };
 
             let body_printer = format!(" => {}", pretty_tm_g(LETP, new_ns, body, gn));
@@ -224,7 +223,8 @@ fn pretty_tm_inner(prec: i32, ns: List<String>, tm: &Tm, gn: GlobalNames<'_>) ->
                 let new_ns = ns.prepend(x.clone());
                 let binder = match i {
                     Icit::Expl => paren(format!("{x}: {}", pretty_tm_g(LETP, ns, a, gn))),
-                    Icit::Impl => bracket(format!("{x}: {}", pretty_tm_g(LETP, ns, a, gn))),
+                    // 隐含 Π binder 用 parser 的 `[x: A]` 语法。
+                    Icit::Impl => format!("[{x}: {}]", pretty_tm_g(LETP, ns, a, gn)),
                 };
                 let f_b = pretty_tm_g(PIP, new_ns, b, gn);
                 let ret = format!("{binder} → {f_b}");

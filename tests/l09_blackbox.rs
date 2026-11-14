@@ -13,7 +13,8 @@
 //!   - 成功：`Ok(String)`。显示形态为 L09–L13 的 **comma 血统**：
 //!     构造子值 `头名::分支名(实参, …)`（L08 的空格连接是 L08 本地形态，
 //!     不随 L08→L09 继承）；struct 脱糖分支名自带 `.mk`（`Point::Point.mk(...)`）；
-//!     未解隐式参数打印成 binder 形式（`{A} => List::nil`）；卡住 match 是
+//!     未解隐式参数打印成 binder 形式（`[A] => List::nil`；b0694c96 起隐含位
+//!     用 parser 认的方括号，花括号只留给优先级分组）；卡住 match 是
 //!     `n => (unsolved match n)`；越哨兵大下标 Var 显示 `recursive_N`；
 //!   - 类型/合一错误：`Err(Error)`；`Error.0` 是带源码偏移的 `Span<String>`，
 //!     Debug 形如 `Error("..." @ start,end)`；
@@ -166,7 +167,8 @@ fn bb_string_concat_partial_stuck() {
 fn bb_list_ctor_comma_display() {
     assert_lines(
         "enum Bool {\n    true\n    false\n}\n\nenum List[A] {\n    nil\n    cons(head: A, tail: List[A])\n}\n\nprintln nil\nprintln (cons true nil)\nprintln (cons true (cons false nil))\nprintln Bool\n",
-        &["{A} => List::nil", "List::cons(Bool::true, List::nil)", "List::cons(Bool::true, List::cons(Bool::false, List::nil))", "Bool"],
+        // 隐含 binder 用 parser 的 [] 语法（花括号只留给优先级分组）。
+        &["[A] => List::nil", "List::cons(Bool::true, List::nil)", "List::cons(Bool::true, List::cons(Bool::false, List::nil))", "Bool"],
     );
 }
 
