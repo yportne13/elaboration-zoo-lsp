@@ -391,6 +391,9 @@ typeclass 面零额外注册点（`TraitDecl`/`ImplDecl` 复用 def/enum 路径�
 实测（同机 min-of-3，`--only basic`）：common 40.97→**32.11 ms（−21.6%）**、
 自有语料 16.42→**5.25 ms（−68%）**、Eq 阶梯单文件 1078.9→**2.13 ms（507×）**、
 同文件 L09 语料 1103.7→**4.04 ms（273×）**；common/Eq 阶梯上已为 L07–L10 最快。
-测试 47/26 全绿、validate 22/0 与 25/9 同基线。详见
-`docs/l10-carrier-switch-2026-11-14.md`（含剩余 L10 实现债：l10bench
-strchain/struct、enum nf-parity panic、traitchain 慢）。
+l10bench（**重建后**）：strchain k11 7.15ms、struct k11 6.96ms、traitchain k9
+20.4ms（P0 前旧二进制是 57.3/166.6/25.5s，过期读数已撤回）、church 1.40ms、
+match 0.081ms、natadd 2.04ms——均与 L09 同级或更快，仅 universe 慢 7.7%。
+测试 47/26 全绿、validate 22/0 与 25/9 同基线。剩余：l10bench enum 的
+ref/twin quote 发散（既有，nf ref=28/twin=6；L09 同源通过）、P0.5（struct_eq/
+深链帧式化）未做。详见 `docs/l10-carrier-switch-2026-11-14.md` §4。

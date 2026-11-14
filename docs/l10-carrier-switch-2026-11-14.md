@@ -71,18 +71,45 @@ L09 2.703 / **L10 2.124 ms**（L10 最快，0.79–0.88×）。
 ⇒ 此前归因完全被证实：P0 后所有「D 超线性」形状回到近线性/常数；值复制类
 负载保持 L10 的 Rc 世代优势（相对 L07/L08/L09 仍快 1.4–2×，见 §3 跨层）。
 
+### 3.1 l10bench micro 家族（**重建 l10bench 后**；同族负载，各层自家生成器）
+
+> 重要勘误：P0 首轮记录的 l10bench strchain/struct/traitchain「仍慢」是**过期
+> 二进制**所致——第一次测量时 `target/release/l10bench.exe` 还是 P0 前 22:05 的
+> 构建（`realbench` 已重建、l10bench 没重建）。重建后三者的真实值如下：
+
+| 负载 | k | L10（P0 后） | L09 同族 | L08 同族 |
+|---|---:|---:|---:|---:|
+| church | 11 | 1.398 ms | 1.399 | 1.323 |
+| strchain | 11 | **7.151 ms** | 7.929 | 7.805 |
+| match | 11 | **0.081 ms** | 0.093 | 0.095 |
+| natadd | 11 | **2.039 ms** | 2.666 | 2.828 |
+| struct | 10 / 11 | **3.524 / 6.958 ms** | 5.117 / 10.238 | 4.967 / 10.074 |
+| universe | 11 | 4.320 ms | **4.012** | — |
+| traitchain | 9 | **20.4 ms**（P0 前旧二进制 25.5s） | — | — |
+
+即 P0 后 L10 在 strchain/struct/natadd/traitchain 上要么最大幅领先、要么回到
+L09 同级；只剩 universe 比 L09 慢约 7.7%（每 def check_universe 的 trait 机械
+常数，量级已正常）。**此前「strchain 57ms / struct 167ms / traitchain 25.5s」
+是过期二进制读数，予以撤回。**
+
 ## 4. 剩余问题（P0 未覆盖，如实登记）
 
-1. **l10bench 的 strchain/struct 仍是 L10 特有的慢**：k=11 约 **57.3ms / 166.6ms**
-   （P0 前 56.0 / 166.6，**无变化**）→ 不是载体税；同文件 `strchain_like_1600`
-   在 realbench 上 L10 已 2.3ms（比 L09 快），故慢在 l10bench 生成器/L10 该路径
-   实现本身（待单独定位，属 L10 实现债而非 P0 回归）。
-2. **l10bench enum 仍因孪生/参考 nf 节点数不一致 panic**（改动前就如此，非本轮）。
-3. **traitchain k=9 实测 25.5s**（trait 求解路径），基线未测但明显异常，列为
-   下一优先项（L10 自身 trait 性能债）。
-4. **P0.5 未做**：L10 参考版无 `struct_eq`；`quote`/`rename` 仍递归（L09 的
+1. **l10bench enum 仍因孪生/参考 nf 节点数不一致 panic**（既有，非 P0 引入）：
+   `realbench --layer L10 --corpus <enum_src 单文件>` 的 gate 给出
+   `nf_parity ref=28 twin=6`；同一源在 **L09 通过（ref=twin=28）**。
+   **已定位根因**（临时探针）：问题在 **L10 孪生 `bump_spine_iter`**，不在参考版——
+   对 `rep` 的 `case cons(h, xs)` 臂，孪生 `Compiler::compile` 的
+   `check_pm_final` 首轮 `unify_pm(cxt, cxt.lvl, …)` 返回 Err，该臂按「荒谬臂」
+   被静默丢弃；于是 `Tm::Match` 只剩 `nil` 一臂，末值 quote 节点数 6（参考版
+   保留两臂 = 28，与 L09 一致）。用户可见 `run` 输出/validate 语义正常，只影响
+   该 bench 口径。修复需对齐 L10 孪生 `unify_pm(lvl)`/`check_pm_final` 与参考版
+   （孪生 index 合一的既有缺陷，独立任务）。
+2. **universe 比 L09 慢 7.7%**（4.32 vs 4.01ms，k=11），量级正常，属 L10 trait
+   机械的每 def 常数；可留待后续微调。
+3. **P0.5 未做**：L10 参考版无 `struct_eq`；`quote`/`rename` 仍递归（L09 的
    深链帧式化未移植）——深值栈风险与迁移前相同。
-5. `cxt.lvl` 语义变为局部口径（错误文案靠 `display_val` 适配）；孪生仍是旧口径。
+4. `cxt.lvl` 语义变为局部口径（错误文案靠 `display_val` 适配）；孪生仍是旧口径。
+
 
 ## 5. 复现
 

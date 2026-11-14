@@ -202,8 +202,10 @@ proofs 100→400 ≈2.9 次幂），L07/L08/L09-new 全部线性。
      40.97→**32.11 ms（−21.6%，全场最快）**、自有语料 16.42→**5.25 ms（−68%）**、
      Eq 阶梯 1078.9→**2.13 ms（507×）**、同文件 L09 语料 1103.7→**4.04 ms（273×）**；
      proofs/let/meta/proj/type0 等 cause fixture 提升 161–1146×（D 超线性全部消失）。
-     剩余 L10 实现债（非 P0 回归）：l10bench strchain/struct 仍慢、enum nf-parity
-     panic、traitchain k9 25.5s，见该文档 §4。
+     l10bench 重建后：strchain k11 7.15ms、struct k11 6.96ms、traitchain k9 20.4ms
+     （P0 前旧二进制的 57.3/166.6/25.5s 为过期读数，已撤回），与 L09 同级或更快；
+     剩余：l10bench enum 的 ref/twin quote 发散（既有；ref nf=28/twin=6，L09 同源
+     通过）与 universe 慢 7.7%，见该文档 §4。P0.5（struct_eq/深链帧式化）未做。
    - **P1（L11/L12，各 1 个 session）**：同剧本逐层继承（L11/L12 已是 Rc 世代，
      重点在载体切换 + 匹配/meta 路径的 L09 回灌项 + 各自真实语料验收）。
    - **P2（可选）**：若要让 L09 也吃到整机 Rc 世代红利，另立「L09 值/项全 Rc 化」实验
