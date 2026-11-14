@@ -694,10 +694,12 @@ println(moduleTreeVL(foo.create[myCd].tree))
 
 ### #5 RegInit 函数式 API
 
-**决策：不做独立 API；现有宏 + 工厂 + regNext 已覆盖。**（开放，推荐不做）
+**决策：已实现（`regInit(value)` + `RegInit[T]` typeclass）。**（2026-11 落地）
 
-- 理由：SpinalHDL `RegInit(t)` 的能力在本语言拆在三处：宏 `reg x = T[w] init v`（体内声明）、`auto*RegInit(w, v)` 工厂族（任意位置、BindingName 命名）、`regNext/regNextWhen`（函数式延迟）。再加 `RegInit(t)` 只是别名，且函数式形态拿不到比 `[bn: BindingName]` 更好的命名来源。
-- 影响面：若做，仅 `hdl-signals.typort` 增一个泛型委托（`def regInit[bn, T][r: RegInitClass[T]](t: T): T`），成本极低，收益同样极低。
+- 现状：`hdl-signals.typort` 的 `RegInit[T]` 镜像 `RegNext`（`mkInitReg(name)`；UInt/Bits/SInt/Bool 四个 impl 直接建 `create*RegWidthInit`，initVal = receiver 的 `this.expr`），入口 `def regInit[bn: BindingName, T][r: RegInit[T]](value: T): T`，寄存器按 let 绑定名命名。
+- codegen：reset 行由 `hdl-verilog.typort` 的 `collectInitLinesCd` 用 `exprVL` 发射（`    r <= <expr>;`），因此初值可以是任意 Expr（常量算术/mux/位运算…）；`literal` 初值的输出与原 `verilogLiteral` 路径逐字节一致。`verilogLiteral` 仅剩 `hdl-core.typort` 里的死代码 `collectInitLines` 在用（无调用方）。
+- 限制：综合要求初值表达式为常量（信号初值只可仿真，不综合）。
+- 示例/回归：`examples/hdl/07-registers.typort` 07g 段；`legacy_tests::test_hdl_reg_init_expr`（四类型 reset 行断言）。
 
 ### #6 常量移位 `<<`/`>>` 变宽 vs 保持宽度
 

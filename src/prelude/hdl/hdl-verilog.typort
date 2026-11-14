@@ -1588,42 +1588,46 @@ def assertsVL[ne: Nat](es: Vec[Expr] ne, cd: ClockDomain): String =
 // Collect reset-init lines for ONE clock domain. Non-Cd init regs belong to
 // the module default cd only (isMain=true); createRegWidthInitCd belongs to
 // its own cd.
-/// Reset-init lines (`    <name> <= <literal>;`) for ONE clock domain: the
+/// Reset-init lines (`    <name> <= <init>;`) for ONE clock domain: the
 /// plain `*Init` factories only when `isMain`, the `*InitCd` factories when their
-/// cd matches.  The literal comes from `verilogLiteral`.
+/// cd matches.  `initVal` is a full `Expr` rendered by `exprVL`, so ANY
+/// expression initializer works (literal, mux, const arithmetic) — for the reset
+/// block to be synthesizable the expression must be constant.  `literal` inits
+/// render exactly as the old `verilogLiteral` path did (`natToDec`), so the
+/// generated text for `init <nat>` registers is unchanged.
 def collectInitLinesCd[ne: Nat](es: Vec[Expr] ne, cd: ClockDomain, isMain: Boolean): List[String] = match es {
     case nil => lnil
     case cons(e, tail) => match e {
         case createRegWidthInit(name, _, initVal) =>
             match isMain {
-                case true => lcons ("    " + name + " <= " + verilogLiteral(initVal) + ";") (collectInitLinesCd(tail, cd, isMain))
+                case true => lcons ("    " + name + " <= " + exprVL(initVal) + ";") (collectInitLinesCd(tail, cd, isMain))
                 case false => collectInitLinesCd(tail, cd, isMain)
             }
         case createSIntRegWidthInit(name, _, initVal) =>
             match isMain {
-                case true => lcons ("    " + name + " <= " + verilogLiteral(initVal) + ";") (collectInitLinesCd(tail, cd, isMain))
+                case true => lcons ("    " + name + " <= " + exprVL(initVal) + ";") (collectInitLinesCd(tail, cd, isMain))
                 case false => collectInitLinesCd(tail, cd, isMain)
             }
         case createOutRegWidthInit(name, _, initVal) =>
             match isMain {
-                case true => lcons ("    " + name + " <= " + verilogLiteral(initVal) + ";") (collectInitLinesCd(tail, cd, isMain))
+                case true => lcons ("    " + name + " <= " + exprVL(initVal) + ";") (collectInitLinesCd(tail, cd, isMain))
                 case false => collectInitLinesCd(tail, cd, isMain)
             }
         case createSIntOutRegWidthInit(name, _, initVal) =>
             match isMain {
-                case true => lcons ("    " + name + " <= " + verilogLiteral(initVal) + ";") (collectInitLinesCd(tail, cd, isMain))
+                case true => lcons ("    " + name + " <= " + exprVL(initVal) + ";") (collectInitLinesCd(tail, cd, isMain))
                 case false => collectInitLinesCd(tail, cd, isMain)
             }
         case createRegWidthInitCd(name, _, initVal, c) =>
             let same = cdEq(c, cd);
             match same {
-                case true => lcons ("    " + name + " <= " + verilogLiteral(initVal) + ";") (collectInitLinesCd(tail, cd, isMain))
+                case true => lcons ("    " + name + " <= " + exprVL(initVal) + ";") (collectInitLinesCd(tail, cd, isMain))
                 case false => collectInitLinesCd(tail, cd, isMain)
             }
         case createSIntRegWidthInitCd(name, _, initVal, c) =>
             let same = cdEq(c, cd);
             match same {
-                case true => lcons ("    " + name + " <= " + verilogLiteral(initVal) + ";") (collectInitLinesCd(tail, cd, isMain))
+                case true => lcons ("    " + name + " <= " + exprVL(initVal) + ";") (collectInitLinesCd(tail, cd, isMain))
                 case false => collectInitLinesCd(tail, cd, isMain)
             }
         case _ => collectInitLinesCd(tail, cd, isMain)

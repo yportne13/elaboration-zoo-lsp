@@ -5,6 +5,9 @@
 //   output reg x = UInt[8] init 42 带异步复位初值（结果作 output 端口，自动加 reset 端口）
 //   regNext(value)      延迟一拍（任意 Data，SpinalHDL 风格；内部寄存器由 output 端口送出）
 //   regNextWhen(v, cond) 条件延迟（同上）
+//   regInit(value)      函数式寄存器，初值 = value 的表达式
+//                       （reset 块内 r <= <expr>;，exprVL 发射；
+//                         综合要求表达式为常量）
 //   when 块内的 :=          条件寄存器赋值
 // ============================================================
 
@@ -16,13 +19,13 @@ module regBasic {
 println("=== 07a: regBasic (普通寄存器) ===")
 println(moduleTreeVL(regBasic.create.tree))
 
-module regInit {
+module regInitNat {
     output reg r = UInt[8] init 42
     input a = UInt[8]
     r := a + 1
 }
-println("=== 07b: regInit (复位初值 42) ===")
-println(moduleTreeVL(regInit.create.tree))
+println("=== 07b: regInitNat (复位初值 42) ===")
+println(moduleTreeVL(regInitNat.create.tree))
 
 module regNextDemo {
     input a = UInt[8]
@@ -77,3 +80,20 @@ module regInWhen {
 }
 println("=== 07f: regInWhen (when 内寄存器赋值) ===")
 println(moduleTreeVL(regInWhen.create.tree))
+
+module regInitExpr {
+    let a = UInt[8]
+    let b = Bool
+    let x = Bits[4]
+    let s = SInt[4]
+    let r = regInit(a + 1)
+    let r2 = regInit(b)
+    let r3 = regInit(x)
+    let r4 = regInit(s)
+    r := a
+    r2 := b
+    r3 := x
+    r4 := s
+}
+println("=== 07g: regInitExpr (表达式初值) ===")
+println(moduleTreeVL(regInitExpr.create.tree))

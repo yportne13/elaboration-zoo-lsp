@@ -767,6 +767,53 @@ def regNext[bn: BindingName, T][r: RegNext[T]](value: T): T = r.mkReg(value, loo
 def regNextWhen[bn: BindingName, T][r: RegNext[T]](value: T, cond: Bool): T = r.mkRegWhen(value, loopName(bn.name), cond)
 
 // ============================================================
+//  RegInit: functional register with an EXPRESSION reset value
+//  (regInit(value) — the register resets to `value`'s expression)
+//  Mirrors the RegNext typeclass above: the receiver (`value`) is the init
+//  source, and each impl creates a create*RegWidthInit reg whose initVal IS
+//  the receiver's Expr.  hdl-verilog's collectInitLinesCd renders initVal
+//  through exprVL, so the reset block emits `r <= <expr>;` for any Expr
+//  (literal inits stay byte-identical to the old nat-only path).
+//    let r = regInit(a + 1)    // reset block: r <= (a + 1);
+//    let r = regInit(x.not)    // reset block: r <= ~x;
+//  NOTE: the init expression must be constant for the reset block to be
+//  synthesizable (a signal-based init is legal simulation Verilog only).
+// ============================================================
+
+/// Reset-init typeclass: `mkInitReg` creates a register of the **same** type as the receiver and makes the receiver's expression its async-reset value (`collectInitLinesCd` emits `r <= <expr>;`). Impls exist for UInt/Bits/SInt/Bool; the register is named by the `name` argument (the `regInit` wrapper passes the caller's let binding).
+trait RegInit[T] {
+    /// Create a register initialized to this value's expression, named `name`.
+    def mkInitReg(name: String): T
+}
+
+impl[w: Nat] RegInit[UInt[w]] for UInt[w] {
+    def mkInitReg(name: String): UInt[w] =
+        let e = createSignalExpr(name, createRegWidthInit(name, w, this.expr));
+        UInt.mk(Some(name), e)
+}
+
+impl[w: Nat] RegInit[Bits[w]] for Bits[w] {
+    def mkInitReg(name: String): Bits[w] =
+        let e = createSignalExpr(name, createRegWidthInit(name, w, this.expr));
+        Bits.mk(Some(name), e)
+}
+
+impl[w: Nat] RegInit[SInt[w]] for SInt[w] {
+    def mkInitReg(name: String): SInt[w] =
+        let e = createSignalExpr(name, createSIntRegWidthInit(name, w, this.expr));
+        SInt.mk(Some(name), e)
+}
+
+impl RegInit[Bool] for Bool {
+    def mkInitReg(name: String): Bool =
+        let e = createSignalExpr(name, createRegWidthInit(name, 1, this.expr));
+        Bool.mk(Some(name), e)
+}
+
+/// Functional register: creates a register of the receiver's type, names it after the caller's let binding (`let r = regInit(expr)` → register `r`) and uses the receiver's expression as the async-reset value, so the reset block emits `r <= <expr>;`. Dispatches through the `RegInit[T]` typeclass (UInt/Bits/SInt/Bool). Unlike the `reg x = T[w] init <nat>` macro, the init is an arbitrary Expr — keep it constant for synthesizable output.
+def regInit[bn: BindingName, T][r: RegInit[T]](value: T): T = r.mkInitReg(value, loopName(bn.name))
+
+// ============================================================
 //  Counter — SpinalHDL 风格计数器
 //  counter(w)       自增计数器：每周期 value := value + 1
 //  counterInc(w, en) 使能计数：when(en) { value := value + 1 }

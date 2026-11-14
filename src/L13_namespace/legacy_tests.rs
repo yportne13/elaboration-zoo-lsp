@@ -1509,6 +1509,10 @@ fn test_examples_hdl_dir() {
             "dc <= c;",               // regNextAny Bool 时钟赋值
             "reg signed [3:0] de;",   // regNext 任意 Data（SInt）
             "de <= e;",               // regNextAny SInt 时钟赋值
+            "r <= (a + 1);",          // regInit 表达式初值（UInt）
+            "r2 <= b;",               // regInit 表达式初值（Bool）
+            "r3 <= x;",               // regInit 表达式初值（Bits）
+            "r4 <= s;",               // regInit 表达式初值（SInt）
         ]),
         ("08-control-flow.typort", include_str!("../../examples/hdl/08-control-flow.typort"), &[
             "always @(*) begin",      // when 组合逻辑
@@ -3413,6 +3417,49 @@ println(moduleTreeVL(Test.create.tree))
             assert!(output.contains("myregs <= 1;"), "SInt reg init should emit 'myregs <= 1;', got: {}", output);
             assert!(output.contains("myregbool <= 1;"), "Bool reg init should emit 'myregbool <= 1;', got: {}", output);
             assert!(output.contains("reg signed [7:0] myregs"), "SInt reg should be signed, got: {}", output);
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+// Test regInit(value): the reset init is value's EXPRESSION, rendered by
+// exprVL (not a Nat literal).  All four RegInit impls (UInt/Bool/Bits/SInt)
+// reach the reset block; the clocked drives below differ from the inits, so
+// each asserted line can only come from the reset branch.
+#[test]
+fn test_hdl_reg_init_expr() {
+    let input = r#"
+module Test {
+    let a = UInt[8]
+    let b = Bool
+    let x = Bits[4]
+    let s = SInt[4]
+    let r = regInit(a + 1)
+    let r2 = regInit(!b)
+    let r3 = regInit(x.not)
+    let r4 = regInit(s + 1)
+    r := a
+    r2 := b
+    r3 := x
+    r4 := s
+}
+
+println(moduleTreeVL(Test.create.tree))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            assert!(output.contains("always @(posedge clk or posedge reset)"),
+                "regInit should add an async reset, got: {}", output);
+            assert!(output.contains("if (reset) begin"), "regInit should emit a reset branch, got: {}", output);
+            assert!(output.contains("r <= (a + 1);"), "UInt regInit expr init, got: {}", output);
+            assert!(output.contains("r2 <= !b;"), "Bool regInit expr init, got: {}", output);
+            assert!(output.contains("r3 <= ~x;"), "Bits regInit expr init, got: {}", output);
+            assert!(output.contains("r4 <= (s + 1);"), "SInt regInit expr init, got: {}", output);
+            // The reset lines precede the else branch; clocked drives follow it.
+            assert!(output.contains("r4 <= (s + 1);\n    end else begin"),
+                "expr init should be inside the reset branch, got: {}", output);
+            assert!(!output.contains("<= 0;"), "no literal-0 fallback should appear, got: {}", output);
         }
         Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
     }
