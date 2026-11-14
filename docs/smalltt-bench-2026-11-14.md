@@ -419,6 +419,9 @@ target\release\smallttbench.exe --layer L10 --case natconv --sizes 1M --rounds 1
 
 ### 11.6 同机结论（对 §6/§8 的修订）
 
+> 更细的差距归因（分配计数 / 峰值内存 / 逐单位成本 / 逐层差异）见
+> [smalltt-gap-analysis-2026-11-14.md](smalltt-gap-analysis-2026-11-14.md)。
+
 1. **twin 与 smalltt 已同量级**：nf 族 0.33–0.71×（更快）、NatConv 10M 0.84×、NatConv 1M/5M 1.36×/1.83×、
    TreeConv 1.5–2.4×、TreeConvM 2.2–2.9×、vecTest 3.3×。
 2. **twin 仍明显落后的两块**：stlc 吞吐 5.3–6.8×；pairTest 形态（≥2500×，设计缺口）。
