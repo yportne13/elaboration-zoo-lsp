@@ -10,10 +10,6 @@ const APPP: i32 = 2; // appp
 const PIP: i32 = 1;  // pip
 const LETP: i32 = 0; // letp
 
-fn bracket(s: &str) -> String {
-    format!("{{{}}}", s)
-}
-
 fn paren(s: &str) -> String {
     format!("({})", s)
 }
@@ -72,10 +68,12 @@ fn go(prec: i32, ns: List<String>, tm: &Tm, out: &mut String) {
             out.push(' ');
             match i {
                 Icit::Expl => go(ATP, ns, u, out),
+                // 隐含实参用 parser 的 `f[x]` 语法；花括号只留给优先级分组
+                // （与 L13/L07 一致）。
                 Icit::Impl => {
-                    out.push('{');
+                    out.push('[');
                     go(ATP, ns, u, out);
-                    out.push('}');
+                    out.push(']');
                 }
             }
             if need_paren {
@@ -92,10 +90,11 @@ fn go(prec: i32, ns: List<String>, tm: &Tm, out: &mut String) {
             }
             match i {
                 Icit::Expl => out.push_str(&x),
+                // 隐含 λ binder 用 parser 的 `[x] => ...` 语法。
                 Icit::Impl => {
-                    out.push('{');
+                    out.push('[');
                     out.push_str(&x);
-                    out.push('}');
+                    out.push(']');
                 }
             }
             out.push_str(" => ");
@@ -122,7 +121,8 @@ fn go(prec: i32, ns: List<String>, tm: &Tm, out: &mut String) {
                 let dom = pretty_tm(LETP, ns, a);
                 match i {
                     Icit::Expl => out.push_str(&paren(&format!("{x}: {dom}"))),
-                    Icit::Impl => out.push_str(&bracket(&format!("{x}: {dom}"))),
+                    // 隐含 Π binder 用 parser 的 `[x: A]` 语法。
+                    Icit::Impl => out.push_str(&format!("[{x}: {dom}]")),
                 }
                 out.push_str(" → ");
                 go(PIP, new_ns, b, out);
@@ -245,7 +245,7 @@ fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &P
                         };
                         let arg_display = match i {
                             Icit::Expl => arg_str,
-                            Icit::Impl => bracket(&arg_str),
+                            Icit::Impl => format!("[{arg_str}]"),
                         };
                         if need_paren {
                             out.push('(');
@@ -274,7 +274,7 @@ fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &P
                         let arg_str = format!("@{}", arg_index);
                         let arg_display = match i {
                             Icit::Expl => arg_str,
-                            Icit::Impl => bracket(&arg_str),
+                            Icit::Impl => format!("[{arg_str}]"),
                         };
                         if need_paren {
                             out.push('(');

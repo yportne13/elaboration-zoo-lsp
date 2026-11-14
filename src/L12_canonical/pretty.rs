@@ -12,10 +12,6 @@ const APPP: i32 = 2;
 const PIP: i32 = 1;
 const LETP: i32 = 0;
 
-fn bracket(s: &str) -> String {
-    format!("{{{}}}", s)
-}
-
 fn paren(s: &str) -> String {
     format!("({})", s)
 }
@@ -74,10 +70,12 @@ fn go(prec: i32, indent: usize, ns: List<SmolStr>, tm: &Tm, out: &mut String) {
             out.push(' ');
             match i {
                 Icit::Expl => go(ATP, indent, ns, u, out),
+                // 隐含实参用 parser 的 `f[x]` 语法；花括号只留给优先级分组
+                // （与 L13/L07 一致）。
                 Icit::Impl => {
-                    out.push('{');
+                    out.push('[');
                     go(ATP, indent, ns, u, out);
-                    out.push('}');
+                    out.push(']');
                 }
             }
             if need_paren {
@@ -94,10 +92,11 @@ fn go(prec: i32, indent: usize, ns: List<SmolStr>, tm: &Tm, out: &mut String) {
             }
             match i {
                 Icit::Expl => out.push_str(&x),
+                // 隐含 λ binder 用 parser 的 `[x] => ...` 语法。
                 Icit::Impl => {
-                    out.push('{');
+                    out.push('[');
                     out.push_str(&x);
-                    out.push('}');
+                    out.push(']');
                 }
             }
             out.push_str(" => ");
@@ -124,7 +123,8 @@ fn go(prec: i32, indent: usize, ns: List<SmolStr>, tm: &Tm, out: &mut String) {
                 let dom = pretty_tm_indent(LETP, indent, ns, a);
                 match i {
                     Icit::Expl => out.push_str(&paren(&format!("{x}: {dom}"))),
-                    Icit::Impl => out.push_str(&bracket(&format!("{x}: {dom}"))),
+                    // 隐含 Π binder 用 parser 的 `[x: A]` 语法。
+                    Icit::Impl => out.push_str(&format!("[{x}: {dom}]")),
                 }
                 out.push_str(" → ");
                 go(PIP, indent, new_ns, b, out);
@@ -302,7 +302,7 @@ fn go_app_pruning(p: i32, indent: usize, top_ns: List<SmolStr>, ns: List<SmolStr
                         };
                         let arg_display = match i {
                             Icit::Expl => arg_str,
-                            Icit::Impl => bracket(&arg_str),
+                            Icit::Impl => format!("[{arg_str}]"),
                         };
                         if need_paren {
                             out.push('(');
@@ -329,7 +329,7 @@ fn go_app_pruning(p: i32, indent: usize, top_ns: List<SmolStr>, ns: List<SmolStr
                         let arg_str = format!("@{}", arg_index);
                         let arg_display = match i {
                             Icit::Expl => arg_str,
-                            Icit::Impl => bracket(&arg_str),
+                            Icit::Impl => format!("[{arg_str}]"),
                         };
                         if need_paren {
                             out.push('(');
@@ -366,17 +366,26 @@ fn pretty_tm_indent(prec: i32, indent: usize, ns: List<SmolStr>, tm: &Tm) -> Str
 }
 
 fn pretty_nat(prec: i32, indent: usize, ns: List<SmolStr>, param: Option<&Tm>, sum: u128) -> String {
-    match param {
-        Some(Tm::SumCase { is_trait, typ, case_name, datas: params }) if matches!(
-            typ.as_ref(),
-            Tm::Sum(name, _, _, _) if name.data == "Nat",
-        ) => if case_name.data == "zero" {
-            format!("{sum}")
-        } else {
-            pretty_nat(prec, indent, ns, params.first().map(|x| x.1.as_ref()), sum + 1)
-        },
-        Some(tm) => format!("{} + {}", pretty_tm_indent(prec, indent, ns, tm), sum),
-        None => format!("unknown + {}", sum),
+    // 迭代：大 `Nat` 字面量是百万层 `succ` 链，递归版每层吃一个原生栈帧
+    // （从 L13 `3be9c24` 回灌，零检查按 L12 的 `case_name == "zero"` 适配）。
+    // 语义与递归版逐字节一致："n" / "tm + n" / "unknown + n" 三个分支不变。
+    let mut sum = sum;
+    let mut param = param;
+    loop {
+        match param {
+            Some(Tm::SumCase { is_trait, typ, case_name, datas: params }) if matches!(
+                typ.as_ref(),
+                Tm::Sum(name, _, _, _) if name.data == "Nat",
+            ) => {
+                if case_name.data == "zero" {
+                    return format!("{sum}");
+                }
+                sum += 1;
+                param = params.first().map(|x| x.1.as_ref());
+            }
+            Some(tm) => return format!("{} + {}", pretty_tm_indent(prec, indent, ns, tm), sum),
+            None => return format!("unknown + {}", sum),
+        }
     }
 }
 
