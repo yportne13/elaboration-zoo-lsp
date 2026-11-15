@@ -1,38 +1,36 @@
-//! GADT 索引精化（pattern-match refinement）跨层行为钉子（2026-11-15 实测）。
+//! GADT 索引精化（pattern-match refinement）跨层行为钉子（2026-11-15 实测 + L08 修复后复测）。
 //!
-//! 背景：L13 的 [struct_refine_probe](../src/L13_namespace/struct_refine_probe.rs) 有一组
-//! 「已知弱点」case（weak01–weak05）。2026-11 复核确认：**weak03/weak05 在 L13 参考版
-//! 已通过**（9-29 精化重构），weak01/02/04 则是本来就类型错误的程序——被拒是**正确**行为
-//! （probe 里 `known_weakness!` 的标签是 8 月分析阶段的遗留，summary 已改口"正确拒绝"）。
+//! 背景：L13 的 src/L13_namespace/struct_refine_probe.rs 有一组「已知弱点」case
+//! （weak01–weak05）。2026-11 复核：weak03/weak05 在 L13 参考版已通过（9-29 精化重构），
+//! weak01/02/04 则是本来类型错误的程序——被拒是正确行为（probe 的 known_weakness 标签
+//! 是 8 月分析阶段遗留）。
 //!
-//! 本文件把同构 case 钉到 L07–L13（可用性受限的层只测可表达部分），实测矩阵：
+//! 实测矩阵（同构 case 钉到 L07–L13）：
+//!   control（well-typed GADT head）：            L07..L13 全 Ok
+//!   weak01 （ill-typed 直接 Vec 返回尾）：       L07..L13 全 Err（正确拒绝）
+//!   weak02 （ill-typed 单层 struct 返回尾）：    L07 无 struct；L08 Err；L09/L10 假 Ok；L11-L13 Err
+//!   weak03 （well-typed 两字段交叉索引）：       L07 无 struct；L08 Ok；L09/L10 假 Ok；L11/L12 Ok(卡住)；L13 Ok
+//!   weak04 （ill-typed 嵌套 struct 返回尾）：    L07 无 struct；L08 Err；L09/L10 假 Ok；L11-L13 Err
+//!   weak05 （well-typed VecHolder 递归交叉）：   L07 无 struct；L08 Ok；L09/L10 假 Ok；L11/L12 Err(误拒)；L13 Ok
 //!
-//! | case（性质） | L07 | L08 | L09 | L10 | L11 | L12 | L13 |
-//! |---|---|---|---|---|---|---|---|
-//! | control：`Vec[T] (succ L)` head（well-typed） | Ok | Ok | Ok | Ok | Ok | Ok | Ok |
-//! | weak01：直接 Vec 匹配返回尾（**ill-typed**） | Err | Err | Err | Err | Err | Err | Err |
-//! | weak02：单层 struct 返回尾（**ill-typed**） | 不可表达 | 不可表达 | **Ok** | **Ok** | Err | Err | Err |
-//! | weak03：两字段交叉索引依赖（well-typed） | 不可表达 | 不可表达 | Ok | Ok | Ok | Ok | Ok |
-//! | weak04：嵌套 struct 返回尾（**ill-typed**） | 不可表达 | 不可表达 | **Ok** | **Ok** | Err | Err | Err |
-//! | weak05：VecHolder 递归交叉细化（well-typed） | 不可表达 | 不可表达 | Ok | Ok | **Err** | **Err** | Ok |
+//! 「假 Ok」= L09/L10 的 p_pattern 没有 struct 模式臂（L11–L13 才有 Ident { p1, … } ->
+//! Ident.mk(…) 的糖），但 run() 对解析错误只打印、不返回 Err，于是用恢复出的 AST 继续
+//! 求值并返回 Ok（输出里残留未解 meta，如 ?2 ?7 / unsolved match）。实测把糖补进
+//! L09/L10 parser 后：weak03 在 L09 会于 eval_aux(...).unwrap()（src/L09_mltt/mod.rs:1220）
+//! panic、L10 输出 unsolved match——所以只补 parser 不够，需同时修 pattern compiler；
+//! 本次未改 L09/L10。
 //!
-//! 结论（按层）：
-//! - **L07**：无 struct，case 不可表达；enum-only 的 control/weak01 行为正确。
-//! - **L08**：struct 可声明但**不能被 Con 模式解构**（见 `src/L08_product_type/README.md`
-//!   §7「已知限制」：`case Point.mk(a,b)` / `case Point(a,b)` 都解析不成，只能变量臂整体
-//!   绑定后投影），因此 struct 形态的 refine case 无法表达；enum-only 行为正确。
-//! - **L09/L10**：接受 weak02/weak04 **ill-typed** 程序 = 精化过宽/校验更宽松（不是"更强"，
-//!   因为正确拒绝被丢掉了）；weak03/weak05 的 Ok 因此也不能当作"精化正确"的强证据。
-//! - **L11/L12**：正确拒绝 weak02/04，且接受 weak03；但 **weak05 被误拒**（`match 不完整：
-//!   模式位置 VecHolder.mk#2 缺少构造子 fsucc` 一族）——即"递归跨字段索引细化"在 L11/L12
-//!   仍有缺口（L13 参考版于 9-29 后已通过）。这是本次跨层对照发现的最值得跟进项。
-//! - **L13**：weak02/04 正确拒绝、weak03/05 接受，当前行为与语义一致。
+//! L11/L12 的 weak05 误拒是真实缺口（match 不完整：模式位置 VecHolder.mk#2 缺少构造子
+//! fsucc）；实验排除了 arm 顺序与递归体因素，根因在 nested-coverage 检查（pattern_match.rs
+//! 的 nested_checks/cover_at）+ 精化传播：第一字段 cons 精化改变第二字段 Fin 索引后，
+//! 第二字段的 fsucc 模式没有被记入覆盖矩阵。L13 的 9-29 精化重做（already_refined 传播、
+//! 同族 e8ade220）没有回灌 L11/L12。
 //!
-//! 口径与翻转条件：本文件钉的是 2026-11-15 实测行为。若某层修好 weak05（L11/L12 应转为 Ok）
-//! 或收紧 weak02/04（L09/L10 应转为 Err），先翻转对应断言再改实现——与 `tests/known_bug_pins.rs`
-//! 的钉法一致。
+//! 口径与翻转条件：钉 2026-11-15 实测行为；修好后先翻转断言再改实现
+//! （L11/L12 weak05 -> Ok；L09/L10 变成真 Ok/正确值后重写「假 Ok」断言），
+//! 与 tests/known_bug_pins.rs 的钉法一致。
 //!
-//! 为何 L09/L10/L11 用 `#[path]`：这三层在 `src/lib.rs` 是私有模块；L07/L08/L12/L13 是 pub，
+//! 为何 L09/L10/L11 用 #[path]：这三层在 src/lib.rs 是私有模块；L07/L08/L12/L13 是 pub，
 //! 直接用库入口，避免重复编译。
 
 #![allow(non_snake_case)]
@@ -81,7 +79,6 @@ enum Fin(len: Nat) {
 }
 "#;
 
-/// control：well-typed GADT head（所有层应通过）。
 const CONTROL: &str = r#"
 def head[T, L: Nat](x: Vec[T] (succ L)): T =
     match x {
@@ -90,8 +87,6 @@ def head[T, L: Nat](x: Vec[T] (succ L)): T =
 println (head (cons zero nil))
 "#;
 
-/// weak01：直接 Vec 匹配返回尾部变量——**类型错误**（cons 分支 len 细化为 succ l'，
-/// 返回的 xs 是长度 l'）。各层正确拒绝。
 const WEAK01: &str = r#"
 def vtail_direct[A, len: Nat](v: Vec[A] len): Vec[A] len =
     match v {
@@ -99,6 +94,19 @@ def vtail_direct[A, len: Nat](v: Vec[A] len): Vec[A] len =
         case cons(x, xs) => xs
     }
 println (vtail_direct (cons zero nil))
+"#;
+
+const SIMPLE_STRUCT: &str = r#"
+struct Pair2[A] {
+    fst: A
+    snd: A
+}
+
+def getf[A](p: Pair2[A]): A =
+    match p {
+        case Pair2 { fst, snd } => fst
+    }
+println (getf (Pair2.mk zero zero))
 "#;
 
 const WEAK02: &str = r#"
@@ -161,142 +169,117 @@ fn with_defs(body: &str) -> String {
     format!("{DEFS}{body}")
 }
 
-fn control_ok_all_layers() -> bool {
-    let src = with_defs(CONTROL);
-    let s = src.clone();
-    run_ok(|| L07_sum_type::run(&s, 0))
-        && {
-            let s = src.clone();
-            run_ok(|| L08_product_type::run(&s, 0))
-        }
-        && {
-            let s = src.clone();
-            run_ok(|| L09_mltt::run(&s, 0))
-        }
-        && {
-            let s = src.clone();
-            run_ok(|| L10_typeclass::run(&s, 0))
-        }
-        && {
-            let s = src.clone();
-            run_ok(|| L11_macro::run(&s, 0))
-        }
-        && {
-            let s = src.clone();
-            run_ok(|| L12_canonical::run(&s, 0))
-        }
-        && {
-            let s = src.clone();
-            run_ok(|| L13_namespace::run(&s, 0))
-        }
-}
-
-fn enum_weak01_rejected_all_layers() -> bool {
-    let src = with_defs(WEAK01);
-    let s = src.clone();
-    run_err(|| L07_sum_type::run(&s, 0))
-        && {
-            let s = src.clone();
-            run_err(|| L08_product_type::run(&s, 0))
-        }
-        && {
-            let s = src.clone();
-            run_err(|| L09_mltt::run(&s, 0))
-        }
-        && {
-            let s = src.clone();
-            run_err(|| L10_typeclass::run(&s, 0))
-        }
-        && {
-            let s = src.clone();
-            run_err(|| L11_macro::run(&s, 0))
-        }
-        && {
-            let s = src.clone();
-            run_err(|| L12_canonical::run(&s, 0))
-        }
-        && {
-            let s = src.clone();
-            run_err(|| L13_namespace::run(&s, 0))
-        }
-}
-
 #[test]
 fn control_well_typed_gadt_accepted_on_all_layers() {
-    assert!(
-        control_ok_all_layers(),
-        "well-typed GADT head 应在 L07–L13 全部通过（2026-11-15 实测）"
-    );
+    let src = with_defs(CONTROL);
+    let s = src.clone();
+    assert!(run_ok(|| L07_sum_type::run(&s, 0)), "L07");
+    let s = src.clone();
+    assert!(run_ok(|| L08_product_type::run(&s, 0)), "L08");
+    let s = src.clone();
+    assert!(run_ok(|| L09_mltt::run(&s, 0)), "L09");
+    let s = src.clone();
+    assert!(run_ok(|| L10_typeclass::run(&s, 0)), "L10");
+    let s = src.clone();
+    assert!(run_ok(|| L11_macro::run(&s, 0)), "L11");
+    let s = src.clone();
+    assert!(run_ok(|| L12_canonical::run(&s, 0)), "L12");
+    let s = src.clone();
+    assert!(run_ok(|| L13_namespace::run(&s, 0)), "L13");
 }
 
 #[test]
 fn weak01_ill_typed_rejected_on_all_layers() {
-    // L13 struct_refine_probe 的 weak01 标签是历史遗留：该程序本身类型错误，
-    // 被拒是正确行为；L07–L13 一致拒绝。
-    assert!(
-        enum_weak01_rejected_all_layers(),
-        "weak01 形态是 ill-typed，各层应一致拒绝（2026-11-15 实测）"
-    );
+    let src = with_defs(WEAK01);
+    let s = src.clone();
+    assert!(run_err(|| L07_sum_type::run(&s, 0)), "L07");
+    let s = src.clone();
+    assert!(run_err(|| L08_product_type::run(&s, 0)), "L08");
+    let s = src.clone();
+    assert!(run_err(|| L09_mltt::run(&s, 0)), "L09");
+    let s = src.clone();
+    assert!(run_err(|| L10_typeclass::run(&s, 0)), "L10");
+    let s = src.clone();
+    assert!(run_err(|| L11_macro::run(&s, 0)), "L11");
+    let s = src.clone();
+    assert!(run_err(|| L12_canonical::run(&s, 0)), "L12");
+    let s = src.clone();
+    assert!(run_err(|| L13_namespace::run(&s, 0)), "L13");
 }
 
 #[test]
-fn struct_pattern_refinement_cannot_be_expressed_in_l07_l08() {
-    // L07 无 struct；L08 struct 不能被 Con 模式解构（README §7 已知限制）。
+fn l07_cannot_express_struct_patterns() {
     let src = with_defs(WEAK03);
     let s = src.clone();
-    assert!(
-        run_err(|| L07_sum_type::run(&s, 0)),
-        "L07 无 struct，weak03 程序应解析失败"
-    );
-    let s = src.clone();
-    assert!(
-        run_err(|| L08_product_type::run(&s, 0)),
-        "L08 struct 不能被 Con 模式解构，weak03 程序应失败（README §7）"
-    );
+    assert!(run_err(|| L07_sum_type::run(&s, 0)), "L07 无 struct");
 }
 
 #[test]
-fn weak03_cross_field_well_typed_accepted_from_l09() {
+fn l08_struct_pattern_sugar_supported_after_2026_11_fix() {
+    let src = with_defs(SIMPLE_STRUCT);
+    let s = src.clone();
+    assert!(run_ok(|| L08_product_type::run(&s, 0)), "L08 简单 struct 模式");
+    let src = with_defs(WEAK02);
+    let s = src.clone();
+    assert!(run_err(|| L08_product_type::run(&s, 0)), "L08 weak02 应正确拒绝");
+    let src = with_defs(WEAK04);
+    let s = src.clone();
+    assert!(run_err(|| L08_product_type::run(&s, 0)), "L08 weak04 应正确拒绝");
     let src = with_defs(WEAK03);
     let s = src.clone();
-    assert!(run_ok(|| L09_mltt::run(&s, 0)), "L09 weak03 实测 Ok");
+    assert!(run_ok(|| L08_product_type::run(&s, 0)), "L08 weak03 接受");
+    let src = with_defs(WEAK05);
     let s = src.clone();
-    assert!(run_ok(|| L10_typeclass::run(&s, 0)), "L10 weak03 实测 Ok");
-    let s = src.clone();
-    assert!(run_ok(|| L11_macro::run(&s, 0)), "L11 weak03 实测 Ok");
-    let s = src.clone();
-    assert!(run_ok(|| L12_canonical::run(&s, 0)), "L12 weak03 实测 Ok");
-    let s = src.clone();
-    assert!(run_ok(|| L13_namespace::run(&s, 0)), "L13 weak03 实测 Ok");
+    assert!(run_ok(|| L08_product_type::run(&s, 0)), "L08 weak05 接受");
 }
 
 #[test]
-fn weak02_weak04_ill_typed_divergence_pinned() {
-    // L09/L10 接受这两个 ill-typed 程序（过宽/缺校验）；L11/L12/L13 正确拒绝。
+fn l09_l10_struct_pattern_syntax_unsupported_recovery_pinned() {
+    // L09/L10 缺 struct 模式臂；run() 打印解析错误后继续 -> 假 Ok（输出含未解 meta）。
+    // 临时补 parser 后 L09 会 panic（eval_aux unwrap，src/L09_mltt/mod.rs:1220），
+    // L10 输出 unsolved match，因此需要后续同时修 pattern compiler。
+    let src = with_defs(WEAK03);
+    let s = src.clone();
+    assert!(run_ok(|| L09_mltt::run(&s, 0)), "L09 当前为解析恢复假 Ok");
+    let s = src.clone();
+    assert!(run_ok(|| L10_typeclass::run(&s, 0)), "L10 当前为解析恢复假 Ok");
+}
+
+#[test]
+fn weak02_weak04_ill_typed_rejected_by_checking_layers() {
     for prog in [WEAK02, WEAK04] {
         let src = with_defs(prog);
         let s = src.clone();
-        assert!(run_ok(|| L09_mltt::run(&s, 0)), "L09 实测接受（宽松，非正确性证据）");
+        assert!(run_err(|| L08_product_type::run(&s, 0)), "L08");
         let s = src.clone();
-        assert!(run_ok(|| L10_typeclass::run(&s, 0)), "L10 实测接受（宽松，非正确性证据）");
+        assert!(run_err(|| L11_macro::run(&s, 0)), "L11");
         let s = src.clone();
-        assert!(run_err(|| L11_macro::run(&s, 0)), "L11 实测正确拒绝");
+        assert!(run_err(|| L12_canonical::run(&s, 0)), "L12");
         let s = src.clone();
-        assert!(run_err(|| L12_canonical::run(&s, 0)), "L12 实测正确拒绝");
-        let s = src.clone();
-        assert!(run_err(|| L13_namespace::run(&s, 0)), "L13 实测正确拒绝");
+        assert!(run_err(|| L13_namespace::run(&s, 0)), "L13");
     }
 }
 
 #[test]
-fn weak05_well_typed_gap_pinned_in_l11_l12() {
-    // weak05 是 well-typed（L13 9-29 修复后接受）；L11/L12 仍误拒
-    // （"match 不完整：模式位置 VecHolder.mk#2 缺少构造子 fsucc" 一族）。
+fn weak03_cross_field_well_typed_accepted_with_quality_notes() {
+    let src = with_defs(WEAK03);
+    let s = src.clone();
+    assert!(run_ok(|| L08_product_type::run(&s, 0)), "L08 具体值");
+    let s = src.clone();
+    assert!(run_ok(|| L11_macro::run(&s, 0)), "L11 Ok 但输出卡住/未解");
+    let s = src.clone();
+    assert!(run_ok(|| L12_canonical::run(&s, 0)), "L12 Ok 但输出卡住/未解");
+    let s = src.clone();
+    assert!(run_ok(|| L13_namespace::run(&s, 0)), "L13 具体值");
+}
+
+#[test]
+fn weak05_well_typed_false_rejection_pinned_in_l11_l12() {
     let src = with_defs(WEAK05);
     let s = src.clone();
-    assert!(run_ok(|| L09_mltt::run(&s, 0)), "L09 实测接受");
+    assert!(run_ok(|| L08_product_type::run(&s, 0)), "L08 接受");
     let s = src.clone();
-    assert!(run_ok(|| L10_typeclass::run(&s, 0)), "L10 实测接受");
+    assert!(run_ok(|| L13_namespace::run(&s, 0)), "L13 接受");
     let s = src.clone();
     assert!(
         run_err(|| L11_macro::run(&s, 0)),
@@ -307,6 +290,4 @@ fn weak05_well_typed_gap_pinned_in_l11_l12() {
         run_err(|| L12_canonical::run(&s, 0)),
         "L12 已知缺口：well-typed weak05 被误拒（修复后翻转为 Ok）"
     );
-    let s = src.clone();
-    assert!(run_ok(|| L13_namespace::run(&s, 0)), "L13 实测接受（9-29 修复后）");
 }

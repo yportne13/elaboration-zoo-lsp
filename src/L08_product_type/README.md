@@ -246,9 +246,10 @@ P5 跨 meta 环守卫、P8 宽松合一收窄、P10 `Error(String, Option<Span<(
 
 ## 7. 已知限制（诚实清单）
 
-- **struct 不能被 Con 模式解构**：case 名含 `.`，`p_pattern` 的头部是
-  单 Ident token，`case Point.mk(a, b)` / `case Point(a, b)` 都解析不
-  成；只能变量臂整体绑定后用投影。与旧 L08 行为一致。
+- **struct 模式糖**：`case Point { a, b }` 解析为 `Point.mk(a, b)` 构造子模式
+  （2026-11 补齐，与 L11/L12/L13 同款）；`case Point.mk(a, b)` / `case Point(a, b)`
+  仍不解析（case 名含 `.`，`p_pattern` 头部是单 Ident token）。struct 上的 match
+  仍是单构造子全覆盖；依赖精化行为见 `tests/gadt_refine_cross_layer_tests.rs`。
 - **元组式 struct**（`struct S(Nat, Nat)`）不支持——旧 L08 里就注释掉
   的形态；字段必须具名。
 - 字段**按行分隔**（无逗号/分号形态，末字段带逗号会解析失败）；

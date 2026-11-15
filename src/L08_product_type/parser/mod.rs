@@ -465,13 +465,21 @@ fn p_let<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
 
 fn p_pattern<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Pattern> {
     (
+        // struct 模式糖（与 L11/L12/L13 同款）：`Wrap { p1, p2 }` 脱糖成单构造子
+        // enum 的 `Wrap.mk(p1, p2)` 模式。struct 在解析期就展开成单 case enum
+        // （case 名即 `Name.mk`），所以这里只需在名字上补 `.mk` 后缀。
         string(Ident),
-        paren(p_pattern.many0_sep(kw(T![,])))
-            .or(square(p_pattern.map(|x| x.to_impl()).many0_sep(kw(T![,]))))
-            .many0()
-            .map(|x| x.concat()),
+        brace(p_pattern.many1_sep(kw(T![,]))),
     )
-        .map(|(x, t)| Pattern::Con(x, t, Icit::Expl))
+        .map(|(x, t)| Pattern::Con(x.map(|t| format!("{t}.mk")), t, Icit::Expl))
+        .or((
+            string(Ident),
+            paren(p_pattern.many0_sep(kw(T![,])))
+                .or(square(p_pattern.map(|x| x.to_impl()).many0_sep(kw(T![,]))))
+                .many0()
+                .map(|x| x.concat()),
+        )
+            .map(|(x, t)| Pattern::Con(x, t, Icit::Expl)))
         .or(kw(T![_]).map(|x| Pattern::Any(x, Icit::Expl)))
         .parse(input, state)
 }
