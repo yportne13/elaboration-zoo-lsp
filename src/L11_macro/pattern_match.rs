@@ -285,14 +285,47 @@ impl Compiler {
                 }
             };
             let raw = pat.to_raw();
-            let Ok((_, sigma)) = infer.check_pm_final(
+            let fallback = match infer.check_pm_final(
                 &cxt_walk,
                 raw,
                 typ.clone(),
                 target_val.clone(),
-            ) else {
-                // 特化方程失败 = 臂不可达：嵌套位置不产生覆盖义务（本臂
-                // 的语义承担 = 静默跳过）
+            ) {
+                Ok((_, s)) => Some(s),
+                Err(_) => {
+                    // L08 walk_con 风格 fallback：check_pm_final 在跨字段索引
+                    // 精化上失败时，用走查已记录的节点方程解 σ；任一方程失败
+                    // 仍按旧语义判该臂不可达。
+                    let mut acc = Rc::new(Subst::default());
+                    let mut ok = true;
+                    'nodes: for node in &self.pending_pos {
+                        let head_f = infer.force(&cxt.decl, &node.head);
+                        let (sum_name, head_params) = match head_f.as_ref() {
+                            Val::Sum(n, params, ..) => (n.data.clone(), params.clone()),
+                            _ => continue,
+                        };
+                        let ret_f = infer.force(&cxt.decl, &node.ret);
+                        let ret_params = match ret_f.as_ref() {
+                            Val::Sum(n, params, ..) if n.data == sum_name => params.clone(),
+                            _ => continue,
+                        };
+                        let span = empty_span(());
+                        let mut spec = SpecSolve { acc: acc.clone() };
+                        for (a, b) in head_params.iter().zip(ret_params.iter()) {
+                            if infer
+                                .unify_pm(cxt, cxt_walk.lvl, &a.1, &b.1, span, &mut spec)
+                                .is_err()
+                            {
+                                ok = false;
+                                break 'nodes;
+                            }
+                        }
+                        acc = spec.acc;
+                    }
+                    if ok { Some(acc) } else { None }
+                }
+            };
+            let Some(sigma) = fallback else {
                 self.pending_pos.clear();
                 continue;
             };

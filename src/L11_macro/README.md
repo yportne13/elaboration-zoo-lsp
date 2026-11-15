@@ -341,3 +341,17 @@ declb 缓存的份额。
   （决策树诊断与收窄登记）、`docs/bench-matrix-2026-09-18.md`（基准口径
   与全表）、`docs/archive/review-continuity/a4-r1.md`/`a5-r1.md`/`a7-r1.md`
   （跨章连贯性登记）
+
+
+## 附：跨字段精化 fallback（2026-11-15）
+
+- struct 模式糖（Ident { p1, … } -> Ident.mk(…)）之外，check_pm_final 在跨字段
+  索引精化上失败时会退回 L08 walk_con 风格：用走查阶段记录的节点索引方程
+  （根 ctor 的「头部 Sum ≐ 走查返回类型」+ pending 字段节点）直接解 σ，再在
+  终态 σ 下检查臂体/结算覆盖。L13 struct_refine_probe 的 weak03/weak05 现在与
+  L08/L13 一致输出具体值；任何节点方程失败仍按旧语义判该臂不可达。
+  行为矩阵见 tests/gadt_refine_cross_layer_tests.rs。
+- 与 L07/L08/L12/L13 的既有差异：对「索引冲突导致不可达的臂」本层 fallback 更
+  宽松（接受而非报不可达/覆盖错误），如 tests/l12_fast_parity 里
+  test_nested_coverage_gadt_tail_position 的同族程序在 L11 为 Ok；后续可按需
+  收紧（在 fallback 方程后追加未解索引检查）。

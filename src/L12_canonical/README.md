@@ -411,3 +411,13 @@ k=11）全流程表：
   parity 钉（嵌套覆盖 / WF / 臂序，用具体枚举载体——List/Vec 载体在
   孪生侧踩中既有 `check_pm_final` 分叉族，套件头注登记）、σ 跨轮回收
   钉。
+
+
+## 附：跨字段精化 fallback（2026-11-15）
+
+- check_pm_final 在跨字段索引精化上失败时会退回 L08 walk_con 风格：walk_pat 现在
+  与其他层同款记 PendingNode(head, ret)（根 ctor 的「头部 Sum ≐ 走查返回类型」+
+  嵌套字段节点），fallback 用这些方程直接解 σ，再在终态 σ 下检查臂体/结算覆盖。
+  L13 struct_refine_probe 的 weak03/weak05 现在与 L08/L13 一致输出具体值；任何
+  节点方程失败仍按旧语义判该臂不可达（test_nested_coverage_gadt_tail_position
+  的保守拒绝语义不变）。行为矩阵见 tests/gadt_refine_cross_layer_tests.rs。

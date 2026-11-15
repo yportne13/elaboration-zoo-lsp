@@ -252,11 +252,45 @@ impl Compiler {
                 }
             };
             let raw = pat.to_raw();
-            let Ok((_, sigma0)) =
-                infer.check_pm_final(&cxt_walk, raw, typ.clone(), target_val.clone())
-            else {
-                // 荒谬臂（特化失败静默跳过）：其嵌套位置不产生覆盖义务——
-                // 臂本身被跳过已承担语义（L07 荒谬臂 clear pending 同款）
+            let fallback: Option<(Rc<Subst>, bool)> =
+                match infer.check_pm_final(&cxt_walk, raw, typ.clone(), target_val.clone()) {
+                    Ok((_, s)) => Some((s, false)),
+                    Err(_) => {
+                        // L08 walk_con 风格 fallback（同 L09）：check_pm_final 在跨
+                        // 字段索引精化上失败时，直接用走查已记录的方程解 σ；方程
+                        // 失败仍判不可达（保留荒谬臂剪枝语义）。
+                        let span = empty_span(());
+                        let mut spec = SpecSolve { acc: Rc::new(Subst::default()) };
+                        let mut ok = true;
+                        if let Some(top_ret) = &top_ret
+                            && infer
+                                .unify_pm(&cxt_walk, cxt_walk.lvl, &typ, top_ret, span, &mut spec)
+                                .is_err()
+                        {
+                            ok = false;
+                        }
+                        if ok {
+                            for (_, field_sum, ret) in self.pending_pos.iter() {
+                                if infer
+                                    .unify_pm(
+                                        &cxt_walk,
+                                        cxt_walk.lvl,
+                                        field_sum,
+                                        ret,
+                                        span,
+                                        &mut spec,
+                                    )
+                                    .is_err()
+                                {
+                                    ok = false;
+                                    break;
+                                }
+                            }
+                        }
+                        if ok { Some((spec.acc, true)) } else { None }
+                    }
+                };
+            let Some((sigma0, fallback_used)) = fallback else {
                 self.pending_pos.clear();
                 continue;
             };
@@ -269,7 +303,7 @@ impl Compiler {
             let mut spec = SpecSolve { acc: sigma0.clone() };
             let span = empty_span(());
             let mut absurd = false;
-            if let Some(top_ret) = &top_ret {
+            if !fallback_used && let Some(top_ret) = &top_ret {
                 if infer
                     .unify_pm(&cxt_walk, cxt_walk.lvl, &typ, top_ret, span, &mut spec)
                     .is_err()
@@ -277,7 +311,7 @@ impl Compiler {
                     absurd = true;
                 }
             }
-            if !absurd {
+            if !fallback_used && !absurd {
                 for (_, field_sum, ret) in self.pending_pos.iter() {
                     if infer
                         .unify_pm(&cxt_walk, cxt_walk.lvl, field_sum, ret, span, &mut spec)

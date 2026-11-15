@@ -45,7 +45,7 @@ pub struct Compiler {
     /// 特化冲突）时丢弃记账：失败臂不产生覆盖义务。
     nested_checks: Vec<NestedCheck>,
     /// 本臂走查中的待提升位置（臂边界结算）。
-    pending_pos: Vec<(Vec<(String, usize)>, Rc<Val>)>,
+    pending_pos: Vec<(Option<Vec<(String, usize)>>, Rc<Val>, Rc<Val>)>,
     /// 当前下钻路径（根到当前字段的 ctor 选择链），臂内 push/pop 平衡。
     cur_path: Vec<(String, usize)>,
 }
@@ -227,22 +227,48 @@ impl Compiler {
                 }
             };
             let raw = pat.to_raw();
-            let Ok((_, sigma)) =
-                infer.check_pm_final(&cxt_walk, raw, typ.clone(), target_val.clone())
-            else {
+            let fallback = match infer.check_pm_final(
+                &cxt_walk,
+                raw,
+                typ.clone(),
+                target_val.clone(),
+            ) {
+                Ok((_, s)) => Some(s),
+                Err(_) => {
+                    // L08 walk_con 风格 fallback（同 L09–L11）：check_pm_final 在
+                    // 跨字段索引精化上失败时，用走查节点方程（head ≐ ret）直接
+                    // 解 σ；根节点（path=None）正是 ctor 索引方程。
+                    let span = empty_span(());
+                    let mut spec = SpecSolve { acc: Rc::new(Subst::default()) };
+                    let mut ok = true;
+                    for node in &self.pending_pos {
+                        if infer
+                            .unify_pm(&cxt_walk, &node.1, &node.2, span, &mut spec)
+                            .is_err()
+                        {
+                            ok = false;
+                            break;
+                        }
+                    }
+                    if ok { Some(spec.acc) } else { None }
+                }
+            };
+            let Some(sigma) = fallback else {
                 self.pending_pos = pending_before;
                 continue;
             };
             // 嵌套位置结算（两段式，L07 同款）：此刻本臂全部特化方程已解出、
             // σ 为终态，字段 Sum 置于 σ 之下再探测才能看到索引精化（如
             // `Vec[A] (succ n)` 的尾部上 `nil` 不可达）。
-            for (path, field_sum) in std::mem::take(&mut self.pending_pos) {
-                self.nested_checks.push(NestedCheck {
-                    path,
-                    field_sum,
-                    sub: sigma.clone(),
-                    lvl: cxt_walk.lvl,
-                });
+            for (path, field_sum, _) in std::mem::take(&mut self.pending_pos) {
+                if let Some(path) = path {
+                    self.nested_checks.push(NestedCheck {
+                        path,
+                        field_sum,
+                        sub: sigma.clone(),
+                        lvl: cxt_walk.lvl,
+                    });
+                }
             }
             let cxt_arm = cxt_walk.subst_cxt(&sigma);
             let ret_type = match self.ret_type.as_ref() {
@@ -468,26 +494,27 @@ fn walk_pat(
                             }
                             Some(p @ Pattern::Con(..)) => {
                                 sub_queue.remove(0);
-                                // 记一笔待提升的嵌套位置：字段 Sum 的可达构造子
-                                // 必须被某臂在该位置覆盖。此处只记账（σ 尚未
-                                // 解出——特化方程在 check_pm_final 里一次解
-                                // 完），臂级成功后以终态 σ 提升（两段式）。
-                                // 若字段并非和类型 / 子名非其构造子，walk_pat
-                                // 回落 Bind/Err——Bind 在 cover_at 下全覆盖、
-                                // Err 臂整体丢弃，均不产生假义务。
+                                // 嵌套 Con：字段类型是含该构造子的 Sum → 沿路径
+                                // 下钻（节点方程由子节点在 Con 分支末尾自行记账，
+                                // 与 L11 同款；本节点在末尾统一记账）。
+                                let nested_name = match p {
+                                    Pattern::Con(cn, _, _) => cn.data.clone(),
+                                    _ => unreachable!(),
+                                };
                                 let field_sum = infer.force(&cxt.decl, &dom);
-                                co.pending_pos.push((
-                                    {
-                                        let mut cp = co.cur_path.clone();
-                                        cp.push((name.data.to_string(), details.len()));
-                                        cp
-                                    },
-                                    field_sum,
-                                ));
-                                co.cur_path
-                                    .push((name.data.to_string(), details.len()));
+                                let is_ctor = matches!(
+                                    field_sum.as_ref(),
+                                    Val::Sum(_, _, cases, _)
+                                        if cases.iter().any(|c| c.data == nested_name)
+                                );
+                                if is_ctor {
+                                    co.cur_path
+                                        .push((name.data.to_string(), details.len()));
+                                }
                                 let walked = walk_pat(infer, co, &cxt_arm, p, &dom);
-                                co.cur_path.pop();
+                                if is_ctor {
+                                    co.cur_path.pop();
+                                }
                                 let (d, c2) = walked?;
                                 cxt_arm = c2;
                                 d
@@ -499,6 +526,16 @@ fn walk_pat(
                     _ => break,
                 }
             }
+            // 节点记账（与 L11 同款）：头部 Sum + 走查槽位实例化的返回类型；
+            // cur_path 非空 = 嵌套字段位置（同时产生覆盖义务），空 = 根节点
+            // （只传导索引方程）。结算期用这些方程解 σ。
+            let ret_sum = infer.force(&cxt.decl, &ty);
+            let my_path = if co.cur_path.is_empty() {
+                None
+            } else {
+                Some(co.cur_path.clone())
+            };
+            co.pending_pos.push((my_path, head_sum.clone(), ret_sum));
             Ok((PatternDetail::Con(name.clone(), details), cxt_arm))
         }
     }

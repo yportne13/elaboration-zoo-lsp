@@ -475,11 +475,10 @@ church/strchain 1.06–1.09×（固定常数）；内建 `string_concat` 仍走�
   解析为 Boxed.mk(p1, p2)（struct 脱糖后 case 名即 Name.mk）。简单 struct
   解构（字段为变量）可正确求值；ill-typed 的"返回尾部变量"用例会正确拒绝
   （can't unify Vec[A, succ _l] == Vec[A, _l]）。
-- 已知缺口：两字段交叉索引精化仍不完整——L13 probe 的 weak03 输出
-  (unsolved match …)（卡住值，语义未落实），weak05 被误拒
-  （match 不完整：模式位置 VecHolder.mk#2 缺少构造子 fsucc），与 L10–L12
-  同族。根因是 check_pm_final 对"第一字段精化改变第二字段索引"的跨字段
-  传播缺失（L13 的 2026-09-29 修复未回灌）。行为矩阵与翻转条件见
-  tests/gadt_refine_cross_layer_tests.rs。
+- 跨字段索引精化（L13 probe weak03/weak05）：2026-11-15 已修——check_pm_final
+  失败时改用 L08 walk_con 风格的节点方程 fallback（根节点 + pending_pos 的
+  「头部 Sum ≐ 走查返回类型」方程直接解 σ，再在终态 σ 下检查体/结算覆盖）。
+  weak03/weak05 现在与 L08/L13 一致输出具体值，ill-typed weak02/04 仍正确拒绝。
+  行为矩阵见 tests/gadt_refine_cross_layer_tests.rs。
 - eval/eval_ref 的 match 入口在"无臂命中"时不再 unwrap panic，改为保留
   Val::Match 卡住值（与 L11/L12 同款；此前 struct 模式会触发 panic）。
