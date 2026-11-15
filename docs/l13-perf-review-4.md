@@ -1028,3 +1028,70 @@ Let 1.24M。Lam 构造 4.9M 次与闭包应用量自洽（v_app 283 万）。语
 - FORCE_MEMO / DECLB_CACHE 仍为 thread_local（单线程下即进程级）；
   若未来 LSP 恢复多线程 elaboration，prelude 池的 Send 论证需要
   重新审视。
+
+## 20. 补记（2026-11-15）：归档分支的三份分析
+
+> 本节把三个本地归档分支里**未进主线**的分析数据补进本日志；上文其余轮次的数字均未改动。
+> 来源分支：`task/l13-perf3`、`analysis/l13-perf-r13`、`analysis/l13-perf-current`
+> （分支已于 2026-11-15 归档为 bundle，恢复方式见 `.deltawork/deleted-branches-2026-11-15.txt`）。
+
+### 20.1 第三轮（2026-08-10）：Infer::clone 实测 0.5–0.8 ms，推翻"0.15 s/次"前提
+
+（来源 `task/l13-perf3:docs/l13-perf-review-3.md`，135 行；本轮无代码改动，工作树与基线逐字节一致）
+
+- 背景：perf2 §5.6 断言每变更 clone 一次 `Infer` ≈0.15 s、大头是 trait 表，据此提议 meta/trait
+  表改"共享只追加前缀"（P3）。本轮用 release + 逐字段计时探针实测：整份 clone
+  **0.51 / 0.62 / 0.73 ms**；meta 28,489 条（736 条孤儿 Unsolved）≈0.60 ms，trait_metas 2,901
+  条仅 0.006 ms，其余 <0.1 ms —— clone 仅占 change（256 ms）的 0.2–0.3%，前提不成立。
+- 前缀探针：用户文件 elaboration 对 prelude 前缀 `[0, base_len)` 零写入（3 个样例 base_diff=0），
+  但"零写入"只是经验事实：Nat-defaulting 整表扫描会就地改写 Unsolved→Solved 并整表
+  clone/restore（elaboration.rs ~875/884/903）、`solve_multi_trait` 按索引改写 trait_metas、
+  unify/prune 全用绝对索引 → 共享前缀需改约 20 个访问点 + hover 快照自洽，收益上限 0.3%。
+  **结论：不实施。**
+- 用户侧结构：01-basics 256 ms = module `create` 32 ms + `tree` 37 ms（两次都在 `check` 体检查）
+  + println nf ~22 ms；check 分支 Let 占 72.9%。
+- 价值：纠正对象是 [l13-perf-review-2.md](l13-perf-review-2.md) 的 0.15 s 错误前提；若未来有人
+  重提"共享前缀"P3，先读本节。
+
+### 20.2 第十三轮（2026-08-16）：force 风暴的**调用方**归因（主线 §14 同轮次的独立测量）
+
+（来源 `analysis/l13-perf-r13:docs/l13-perf-review-13.md`，190 行 + 临时探针；独立 worktree，
+基于 master 40c0341，与主线 WIP 隔离）
+
+- 基线：prelude 固定成本 17.6 s（Linux release），~85% 是 force 风暴；top-8 声明占 probe-on
+  总墙钟（25.2 s）的 77%（streamFifoCC 6.41 s / 1.958 亿 force、dividerCore 6.09 s / 1.934 亿 …）。
+- force(Call) 按名直方图：`pred` 1,766 万 / `log2Up` 1,176 万 / `maxNat` 998 万 /
+  `andCond` 936 万 —— top-4 = 4,877 万 ≈ 全部 Call force 的 99.6%。
+- **调用方归因（主线日志缺此数据）**：全部 6.98 亿 force 入口中 **unify 62.3%（4.35 亿）**、
+  **check_universe 32.5%（2.27 亿）**、check 5.1%、quote 0.05%、solve_trait 0.02%。unify 仅
+  12.9 万次调用 → 每次入口平均 ~5,400 次 force。force 形状：Sum 28% / SumCase 27.5% /
+  Rigid 11% / LiteralIntro 10% / Match 7.5% / Call 7.5% / Obj 7% / Decl 1.5%
+  （Match 与 Call 严格锁步）。
+- 因果实验：6 个递归 Nat 函数恒等替换 → 17.6 s → **2.62–2.72 s（−85%）**，crossclock force
+  2.572 亿 → 32.9 万（−99.9%）；但 `pred` 单独只 −6% —— 成本在**递归嵌套**而非调用次数。
+  残余 2.70 s：hdl-verilog 0.52 s（运算符 trait_wrap 路径，prim 治不了）+ 工厂真实 eval
+  ~1.6 s + 其余 ~0.6 s。用户侧：19-crossclock 0.187 → 0.097 s（1.9×）。
+- 与 §14 的关系：§14 记录主线同一轮的 Nat prim"完整实现后净收益为零、已撤销"及四类坑；
+  本节说明**方向本身有效，失败在工程实现**（identity 等价于理想 prim，−85%）；真正落地的是
+  §16 FORCE_MEMO（636.6M→4.41M force）。今后若重开 prim 路线，本节数据应与 §14 的坑并读。
+- 方法学：探针开销约 +40%（17.6→25 s 墙钟），归因用 probe-on 相对值 + NOCOUNTER 绝对值。
+
+### 20.3 第六轮（2026-08-14）：`quote(Val::Lam)` 的自引用实例记录指数爆炸（机制补充）
+
+（来源 `analysis/l13-perf-current:docs/l13-perf-review-6.md`，129 行；主线 §7 已从**调用方**
+`no_metas` 侧解决同一批解，本节保留**实现方**机制，供未来 quote 新消费路径参考）
+
+- 异常点：11-bundle-deep 4.06 s（其他 HDL 文件 0.1–0.9 s）；逐层隔离：asMaster 体全换 `this`
+  → 0.14 s（30×），成本全在嵌套工厂方法体，逐层约 25–80×。
+- 机制：`quote_inner(Val::Lam)` 走 `closure_apply` → **重新 eval 闭包体**；trait 实例记录的
+  asMaster/asSlave 闭包体里 `$Self` 隐式 let 在 eval 时**再次物化实例记录**，quote 又遇到同一
+  方法闭包 → 自引用递归、Tm 指数增长。证据：单次 quote 0.2–0.6 s；探针版申请
+  137,438,953,472 B（128 GB）失败；force 深度 500–752。
+- 修复（空环境闭包按语法引 Tm 体、跳过 eval；de Bruijn 恒等映射，输出字节级一致）：
+  4.06 → 1.34 s（3.0×）。但 §6 自评：主线 `d8c518e`/§7 的 no_metas 改造已从调用方删掉同一批
+  解，rebase 后 A/B 1.295 vs 1.285 s 无叠加，**建议不并入**（改 quote 核心语义风险高）。
+- 负结果：Sum 臂 eval 记忆化实测命中率仅 3.7%（6,387/17.3 万），02-arithmetic 反退
+  0.23→0.31 s，已回退 —— 与 §8/§9 的"重复求值 ≠ 可缓存命中（env 头指针每次 prepend 都变）"
+  一致；§8.3 的 40% 重复率估计偏高，以本节 3.7% 为准。
+- 长期风险：若未来出现新的 quote 消费路径（hover/inlay/注解复用）再次 quote 含方法闭包的
+  trait 记录，同款指数爆炸仍可能复现；该修复可作为防御性加固随时启用。
