@@ -467,3 +467,19 @@ church/strchain 1.06–1.09×（固定常数）；内建 `string_concat` 仍走�
   载体切换：全局移出 Cxt、`Tm::Global` 三态编码、A/B 验收）；
 - [elaboration-zoo](https://github.com/AndrasKovacs/elaboration-zoo)
   （MLTT 教学章：宇宙层级 + 和类型 / match 的切片原型）。
+
+
+## 7. struct 模式支持与已知精化缺口（2026-11-15）
+
+- p_pattern 已补齐与 L08/L11–L13 同款的 struct 模式糖：case Boxed { p1, p2 }
+  解析为 Boxed.mk(p1, p2)（struct 脱糖后 case 名即 Name.mk）。简单 struct
+  解构（字段为变量）可正确求值；ill-typed 的"返回尾部变量"用例会正确拒绝
+  （can't unify Vec[A, succ _l] == Vec[A, _l]）。
+- 已知缺口：两字段交叉索引精化仍不完整——L13 probe 的 weak03 输出
+  (unsolved match …)（卡住值，语义未落实），weak05 被误拒
+  （match 不完整：模式位置 VecHolder.mk#2 缺少构造子 fsucc），与 L10–L12
+  同族。根因是 check_pm_final 对"第一字段精化改变第二字段索引"的跨字段
+  传播缺失（L13 的 2026-09-29 修复未回灌）。行为矩阵与翻转条件见
+  tests/gadt_refine_cross_layer_tests.rs。
+- eval/eval_ref 的 match 入口在"无臂命中"时不再 unwrap panic，改为保留
+  Val::Match 卡住值（与 L11/L12 同款；此前 struct 模式会触发 panic）。

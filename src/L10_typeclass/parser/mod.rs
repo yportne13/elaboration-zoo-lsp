@@ -538,14 +538,21 @@ fn p_let<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
 
 fn p_pattern<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Pattern> {
     (
+        // struct 模式糖（与 L08/L11/L12/L13 同款）：`Wrap { p1, p2 }` -> `Wrap.mk(p1, p2)`。
         string(Ident),
-        paren_cut(p_pattern.many0_sep(kw(T![,])))
-            .map(|x| x.ok().unwrap_or_default())
-            .or(square_cut(p_pattern.map(|x| x.to_impl()).many0_sep(kw(T![,]))).map(|x| x.ok().unwrap_or_default()))
-            .many0()
-            .map(|x| x.concat()),
+        brace(p_pattern.many1_sep(kw(T![,])))
+            .map(|x| x.ok().unwrap_or_default()),
     )
-        .map(|(x, t)| Pattern::Con(x, t, Icit::Expl))
+        .map(|(x, t)| Pattern::Con(x.map(|t| format!("{t}.mk")), t, Icit::Expl))
+        .or((
+            string(Ident),
+            paren_cut(p_pattern.many0_sep(kw(T![,])))
+                .map(|x| x.ok().unwrap_or_default())
+                .or(square_cut(p_pattern.map(|x| x.to_impl()).many0_sep(kw(T![,]))).map(|x| x.ok().unwrap_or_default()))
+                .many0()
+                .map(|x| x.concat()),
+        )
+            .map(|(x, t)| Pattern::Con(x, t, Icit::Expl)))
         .or(kw(T![_]).map(|x| Pattern::Any(x.map(|_| true), Icit::Expl)))
         .parse(input, state)
 }

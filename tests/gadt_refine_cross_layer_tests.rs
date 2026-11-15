@@ -8,17 +8,19 @@
 //! 实测矩阵（同构 case 钉到 L07–L13）：
 //!   control（well-typed GADT head）：            L07..L13 全 Ok
 //!   weak01 （ill-typed 直接 Vec 返回尾）：       L07..L13 全 Err（正确拒绝）
-//!   weak02 （ill-typed 单层 struct 返回尾）：    L07 无 struct；L08 Err；L09/L10 假 Ok；L11-L13 Err
-//!   weak03 （well-typed 两字段交叉索引）：       L07 无 struct；L08 Ok；L09/L10 假 Ok；L11/L12 Ok(卡住)；L13 Ok
-//!   weak04 （ill-typed 嵌套 struct 返回尾）：    L07 无 struct；L08 Err；L09/L10 假 Ok；L11-L13 Err
-//!   weak05 （well-typed VecHolder 递归交叉）：   L07 无 struct；L08 Ok；L09/L10 假 Ok；L11/L12 Err(误拒)；L13 Ok
+//!   weak02 （ill-typed 单层 struct 返回尾）：    L07 无 struct；L08..L13 Err（正确拒绝）
+//!   weak03 （well-typed 两字段交叉索引）：       L07 无 struct；L08/L13 Ok(具体值)；
+//!                                              L09..L12 Ok(卡住/未解 —— 语义未落实)
+//!   weak04 （ill-typed 嵌套 struct 返回尾）：    L07 无 struct；L08..L13 Err（正确拒绝）
+//!   weak05 （well-typed VecHolder 递归交叉）：   L07 无 struct；L08/L13 Ok(具体值)；
+//!                                              L09..L12 Err（误拒 —— 已知精化缺口）
 //!
-//! 「假 Ok」= L09/L10 的 p_pattern 没有 struct 模式臂（L11–L13 才有 Ident { p1, … } ->
-//! Ident.mk(…) 的糖），但 run() 对解析错误只打印、不返回 Err，于是用恢复出的 AST 继续
-//! 求值并返回 Ok（输出里残留未解 meta，如 ?2 ?7 / unsolved match）。实测把糖补进
-//! L09/L10 parser 后：weak03 在 L09 会于 eval_aux(...).unwrap()（src/L09_mltt/mod.rs:1220）
-//! panic、L10 输出 unsolved match——所以只补 parser 不够，需同时修 pattern compiler；
-//! 本次未改 L09/L10。
+//! L09/L10 的第二轮修复（2026-11-15）：p_pattern 补上 struct 模式臂（与 L08/L11–L13
+//! 同款），并把 L09 eval/eval_ref 的 match 入口在"无臂命中"时从 unwrap panic 改为保留
+//! Val::Match 卡住值。于是 L09/L10 也能解析 struct 模式、简单解构可求值、ill-typed
+//! 用例正确拒绝；但依赖两字段交叉索引精化的 case（weak03 卡住、weak05 误拒）与
+//! L11/L12 同病——缺口在 L09–L12 的 check_pm_final 跨字段精化传播（L13 的 2026-09-29
+//! 修复未回灌），不是 parser 层问题。
 //!
 //! L11/L12 的 weak05 误拒是真实缺口（match 不完整：模式位置 VecHolder.mk#2 缺少构造子
 //! fsucc）；实验排除了 arm 顺序与递归体因素，根因在 nested-coverage 检查（pattern_match.rs
@@ -234,15 +236,20 @@ fn l08_struct_pattern_sugar_supported_after_2026_11_fix() {
 }
 
 #[test]
-fn l09_l10_struct_pattern_syntax_unsupported_recovery_pinned() {
-    // L09/L10 缺 struct 模式臂；run() 打印解析错误后继续 -> 假 Ok（输出含未解 meta）。
-    // 临时补 parser 后 L09 会 panic（eval_aux unwrap，src/L09_mltt/mod.rs:1220），
-    // L10 输出 unsolved match，因此需要后续同时修 pattern compiler。
-    let src = with_defs(WEAK03);
+fn l09_l10_struct_pattern_sugar_supported_after_2026_11_fix() {
+    // 2026-11-15：L09/L10 的 p_pattern 补上 struct 模式臂；L09 的 match 入口在
+    // 无臂命中时改为保留 Val::Match（不再 unwrap panic）。简单 struct 解构可求值。
+    let src = with_defs(SIMPLE_STRUCT);
     let s = src.clone();
-    assert!(run_ok(|| L09_mltt::run(&s, 0)), "L09 当前为解析恢复假 Ok");
+    assert!(run_ok(|| L09_mltt::run(&s, 0)), "L09 简单 struct 模式");
     let s = src.clone();
-    assert!(run_ok(|| L10_typeclass::run(&s, 0)), "L10 当前为解析恢复假 Ok");
+    assert!(run_ok(|| L10_typeclass::run(&s, 0)), "L10 简单 struct 模式");
+    // 嵌套 Con 的 ill-typed 用例正确拒绝（不再因解析恢复而假 Ok）。
+    let src = with_defs(WEAK02);
+    let s = src.clone();
+    assert!(run_err(|| L09_mltt::run(&s, 0)), "L09 weak02 应正确拒绝");
+    let s = src.clone();
+    assert!(run_err(|| L10_typeclass::run(&s, 0)), "L10 weak02 应正确拒绝");
 }
 
 #[test]
@@ -251,6 +258,10 @@ fn weak02_weak04_ill_typed_rejected_by_checking_layers() {
         let src = with_defs(prog);
         let s = src.clone();
         assert!(run_err(|| L08_product_type::run(&s, 0)), "L08");
+        let s = src.clone();
+        assert!(run_err(|| L09_mltt::run(&s, 0)), "L09");
+        let s = src.clone();
+        assert!(run_err(|| L10_typeclass::run(&s, 0)), "L10");
         let s = src.clone();
         assert!(run_err(|| L11_macro::run(&s, 0)), "L11");
         let s = src.clone();
@@ -266,6 +277,10 @@ fn weak03_cross_field_well_typed_accepted_with_quality_notes() {
     let s = src.clone();
     assert!(run_ok(|| L08_product_type::run(&s, 0)), "L08 具体值");
     let s = src.clone();
+    assert!(run_ok(|| L09_mltt::run(&s, 0)), "L09 Ok 但输出卡住/未解");
+    let s = src.clone();
+    assert!(run_ok(|| L10_typeclass::run(&s, 0)), "L10 Ok 但输出卡住/未解");
+    let s = src.clone();
     assert!(run_ok(|| L11_macro::run(&s, 0)), "L11 Ok 但输出卡住/未解");
     let s = src.clone();
     assert!(run_ok(|| L12_canonical::run(&s, 0)), "L12 Ok 但输出卡住/未解");
@@ -280,6 +295,16 @@ fn weak05_well_typed_false_rejection_pinned_in_l11_l12() {
     assert!(run_ok(|| L08_product_type::run(&s, 0)), "L08 接受");
     let s = src.clone();
     assert!(run_ok(|| L13_namespace::run(&s, 0)), "L13 接受");
+    let s = src.clone();
+    assert!(
+        run_err(|| L09_mltt::run(&s, 0)),
+        "L09 已知缺口：well-typed weak05 被误拒（修复后翻转为 Ok）"
+    );
+    let s = src.clone();
+    assert!(
+        run_err(|| L10_typeclass::run(&s, 0)),
+        "L10 已知缺口：well-typed weak05 被误拒（修复后翻转为 Ok）"
+    );
     let s = src.clone();
     assert!(
         run_err(|| L11_macro::run(&s, 0)),

@@ -397,3 +397,15 @@ match 0.081ms、natadd 2.04ms——均与 L09 同级或更快，仅 universe 慢
 测试 47/26 全绿、validate 22/0 与 25/9 同基线。剩余：l10bench enum 的
 ref/twin quote 发散（既有，nf ref=28/twin=6；L09 同源通过）、P0.5（struct_eq/
 深链帧式化）未做。详见 `docs/l10-carrier-switch-2026-11-14.md` §4。
+
+
+## 7. struct 模式支持与已知精化缺口（2026-11-15）
+
+- p_pattern 已补齐与 L08/L11–L13 同款的 struct 模式糖：case Boxed { p1, p2 }
+  解析为 Boxed.mk(p1, p2)（struct 脱糖后 case 名即 Name.mk）。简单 struct
+  解构可正确求值；ill-typed 的"返回尾部变量"用例正确拒绝。
+- 已知缺口：两字段交叉索引精化仍不完整——L13 probe 的 weak03 输出
+  (unsolved match …)（卡住值），weak05 被误拒（match 不完整：模式位置
+  VecHolder.mk#2 缺少构造子 fsucc），与 L09/L11/L12 同族；根因同为跨字段
+  精化传播缺失（L13 的 2026-09-29 修复未回灌）。行为矩阵与翻转条件见
+  tests/gadt_refine_cross_layer_tests.rs。

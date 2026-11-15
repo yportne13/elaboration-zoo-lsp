@@ -1078,8 +1078,17 @@ impl Infer {
                 let val = self.force(self.eval(env, *tm));
                 match val {
                     val @ Val::SumCase { .. } => {
-                        let (body, env2) = Compiler::eval_aux(self, &val, env, &cases).unwrap();
-                        self.eval_ref(&env2, body)
+                        match Compiler::eval_aux(self, &val, env, &cases) {
+                            Some((body, env2)) => self.eval_ref(&env2, body),
+                            // 无臂命中：按卡住值保留（延迟到 scrutinee/模式可用），
+                            // 不再 unwrap 成 panic（L09 struct 模式支持所需）。
+                            None => Val::Match(
+                                Rc::new(val),
+                                env.clone(),
+                                Rc::new(cases),
+                                Rc::new(Vec::new()),
+                            ),
+                        }
                     }
                     neutral => Val::Match(
                         Rc::new(neutral),
@@ -1217,8 +1226,15 @@ impl Infer {
                 let val = self.force(val);
                 match val {
                     val @ Val::SumCase { .. } => {
-                        let (body, env2) = Compiler::eval_aux(self, &val, env, &cases[..]).unwrap();
-                        self.eval_ref(&env2, body)
+                        match Compiler::eval_aux(self, &val, env, &cases[..]) {
+                            Some((body, env2)) => self.eval_ref(&env2, body),
+                            None => Val::Match(
+                                Rc::new(val),
+                                env.clone(),
+                                Rc::new(cases.clone()),
+                                Rc::new(Vec::new()),
+                            ),
+                        }
                     }
                     neutral => {
                         // 借用路径下卡住值必须持有 owned cases：深拷只发生在
