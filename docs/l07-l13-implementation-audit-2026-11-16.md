@@ -286,7 +286,7 @@
 - 根因：各层 prim 载体不同——L07/L08 是 decl 表 `Val::Decl(name, spine)`（实参保留，unification.rs:1068 同名比 spine）；L09/L10 是单元 `Val::Prim`（无实参，且无 `(Prim,Prim)` 臂）；L11/L12 是 `Val::Prim(typ, PrimFunc)`（无应用实参，且 unification.rs:715-716/766-767 用 `(_,Prim(b,_)) => unify(t,b)` 把任意两 prim 判等）；L13 是 decl 表 + `PrimFunc(&[args])`（实参保留）。
 - 影响：这不是“特性门”，是同一合法程序在不同层被接受/拒绝/崩溃；LSP 产品层 L13 自身正确，但任何以 L09–L12 为参考 oracle 的跨层测试都会误判。
 
-> **2026-11-16 修复（L07/L08）**：参考版与孪生版已补 `(LiteralIntro, LiteralIntro)` 合一臂（`src/L07_sum_type/unification.rs`、`src/L07_sum_type/bump_spine_iter/unify.rs` 及 L08 同两处），并新增 2 个单测 + parity 语料；验证结果：`prim_identity_ctrl` 在 L07/L08 从 Err 变 **PASS**，`prim_identity_bad` 仍正确拒绝，L07 lib 72 / L08 lib 83 / l07 parity 99 / l08 parity 118 全绿。L09–L12 的 literal 臂缺失与“legacy env-slot prim panic”是另一组问题（本次未改）。
+> **2026-11-16 修复（L07/L08）**：参考版与孪生版已补 `(LiteralIntro, LiteralIntro)` 合一臂（`src/L07_sum_type/unification.rs`、`src/L07_sum_type/bump_spine_iter/unify.rs` 及 L08 同两处），并新增 2 个单测 + parity 语料；验证结果：`prim_identity_ctrl` 在 L07/L08 从 Err 变 **PASS**，`prim_identity_bad` 仍正确拒绝，L07 lib 72 / L08 lib 83 / l07 parity 99 / l08 parity 118 全绿。L09–L12 的 prim 载体迁移与 literal 臂已于同日第二轮完成（L09/L10 改为“名字+实参 spine”，L11/L12 改为 args 版 PrimFunc+spine），并顺带修复 L12 孪生 force 的一个既有潜在 bug，详见**附录 C**。
 
 **F2（真回归）：L12 拒绝 enum 索引参数投影**
 - 最小复现（独立复核，非仅 probe）：
@@ -319,7 +319,7 @@
 
 | 严重度 | 风险 | 层/锚点 | 建议 |
 |---|---|---|---|
-| P0 | 卡住 prim 相等判定四态：L11/L12 假阳性、L07/L08 假阴性（根因是缺 literal 臂，prim 表示正确）、L09–L12 在相同实参时 panic | 见 F1；probe prim_identity_*；L07 实测 `.audit/primprobe*` | L07/L08 只需补 `(LiteralIntro,LiteralIntro)` 臂（L13 unification.rs:1135 同款，一行级修复）；L09/L10 补 `(Prim,Prim)` 臂并把 env-slot prim 改为 decl PrimFunc；L11/L12 收紧忽略实参的臂；panic 点必须改为可恢复 Err |
+| P0 | 卡住 prim 相等判定四态：L11/L12 假阳性、L07/L08 假阴性（根因是缺 literal 臂，prim 表示正确）、L09–L12 在相同实参时 panic | 见 F1；probe prim_identity_*；L07 实测 `.audit/primprobe*` | **2026-11-16 已全部落地**：L07/L08 补 literal 臂；L09/L10 改为“名字+实参 spine”；L11/L12 改为 args 版 PrimFunc+spine 并删除假阳臂；panic 点随 env-slot 模型移除。见附录 C |
 | P0 | L12 拒绝 enum 索引投影 `t.len`（L07–L11/L13 接受） | F2；realbench 复核 | 定位 L12 elaboration 的索引投影路径；在 `tests/l12_fast_parity.rs` 之外加跨层回归 |
 | P1 | L10–L13 缺 `MATCH_CMP_BUDGET`/`meta_expanding`/深值迭代；L07–L12 缺 eval 看门狗 | §5.1 矩阵 | 要么回灌守卫，要么在 README 写明“不设防”并给测试上限 |
 | P1 | L13 与 L12 的精化载体分叉（σ vs update_cxt）导致的 GADT 行为差异未系统对照 | §5.1；gadt 测试 84 passed 只覆盖已钉形态 | 建立“L12/L13 精化行为差异”语料；L13 的 struct_refine_probe 已知弱点保持单独跟踪 |
@@ -498,7 +498,7 @@ L13 的构造子只登记全限定名（`Enum.case`），不设裸名别名（el
 
 ### 11.1 正确性优先（小改动、高收益）
 
-1. **统一卡住 prim 的相等语义**（真实健全性分裂，最小可复现）：L09/L10 的单元 `Val::Prim` 无 `(Prim,Prim)` 臂 → 相同实参的卡住 prim 等式也 Err，且 env-slot prim 体会 `unwrap` panic；L11/L12 用 `(_,Prim(b,_)) | (Prim(a,_),_) => unify(...)` 把任意两个卡住 prim 判等（假阳性）。L07/L08/L13 的 decl 表 prim 保留实参、按 spine 比较是正确的；L07/L08 的 ctrl 失败是**另一件事**——unify 缺 `(LiteralIntro,LiteralIntro)` 臂（L13 unification.rs:1135 有），补上即可。建议：L07/L08 补 literal 臂；L09/L10 改成 L07/L13 的 decl-PrimFunc 载体；L11/L12 收紧忽略实参的臂；把 `tests/audit_crosslayer_probe.rs` 的 prim_identity_bad/ctrl 升级为常驻跨层门禁。
+1. **统一卡住 prim 的相等语义**（真实健全性分裂，最小可复现）：L09/L10 的单元 `Val::Prim` 无 `(Prim,Prim)` 臂 → 相同实参的卡住 prim 等式也 Err，且 env-slot prim 体会 `unwrap` panic；L11/L12 用 `(_,Prim(b,_)) | (Prim(a,_),_) => unify(...)` 把任意两个卡住 prim 判等（假阳性）。L07/L08/L13 的 decl 表 prim 保留实参、按 spine 比较是正确的；L07/L08 的 ctrl 失败是**另一件事**——unify 缺 `(LiteralIntro,LiteralIntro)` 臂（L13 unification.rs:1135 有），补上即可。**2026-11-16 已按此执行**：L07/L08 补 literal 臂；L09/L10 改成“名字+实参 spine”（等价于 L07 的 args 保持模型，无需 decl 表）；L11/L12 改成 args 版 PrimFunc+spine 并删除假阳臂；新增 `tests/prim_identity_cross_layer.rs` 常驻门禁（5 程序 × 7 层）。详见附录 C。
 2. **收口 L11/L12 的跨字段精化**：11-15 的 walk_con fallback 已把 weak03/weak05 拉回与 L08/L13 一致（实验结果为准）；若仍有误拒，优先移植 L13 的 `already_refined` 传播/9-29 精化重做，而不是再加一层 fallback。
 3. **明确精化载体路线**：L13 产品层保留 `update_cxt` 是已定的产品决策（σ 五轮失败），但应停止在文档/模块头里声称“继承 L05–L12 全部机制”；在 L13 与 L12 之间建立“精化行为差异”对照表（哪些程序在 L12/L13 结果不同），并把 L13 的精化弱点文档化。
 4. **补齐或登记守卫**：MATCH_CMP_BUDGET / P5 / 深值迭代在 L10–L13 缺失。若判定“这些层不会触发卡住比较/深值”，请在每层 README 写明理由；否则把 L07 的实现回灌（L09 已证明可适配），并加 deep-value/cyclic-meta 回归钉子。
@@ -572,4 +572,48 @@ target/release/l13bench.exe --file tools\bench_corpus\common\ladder_l07_large.ty
 | tests/audit_crosslayer_probe.rs | 本报告实验 A 的常驻 harness（新增；建议保留为跨层门禁） |
 | docs/compare-l07-l13/DELTA.md | 旧审计（2026-11-08 时点；基线 8443586e 是 master 之外的孤儿提交，master 内同内容为 5be479cd） |
 | docs/bench-crosslayer-ref-2026-11-12.md、docs/bench-crosslayer-vspan-2026-11-13.md、docs/l09-carrier-switch-2026-11-12.md、docs/l10-carrier-switch-2026-11-14.md | 本报告 §8 对照的历史基准/载体文档 |
+
+---
+
+## 附录 C. 2026-11-16 prim 载体迁移记录（L09–L12，改造后状态）
+
+> 正文 §6/§6.4/§11.1 记录的是当天上午的审计结论（当时 L09–L12 仍是 L06 式 env 槽 prim）。同日第二轮已完成迁移并验证；本附录是正文的后续状态，引用正文结论时以本附录为准。
+
+### C.1 改造内容
+
+| 层 | 参考版 | 孪生版 |
+|---|---|---|
+| L09/L10 | `Tm::Prim(SmolStr)` / `Val::Prim(SmolStr, Spine)`；builtin 注册值 = 单个中性 Prim 头（**不再构造 λ 链、不再读 env 槽**）；eval 产中性头、`v_app` 收 spine、`force` 先 force 实参再调本层 `prim_reduce(name, args)`；quote/rename/struct_eq/pretty/frcs/`mentions_level`/unify 全部改为“名字+实参 spine”；新增/收窄 `(LiteralIntro,LiteralIntro)` 自反臂 | `XCell::Prim(&str)` / `CTm::Prim(&str)` 携带名字；新增 `HK_PRIM` 链头种类与 `prim_head_name`，`bump_spine_iter/prim.rs` 提供 string_concat 归约；machine 的 builtin 初始化改为单 Prim 头；force/quote/rename/unify/spine/subst/debug 同步；v_app 对 Prim 头压栈而不再 panic |
+| L11/L12 | `PrimFunc` 改为 args 版 `Rc<dyn Fn(&Infer,&Decl,&[Rc<Val>]) -> Option<Rc<Val>> + Send+Sync>`（去掉 `&Env`、返回 Option）；`Val::Prim(typ, PrimFunc, Spine)`；builtin 注册值 = 中性 Prim 头；cxt.rs 的 prim 函数由 `env.iter().nth(k).unwrap()` 改为 `args.get(k)`；**删除** unify 的“任意 Prim 判等 / 按携带 typ 剥离”假阳臂，改为同身份（同名或同 `Rc`）+ 逐 spine；补 literal 自反臂 | `XCell::Prim { typ, pid }` 保留 `PrimId` 身份但改为中性头 + spine；“任意 Prim 判等/typ 剥离”臂删除；v_app 压栈不再 panic；`prim_exec(pid, args)` 由 eval 的 env 版分支改成 args 版；quote/rename/unify/frcs/mentions 同步 |
+
+公共：四层 ref+twin 均加 `(LiteralIntro, LiteralIntro)` 自反臂（L13 `unification.rs:1135` 同款）；新增 `tests/prim_identity_cross_layer.rs`（5 程序 × 7 层，参考版）作为常驻门禁；各层 `tests/lXX_fast_parity.rs` 增加 prim 钉子（literal 自反、prim 正控 Ok、prim 负例 Err、部分应用 no-panic）。
+
+### C.2 顺带修复的既有 bug（L12 孪生）
+
+`src/L12_canonical/bump_spine_iter/force.rs` 的未解 flex 链臂原为 `MetaEntry::Unsolved(v, _, _) => return *v`——把 `MetaEntry` 里存的**闭类型**当值返回（`?m x` 被 force 成其 Π 型），导致 `prim_identity_ctrl` 在 L12 twin Err。该行在 HEAD 即存在（修复前 `git show HEAD:src/L12_canonical/bump_spine_iter/force.rs` 可核），属既有潜在 bug，只是此前被 unify 的 Prim typ 剥离假阳臂掩盖。修复为 `Unsolved(_, _, _) => return v`（与 L11 孪生同款），`l12_fast_parity` 由 53 passed/2 ignored 变为 **55 passed / 0 failed / 0 ignored**。
+
+### C.3 改造后门禁矩阵（HEAD + 本轮改动，实测）
+
+| 门禁 | 结果 |
+|---|---|
+| `cargo test --release --test l07_fast_parity` | 99 passed / 0 failed / 0 ignored |
+| `l08_fast_parity` | 118 / 0 / 0 |
+| `l09_fast_parity` | 47 / 0 / 0 |
+| `l10_fast_parity` | 48 / 0 / 0 |
+| `l11_fast_parity` | 56 / 0 / 0 |
+| `l12_fast_parity` | 55 / 0 / 0 |
+| `l13_fast_parity` | 630 / 0 / 6 ignored（L13 未改） |
+| `l07_blackbox` / `l08_blackbox` / `l09_blackbox` | 48+1 ignored / 57+1 ignored / 82，全部 0 failed |
+| `tests/prim_identity_cross_layer` | 77 passed / 0 failed（5 程序 × 7 层 ref 语义） |
+| `tests/audit_crosslayer_probe` | 273 单元矩阵：`prim_identity_bad`/`bad_rfl` 7 层全 Err；`prim_identity_ctrl`/`ctrl_rfl` 7 层全 Ok；`core_stuck_prim` 不再 panic |
+| `realbench --layer L07..L12 --corpus .audit/primprobe4 --validate` | 六层全部 pass=1 skip=1（ctrl PASS / bad SKIP） |
+| `cargo build --release --bins` | Finished，0 error |
+
+### C.4 行为面变化与口径
+
+1. **有意变化**：L09–L12 的部分应用 builtin 显示从 `y => Prim Func`（实参丢失）变为实际调用形态（`string_concat <实参>`）；`primprobe4`/`core_stuck_prim` 的 hash 因此变化，受影响的 L09 golden 与 L09 blackbox 期望已同步更新。
+2. **诊断差异保留**：ref/twin 在 prim 负例上的 Err 文案顺序（find/expected）与零宽空格等仍按各自 pretty 血统，判定一致；parity 判据仍为“Ok 逐字节 / Err 判定一致”。
+3. **未扩展**：L12 twin 仍只注册 5 个 builtin（ref 6 个，`change_mutable_default` 为既有分叉）；本次未补，不影响 prim 语义门禁。
+4. **性能影响未测**：本次只做语义/载体改造，未重跑 §8 的性能矩阵；按设计，L09–L12 参考版在 prim 热路径上省掉了 env 槽读取与 λ 链求值，预期不劣于旧实现，但需后续基准确认。
+
 
