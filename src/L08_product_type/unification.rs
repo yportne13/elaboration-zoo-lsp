@@ -1053,6 +1053,11 @@ impl Infer {
             (Val::Flex(m, sp), _) => self.solve(decl, l, *m, sp.clone(), u.clone()),
             (_, Val::Flex(m_prime, sp_prime)) => self.solve(decl, l, *m_prime, sp_prime.clone(), t.clone()),
             (Val::LiteralType, Val::LiteralType) => Ok(()),
+            // 字面量相等：同值才可合一（L13 `unification.rs:1135` 同款）。
+            // 缺此臂时 `Eq[String] "ab" "ab"` 与“含字面量实参的卡住 prim
+            // 自等式”都会落到 `unify_no_arm` 被误拒——2026-11 跨层复查的
+            // prim_identity_ctrl 假阴即由此而来（L09–L12 仍未补，见报告）。
+            (Val::LiteralIntro(a), Val::LiteralIntro(b)) if a.data == b.data => Ok(()),
             // 宽松臂（L06 同款把关）：String 与卡住内建 / 卡住 Decl 的宽松
             // 合一只对 decl 表**未登记名**放行——string_to_global_type 对
             // 未知名返回以其名字的卡住 Decl（动态类型的逃逸舱口）；已登记

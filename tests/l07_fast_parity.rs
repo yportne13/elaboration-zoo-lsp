@@ -100,6 +100,12 @@ fn parity_u_enum_strings() {
         "def store : U = create_global \"k\" \"v\"\ndef upd : U = change_mutable \"k\" (s => string_concat s \"!\")\ndef g1 : String = get_global \"k\"\nprintln g1\n",
         "def g3 : String = get_global_default \"nope\" \"fb\"\nprintln g3\n",
         "def v : String = get_global \"missing\"\nprintln v\n",
+        // 字面量合一自反性（unify 缺 (LiteralIntro,LiteralIntro) 臂的回归）
+        "enum Eq[A](x: A, y: A) {\n    refl[a: A] -> Eq[A] a a\n}\n\ndef ok: Eq[String] \"ab\" \"ab\" = refl\n\nprintln \"literal-eq\"\n",
+        // 含字面量实参的卡住 prim 自等式（同缺臂的另一形态）
+        "enum Eq[A](x: A, y: A) {\n    refl[a: A] -> Eq[A] a a\n}\n\ndef p(x: String): String = string_concat x \"a\"\n\ndef ok(x: String): Eq[String] (p x) (p x) = refl\n\nprintln \"prim-eq\"\n",
+        // 不同字面量仍必须被拒（两侧 Err）
+        "enum Eq[A](x: A, y: A) {\n    refl[a: A] -> Eq[A] a a\n}\n\ndef bad: Eq[String] \"ab\" \"cd\" = refl\n",
     ] {
         assert_parity(src);
     }

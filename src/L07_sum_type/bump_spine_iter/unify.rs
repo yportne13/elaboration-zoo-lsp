@@ -805,6 +805,18 @@ pub(super) fn unify_iter<'a>(
         if v_tag(t) == 6 && v_tag(u) == 6 {
             continue;
         }
+        // —— (LiteralIntro, LiteralIntro)：同值相等（参考臂 14b；
+        // 参考版 2026-11 补臂，L13 `unification.rs:1135` 同款）。缺此臂时
+        // 字面量自反性与“含字面量实参的卡住 prim 自等式”都会被误拒。
+        // 位相等捷径（t.0 == u.0）对 tag 7 关闭，故这里按内容比较。
+        if v_tag(t) == 7 && v_tag(u) == 7 {
+            if let (XCell::Lit(a), XCell::Lit(b)) = (v_xcell_of(t), v_xcell_of(u)) {
+                if a == b {
+                    continue;
+                }
+                return false; // 异字面量：参考版落 unify_no_arm（两侧规范头）→ 确定不等
+            }
+        }
         // —— 宽松臂（参考臂 15）：String 与卡住内建 / 卡住 Decl 的宽松合一
         // 只对 decl 表**未登记名**放行——string_to_global_type 对未知名返回
         // 以其名字的卡住 Decl（动态类型的逃逸舱口）；已登记名按登记类型把关

@@ -2352,3 +2352,46 @@ fn loose_string_requires_empty_spine() {
         "应记为无法判定（不是矛盾）"
     );
 }
+
+/// 回归：字面量自反性。`unify` 曾缺 `(LiteralIntro, LiteralIntro)` 臂：
+/// `Eq[String] "ab" "ab"` 会落到 `unify_no_arm` 被误拒（L13 有同款臂，
+/// 见 src/L13_namespace/unification.rs:1135）。
+#[test]
+fn test_literal_equality() {
+    check(
+        r#"
+enum Eq[A](x: A, y: A) {
+    refl[a: A] -> Eq[A] a a
+}
+
+def ok: Eq[String] "ab" "ab" = refl
+"#,
+    );
+    check_err(
+        r#"
+enum Eq[A](x: A, y: A) {
+    refl[a: A] -> Eq[A] a a
+}
+
+def bad: Eq[String] "ab" "cd" = refl
+"#,
+    );
+}
+
+/// 回归：含字面量实参的卡住 prim 自等式应可证。修复前该形态与字面量
+/// 自反性一样被误拒（prim_identity_ctrl 的层内最小形态）。
+#[test]
+fn test_stuck_prim_with_literal_arg_reflexive() {
+    check(
+        r#"
+enum Eq[A](x: A, y: A) {
+    refl[a: A] -> Eq[A] a a
+}
+
+def p(x: String): String = string_concat x "a"
+
+def ok(x: String): Eq[String] (p x) (p x) = refl
+"#,
+    );
+}
+
