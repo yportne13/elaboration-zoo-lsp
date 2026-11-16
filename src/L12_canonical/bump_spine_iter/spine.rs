@@ -20,6 +20,9 @@ use super::syntax::{V, XCell, v_meta, v_meta_of, v_spine, v_spine_of, v_tag, v_x
 pub(super) const HK_OTHER: u8 = 0;
 pub(super) const HK_FLEX: u8 = 1;
 pub(super) const HK_OBJ: u8 = 2;
+/// 卡住内建头（XCell::Prim）：force 收集实参后调 prim_exec 归约（元数不足
+/// / 实参不合 → 保持卡住）。
+pub(super) const HK_PRIM: u8 = 3;
 
 /// spine 栈槽：一次中性应用（icit 随槽携带）。`len`/`base` 支撑流式右链
 /// quote；`hk` 记录链头种类（push 时随函数侧传播）。
@@ -47,6 +50,7 @@ impl Spine {
             5 => HK_FLEX,
             7 => match v_xcell_of(f) {
                 XCell::Obj { .. } => HK_OBJ,
+                XCell::Prim { .. } => HK_PRIM,
                 _ => HK_OTHER,
             },
             2 => self.stack[v_spine_of(f)].hk,

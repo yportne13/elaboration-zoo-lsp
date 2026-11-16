@@ -158,7 +158,7 @@ fn bb_string_concat_applied() {
 fn bb_string_concat_partial_stuck() {
     assert_lines(
         "def mystr = \"hello world\"\n\ndef stuck_concat = string_concat mystr\n\nprintln stuck_concat\nprintln (stuck_concat \"!\")\n",
-        &["y => Prim Func", "hello world!"],
+        &["string_concat hello world", "hello world!"],
     );
 }
 

@@ -81,82 +81,82 @@ pub struct Cxt {
     pub namespace: List<(Rc<Val>, FxHashSet<SmolStr>, Raw)>,
 }
 
-fn string_concat(_: &Infer, _: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
-    match (env.iter().nth(1).unwrap().as_ref(), env.iter().next().unwrap().as_ref()) {
-        (Val::LiteralIntro(a), Val::LiteralIntro(b)) => {
-            Val::LiteralIntro(a.clone().map(|x| format!("{x}{}", b.data))).into()
-        },
-        _ => Val::Prim(typ, PrimFunc(Rc::new(string_concat))).into(),
+// builtin 归约体（args 版）：实参自然序（最先应用在前），由 force 在
+// Prim 归约臂里收集 spine、逐个 force 后传入；元数不足 / 实参不合 / 缺名
+// 一律返回 None（保持卡住，不 panic）。下标映射对照旧 env 槽版：
+// env.nth(1) = 第一实参 = args[0]，env.nth(0) = 第二实参 = args[1]。
+fn string_concat(_: &Infer, _: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+    match (args.get(0)?.as_ref(), args.get(1)?.as_ref()) {
+        (Val::LiteralIntro(a), Val::LiteralIntro(b)) => Some(
+            Val::LiteralIntro(a.clone().map(|x| format!("{x}{}", b.data))).into(),
+        ),
+        _ => None,
     }
 }
 
-fn string_to_global_type(infer: &Infer, decl: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
-    match env.iter().next().unwrap().as_ref() {
-        Val::LiteralIntro(a) => {
-            infer.eval(decl, env, &Tm::Decl(a.clone().map(|a| SmolStr::new(a))).into())
-        }
-        _ => Val::Prim(typ, PrimFunc(Rc::new(string_to_global_type))).into(),
+fn string_to_global_type(infer: &Infer, decl: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+    match args.get(0)?.as_ref() {
+        Val::LiteralIntro(a) => Some(infer.eval(
+            decl,
+            &List::new(),
+            &Tm::Decl(a.clone().map(|a| SmolStr::new(a))).into(),
+        )),
+        _ => None,
     }
 }
 
-fn create_global(infer: &Infer, _decl: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
-    match env.iter().nth(1).unwrap().as_ref() {
+fn create_global(infer: &Infer, _decl: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+    match args.get(0)?.as_ref() {
         Val::LiteralIntro(a) => {
+            let v = args.get(1)?.clone();
             if let Ok(mut x) = infer.mutable_map.write() {
-                x.insert(a.data.clone(), env.iter().next().unwrap().clone());
+                x.insert(a.data.clone(), v);
             };
-            Val::U(0).into()
+            Some(Val::U(0).into())
         }
-        _ => Val::Prim(typ, PrimFunc(Rc::new(create_global))).into(),
+        _ => None,
     }
 }
 
-fn change_mutable(infer: &Infer, decl: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
-    match env.iter().nth(1).unwrap().as_ref() {
+fn change_mutable(infer: &Infer, decl: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+    match args.get(0)?.as_ref() {
         Val::LiteralIntro(a) => {
+            let f = args.get(1)?;
             if let Ok(mut x) = infer.mutable_map.write() {
                 if let Some(x) = x.get_mut(&a.data) {
-                    *x = infer.v_app(
-                        decl,
-                        env.iter().next().unwrap(),
-                        x.clone(),
-                        Icit::Expl
-                    )
+                    *x = infer.v_app(decl, f, x.clone(), Icit::Expl)
                 }
             };
-            Val::U(0).into()
+            Some(Val::U(0).into())
         }
-        _ => Val::Prim(typ, PrimFunc(Rc::new(change_mutable))).into(),
+        _ => None,
     }
 }
 
-fn get_global(infer: &Infer, _: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
-    match env.iter().next().unwrap().as_ref() {
-        Val::LiteralIntro(a) => {
-            infer.mutable_map.write().unwrap().get(&a.data).unwrap().clone()
-        }
-        _ => Val::Prim(typ, PrimFunc(Rc::new(get_global))).into(),
+fn get_global(infer: &Infer, _: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+    match args.get(0)?.as_ref() {
+        Val::LiteralIntro(a) => Some(
+            infer.mutable_map.write().unwrap().get(&a.data).unwrap().clone(),
+        ),
+        _ => None,
     }
 }
 
-fn change_mutable_default(infer: &Infer, decl: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
-    match env.iter().nth(2).unwrap().as_ref() {
+fn change_mutable_default(infer: &Infer, decl: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+    match args.get(0)?.as_ref() {
         Val::LiteralIntro(a) => {
+            let f = args.get(1)?;
+            let z = args.get(2)?;
             if let Ok(mut x) = infer.mutable_map.write() {
                 if let Some(x) = x.get_mut(&a.data) {
-                    *x = infer.v_app(
-                        decl,
-                        env.iter().nth(1).unwrap(),
-                        x.clone(),
-                        Icit::Expl
-                    )
+                    *x = infer.v_app(decl, f, x.clone(), Icit::Expl)
                 } else {
-                    x.insert(a.data.clone(), env.iter().next().unwrap().clone());
+                    x.insert(a.data.clone(), z.clone());
                 }
             };
-            Val::U(0).into()
+            Some(Val::U(0).into())
         }
-        _ => Val::Prim(typ, PrimFunc(Rc::new(change_mutable_default))).into(),
+        _ => None,
     }
 }
 
@@ -182,12 +182,12 @@ fn tm_app(f: Rc<Tm>, arg: Rc<Tm>) -> Rc<Tm> {
 
 impl Cxt {
     pub fn new(infer: &Infer) -> Self {
-        let f_concat = PrimFunc(Rc::new(string_concat));
-        let f_to_global = PrimFunc(Rc::new(string_to_global_type));
-        let f_create = PrimFunc(Rc::new(create_global));
-        let f_change = PrimFunc(Rc::new(change_mutable));
-        let f_get = PrimFunc(Rc::new(get_global));
-        let f_change_def = PrimFunc(Rc::new(change_mutable_default));
+        let f_concat = PrimFunc::new("string_concat", string_concat);
+        let f_to_global = PrimFunc::new("string_to_global_type", string_to_global_type);
+        let f_create = PrimFunc::new("create_global", create_global);
+        let f_change = PrimFunc::new("change_mutable", change_mutable);
+        let f_get = PrimFunc::new("get_global", get_global);
+        let f_change_def = PrimFunc::new("change_mutable_default", change_mutable_default);
 
         let mut cxt = Self::empty();
 
@@ -201,18 +201,20 @@ impl Cxt {
 
         let str_val = infer.eval(&cxt.decl, &cxt.env, &tm_decl("String"));
 
+        // builtin 值 = 中性 Prim 头（不再构造 λ 链）：实参经 App/spine 到达，
+        // 归约统一在 force 的 Prim 臂
         cxt.add_builtin_mut(infer, "string_concat",
-            tm_lam(&["x", "y"], Tm::Prim(str_val.clone(), f_concat).into()),
+            Tm::Prim(str_val.clone(), f_concat).into(),
             tm_pi(&[("x", tm_decl("String")), ("y", tm_decl("String"))], tm_decl("String")),
         );
 
         cxt.add_builtin_mut(infer, "string_to_global_type",
-            tm_lam(&["x"], Tm::Prim(str_val.clone(), f_to_global).into()),
+            Tm::Prim(str_val.clone(), f_to_global).into(),
             tm_pi(&[("x", tm_decl("String"))], Tm::U(0).into()),
         );
 
         cxt.add_builtin_mut(infer, "create_global",
-            tm_lam(&["x", "y"], Tm::Prim(Val::U(0).into(), f_create).into()),
+            Tm::Prim(Val::U(0).into(), f_create).into(),
             tm_pi(&[
                 ("x", tm_decl("String")),
                 ("y", tm_app(tm_decl("string_to_global_type"), Tm::Var(Ix(0)).into())),
@@ -220,7 +222,7 @@ impl Cxt {
         );
 
         cxt.add_builtin_mut(infer, "change_mutable",
-            tm_lam(&["x", "y"], Tm::Prim(Val::U(0).into(), f_change).into()),
+            Tm::Prim(Val::U(0).into(), f_change).into(),
             tm_pi(&[
                 ("x", tm_decl("String")),
                 ("f", tm_pi(&[
@@ -230,13 +232,13 @@ impl Cxt {
         );
 
         cxt.add_builtin_mut(infer, "get_global",
-            tm_lam(&["x"], Tm::Prim(Val::U(0).into(), f_get).into()),
+            Tm::Prim(Val::U(0).into(), f_get).into(),
             tm_pi(&[("x", tm_decl("String"))],
                 tm_app(tm_decl("string_to_global_type"), Tm::Var(Ix(0)).into())),
         );
 
         cxt.add_builtin_mut(infer, "change_mutable_default",
-            tm_lam(&["x", "y", "z"], Tm::Prim(Val::U(0).into(), f_change_def).into()),
+            Tm::Prim(Val::U(0).into(), f_change_def).into(),
             tm_pi(&[
                 ("x", tm_decl("String")),
                 ("f", tm_pi(&[

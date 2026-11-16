@@ -101,9 +101,12 @@ pub(super) fn export(t: &Tm<'_>) -> CTm {
                 },
             )),
             J::Do(Tm::Decl(x)) => done.push(CTm::Decl(name(x))),
+            // 参考版 Tm::Prim 携带 (typ, PrimFunc)；孪生 Tm::Prim 只带 (typ,
+            // pid)，导出时用哑 PrimFunc 占位（pretty 只打印 "Prim Func"，
+            // 类型/函数字段不参与显示）
             J::Do(Tm::Prim(_, _)) => done.push(CTm::Prim(
                 CRc::new(super::Val::LiteralType),
-                super::PrimFunc(CRc::new(|_, _, _, _| super::Val::U(0).into())),
+                super::PrimFunc::new("prim", |_, _, _| None),
             )),
             J::Do(Tm::Obj(h, n)) => {
                 tasks.push(J::Obj2(n));

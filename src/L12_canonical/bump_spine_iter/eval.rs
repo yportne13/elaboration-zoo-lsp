@@ -227,90 +227,12 @@ pub(super) fn eval_iter<'a>(
             W::Tm(Tm::U(l), _) => vals.push(v_u(*l)),
             W::Tm(Tm::LiteralType, _) => vals.push(v_lit_ty()),
             W::Tm(Tm::LiteralIntro(s), _) => vals.push(v_xcell(bump.alloc(XCell::Lit(s)))),
-            // builtin 体（带声明返回类型 + 函数标识；参考版 cxt.rs 5 个
-            // PrimFunc 的逐句移植）：reduce 不成功 → 卡 `XCell::Prim { typ,
-            // pid }`（v_app 对它 panic，永无 Prim 头的链）。env 槽数不足时
-            // env_nth 越界 panic（参考版 unwrap 同款崩溃）。
-            W::Tm(Tm::Prim(typ, pid), env) => match pid {
-                // string_concat：env 前两槽全为字面量 → 拼接；否则卡住。
-                PrimId::StringConcat => {
-                    let b = env_nth(defs, env, 0);
-                    let a = env_nth(defs, env, 1);
-                    match (lit_of(a), lit_of(b)) {
-                        (Some(a), Some(b)) => {
-                            let len = a.len() + b.len();
-                            let ptr = bump
-                                .alloc_layout(std::alloc::Layout::from_size_align(len, 1).unwrap())
-                                .as_ptr();
-                            // SAFETY: a/b 都是 &str（合法 UTF-8）；两段完整
-                            // 序列按字节拼接仍是合法 UTF-8，不会引入跨边界
-                            // 截断的码点
-                            let s = unsafe {
-                                std::ptr::copy_nonoverlapping(a.as_ptr(), ptr, a.len());
-                                std::ptr::copy_nonoverlapping(b.as_ptr(), ptr.add(a.len()), b.len());
-                                std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len))
-                            };
-                            vals.push(v_xcell(bump.alloc(XCell::Lit(s))));
-                        }
-                        _ => vals.push(v_xcell(bump.alloc(XCell::Prim { typ: *typ, pid: *pid }))),
-                    }
-                }
-                // string_to_global_type：首槽字面量 → decl 表查名（命中给
-                // 登记值，未登记卡 `Decl(name)`——参考版 eval(Tm::Decl)
-                // 同款逃逸）；非字面量卡住。
-                PrimId::StringToGlobalType => {
-                    match lit_of(env_nth(defs, env, 0)) {
-                        Some(name) => match decl.get(name) {
-                            Some(e) => vals.push(e.val),
-                            None => vals.push(v_xcell(bump.alloc(XCell::Decl { name }))),
-                        },
-                        None => vals.push(v_xcell(bump.alloc(XCell::Prim { typ: *typ, pid: *pid }))),
-                    }
-                }
-                // create_global：首槽字面量名字 + 次槽值 → mutable_map 写入
-                //（参考版 RwLock write 同款；同线程重入自锁域不在这条路径）。
-                PrimId::CreateGlobal => match lit_of(env_nth(defs, env, 1)) {
-                    Some(name) => {
-                        let v0 = env_nth(defs, env, 0);
-                        mutable.borrow_mut().insert(SmolStr::new(name), v0);
-                        vals.push(v_u(0));
-                    }
-                    None => vals.push(v_xcell(bump.alloc(XCell::Prim { typ: *typ, pid: *pid }))),
-                },
-                // change_mutable：首槽字面量名字，次槽函数应用到旧值再写回
-                //（参考版 get_mut + v_app 同款；v_app 在持锁区间外执行——
-                // 参考版持写锁期间 v_app 重入自锁，快版以短借用规避，行为
-                // 仅在嵌套 builtin 的病理程序上可观察差异）。
-                PrimId::ChangeMutable => match lit_of(env_nth(defs, env, 1)) {
-                    Some(name) => {
-                        let f = env_nth(defs, env, 0);
-                        let old = mutable.borrow().get(name).copied();
-                        if let Some(x) = old {
-                            // 内层 β 用**独立草稿栈**——eval_iter 入口会清空
-                            // work/vals/icits，复用外层栈会销毁外层 eval 的
-                            // 待续状态（change 之后的下一条求值即被吞掉）
-                            let mut w2: Vec<W<'a>> = Vec::new();
-                            let mut v2: Vec<V> = Vec::new();
-                            let mut i2: Vec<Icit> = Vec::new();
-                            let nx = vapp1(
-                                bump, spine, &mut w2, &mut v2, &mut i2, defs, metas, decl,
-                                mutable, f, x, Icit::Expl,
-                            );
-                            mutable.borrow_mut().insert(SmolStr::new(name), nx);
-                        }
-                        vals.push(v_u(0));
-                    }
-                    None => vals.push(v_xcell(bump.alloc(XCell::Prim { typ: *typ, pid: *pid }))),
-                },
-                // get_global：首槽字面量名字 → mutable_map 读取（缺名 panic
-                //——参考版 `unwrap()` 同款崩溃）。
-                PrimId::GetGlobal => {
-                    let name = lit_of(env_nth(defs, env, 0))
-                        .expect("get_global: 名字非字面量");
-                    let v = mutable.borrow().get(name).copied().unwrap();
-                    vals.push(v);
-                }
-            },
+            // builtin：求值只产**中性 Prim 头**（不再读 env 槽、不在求值期
+            // 归约）；实参经 App 由 v_app 压 spine，reduction 统一在 force 的
+            // Prim 链臂（prim_exec，args 版）。
+            W::Tm(Tm::Prim(typ, pid), _env) => {
+                vals.push(v_xcell(bump.alloc(XCell::Prim { typ: *typ, pid: *pid })));
+            }
             W::Tm(Tm::Pi(name, icit, dom, cod), env) => {
                 work.push(W::PiBody(name, *icit, cod, env));
                 cur = Some(W::Tm(dom, env));
@@ -626,4 +548,96 @@ v = vapp1(
         }
     }
     vals.pop().expect("eval 必须恰有一个根值")
+}
+
+// prim_exec：builtin 归约体（args 版，参考版 cxt.rs args 版 PrimFunc 的
+// 逐句移植）。实参**自然序**（最先应用在前）；元数不足 / 实参不合 /
+// 缺名一律 None（调用方 force 保持卡住，不 panic）。下标映射对照旧 env
+// 槽版：env_nth(.., 1) = 第一实参 = args[0]，env_nth(.., 0) = 第二实参。
+// SAFETY（string_concat 的 bump 拼接）：a/b 都是 &str（合法 UTF-8）；两段
+// 完整序列按字节拼接仍是合法 UTF-8，不会引入跨边界截断的码点。
+#[allow(clippy::too_many_arguments)]
+pub(super) fn prim_exec<'a>(
+    bump: &'a Bump,
+    spine: &mut Spine,
+    defs: &mut Vec<V>,
+    metas: &[MetaEntry],
+    decl: &Decls<'a>,
+    mutable: &RefCell<FxHashMap<SmolStr, V>>,
+    pid: PrimId,
+    args: &[(V, Icit)],
+) -> Option<V> {
+    match pid {
+        // string_concat：前两实参全为字面量 → 拼接；否则卡住。
+        PrimId::StringConcat => {
+            // args[0] = 第一实参（先拼的左侧），args[1] = 第二实参
+            let a = force(bump, spine, defs, metas, decl, mutable, args.get(0)?.0);
+            let b = force(bump, spine, defs, metas, decl, mutable, args.get(1)?.0);
+            match (lit_of(a), lit_of(b)) {
+                (Some(a), Some(b)) => {
+                    let len = a.len() + b.len();
+                    let ptr = bump
+                        .alloc_layout(std::alloc::Layout::from_size_align(len, 1).unwrap())
+                        .as_ptr();
+                    let s = unsafe {
+                        std::ptr::copy_nonoverlapping(a.as_ptr(), ptr, a.len());
+                        std::ptr::copy_nonoverlapping(b.as_ptr(), ptr.add(a.len()), b.len());
+                        std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len))
+                    };
+                    Some(v_xcell(bump.alloc(XCell::Lit(s))))
+                }
+                _ => None,
+            }
+        }
+        // string_to_global_type：首实参字面量 → decl 表查名（命中给登记值，
+        // 未登记卡 Decl(name)——参考版 eval(Tm::Decl) 同款逃逸）；否则卡住。
+        PrimId::StringToGlobalType => {
+            let n = force(bump, spine, defs, metas, decl, mutable, args.get(0)?.0);
+            match lit_of(n) {
+                Some(name) => Some(match decl.get(name) {
+                    Some(e) => e.val,
+                    None => v_xcell(bump.alloc(XCell::Decl { name })),
+                }),
+                None => None,
+            }
+        }
+        // create_global：首实参字面量名字 + 次实参值 → mutable_map 写入；
+        // 次实参不 force（旧 env 槽版同款）。
+        PrimId::CreateGlobal => {
+            let n = force(bump, spine, defs, metas, decl, mutable, args.get(0)?.0);
+            let name = lit_of(n)?;
+            let v0 = args.get(1)?.0;
+            mutable.borrow_mut().insert(SmolStr::new(name), v0);
+            Some(v_u(0))
+        }
+        // change_mutable：首实参字面量名字，次实参函数应用到旧值再写回
+        //（参考版 get_mut + v_app 同款；v_app 在持锁区间外执行）。
+        PrimId::ChangeMutable => {
+            let n = force(bump, spine, defs, metas, decl, mutable, args.get(0)?.0);
+            let name = lit_of(n)?;
+            let f = args.get(1)?.0;
+            let old = mutable.borrow().get(name).copied();
+            if let Some(x) = old {
+                // 内层 β 用**独立草稿栈**——eval_iter 入口会清空
+                // work/vals/icits，复用外层栈会销毁外层 eval 的待续状态
+                let mut w2: Vec<W<'a>> = Vec::new();
+                let mut v2: Vec<V> = Vec::new();
+                let mut i2: Vec<Icit> = Vec::new();
+                let nx = vapp1(
+                    bump, spine, &mut w2, &mut v2, &mut i2, defs, metas, decl,
+                    mutable, f, x, Icit::Expl,
+                );
+                mutable.borrow_mut().insert(SmolStr::new(name), nx);
+            }
+            Some(v_u(0))
+        }
+        // get_global：首实参字面量名字 → mutable_map 读取（缺名 panic
+        //——参考版 unwrap 同款崩溃）。
+        PrimId::GetGlobal => {
+            let name = lit_of(force(bump, spine, defs, metas, decl, mutable, args.get(0)?.0))
+                .expect("get_global: 名字非字面量");
+            let v = mutable.borrow().get(name).copied().unwrap();
+            Some(v)
+        }
+    }
 }

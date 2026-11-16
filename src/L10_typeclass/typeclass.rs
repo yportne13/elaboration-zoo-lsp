@@ -32,7 +32,7 @@ impl Val {
             // 返回 None 与快版及非 Sum 接收者（Pi 等）的既有语义一致。
             Val::LiteralType => None,
             Val::LiteralIntro(_) => None,
-            Val::Prim => None,
+            Val::Prim(..) => None,
             Val::Sum(span, items, _, _) => Some(
                 if items.is_empty() {
                     Typ::Val(span.clone())

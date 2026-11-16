@@ -1,6 +1,7 @@
 use std::rc::Rc;
 
 use crate::bimap::BiMap;
+use smol_str::SmolStr;
 
 use super::{
     syntax::{Locals, Pruning},
@@ -52,29 +53,14 @@ impl Cxt {
                 Tm::U(0),
                 Val::U(0),
             )
+            // builtin 的值 = 中性的 Prim 头（名字 + 空实参 spine）：**不再**
+            // 构造 λ 链、不再让 `Tm::Prim` 读现场 env 槽。实参经 App 进
+            // spine，满元数 + 全字面量时由 force 的 `prim_reduce` 归约。
+            // 类型仍保持 Π 链（类型检查面完全不变）。
             .define(
                 empty_span("string_concat".to_owned()),
-                Tm::Lam(
-                    empty_span("x".to_owned()),
-                    Icit::Expl,
-                    Rc::new(Tm::Lam(
-                        empty_span("y".to_owned()),
-                        Icit::Expl,
-                        Rc::new(Tm::Prim),
-                    )),
-                ),
-                Val::Lam(
-                    super::vspan(empty_span("x".to_owned())),
-                    Icit::Expl,
-                    Closure(
-                        List::new().prepend(Val::LiteralType),
-                        Rc::new(Tm::Lam(
-                            empty_span("y".to_owned()),
-                            Icit::Expl,
-                            Rc::new(Tm::Prim),
-                        )),
-                    ),
-                ),
+                Tm::Prim(SmolStr::new("string_concat")),
+                Val::Prim(SmolStr::new("string_concat"), List::new()),
                 Tm::Pi(
                     empty_span("x".to_owned()),
                     Icit::Expl,

@@ -94,79 +94,79 @@ pub struct Cxt {
 }
 
 
-fn string_concat(infer: &Infer, decl: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
-    // 精化 σ 包裹的槽值先 force 推开（臂体内引用被解槽时 env 带 VSub；
-    // 旧 refresh 世界槽值已物化）
-    let a = infer.force(decl, &env.iter().nth(1).unwrap());
-    let b = infer.force(decl, &env.iter().nth(0).unwrap());
+// builtin 归约体（args 版）：实参自然序（最先应用在前），由 force 在
+// Prim 归约臂里收集 spine、逐个 force 后传入；元数不足 / 实参不合 / 缺名
+// 一律返回 None（保持卡住，不 panic）。下标映射对照旧 env 槽版：
+// env.nth(1) = 第一实参 = args[0]，env.nth(0) = 第二实参 = args[1]。
+fn string_concat(infer: &Infer, decl: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+    // 精化 σ 包裹的槽值已在 force 收集时推开；此处再 force 一次是幂等的
+    let a = infer.force(decl, args.get(0)?);
+    let b = infer.force(decl, args.get(1)?);
     match (a.as_ref(), b.as_ref()) {
-        (Val::LiteralIntro(a), Val::LiteralIntro(b)) => {
-            Val::LiteralIntro(a.clone().map(|x| format!("{x}{}", b.data))).into()
-        },
-        _ => Val::Prim(typ, PrimFunc(Rc::new(string_concat))).into(),
+        (Val::LiteralIntro(a), Val::LiteralIntro(b)) => Some(
+            Val::LiteralIntro(a.clone().map(|x| format!("{x}{}", b.data))).into(),
+        ),
+        _ => None,
     }
 }
 
-fn string_to_global_type(infer: &Infer, decl: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
-    let a = infer.force(decl, &env.iter().next().unwrap());
+fn string_to_global_type(infer: &Infer, decl: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+    let a = infer.force(decl, args.get(0)?);
     match a.as_ref() {
         Val::LiteralIntro(a) => {
-            infer.eval(decl, env, &Tm::Decl(a.clone()).into())
+            Some(infer.eval(decl, &List::new(), &Tm::Decl(a.clone()).into()))
         }
-        _ => Val::Prim(typ, PrimFunc(Rc::new(string_to_global_type))).into(),
+        _ => None,
     }
 }
 
-fn create_global(infer: &Infer, decl: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
-    let a = infer.force(decl, &env.iter().nth(1).unwrap());
+fn create_global(infer: &Infer, decl: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+    let a = infer.force(decl, args.get(0)?);
     match a.as_ref() {
         Val::LiteralIntro(a) => {
+            let v = args.get(1)?.clone();
             if let Ok(mut x) = infer.mutable_map.write() {
-                x.insert(a.data.clone(), env.iter().nth(0).unwrap().clone());
+                x.insert(a.data.clone(), v);
             };
-            Val::U(0).into()
+            Some(Val::U(0).into())
         }
-        _ => Val::Prim(typ, PrimFunc(Rc::new(change_mutable))).into(),
+        _ => None,
     }
 }
 
-fn change_mutable(infer: &Infer, decl: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
-    let a = infer.force(decl, &env.iter().nth(1).unwrap());
+fn change_mutable(infer: &Infer, decl: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+    let a = infer.force(decl, args.get(0)?);
     match a.as_ref() {
         Val::LiteralIntro(a) => {
+            let f = args.get(1)?;
             if let Ok(mut x) = infer.mutable_map.write() {
                 if let Some(x) = x.get_mut(&a.data) {
-                    *x = infer.v_app(
-                        decl,
-                        env.iter().next().unwrap(),
-                        x.clone(),
-                        Icit::Expl
-                    )
+                    *x = infer.v_app(decl, f, x.clone(), Icit::Expl)
                 }
             };
-            Val::U(0).into()
+            Some(Val::U(0).into())
         }
-        _ => Val::Prim(typ, PrimFunc(Rc::new(change_mutable))).into(),
+        _ => None,
     }
 }
 
-fn get_global(infer: &Infer, decl: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
-    let a = infer.force(decl, &env.iter().next().unwrap());
+fn get_global(infer: &Infer, decl: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+    let a = infer.force(decl, args.get(0)?);
     match a.as_ref() {
         Val::LiteralIntro(a) => {
-            infer.mutable_map.write().unwrap().get(&a.data).unwrap().clone()
+            Some(infer.mutable_map.write().unwrap().get(&a.data).unwrap().clone())
         }
-        _ => Val::Prim(typ, PrimFunc(Rc::new(change_mutable))).into(),
+        _ => None,
     }
 }
 
 impl Cxt {
     pub fn new() -> Self {
-        let string_concat = PrimFunc(Rc::new(string_concat));
-        let string_to_global_type = PrimFunc(Rc::new(string_to_global_type));
-        let create_global = PrimFunc(Rc::new(create_global));
-        let change_mutable = PrimFunc(Rc::new(change_mutable));
-        let get_global = PrimFunc(Rc::new(get_global));
+        let string_concat = PrimFunc::new("string_concat", string_concat);
+        let string_to_global_type = PrimFunc::new("string_to_global_type", string_to_global_type);
+        let create_global = PrimFunc::new("create_global", create_global);
+        let change_mutable = PrimFunc::new("change_mutable", change_mutable);
+        let get_global = PrimFunc::new("get_global", get_global);
         Self::empty()
             .decl(
                 empty_span("String".to_owned()),
@@ -178,27 +178,10 @@ impl Cxt {
             .unwrap()
             .decl(
                 empty_span("string_concat".to_owned()),
-                Tm::Lam(
-                    empty_span("x".to_owned()),
-                    Icit::Expl,
-                    Rc::new(Tm::Lam(
-                        empty_span("y".to_owned()),
-                        Icit::Expl,
-                        Rc::new(Tm::Prim(Val::LiteralType.into(), string_concat.clone())),
-                    )),
-                ).into(),
-                Val::Lam(
-                    empty_span("x".to_owned()),
-                    Icit::Expl,
-                    Closure(
-                        List::new().prepend(Val::LiteralType.into()),
-                        Tm::Lam(
-                            empty_span("y".to_owned()),
-                            Icit::Expl,
-                            Rc::new(Tm::Prim(Val::LiteralType.into(), string_concat)),
-                        ).into(),
-                    ),
-                ).into(),
+                // 中性 Prim 头（不再构造 λ 链）：实参经 App/spine 到达，
+                // 归约统一在 force 的 Prim 臂
+                Tm::Prim(Val::LiteralType.into(), string_concat.clone()).into(),
+                Val::Prim(Val::LiteralType.into(), string_concat, List::new()).into(),
                 Tm::Pi(
                     empty_span("x".to_owned()),
                     Icit::Expl,
@@ -228,19 +211,8 @@ impl Cxt {
             .unwrap()
             .decl(
                 empty_span("string_to_global_type".to_owned()),
-                Tm::Lam(
-                    empty_span("x".to_owned()),
-                    Icit::Expl,
-                    Rc::new(Tm::Prim(Val::LiteralType.into(), string_to_global_type.clone())),
-                ).into(),
-                Val::Lam(
-                    empty_span("x".to_owned()),
-                    Icit::Expl,
-                    Closure(
-                        List::new(),
-                        Tm::Prim(Val::LiteralType.into(), string_to_global_type).into(),
-                    ),
-                ).into(),
+                Tm::Prim(Val::LiteralType.into(), string_to_global_type.clone()).into(),
+                Val::Prim(Val::LiteralType.into(), string_to_global_type, List::new()).into(),
                 Tm::Pi(
                     empty_span("x".to_owned()),
                     Icit::Expl,
@@ -260,27 +232,8 @@ impl Cxt {
             .unwrap()
             .decl(
                 empty_span("create_global".to_owned()),
-                Tm::Lam(
-                    empty_span("x".to_owned()),
-                    Icit::Expl,
-                    Rc::new(Tm::Lam(
-                        empty_span("y".to_owned()),
-                        Icit::Expl,
-                        Rc::new(Tm::Prim(Val::U(0).into(), create_global.clone())),
-                    )),
-                ).into(),
-                Val::Lam(
-                    empty_span("x".to_owned()),
-                    Icit::Expl,
-                    Closure(
-                        List::new(),
-                        Tm::Lam(
-                            empty_span("y".to_owned()),
-                            Icit::Expl,
-                            Rc::new(Tm::Prim(Val::U(0).into(), create_global)),
-                        ).into(),
-                    ),
-                ).into(),
+                Tm::Prim(Val::U(0).into(), create_global.clone()).into(),
+                Val::Prim(Val::U(0).into(), create_global, List::new()).into(),
                 Tm::Pi(
                     empty_span("x".to_owned()),
                     Icit::Expl,
@@ -310,27 +263,8 @@ impl Cxt {
             .unwrap()
             .decl(
                 empty_span("change_mutable".to_owned()),
-                Tm::Lam(
-                    empty_span("x".to_owned()),
-                    Icit::Expl,
-                    Rc::new(Tm::Lam(
-                        empty_span("y".to_owned()),
-                        Icit::Expl,
-                        Rc::new(Tm::Prim(Val::U(0).into(), change_mutable.clone())),
-                    )),
-                ).into(),
-                Val::Lam(
-                    empty_span("x".to_owned()),
-                    Icit::Expl,
-                    Closure(
-                        List::new(),
-                        Tm::Lam(
-                            empty_span("y".to_owned()),
-                            Icit::Expl,
-                            Rc::new(Tm::Prim(Val::U(0).into(), change_mutable)),
-                        ).into(),
-                    ),
-                ).into(),
+                Tm::Prim(Val::U(0).into(), change_mutable.clone()).into(),
+                Val::Prim(Val::U(0).into(), change_mutable, List::new()).into(),
                 Tm::Pi(
                     empty_span("x".to_owned()),
                     Icit::Expl,
@@ -370,27 +304,8 @@ impl Cxt {
             .unwrap()
             .decl(
                 empty_span("get_global".to_owned()),
-                Tm::Lam(
-                    empty_span("x".to_owned()),
-                    Icit::Expl,
-                    Rc::new(Tm::Prim(
-                        //Rc::new(Tm::App(Tm::Decl(empty_span("string_to_global_type".to_owned())).into(), Tm::Var(Ix(0)).into(), Icit::Expl)),
-                        Val::U(0).into(),
-                        get_global.clone()
-                    )),
-                ).into(),
-                Val::Lam(
-                    empty_span("x".to_owned()),
-                    Icit::Expl,
-                    Closure(
-                        List::new(),
-                        Tm::Prim(
-                            //Rc::new(Tm::App(Tm::Decl(empty_span("string_to_global_type".to_owned())).into(), Tm::Var(Ix(0)).into(), Icit::Expl)),
-                            Val::U(0).into(),
-                            get_global
-                        ).into(),
-                    ),
-                ).into(),
+                Tm::Prim(Val::U(0).into(), get_global.clone()).into(),
+                Val::Prim(Val::U(0).into(), get_global, List::new()).into(),
                 Tm::Pi(
                     empty_span("x".to_owned()),
                     Icit::Expl,

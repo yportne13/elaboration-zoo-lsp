@@ -16,7 +16,8 @@
 //!   判定（icit / pat / 名字 / 长度）在压栈前完成，失败即 return。
 //!
 //! L09 差异：无 decl 表（无 `Val::Decl` / `Tm::Decl`）；`Val::U(u32)`、
-//! `Val::Prim`（单元）、`Tm::Prim`（单元）；`Ix` 按字段比较。
+//! `Val::Prim(name, spine)`（名字 + 实参 spine）、`Tm::Prim(name)`；`Ix`
+//! 按字段比较。
 
 use std::rc::Rc;
 
@@ -125,7 +126,12 @@ fn eq_run(first: EqTask<'_>) -> bool {
                         }
                     }
                     (Val::LiteralType, Val::LiteralType) => {}
-                    (Val::Prim, Val::Prim) => {}
+                    (Val::Prim(x, xs), Val::Prim(y, ys)) => {
+                        if x != y {
+                            return false;
+                        }
+                        stack.push(EqTask::Spine(xs, ys));
+                    }
                     (Val::LiteralIntro(x), Val::LiteralIntro(y)) => {
                         if x != y {
                             return false;
@@ -279,7 +285,11 @@ fn eq_run(first: EqTask<'_>) -> bool {
                         stack.push(EqTask::T(x, y));
                     }
                     (Tm::LiteralType, Tm::LiteralType) => {}
-                    (Tm::Prim, Tm::Prim) => {}
+                    (Tm::Prim(x), Tm::Prim(y)) => {
+                        if x != y {
+                            return false;
+                        }
+                    }
                     (Tm::LiteralIntro(x), Tm::LiteralIntro(y)) => {
                         if x != y {
                             return false;

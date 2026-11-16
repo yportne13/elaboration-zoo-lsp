@@ -1254,8 +1254,8 @@ println (stuck_concat "!")
 "#;
     assert_eq!(
         run_basic(src).unwrap(),
-        "Type 0\nType 1 → Type 0\ny => Prim Func\nhello world!\n",
-        "宇宙字面 Type N、匿名 Π 的 → 箭头、string_concat 部分应用卡在 y 上的 Prim Func 形态"
+        "Type 0\nType 1 → Type 0\nstring_concat hello world\nhello world!\n",
+        "宇宙字面 Type N、匿名 Π 的 → 箭头、string_concat 部分应用保留实参 spine（名字+实参中性头）形态"
     );
 }
 
@@ -1692,4 +1692,39 @@ def f(x: Tagged[Nat] true): Nat =
 println (f t1)
 "#,
     );
+}
+
+// —— prim 模型改造行为钉子（名字 + 实参 spine，2026-11）——
+// 旧模型（env 槽读参 / 无名单元 Prim）在以下四类形态上失真：
+// ① 字面量自反/异值无判定臂（L13 unification.rs:1135 同款臂缺失）；
+// ② 同实参卡住 prim 自等式误拒（单元 Prim 无 spine，dpm conv 无臂）；
+// ③ 异实参卡住 prim 无法判异（旧 L11/L12 任意 prim 判等臂假 Ok）；
+// ④ 部分应用打印/再应用丢实参或 panic。
+// 语料与 .audit/primprobe4 的 ctrl/bad 最小复现一致。
+#[test]
+fn parity_prim_model_name_and_spine_pins() {
+    // 1) literal 合一臂：同值自反 Ok / 异值 Err
+    let lit_ok = "enum Eq[A](x: A, y: A) {\n    refl[a: A] -> Eq[A] a a\n}\n\ndef good: Eq[String] \"ab\" \"ab\" = refl\n\nprintln \"lit-ok\"\n";
+    let lit_bad = "enum Eq[A](x: A, y: A) {\n    refl[a: A] -> Eq[A] a a\n}\n\ndef bad: Eq[String] \"ab\" \"cd\" = refl\n";
+    assert!(run_basic(lit_ok).is_ok(), "字面量自反应 Ok（literal 合一臂缺失？）: {:?}", run_basic(lit_ok));
+    assert!(run_basic(lit_bad).is_err(), "异值字面量应 Err: {:?}", run_basic(lit_bad));
+    assert_parity(lit_ok);
+    assert_parity(lit_bad);
+
+    // 2) prim 正控（ctrl）：同实参的卡住 prim 自等式 → Ok（旧模型 Err/Panic）
+    let ctrl = "enum Eq[A](x: A, y: A) {\n    refl[a: A] -> Eq[A] a a\n}\n\ndef p(x: String): String = string_concat x \"a\"\n\ndef good(x: String): Eq[String] (p x) (p x) = refl\n\nprintln \"prim-ok\"\n";
+    assert!(run_basic(ctrl).is_ok(), "prim 正控应 Ok（名字+spine 自反）: {:?}", run_basic(ctrl));
+    assert_parity(ctrl);
+
+    // 3) prim 负例（bad）：不同实参的卡住 prim → Err（不得任意判等）
+    let bad = "enum Eq[A](x: A, y: A) {\n    refl[a: A] -> Eq[A] a a\n}\n\ndef p(x: String): String = string_concat x \"a\"\n\ndef q(y: String): String = string_concat y \"b\"\n\ndef bad(x: String, y: String): Eq[String] (p x) (q y) = refl\n";
+    assert!(run_basic(bad).is_err(), "prim 负例应 Err: {:?}", run_basic(bad));
+    assert_parity(bad);
+
+    // 4) 部分应用不 panic：实参保留在 spine（打印 string_concat <实参>），
+    //    再应用满元数后正常归约；ref/twin 输出一致
+    let partial = "def mystr = \"hello world\"\n\ndef stuck_concat = string_concat mystr\n\nprintln stuck_concat\nprintln (stuck_concat \"!\")\n";
+    let b = run_basic(partial);
+    assert!(b.is_ok(), "部分应用不应 panic: {:?}", b);
+    assert_parity(partial);
 }

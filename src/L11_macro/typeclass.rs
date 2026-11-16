@@ -31,7 +31,7 @@ impl Val {
             // `bump_spine_iter::val_to_typ` 对同形值一律 None；此前这里是
             // `todo!()`，字符串字面量取字段（`"a".foo`）或作 trait 实参
             // （`impl Foo["x"] for T`）会直接 panic。
-            Val::LiteralType | Val::LiteralIntro(_) | Val::Prim(_, _) => None,
+            Val::LiteralType | Val::LiteralIntro(_) | Val::Prim(..) => None,
             Val::Sum(span, items, _, _) => Some(
                 if items.is_empty() {
                     Typ::Val(span.clone())

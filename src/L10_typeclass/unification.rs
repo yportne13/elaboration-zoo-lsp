@@ -16,7 +16,10 @@ use std::rc::Rc;
 /// 落后续臂判失败（λ 与非函数值的比较无从展开，最小惊讶；快版 η 臂的
 /// `vapp_ok` 同款守卫）。
 fn v_applicable(v: &Val) -> bool {
-    matches!(v, Val::Flex(..) | Val::Rigid(..) | Val::Obj(..))
+    matches!(
+        v,
+        Val::Flex(..) | Val::Rigid(..) | Val::Obj(..) | Val::Prim(..)
+    )
 
 }
 
@@ -310,7 +313,7 @@ impl Infer {
             Val::U(x) => Ok(Tm::U(*x).into()),
             Val::LiteralType => Ok(Tm::LiteralType.into()),
             Val::LiteralIntro(x) => Ok(Tm::LiteralIntro(x.clone()).into()),
-            Val::Prim => Ok(Tm::Prim.into()),
+            Val::Prim(name, sp) => self.rename_sp(pren, Tm::Prim(name.clone()).into(), sp),
             Val::Sum(x, params, cases, is_trait) => {
                 let new_params = params
                     .iter()
@@ -668,8 +671,21 @@ impl Infer {
                 self.solve_multi_trait(cxt, *m)
             },
             (Val::LiteralType, Val::LiteralType) => Ok(()),
-            (Val::LiteralType, Val::Prim) => Ok(()),
-            (Val::Prim, Val::LiteralType) => Ok(()),
+            // 字面量相等：同值才可合一（L13 `unification.rs:1135` 同款）。
+            // 缺此臂时 `Eq[String] "ab" "ab"` 与"含字面量实参的卡住 prim
+            // 自等式"都会落到兜底臂被误拒。
+            (Val::LiteralIntro(a), Val::LiteralIntro(b)) if a.data == b.data => Ok(()),
+            // 宽松臂（保持旧行为）：String 与卡住内建宽松合一。
+            (Val::LiteralType, Val::Prim(_, _)) | (Val::Prim(_, _), Val::LiteralType) => Ok(()),
+            // 卡住的内建：同名比实参 spine（异名失败）——不带实参的单元
+            // Prim 会把 `x ++ y ≡ x ++ z` 判成相等。
+            (Val::Prim(a, sp), Val::Prim(b, sp_prime)) if a == b => {
+                self.unify_sp(l, cxt, sp, sp_prime)
+            }
+            (Val::Prim(..), Val::Prim(..)) => {
+                // 异名卡住内建：判不出相等（dpm 的 conv false ⇒ UIDK）。
+                Err(UnifyError::Basic)
+            }
             (Val::Sum(a, params_a, _, _), Val::Sum(b, params_b, _, _)) if a.data == b.data => {
                 // params_a.len() always equal to params_b.len()?
                 for (a, b) in params_a.iter().zip(params_b.iter()) {

@@ -883,3 +883,100 @@ println (add (len (cons zero nil)) (succ zero))
         "σ 链条目跨轮未回收（arena 克隆泄漏）：base={base} after1={after1} after2={after2}"
     );
 }
+
+// prim 模型改造行为钉子（args 版 PrimFunc + 实参 spine）
+// --------------------------------------------------------------------------------
+
+/// literal 自反：Eq[String] "ab" "ab" → Ok；"ab" vs "cd" → Err（两版判定一致）。
+#[test]
+fn prim_literal_reflexive() {
+    let base = "enum Eq[A](x: A, y: A) {\n    refl[a: A] -> Eq[A] a a\n}\n";
+    let ok = format!("{base}def ok : Eq[String] \"ab\" \"ab\" = refl\n");
+    assert_parity(&ok);
+    assert!(run_basic(&ok).is_ok(), "literal 自反应 Ok（basic）");
+    assert!(run_fast(&ok).is_ok(), "literal 自反应 Ok（fast）");
+    let bad = format!("{base}def bad : Eq[String] \"ab\" \"cd\" = refl\n");
+    assert_parity(&bad);
+    assert!(run_basic(&bad).is_err(), "异字面量应 Err（basic）");
+    assert!(run_fast(&bad).is_err(), "异字面量应 Err（fast）");
+}
+
+/// prim 正控：同一卡住 prim（相同实参 spine）自等式 → Ok。改造前 L12 靠
+/// “任意 Prim 判等”臂假 Ok；改造后按函数身份 + spine 逐槽合一。
+///
+/// 2026-11-16 修复：孪生 force 的未解 flex 链臂曾把 MetaEntry 里存的闭类型
+/// 当值返回（`?m x` → 其类型），ref Ok / twin Err；现返回原链（与 L11 孪生同款）。
+#[test]
+fn prim_positive_control_stuck_self_eq() {
+    let src = r#"
+enum Eq[A](x: A, y: A) {
+    refl[a: A] -> Eq[A] a a
+}
+
+def p(x: String): String = string_concat x "a"
+
+def good(x: String): Eq[String] (p x) (p x) = refl
+"#;
+    assert_parity(src);
+    assert!(run_basic(src).is_ok(), "prim 正控应 Ok（basic）");
+    assert!(run_fast(src).is_ok(), "prim 正控应 Ok（fast）");
+}
+
+/// prim 负例：不同实参 spine（p x ≡ q y）→ Err。改造前 L12 是假 Ok。
+///
+/// 2026-11-16 修复后：twin 与 ref 同判 Err（错误正文可因诊断路径不同而不同；
+/// 本用例只要求判定一致）。
+#[test]
+fn prim_negative_control_spine_mismatch() {
+    let src = r#"
+enum Eq[A](x: A, y: A) {
+    refl[a: A] -> Eq[A] a a
+}
+
+def p(x: String): String = string_concat x "a"
+
+def q(y: String): String = string_concat y "b"
+
+def bad(x: String, y: String): Eq[String] (p x) (q y) = refl
+"#;
+    assert_parity(src);
+    assert!(run_basic(src).is_err(), "prim 负例应 Err（basic）");
+    assert!(run_fast(src).is_err(), "prim 负例应 Err（fast）");
+}
+
+/// 部分应用不 panic：卡住 prim 值（含空 spine / 单实参 / 全应用）可打印，
+/// ref/twin 输出逐字节一致。
+#[test]
+fn prim_partial_application_no_panic() {
+    for src in [
+        "println string_concat\n",
+        "println (string_concat \"hello\")\n",
+        "println (string_concat \"hello\" \"world\")\n",
+    ] {
+        let b = unpanic(|| run_basic(src));
+        let f = unpanic(|| run_fast(src));
+        assert!(b.is_ok(), "参考版不应 panic，src:\n{src}");
+        assert!(f.is_ok(), "快版不应 panic，src:\n{src}");
+        let (b, f) = (b.unwrap(), f.unwrap());
+        assert_eq!(b.is_ok(), f.is_ok(), "判定应一致 src:\n{src}");
+        if let (Ok(b), Ok(f)) = (b, f) {
+            assert_eq!(b, f, "输出应一致 src:\n{src}");
+        }
+    }
+}
+
+// TEMP-DEBUG（提交前删除）：L12 prim pin 失败定位
+#[test]
+fn debug_probe_prim_l12() {
+    let cases = [
+        ("literal", "enum Eq[A](x: A, y: A) {\n    refl[a: A] -> Eq[A] a a\n}\ndef f : Eq[String] \"ab\" \"ab\" = refl\n".to_string()),
+        ("direct", "enum Eq[A](x: A, y: A) {\n    refl[a: A] -> Eq[A] a a\n}\ndef good(x: String): Eq[String] (string_concat x \"a\") (string_concat x \"a\") = refl\n".to_string()),
+        ("via-p", "enum Eq[A](x: A, y: A) {\n    refl[a: A] -> Eq[A] a a\n}\ndef p(x: String): String = string_concat x \"a\"\ndef good(x: String): Eq[String] (p x) (p x) = refl\n".to_string()),
+        ("print-p", "def p(x: String): String = string_concat x \"a\"\nprintln (p \"z\")\n".to_string()),
+    ];
+    for (name, src) in cases {
+        let b = run_basic(&src);
+        let f = run_fast(&src);
+        println!("CASE {name}: basic={b:?}\n         fast={f:?}");
+    }
+}

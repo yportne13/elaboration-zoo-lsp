@@ -323,7 +323,10 @@ impl Infer {
             Val::U(x) => Ok(Tm::U(*x).into()),
             Val::LiteralType => Ok(Tm::LiteralType.into()),
             Val::LiteralIntro(x) => Ok(Tm::LiteralIntro(x.clone()).into()),
-            Val::Prim(typ, func) => Ok(Tm::Prim(typ.clone(), func.clone()).into()),
+            Val::Prim(typ, func, sp) => {
+                let t = Tm::Prim(typ.clone(), func.clone());
+                self.rename_sp(decl, pren, t.into(), sp)
+            },
             Val::Sum(x, params, cases, is_trait) => {
                 let new_params = params
                     .iter()
@@ -763,8 +766,17 @@ impl Infer {
                 self.solve_multi_trait(cxt, *m)
             },
             (Val::LiteralType, Val::LiteralType) => Ok(()),
-            (_, Val::Prim(b, _)) => self.unify(l, cxt, &t, b, fuel),
-            (Val::Prim(a, _), _) => self.unify(l, cxt, a, &u, fuel),
+            // 字面量相等（L13 unification.rs:1135 同款）：同值才可合一。
+            // 缺此臂时 Eq[String] "ab" "ab" 与含字面量实参的卡住 prim
+            // 自等式都会落到末尾失配被误拒。
+            (Val::LiteralIntro(a), Val::LiteralIntro(b)) if a.data == b.data => Ok(()),
+            // 卡住的内建：同一 PrimFunc 身份（Rc 指针或同名）→ 逐实参
+            // spine 合一；异身份 → Err。删除旧 “任意 Prim 判等 / 按携带
+            // typ 剥离” 的假阳臂（那会把 x++y ≡ x++z 判成相等）。
+            (Val::Prim(_, fa, spa), Val::Prim(_, fb, spb)) if fa.same(fb) => {
+                self.unify_sp(l, cxt, spa, spb, fuel)
+            }
+            (Val::Prim(..), Val::Prim(..)) => Err(UnifyError::Basic),
             (Val::Sum(a, params_a, _, _), Val::Sum(b, params_b, _, _)) if a.data == b.data => {
                 // params_a.len() always equal to params_b.len()?
                 for (a, b) in params_a.iter().zip(params_b.iter()) {

@@ -519,7 +519,7 @@ impl Infer {
             Val::U(x) => Ok(Tm::U(x)),
             Val::LiteralType => Ok(Tm::LiteralType),
             Val::LiteralIntro(x) => Ok(Tm::LiteralIntro(super::tmspan(&x))),
-            Val::Prim => Ok(Tm::Prim),
+            Val::Prim(name, sp) => self.rename_sp(pren, Tm::Prim(name.clone()), &sp),
             Val::Sum(x, params, cases) => {
                 let new_params = params
                     .iter()
@@ -885,8 +885,23 @@ impl Infer {
                 self.solve(l, *m_prime, sp_prime.clone(), t.clone())
             }
             (Val::LiteralType, Val::LiteralType) => Ok(()),
-            (Val::LiteralType, Val::Prim) => Ok(()),
-            (Val::Prim, Val::LiteralType) => Ok(()),
+            // 字面量相等：同值才可合一（L13 `unification.rs:1135` 同款）。
+            // 缺此臂时 `Eq[String] "ab" "ab"` 与"含字面量实参的卡住 prim
+            // 自等式"都会落到兜底臂被误拒。
+            (Val::LiteralIntro(a), Val::LiteralIntro(b)) if a.data == b.data => Ok(()),
+            // 宽松臂（保持旧行为）：String 与卡住内建宽松合一。
+            (Val::LiteralType, Val::Prim(_, _)) | (Val::Prim(_, _), Val::LiteralType) => Ok(()),
+            // 卡住的内建：同名比实参 spine（异名失败）——不带实参的单元
+            // Prim 会把 `x ++ y ≡ x ++ z` 判成相等。
+            (Val::Prim(a, sp), Val::Prim(b, sp_prime)) if a == b => {
+                self.unify_sp(l, cxt, sp, sp_prime, spec.as_deref_mut())
+            }
+            (Val::Prim(..), Val::Prim(..)) => {
+                // 异名卡住内建：不是同一个函数，但也不是构造子矛盾——判不出
+                // 相等（dpm 的 conv false ⇒ UIDK）。
+                self.note_unify_kind(super::UnifyKind::Undecided);
+                Err(UnifyError)
+            }
             (Val::Sum(a, params_a, _), Val::Sum(b, params_b, _)) if a.data == b.data => {
                 // params_a.len() always equal to params_b.len()?
                 for (a, b) in params_a.iter().zip(params_b.iter()) {

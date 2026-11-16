@@ -124,7 +124,7 @@ pub(super) fn quote_iter<'a>(
                     6 => done.push(bump.alloc(Tm::LiteralType)),
                     7 => match v_xcell_of(v) {
                         XCell::Lit(s) => done.push(bump.alloc(Tm::LiteralIntro(s))),
-                        XCell::Prim => done.push(bump.alloc(Tm::Prim)),
+                        XCell::Prim(s) => done.push(bump.alloc(Tm::Prim(s))),
                         // 防御：正常路径 force 后顶层不会是 VSub（frcs 的
                         // 降级点是返回裸 rigid）——解包打印内层
                         XCell::VSub { val, .. } => {
@@ -264,6 +264,14 @@ pub(super) fn quote_iter<'a>(
                                 // flex 链头：未解 meta 立即数（已解的在
                                 // force 里早已展开），共享单一 ?m 节点
                                 5 => Some(&*bump.alloc(Tm::Meta(v_meta_of(f0))) as &Tm<'a>),
+                                // Prim 链头：共享单一名字节点（App 链形态 =
+                                // 参考版 quote_sp(Tm::Prim(name), sp)）
+                                7 => match v_xcell_of(f0) {
+                                    XCell::Prim(s) => {
+                                        Some(&*bump.alloc(Tm::Prim(s)) as &Tm<'a>)
+                                    }
+                                    _ => None,
+                                },
                                 // Obj 头的链（内层值要按 level 引读）挂起走 Q
                                 _ => None,
                             };

@@ -37,10 +37,10 @@
 //!   Var 臂对越过哨兵的下标查 global 表，quote/rename 对越过哨兵的 Rigid
 //!   原样产出大下标 Var。递归 def = fake_bind（src_names 里以全局层级占
 //!   位）+ 检查前 global 表放 `VVar(自身大层级)` 占位 + 检查后覆盖真值。
-//! - **builtin 只有 `string_concat`**：名字 lambda 链的体是**无名的**
-//!   `Tm::Prim`，求值时读 env 前两槽（全为字面量则拼接，否则卡
-//!   `Val::Prim`——**不带 spine**，参考版 v_app 对它 panic，故永无
-//!   Prim 头的链）。没有可变全局 / 文件 IO / 其余 builtin。
+//! - **builtin 只有 `string_concat`**：builtin 的**值 = 中性
+//!   `XCell::Prim(name)` 头**（不再构造 λ 链、不再读 env 槽）；实参经
+//!   App 进 spine 链，force 在 Prim 链头按 `prim_reduce` 归约（全为字面
+//!   量才拼接，否则保持卡住）。没有可变全局 / 文件 IO / 其余 builtin。
 //! - **卡住 match 无 pending、force 展开 Flex + Obj**：v_app 对 Match panic
 //!   （不可能吸收实参）；参考版 force 只有 Flex + Obj 两臂——meta 解开后
 //!   不会重选 match、不展开 Decl。卡住投影 `Val::Obj` 只在 eval 的 Tm::Obj
@@ -125,6 +125,7 @@ mod env;
 mod eval;
 mod force;
 mod machine;
+mod prim;
 mod quote;
 mod rename;
 mod spine;

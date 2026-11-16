@@ -15,7 +15,8 @@ use super::syntax::{V, XCell, v_meta, v_meta_of, v_spine, v_spine_of, v_tag, v_x
 /// ——force 直接原样返回）。
 pub(super) const HK_OTHER: u8 = 0;
 pub(super) const HK_FLEX: u8 = 1;
-pub(super) const HK_OBJ: u8 = 2;
+pub(super) const HK_PRIM: u8 = 2;
+pub(super) const HK_OBJ: u8 = 3;
 
 /// spine 栈槽：一次中性应用（icit 随槽携带）。`len`/`base` 支撑流式右链
 /// quote；`hk` 记录链头种类（push 时随函数侧传播）。
@@ -42,6 +43,7 @@ impl Spine {
         let hk = match v_tag(f) {
             5 => HK_FLEX,
             7 => match v_xcell_of(f) {
+                XCell::Prim(_) => HK_PRIM,
                 XCell::Obj { .. } => HK_OBJ,
                 _ => HK_OTHER,
             },
@@ -119,6 +121,30 @@ impl Spine {
             }
             _ => None,
         }
+    }
+}
+
+/// 取值（裸单元或链）的 Prim 头名字（非 Prim 头 → None）。参考版
+/// `unify` 的 (Prim,Prim) 同名臂用。
+#[inline]
+pub(super) fn prim_head_name<'a>(spine: &Spine, v: V) -> Option<&'a str> {
+    match v_tag(v) {
+        7 => match v_xcell_of(v) {
+            XCell::Prim(n) => Some(n),
+            _ => None,
+        },
+        2 => {
+            let hd = spine.spine_head(v_spine_of(v));
+            if v_tag(hd) == 7 {
+                match v_xcell_of(hd) {
+                    XCell::Prim(n) => Some(n),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        }
+        _ => None,
     }
 }
 

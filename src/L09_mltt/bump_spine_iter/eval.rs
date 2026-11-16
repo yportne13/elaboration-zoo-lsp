@@ -161,7 +161,7 @@ pub(super) enum W<'a> {
     },
 }
 
-/// 双栈迭代 eval（L06 版 + L09 变体：global 大下标、无名 Prim 的 env 双槽
+/// 双栈迭代 eval（L06 版 + L09 变体：global 大下标、中性 Prim 头（名字）
 /// 拼接、投影的 panic 语义、match 的编译期选择与卡住停等）。
 #[allow(clippy::too_many_arguments)]
 pub(super) fn eval_iter<'a>(
@@ -211,30 +211,10 @@ pub(super) fn eval_iter<'a>(
             W::Tm(Tm::U(l), _) => vals.push(v_u(*l)),
             W::Tm(Tm::LiteralType, _) => vals.push(v_lit_ty()),
             W::Tm(Tm::LiteralIntro(s), _) => vals.push(v_xcell(bump.alloc(XCell::Lit(s)))),
-            // builtin 体：env 前两槽全为字面量 → 拼接；否则卡住 `Prim`（无
-            // spine——v_app 对它 panic，永无 Prim 头的链）。env 不足两槽时
-            // env_nth 越界 panic（参考版 unwrap 同款崩溃）。
-            W::Tm(Tm::Prim, env) => {
-                let b = env_nth(defs, env, 0);
-                let a = env_nth(defs, env, 1);
-                match (lit_of(a), lit_of(b)) {
-                    (Some(a), Some(b)) => {
-                        let len = a.len() + b.len();
-                        let ptr = bump
-                            .alloc_layout(std::alloc::Layout::from_size_align(len, 1).unwrap())
-                            .as_ptr();
-                        // SAFETY: a/b 都是 &str（合法 UTF-8）；两段完整序列按
-                        // 字节拼接仍是合法 UTF-8，不会引入跨边界截断的码点
-                        let s = unsafe {
-                            std::ptr::copy_nonoverlapping(a.as_ptr(), ptr, a.len());
-                            std::ptr::copy_nonoverlapping(b.as_ptr(), ptr.add(a.len()), b.len());
-                            std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len))
-                        };
-                        vals.push(v_xcell(bump.alloc(XCell::Lit(s))));
-                    }
-                    _ => vals.push(v_xcell(bump.alloc(XCell::Prim))),
-                }
-            }
+            // builtin 体：**不读 env**——只产中性的 `XCell::Prim(name)` 头；
+            // 实参经 App 进 spine 链，归约统一在 force 的 `prim_reduce`
+            // （旧实现把 env 前两槽当实参，env 不足时越界 panic）。
+            W::Tm(Tm::Prim(name), _) => vals.push(v_xcell(bump.alloc(XCell::Prim(name)))),
             W::Tm(Tm::Pi(name, icit, dom, cod), env) => {
                 work.push(W::PiBody(name, *icit, cod, env));
                 cur = Some(W::Tm(dom, env));

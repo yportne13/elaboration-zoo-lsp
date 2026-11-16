@@ -105,6 +105,11 @@ fn debug_val_go(spine: &Spine, defs: &[V], v: V, out: &mut String) {
                         debug_spine(spine, defs, h, out);
                         out.push(')');
                     }
+                    XCell::Prim(s) => {
+                        out.push_str(&format!("Prim({:?}, ", s));
+                        debug_spine(spine, defs, h, out);
+                        out.push(')');
+                    }
                     _ => {
                         // 其余头不可达（v_app panic，进不了链）；防御输出
                         out.push_str("Neutral(...)");
@@ -135,7 +140,9 @@ fn debug_val_go(spine: &Spine, defs: &[V], v: V, out: &mut String) {
             XCell::Lit(s) => {
                 out.push_str(&format!("LiteralIntro({})", dbg_span_str(s)));
             }
-            XCell::Prim => out.push_str("Prim"),
+            XCell::Prim(s) => {
+                out.push_str(&format!("Prim({:?}, [])", s));
+            }
             XCell::VSub { val, .. } => {
                 out.push_str(&format!("VSub({}, ..)", debug_val(spine, defs, *val)));
             }
@@ -324,7 +331,7 @@ fn debug_tm_go(t: &Tm<'_>, out: &mut String) {
         Tm::Meta(m) => out.push_str(&format!("Meta(MetaVar({}))", m)),
         Tm::LiteralType => out.push_str("LiteralType"),
         Tm::LiteralIntro(s) => out.push_str(&format!("LiteralIntro({})", dbg_span_str(s))),
-        Tm::Prim => out.push_str("Prim"),
+        Tm::Prim(s) => out.push_str(&format!("Prim({:?})", s)),
         Tm::Obj(h, name) => {
             out.push_str("Obj(");
             debug_tm_go(h, out);

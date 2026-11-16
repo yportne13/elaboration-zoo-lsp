@@ -243,7 +243,7 @@ enum RJob<'a> {
 }
 
 /// partial renaming 的迭代版（L06 版 + L09 增量：tag 0 的大下标直通、
-/// tag 3 带层级、无 Decl 头、Prim 无名；Match 的分支体在"捕获 env + fresh
+/// tag 3 带层级、无 Decl 头、Prim 带名；Match 的分支体在"捕获 env + fresh
 /// rigid 槽"下用**中性 global 视图**重求值，再在**独立克隆的 renaming**
 /// （lift 过 count 次）下 rename——参考版按分支 clone 整个 HashMap，这里
 /// 逐代克隆 RenBuf）。
@@ -350,6 +350,7 @@ pub(super) fn rename_iter<'a>(
                                         Tm::Obj(inner, name)
                                     }
                                     XCell::Lit(s) => Tm::LiteralIntro(s),
+                                    XCell::Prim(n) => Tm::Prim(n),
                                     _ => return None,
                                 });
                                 spine_case!(dom, cod, h, head_tm, tasks);
@@ -415,7 +416,7 @@ pub(super) fn rename_iter<'a>(
                     6 => done.push(bump.alloc(Tm::LiteralType)),
                     7 => match v_xcell_of(v) {
                         XCell::Lit(s) => done.push(bump.alloc(Tm::LiteralIntro(s))),
-                        XCell::Prim => done.push(bump.alloc(Tm::Prim)),
+                        XCell::Prim(s) => done.push(bump.alloc(Tm::Prim(s))),
                         // 不变式：force 后顶层不会是 VSub——防御性失败（参考版
                         // rename 的 VSub 臂 Err 同款）
                         XCell::VSub { .. } => return None,

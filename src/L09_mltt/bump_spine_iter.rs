@@ -21,10 +21,10 @@
 //!   Var 臂对越过哨兵的下标查 global 表，quote/rename 对越过哨兵的 Rigid
 //!   原样产出大下标 Var。递归 def = fake_bind（src_names 里以全局层级占
 //!   位）+ 检查前 global 表放 `VVar(自身大层级)` 占位 + 检查后覆盖真值。
-//! - **builtin 只有 `string_concat`**：名字 lambda 链的体是**无名的**
-//!   `Tm::Prim`，求值时读 env 前两槽（全为字面量则拼接，否则卡
-//!   `Val::Prim`——**不带 spine**，参考版 v_app 对它 panic，故永无
-//!   Prim 头的链）。没有可变全局 / 文件 IO / 其余 builtin。
+//! - **builtin 只有 `string_concat`**：builtin 的**值 = 中性
+//!   `XCell::Prim(name)` 头**（不再构造 λ 链、不再读 env 槽）；实参经
+//!   App 进 spine 链，force 在 Prim 链头按 `prim_reduce` 归约（全为字面
+//!   量才拼接，否则保持卡住）。没有可变全局 / 文件 IO / 其余 builtin。
 //! - **卡住 match 无 pending、force 只展开 Flex**：v_app 对 Match panic
 //!   （不可能吸收实参）；参考版 force 只有一个 Flex 臂——meta 解开后
 //!   不会重选 match、不展开投影/decl。卡住投影 `Val::Obj` 只在 eval 的
@@ -79,8 +79,8 @@
 //! - `entry`：export/tm_size/Tycker/run_fast/parse；
 //! - `bench_src`：基准负载生成器（bins 引用）。
 //!
-//! 与 L07 拆分的差异（按本层实际内容）：无 decl 表/prim 归约与 struct_eq
-//! 快路径（省略 `prim`/`struct_eq` 子模块）；燃料块随 force、
+//! 与 L07 拆分的差异（按本层实际内容）：无 decl 表与 struct_eq 快路径
+//!（`prim` 子模块仅含 string_concat 的 `prim_reduce`）；燃料块随 force、
 //! ReclaimOnClear 按原文件位置留在 unify；内嵌测试本层没有（entry 无
 //! 测试段）。
 //!
@@ -95,6 +95,7 @@ mod env;
 mod eval;
 mod force;
 mod machine;
+mod prim;
 mod quote;
 mod rename;
 mod spine;

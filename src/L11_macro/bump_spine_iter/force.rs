@@ -15,8 +15,8 @@ use smol_str::SmolStr;
 use super::parser::syntax::Icit;
 
 use super::env::{env_ext, env_len, env_nth, CloCell, Decls, Env, EnvCons, PiCell};
-use super::eval::{eval_aux, eval_iter, W};
-use super::spine::{MetaEntry, Spine, HK_FLEX};
+use super::eval::{eval_aux, eval_iter, prim_exec, W};
+use super::spine::{MetaEntry, Spine, HK_FLEX, HK_PRIM};
 use super::subst::{wrap_sub, SubstV};
 use super::syntax::{
     SumDataV, SumParamV, V, XCell, v_clo, v_clo_of, v_lvl, v_lvl_of, v_meta_of, v_pi,
@@ -123,19 +123,27 @@ pub(super) fn vapp1<'a>(
             return vapp1(bump, spine, work, vals, icits, defs, metas, decl, mutable, f2, a, i);
         }
     }
-    if v_tag(f) == 1 {
+    let r = if v_tag(f) == 1 {
         let c = v_clo_of(f);
         let env = env_ext(bump, c.env, a);
         eval_iter(bump, spine, work, vals, icits, defs, metas, decl, mutable, env, c.body)
     } else if v_tag(f) == 7 {
         match v_xcell_of(f) {
-            XCell::Obj { .. } | XCell::Decl { .. } => spine.push(f, a, i),
+            // 卡住内建头：实参压 spine（不再 panic）
+            XCell::Obj { .. } | XCell::Decl { .. } | XCell::Prim { .. } => spine.push(f, a, i),
             _ => panic!("impossible apply"),
         }
     } else if v_tag(f) == 3 || v_tag(f) == 4 || v_tag(f) == 6 {
         panic!("impossible apply")
     } else {
         spine.push(f, a, i)
+    };
+    // 内建链：应用后**立刻尝试归约**（对齐旧 λ 链模型“eval(App) 到达
+    // 元数即执行 builtin 体”的求值期副作用时序）；未饱和/实参不合保持卡住。
+    if v_tag(r) == 2 && spine.stack[v_spine_of(r)].hk == HK_PRIM {
+        force(bump, spine, defs, metas, decl, mutable, r)
+    } else {
+        r
     }
 }
 
@@ -151,7 +159,7 @@ pub(super) fn vapp_ok(v: V) -> bool {
         3 | 4 | 6 => false,
         7 => matches!(
             v_xcell_of(v),
-            XCell::Obj { .. } | XCell::Decl { .. } | XCell::VSub { .. }
+            XCell::Obj { .. } | XCell::Decl { .. } | XCell::Prim { .. } | XCell::VSub { .. }
         ),
         _ => true,
     }
@@ -226,6 +234,28 @@ pub(super) fn force<'a>(
             },
             2 => {
                 let h = v_spine_of(v);
+                if spine.stack[h].hk == HK_PRIM {
+                    // 卡住内建链：收集实参（逆应用序 → 自然序）交 prim_exec
+                    // 归约；成功则继续 force 归约值，失败保持卡住（参考版
+                    // force 的 Prim 臂同款）。O(1) 读顶端槽种类。
+                    let hd = spine.spine_head(h);
+                    let pid = match v_xcell_of(hd) {
+                        XCell::Prim { pid, .. } => *pid,
+                        _ => return v,
+                    };
+                    args.clear();
+                    spine.collect_args(h, &mut args);
+                    args.reverse();
+                    match prim_exec(
+                        bump, spine, defs, metas, decl, mutable, pid, &args,
+                    ) {
+                        Some(val) => {
+                            v = val;
+                            continue;
+                        }
+                        None => return v,
+                    }
+                }
                 if spine.stack[h].hk != HK_FLEX {
                     // Rigid / Obj / Decl 头的链：卡住（参考版 force 无对应臂）。
                     // O(1) 读顶端槽种类，省去非 flex 链的整趟走底

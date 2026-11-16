@@ -1012,3 +1012,78 @@ fn parity_spine_escape_juxtaposed_paren() {
     assert_both_ok_contains(&format!("{pair}def p = new Pair(succ zero, zero)\nprintln p.fst\n"), "Nat::succ(Nat::zero)");
     assert_both_ok_contains(&format!("{pair}def w = new Wrap(zero)\nprintln w.v\n"), "Nat::zero");
 }
+
+// prim 模型改造行为钉子（args 版 PrimFunc + 实参 spine）
+// --------------------------------------------------------------------------------
+
+/// literal 自反：Eq[String] "ab" "ab" → Ok；"ab" vs "cd" → Err（两版判定一致）。
+#[test]
+fn prim_literal_reflexive() {
+    let base = "enum Eq[A](x: A, y: A) {\n    refl[a: A] -> Eq[A] a a\n}\n";
+    let ok = format!("{base}def ok : Eq[String] \"ab\" \"ab\" = refl\n");
+    assert_parity(&ok);
+    assert!(run_basic(&ok).is_ok(), "literal 自反应 Ok（basic）");
+    assert!(run_fast(&ok).is_ok(), "literal 自反应 Ok（fast）");
+    let bad = format!("{base}def bad : Eq[String] \"ab\" \"cd\" = refl\n");
+    assert_parity(&bad);
+    assert!(run_basic(&bad).is_err(), "异字面量应 Err（basic）");
+    assert!(run_fast(&bad).is_err(), "异字面量应 Err（fast）");
+}
+
+/// prim 正控：同一卡住 prim（相同实参 spine）自等式 → Ok。改造前 L11 靠
+/// “任意 Prim 判等”臂假 Ok；改造后按函数身份 + spine 逐槽合一。
+#[test]
+fn prim_positive_control_stuck_self_eq() {
+    let src = r#"
+enum Eq[A](x: A, y: A) {
+    refl[a: A] -> Eq[A] a a
+}
+
+def p(x: String): String = string_concat x "a"
+
+def good(x: String): Eq[String] (p x) (p x) = refl
+"#;
+    assert_parity(src);
+    assert!(run_basic(src).is_ok(), "prim 正控应 Ok（basic）");
+    assert!(run_fast(src).is_ok(), "prim 正控应 Ok（fast）");
+}
+
+/// prim 负例：不同实参 spine（p x ≡ q y）→ Err。改造前 L11 是假 Ok。
+#[test]
+fn prim_negative_control_spine_mismatch() {
+    let src = r#"
+enum Eq[A](x: A, y: A) {
+    refl[a: A] -> Eq[A] a a
+}
+
+def p(x: String): String = string_concat x "a"
+
+def q(y: String): String = string_concat y "b"
+
+def bad(x: String, y: String): Eq[String] (p x) (q y) = refl
+"#;
+    assert_parity(src);
+    assert!(run_basic(src).is_err(), "prim 负例应 Err（basic）");
+    assert!(run_fast(src).is_err(), "prim 负例应 Err（fast）");
+}
+
+/// 部分应用不 panic：卡住 prim 值（含空 spine / 单实参 / 全应用）可打印，
+/// ref/twin 输出逐字节一致。
+#[test]
+fn prim_partial_application_no_panic() {
+    for src in [
+        "println string_concat\n",
+        "println (string_concat \"hello\")\n",
+        "println (string_concat \"hello\" \"world\")\n",
+    ] {
+        let b = unpanic(|| run_basic(src));
+        let f = unpanic(|| run_fast(src));
+        assert!(b.is_ok(), "参考版不应 panic，src:\n{src}");
+        assert!(f.is_ok(), "快版不应 panic，src:\n{src}");
+        let (b, f) = (b.unwrap(), f.unwrap());
+        assert_eq!(b.is_ok(), f.is_ok(), "判定应一致 src:\n{src}");
+        if let (Ok(b), Ok(f)) = (b, f) {
+            assert_eq!(b, f, "输出应一致 src:\n{src}");
+        }
+    }
+}

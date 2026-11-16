@@ -207,7 +207,7 @@ fn mentions_level(spine: &Spine, defs: &[V], v: V, sub: &SubstV) -> bool {
             mentions_level(spine, defs, p.dom, sub) || env_slots(spine, defs, p.env, sub)
         }
         7 => match v_xcell_of(v) {
-            XCell::Lit(_) | XCell::Prim => false,
+            XCell::Lit(_) | XCell::Prim(_) => false,
             XCell::Obj { val, .. } => mentions_level(spine, defs, *val, sub),
             XCell::Sum { params, .. } => params
                 .iter()

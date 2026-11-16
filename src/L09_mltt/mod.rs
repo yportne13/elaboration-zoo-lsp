@@ -18,6 +18,7 @@ use pretty::pretty_tm;
 
 use crate::list::List;
 use crate::parser_lib::Span;
+use smol_str::SmolStr;
 
 mod cxt;
 mod elaboration;
@@ -88,7 +89,9 @@ pub enum Tm {
     Meta(MetaVar),
     LiteralType,
     LiteralIntro(Span<String>),
-    Prim,
+    /// 内建函数体标记（携带名字：求值时卡成 `Val::Prim(name, [])`，实参
+    /// 经 App 进入 spine，归约统一在 force 的 `prim_reduce`）。
+    Prim(SmolStr),
     Sum(Span<String>, Vec<(Span<String>, Tm, Ty, Icit)>, Vec<Span<String>>),
     SumCase {
         typ: Box<Tm>,
@@ -232,7 +235,11 @@ pub enum Val {
     U(u32),
     LiteralType,
     LiteralIntro(VSpan),
-    Prim,
+    /// 卡住的内建应用：名字 + 已收实参 spine（头 = 最后应用的实参）。
+    /// 全部实参字面量时在 `force` 归约（本层仅 string_concat），否则保持
+    /// 中性参与 unify / quote / rename（丢实参的单元 `Prim` 会把
+    /// `x ++ y ≡ x ++ z` 判成相等）。
+    Prim(SmolStr, Spine),
     Sum(
         VSpan,
         Rc<Vec<(VSpan, Rc<Val>, Rc<VTy>, Icit)>>,
@@ -339,7 +346,9 @@ impl Subst {
                 }
                 // 已被包裹的值保守视为引用（内层结构不再探查）
                 Val::VSub(..) => true,
-                Val::U(_) | Val::LiteralType | Val::LiteralIntro(_) | Val::Prim => false,
+                // 卡住内建的 spine 槽是值，读点会流出——必须扫描
+                Val::Prim(_, sp) => sp.iter().any(|(v, _)| mentions_level(v, sub)),
+                Val::U(_) | Val::LiteralType | Val::LiteralIntro(_) => false,
             }
         }
         mentions_level(v, sub)
@@ -394,7 +403,12 @@ impl Subst {
 pub(crate) fn v_applicable(v: &Val) -> bool {
     matches!(
         v,
-        Val::Flex(..) | Val::Rigid(..) | Val::Obj(..) | Val::Match(..) | Val::VSub(..)
+        Val::Flex(..)
+            | Val::Rigid(..)
+            | Val::Obj(..)
+            | Val::Prim(..)
+            | Val::Match(..)
+            | Val::VSub(..)
     )
 }
 
@@ -533,8 +547,9 @@ pub(crate) fn val_mentions_lvl(v: &Val, x: Lvl) -> bool {
                 stack.extend(env.iter());
                 stack.extend(pending.iter().map(|(v, _)| v));
             }
-            Val::Lam(..) | Val::Pi(..) | Val::U(_) | Val::LiteralType | Val::LiteralIntro(_)
-            | Val::Prim => {}
+            Val::Lam(..) | Val::Pi(..) | Val::U(_) | Val::LiteralType | Val::LiteralIntro(_) => {}
+            // 内建 spine 实参：结构上可能引用层级（保守扫描）
+            Val::Prim(_, sp) => stack.extend(sp.iter().map(|(v, _)| v)),
         }
     }
     false
@@ -853,7 +868,41 @@ impl Infer {
                 }
                 Val::Match(s, env, cases, pending)
             }
+            // 卡住的内建：实参先 force（spine 槽可能存未归约的嵌套 prim），
+            // 反转自然序后交 `prim_reduce`；元数不足 / 实参不合时保持卡住
+            // （None），不 panic。
+            Val::Prim(name, sp) => {
+                if burn(&self.unify_fuel) {
+                    let mut args: Vec<Val> =
+                        sp.iter().map(|(v, _)| self.force(v.clone())).collect();
+                    args.reverse(); // spine 头 = 最后应用 → 自然序
+                    if let Some(v) = self.prim_reduce(&name, &args) {
+                        return self.force(v);
+                    }
+                }
+                Val::Prim(name, sp)
+            }
             _ => t,
+        }
+    }
+
+    /// 卡住内建的归约体（L07 `Infer::prim_reduce` 的 L09 裁剪版：本层唯一
+    /// builtin 是 string_concat）。`args` 自然序（最先应用在前）；元数 /
+    /// 字面量检查不满足即 None 保持卡住——源码可达路径不 panic。
+    fn prim_reduce(&self, name: &str, args: &[Val]) -> Option<Val> {
+        match name {
+            "string_concat" => {
+                if args.len() < 2 {
+                    return None;
+                }
+                match (&args[0], &args[1]) {
+                    (Val::LiteralIntro(a), Val::LiteralIntro(b)) => Some(Val::LiteralIntro(
+                        vspan(tmspan(a).map(|x| format!("{x}{}", b.data))),
+                    )),
+                    _ => None,
+                }
+            }
+            _ => None,
         }
     }
 
@@ -957,7 +1006,10 @@ impl Infer {
                         .collect::<Vec<_>>(),
                 ),
             )),
-            // U / LiteralType / LiteralIntro / Prim：原样
+            // 卡住内建：spine 槽只包裹不推进（槽位引用是作用域事实），
+            // 包裹后交回 force 重走归约臂。
+            Val::Prim(name, sp) => self.force(Val::Prim(name, self.wrap_sp(sub, sp))),
+            // U / LiteralType / LiteralIntro：原样
             t => t,
         }
     }
@@ -1021,6 +1073,9 @@ impl Infer {
             Val::Flex(m, sp) => Val::Flex(m, sp.prepend((u, i))),
             Val::Rigid(x, sp) => Val::Rigid(x, sp.prepend((u, i))),
             Val::Obj(x, name, sp) => Val::Obj(x, name, sp.prepend((u, i))),
+            // 卡住的内建：实参收进 spine（头 = 最后应用），归约由 force 的
+            // prim_reduce 在满元数 + 全字面量时触发。
+            Val::Prim(name, sp) => Val::Prim(name, sp.prepend((u, i))),
             // 卡住的 match 把实参收进 pending（值层保存）：scrutinee 归约选中
             // 分支后由 force / eval 在**值层**逐个应用——项层 splice 需要把实参
             // quote 成项，实参的自由变量层级可能超出捕获 env，引不到正确上下文
@@ -1180,16 +1235,13 @@ impl Infer {
             Tm::AppPruning(t, pr) => self.v_app_pruning(env, self.eval_ref(env, t), pr),
             Tm::LiteralIntro(x) => Val::LiteralIntro(vspan(x.clone())),
             Tm::LiteralType => Val::LiteralType,
-            Tm::Prim => {
-                // 实参槽可能被 subst_cxt 包成 VSub——先 force 推开再判字面量
-                let a0 = self.force(env.iter().nth(1).unwrap().clone());
-                let b0 = self.force(env.iter().nth(0).unwrap().clone());
-                match (a0, b0) {
-                    (Val::LiteralIntro(a), Val::LiteralIntro(b)) => {
-                        Val::LiteralIntro(vspan(tmspan(&a).map(|x| format!("{x}{}", b.data))))
-                    }
-                    _ => Val::Prim,
-                }
+            Tm::Prim(name) => {
+                // 零元卡住头：实参一律经 App 到达（builtin 值即中性 Prim
+                // 头，quote 产物也是 `Prim 实参` 应用形态）。**不读现场
+                // env**——旧实现把 env 前两槽当实参，只在 builtin λ 链体的
+                // 正典路径下正确；quoted Prim 在其它 env 下重求值会捕获
+                // 无关槽 / 越界 panic。归约统一在 force（prim_reduce）。
+                Val::Prim(name.clone(), List::new())
             }
             Tm::Sum(name, params, cases) => {
                 let new_params = params
@@ -1523,7 +1575,7 @@ impl Infer {
             Val::U(x) => Tm::U(x),
             Val::LiteralIntro(x) => Tm::LiteralIntro(tmspan(&x)),
             Val::LiteralType => Tm::LiteralType,
-            Val::Prim => Tm::Prim,
+            Val::Prim(name, sp) => self.quote_sp(l, Tm::Prim(name.clone()), sp),
             Val::Match(val, env, cases, pending) => {
                 /*TODO:let tm_cases = cases
                     .into_iter()
@@ -1652,7 +1704,7 @@ fn tm_size_ref(t: &Tm) -> u64 {
         n += 1;
         match x {
             Tm::Var(_) | Tm::Global(_) | Tm::U(_) | Tm::Meta(_) | Tm::LiteralType
-            | Tm::LiteralIntro(_) | Tm::Prim => {}
+            | Tm::LiteralIntro(_) | Tm::Prim(_) => {}
             Tm::Obj(h, _) => stack.push(h),
             Tm::Lam(_, _, b) => stack.push(&**b),
             Tm::App(f, a, _) => {

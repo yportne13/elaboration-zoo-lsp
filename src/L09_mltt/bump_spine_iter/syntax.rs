@@ -32,8 +32,9 @@ pub(crate) enum Tm<'a> {
     LiteralType,
     /// 字符串字面量（内容即值）。
     LiteralIntro(&'a str),
-    /// builtin 体标记（无名；求值时读 env 前两槽拼接或卡住）。
-    Prim,
+    /// builtin 体标记（携带名字：求值即中性 `XCell::Prim(name)`，实参经
+    /// App 链到达，归约统一在 force 的 `prim_reduce`）。
+    Prim(&'a str),
     /// `x.field` 投影（参考版 `Tm::Obj`；字段名只服务 pretty/查表）。
     Obj(&'a Tm<'a>, &'a str),
     /// enum 类型本体（enum 声明 λ 链的体）。params = (参数名, 值项, 类型项,
@@ -219,8 +220,9 @@ pub(crate) struct SumDataV<'a> {
 #[repr(align(8))]
 pub(crate) enum XCell<'a> {
     Lit(&'a str),
-    /// builtin 体标记（无名；v_app 对它 panic，故永无 Prim 头的链）。
-    Prim,
+    /// 卡住的内建头（名字 + 实参 spine 链；头 = 本单元）。同参考版
+    /// `Val::Prim(name, spine)`。
+    Prim(&'a str),
     /// 卡住投影：被投影者 + 字段名。带实参的卡住投影 = spine 链（头 =
     /// 本单元），与参考版 `Val::Obj(v, name, sp)` 同构。
     Obj { val: V, name: &'a str },

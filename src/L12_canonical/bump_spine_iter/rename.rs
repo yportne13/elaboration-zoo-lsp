@@ -352,6 +352,9 @@ pub(super) fn rename_iter<'a>(
                                     }
                                     XCell::Decl { name } => Tm::Decl(name),
                                     XCell::Lit(s) => Tm::LiteralIntro(s),
+                                    // 卡住内建头的链：以 Tm::Prim 为头折叠实参
+                                    //（参考版 rename 的 Prim 臂同款）
+                                    XCell::Prim { typ, pid } => Tm::Prim(*typ, *pid),
                                     _ => return None,
                                 });
                                 spine_case!(dom, cod, h, head_tm, tasks);

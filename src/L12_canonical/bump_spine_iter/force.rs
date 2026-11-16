@@ -14,9 +14,9 @@ use std::rc::Rc;
 use super::parser::syntax::Icit;
 
 use super::env::{env_ext, env_len, env_nth, CloCell, Env, EnvCons, PiCell};
-use super::eval::{eval_aux, eval_iter, W};
+use super::eval::{eval_aux, eval_iter, prim_exec, W};
 use super::machine::Decls;
-use super::spine::{HK_FLEX, MetaEntry, Spine};
+use super::spine::{HK_FLEX, HK_PRIM, MetaEntry, Spine};
 use super::subst::{wrap_sub, SubstV};
 use super::syntax::{
     SumDataV, SumParamV, V, XCell, v_clo, v_clo_of, v_lvl, v_lvl_of, v_meta_of, v_pi,
@@ -116,19 +116,22 @@ pub(super) fn vapp1<'a>(
     a: V,
     i: Icit,
 ) -> V {
-    if v_tag(f) == 1 {
+    let r = if v_tag(f) == 1 {
         let c = v_clo_of(f);
         let env = env_ext(bump, c.env, a);
         eval_iter(bump, spine, work, vals, icits, defs, metas, decl, mutable, env, c.body)
     } else if v_tag(f) == 7 {
         match v_xcell_of(f) {
-            XCell::Obj { .. } | XCell::Decl { .. } => spine.push(f, a, i),
+            // 卡住内建头：实参压 spine（不再 panic）
+            XCell::Obj { .. } | XCell::Decl { .. } | XCell::Prim { .. } => spine.push(f, a, i),
             // 精化包裹的值先推开再分发（eval(App) 等不经 force 的调用点会
             // 把 VSub 头送进来——臂上下文里 Var 引用了被解槽），force 顶层
             // 不再产出 VSub，递归必终止
             XCell::VSub { .. } => {
                 let f2 = force(bump, spine, defs, metas, decl, mutable, f);
-                vapp1(bump, spine, work, vals, icits, defs, metas, decl, mutable, f2, a, i)
+                return vapp1(
+                    bump, spine, work, vals, icits, defs, metas, decl, mutable, f2, a, i,
+                );
             }
             _ => panic!("impossible apply"),
         }
@@ -136,6 +139,13 @@ pub(super) fn vapp1<'a>(
         panic!("impossible apply")
     } else {
         spine.push(f, a, i)
+    };
+    // 内建链：应用后**立刻尝试归约**（对齐旧 λ 链模型“eval(App) 到达
+    // 元数即执行 builtin 体”的求值期副作用时序）；未饱和/实参不合保持卡住。
+    if v_tag(r) == 2 && spine.stack[v_spine_of(r)].hk == HK_PRIM {
+        force(bump, spine, defs, metas, decl, mutable, r)
+    } else {
+        r
     }
 }
 
@@ -151,7 +161,7 @@ pub(super) fn vapp_ok(v: V) -> bool {
         3 | 4 | 6 => false,
         7 => matches!(
             v_xcell_of(v),
-            XCell::Obj { .. } | XCell::Decl { .. } | XCell::VSub { .. }
+            XCell::Obj { .. } | XCell::Decl { .. } | XCell::Prim { .. } | XCell::VSub { .. }
         ),
         _ => true,
     }
@@ -224,6 +234,26 @@ pub(super) fn force<'a>(
             },
             2 => {
                 let h = v_spine_of(v);
+                if spine.stack[h].hk == HK_PRIM {
+                    // 卡住内建链：收集实参（逆应用序 → 自然序）交 prim_exec
+                    // 归约；成功则继续 force 归约值，失败保持卡住（参考版
+                    // force 的 Prim 臂同款）。O(1) 读顶端槽种类。
+                    let hd = spine.spine_head(h);
+                    let pid = match v_xcell_of(hd) {
+                        XCell::Prim { pid, .. } => *pid,
+                        _ => return v,
+                    };
+                    args.clear();
+                    spine.collect_args(h, &mut args);
+                    args.reverse();
+                    match prim_exec(bump, spine, defs, metas, decl, mutable, pid, &args) {
+                        Some(val) => {
+                            v = val;
+                            continue;
+                        }
+                        None => return v,
+                    }
+                }
                 if spine.stack[h].hk != HK_FLEX {
                     // Rigid / Obj / Decl 头的链：卡住（参考版 force 无对应臂）。
                     // O(1) 读顶端槽种类，省去非 flex 链的整趟走底
@@ -233,7 +263,10 @@ pub(super) fn force<'a>(
                 // flex 链：解应用到全部实参（应用序 = 收集序的逆序）；
                 // 每步都可能 β（参考版 vAppSp 逐步 vApp 同款）
                 match &metas[v_meta_of(hd) as usize] {
-                    MetaEntry::Unsolved(v, _, _) => return *v,
+                    // 未解的 flex 链原样保留（与 L11 孪生同款；此臂曾误把
+                    // MetaEntry 里存的**闭类型**当值返回，令 `?m x` 被 force 成
+                    // 其类型——删除 unify 的 Prim typ 剥离假阳臂后暴露）。
+                    MetaEntry::Unsolved(_, _, _) => return v,
                     MetaEntry::Solved(sol, _) => {
                         args.clear();
                         spine.collect_args(h, &mut args);

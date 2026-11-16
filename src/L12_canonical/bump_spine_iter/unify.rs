@@ -661,6 +661,26 @@ pub(super) fn unify_iter<'a>(
                 }
                 return false;
             }
+            // —— Prim 头链（参考版 (Prim, Prim) 臂的链形态）：同一内建
+            // 标识（PrimId）→ 逐实参 lockstep 合一；异标识 → 失配 ——
+            if v_tag(hd1) == 7 && v_tag(hd2) == 7 {
+                if let (
+                    XCell::Prim { pid: p1, .. },
+                    XCell::Prim { pid: p2, .. },
+                ) = (v_xcell_of(hd1), v_xcell_of(hd2))
+                {
+                    if p1 == p2 {
+                        if memo_on {
+                            stack.push(UItem::Store((t.0, u.0)));
+                        }
+                        if !unify_sp_lockstep(spine, stack, l, h1, h2) {
+                            return false;
+                        }
+                        continue;
+                    }
+                    return false;
+                }
+            }
             // —— Decl 头链的同名判定（参考臂 3.5 的链形态）：头都是卡住
             // 声明 → 同名 unlockstep 比实参、异名失配；其余组合落同头/异头
             // 分派 ——
@@ -864,25 +884,29 @@ pub(super) fn unify_iter<'a>(
         if v_tag(t) == 6 && v_tag(u) == 6 {
             continue;
         }
-        // —— Prim 带类型臂（参考臂 12/12.5）：`(_, Prim(b, _)) → unify(t, b)`
-        // 与 `(Prim(a, _), _) → unify(a, u)`（参考版逐字——先检次位再检
-        // 首位；双 Prim 经两臂传导到 typ-vs-typ）——
-        if v_tag(u) == 7 {
-            if let XCell::Prim { typ, .. } = v_xcell_of(u) {
-                stack.push(UItem::Pair(l, t, *typ));
-                continue;
-            }
-        }
-        if v_tag(t) == 7 {
-            if let XCell::Prim { typ, .. } = v_xcell_of(t) {
-                stack.push(UItem::Pair(l, *typ, u));
-                continue;
-            }
-        }
+        // （旧 Prim 按携带 typ 剥离的假阳臂已删除：Prim 现在是“函数身份 +
+        // 实参 spine”的中性头，判等在下方 tag7 臂与链分派里按身份/spine 做）
         // —— Sum/Sum（参考臂 13）：同名即逐参数（含索引）值合一；zip 语义
         // （参数数不等取 min——参考版同款）；异名失配 ——
         if v_tag(t) == 7 && v_tag(u) == 7 {
             let (xt, xu) = (v_xcell_of(t), v_xcell_of(u));
+            // —— 字面量相等（L13 unification.rs:1135 同款）：同值才可合一。
+            // 参考版对字面量无自反臂；本孪生补上后 Eq[String] "ab" "ab"
+            // 与含字面量实参的卡住 prim 自等式不再被误拒 ——
+            if let (XCell::Lit(a), XCell::Lit(b)) = (xt, xu) {
+                if a == b {
+                    continue;
+                }
+                return false;
+            }
+            // —— Prim/Prim（裸头）：同一内建标识即成立（空 spine 相等）；
+            // 异标识失配（不同函数不是构造子矛盾，判不出相等 → false）——
+            if let (XCell::Prim { pid: p1, .. }, XCell::Prim { pid: p2, .. }) = (xt, xu) {
+                if p1 == p2 {
+                    continue;
+                }
+                return false;
+            }
             // —— Decl/Decl 同名（参考臂 3.5）：裸头同名比 spine（空 spine
             // 即成立）；异名失配（参考版 `_` 落点同款）——
             if let (XCell::Decl { name: n1 }, XCell::Decl { name: n2 }) = (xt, xu) {

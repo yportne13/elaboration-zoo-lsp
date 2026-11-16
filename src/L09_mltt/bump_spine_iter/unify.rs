@@ -14,7 +14,7 @@ use super::env::{Env, env_ext};
 use super::eval::{W, eval_iter};
 use super::force::{force, val_mentions_lvl, vapp1, vapp_ok};
 use super::rename::{RenBuf, invert_bump, prune_meta_bump, solve_bump, solve_with_pren_bump};
-use super::spine::{HK_OBJ, HK_OTHER, MetaEntry, Spine, is_flex};
+use super::spine::{HK_OBJ, HK_OTHER, MetaEntry, Spine, is_flex, prim_head_name};
 use super::subst::{SpecSolve, SubstV, wrap_sub};
 use super::syntax::{Tm, V, XCell, v_clo_of, v_lvl, v_lvl_of, v_meta_of, v_pi_of, v_spine_of, v_tag, v_u_of, v_xcell_of};
 
@@ -615,6 +615,23 @@ pub(super) fn unify_iter<'a>(
                 }
                 return false; // 防御（is_objheaded 已保证 Obj 头）
             }
+            // 同名 Prim 头（不同单元 / 不同链）：逐实参 lockstep；异名落到
+            // 下方异头分派 → f1/f2 均 false → 失配。
+            if v_tag(hd1) == 7
+                && v_tag(hd2) == 7
+                && matches!(
+                    (v_xcell_of(hd1), v_xcell_of(hd2)),
+                    (XCell::Prim(n1), XCell::Prim(n2)) if n1 == n2
+                )
+            {
+                if memo_on {
+                    stack.push(UItem::Store((t.0, u.0)));
+                }
+                if !unify_sp_lockstep(spine, stack, l, h1, h2) {
+                    return false;
+                }
+                continue;
+            }
             // 异头：一侧 flex 头（f1/f2 已排除双 flex）→ 该侧 solve（参考
             // 臂 9/10 的链形态）；双刚性异级 / Obj 头组合 → 失配。
             let (mv, h, rhs) = if f1 {
@@ -776,11 +793,34 @@ pub(super) fn unify_iter<'a>(
             continue;
         }
         // —— 宽松臂（参考臂 12）：String 与卡住内建的宽松合一（参考版无
-        // decl 表把关——恒放行）——
-        if (v_tag(t) == 6 && v_tag(u) == 7 && matches!(v_xcell_of(u), XCell::Prim))
-            || (v_tag(t) == 7 && matches!(v_xcell_of(t), XCell::Prim) && v_tag(u) == 6)
-        {
-            continue;
+        // decl 表把关——恒放行）。Prim 可裸（tag 7）可带实参（tag 2 链头）。——
+        if v_tag(t) == 6 || v_tag(u) == 6 {
+            let other = if v_tag(t) == 6 { u } else { t };
+            if prim_head_name(spine, other).is_some() {
+                continue;
+            }
+        }
+        // —— 字面量值自反（L13 unification.rs:1135 同款）：同内容 Ok；异
+        // 内容失配。字面量单元是 tag 7 XCell::Lit，位相等捷径对 tag 7 关闭，
+        // 故必须显式判内容。缺此臂时 `Eq[String] "ab" "ab"` 被误拒。——
+        if v_tag(t) == 7 && v_tag(u) == 7 {
+            if let (XCell::Lit(a), XCell::Lit(b)) = (v_xcell_of(t), v_xcell_of(u)) {
+                if a == b {
+                    continue;
+                }
+                return false;
+            }
+        }
+        // —— Prim/Prim（参考臂 16）：同名自反（双裸单元 spine 空 vs 空）；
+        // 异名失配——不带实参的单元 Prim 会把 `x ++ y ≡ x ++ z` 判成相等。
+        // 带实参的同名链在上方同头分派里按 lockstep 比实参。
+        if v_tag(t) == 7 && v_tag(u) == 7 {
+            if let (XCell::Prim(n1), XCell::Prim(n2)) = (v_xcell_of(t), v_xcell_of(u)) {
+                if n1 == n2 {
+                    continue;
+                }
+                return false;
+            }
         }
         // —— (Obj, Obj) 合同（参考版新臂，L08 8988f7c 评审修复回移）：
         // 字段名相同 ⇒ 比接收者（裸单元无实参，spine 空 vs 空即完）。

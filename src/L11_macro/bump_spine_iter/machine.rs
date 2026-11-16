@@ -2705,17 +2705,10 @@ impl Machine {
             PrimId::GetGlobal,
         );
         let filled = env_ext(bump, EMPTY_ENV, v_lit_ty());
-        let sc_lam_tm: &'a Tm<'a> = bump.alloc(Tm::Lam(
-            "x",
-            Icit::Expl,
-            bump.alloc(Tm::Lam("y", Icit::Expl, bump.alloc(Tm::Prim(v_lit_ty(), sc)))),
-        ));
-        let sc_val = v_clo(bump.alloc(CloCell {
-            name: "x",
-            icit: Icit::Expl,
-            env: filled,
-            body: bump.alloc(Tm::Lam("y", Icit::Expl, bump.alloc(Tm::Prim(v_lit_ty(), sc)))),
-        }));
+        // 中性 Prim 头（不再构造 λ 链）：实参经 App/v_app 压 spine，
+        // 归约统一在 force 的 Prim 链臂（prim_exec，args 版）
+        let sc_lam_tm: &'a Tm<'a> = bump.alloc(Tm::Prim(v_lit_ty(), sc));
+        let sc_val = v_xcell(bump.alloc(XCell::Prim { typ: v_lit_ty(), pid: sc }));
         let sc_pi_tm: &'a Tm<'a> = bump.alloc(Tm::Pi(
             "x",
             Icit::Expl,
@@ -2742,15 +2735,10 @@ impl Machine {
         let cxt = self.decl_reg(bump, &cxt, "string_concat", sc_lam_tm, sc_val, sc_pi_tm, sc_ty);
         // string_to_global_type：λ x → Prim(LiteralType)；值 = Lam x
         // (Closure [] Prim)；类型 Π x:String. U(0)
-        let stgt_val = v_clo(bump.alloc(CloCell {
-            name: "x",
-            icit: Icit::Expl,
-            env: EMPTY_ENV,
-            body: bump.alloc(Tm::Prim(v_lit_ty(), stgt)),
-        }));
+        let stgt_val = v_xcell(bump.alloc(XCell::Prim { typ: v_lit_ty(), pid: stgt }));
         let cxt = self.decl_reg(
             bump, &cxt, "string_to_global_type",
-            bump.alloc(Tm::Lam("x", Icit::Expl, bump.alloc(Tm::Prim(v_lit_ty(), stgt)))),
+            bump.alloc(Tm::Prim(v_lit_ty(), stgt)),
             stgt_val,
             bump.alloc(Tm::Pi("x", Icit::Expl, bump.alloc(Tm::Decl(st)), bump.alloc(Tm::U(0)))),
             v_pi(bump.alloc(PiCell {
@@ -2763,16 +2751,7 @@ impl Machine {
         );
         // create_global：λ x y → Prim(U(0))；类型
         // Π x:String. Π y: string_to_global_type x. U(0)
-        let cg_val = v_clo(bump.alloc(CloCell {
-            name: "x",
-            icit: Icit::Expl,
-            env: EMPTY_ENV,
-            body: bump.alloc(Tm::Lam(
-                "y",
-                Icit::Expl,
-                bump.alloc(Tm::Prim(v_u(0), cg)),
-            )),
-        }));
+        let cg_val = v_xcell(bump.alloc(XCell::Prim { typ: v_u(0), pid: cg }));
         let cg_pi_tm: &'a Tm<'a> = bump.alloc(Tm::Pi(
             "x",
             Icit::Expl,
@@ -2790,11 +2769,7 @@ impl Machine {
         ));
         let cxt = self.decl_reg(
             bump, &cxt, "create_global",
-            bump.alloc(Tm::Lam(
-                "x",
-                Icit::Expl,
-                bump.alloc(Tm::Lam("y", Icit::Expl, bump.alloc(Tm::Prim(v_u(0), cg)))),
-            )),
+            bump.alloc(Tm::Prim(v_u(0), cg)),
             cg_val,
             cg_pi_tm,
             v_pi(bump.alloc(PiCell {
@@ -2817,16 +2792,7 @@ impl Machine {
         // change_mutable：λ x f → Prim(U(0))；类型
         // Π x:String. Π f: Π _: stgt x. stgt (f x). U(0)（参考版逐字，
         // 含其变量索引怪癖）
-        let cm_val = v_clo(bump.alloc(CloCell {
-            name: "x",
-            icit: Icit::Expl,
-            env: EMPTY_ENV,
-            body: bump.alloc(Tm::Lam(
-                "f",
-                Icit::Expl,
-                bump.alloc(Tm::Prim(v_u(0), cm)),
-            )),
-        }));
+        let cm_val = v_xcell(bump.alloc(XCell::Prim { typ: v_u(0), pid: cm }));
         let cm_pi_tm: &'a Tm<'a> = bump.alloc(Tm::Pi(
             "x",
             Icit::Expl,
@@ -2872,11 +2838,7 @@ impl Machine {
         ));
         let cxt = self.decl_reg(
             bump, &cxt, "change_mutable",
-            bump.alloc(Tm::Lam(
-                "x",
-                Icit::Expl,
-                bump.alloc(Tm::Lam("f", Icit::Expl, bump.alloc(Tm::Prim(v_u(0), cm)))),
-            )),
+            bump.alloc(Tm::Prim(v_u(0), cm)),
             cm_val,
             cm_pi_tm,
             v_pi(bump.alloc(PiCell {
@@ -2888,12 +2850,7 @@ impl Machine {
             })),
         );
         // get_global：λ x → Prim(U(0))；类型 Π x:String. stgt x
-        let gg_val = v_clo(bump.alloc(CloCell {
-            name: "x",
-            icit: Icit::Expl,
-            env: EMPTY_ENV,
-            body: bump.alloc(Tm::Prim(v_u(0), gg)),
-        }));
+        let gg_val = v_xcell(bump.alloc(XCell::Prim { typ: v_u(0), pid: gg }));
         let gg_pi_tm: &'a Tm<'a> = bump.alloc(Tm::Pi(
             "x",
             Icit::Expl,
@@ -2906,7 +2863,7 @@ impl Machine {
         ));
         self.decl_reg(
             bump, &cxt, "get_global",
-            bump.alloc(Tm::Lam("x", Icit::Expl, bump.alloc(Tm::Prim(v_u(0), gg)))),
+            bump.alloc(Tm::Prim(v_u(0), gg)),
             gg_val,
             gg_pi_tm,
             v_pi(bump.alloc(PiCell {

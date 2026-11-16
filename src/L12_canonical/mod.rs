@@ -62,12 +62,34 @@ pub enum DeclTm {
     },
 }
 
+/// 内建函数（args 版）：身份 = name（或同一 Rc 分配，见 PrimFunc::same），
+/// 实参按**自然序**（最先应用在前）由 force 收集后传入；None = 元数不足 /
+/// 实参不合 / 缺名 → 调用方保持卡住（不再读求值环境槽；卡住时也不再重建
+/// Prim 值——实参 spine 由调用点保留）。
 #[derive(Clone)]
-pub struct PrimFunc(Rc<dyn Fn(&Infer, &Decl, &Env, Rc<Val>) -> Rc<Val> + Send + Sync>);
+pub struct PrimFunc {
+    name: &'static str,
+    f: Rc<dyn Fn(&Infer, &Decl, &[Rc<Val>]) -> Option<Rc<Val>> + Send + Sync>,
+}
+
+impl PrimFunc {
+    pub(crate) fn new(
+        name: &'static str,
+        f: impl Fn(&Infer, &Decl, &[Rc<Val>]) -> Option<Rc<Val>> + Send + Sync + 'static,
+    ) -> Self {
+        PrimFunc { name, f: Rc::new(f) }
+    }
+
+    /// 同一个内建函数：同一 Rc 分配，或同名（跨 Cxt::new 重建的同层内建
+    /// 仍按函数身份判等）。
+    fn same(&self, other: &PrimFunc) -> bool {
+        self.name == other.name || Rc::ptr_eq(&self.f, &other.f)
+    }
+}
 
 impl std::fmt::Debug for PrimFunc {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "PrimFunc")
+        write!(f, "PrimFunc({})", self.name)
     }
 }
 
@@ -265,7 +287,7 @@ pub enum Val {
     U(u32),
     LiteralType,
     LiteralIntro(Span<String>),
-    Prim(Rc<Val>, PrimFunc),
+    Prim(Rc<Val>, PrimFunc, Spine),
     Sum(
         Span<SmolStr>,
         Vec<(Span<SmolStr>, Rc<Val>, Rc<VTy>, Icit)>,
@@ -375,6 +397,8 @@ impl Subst {
             match v {
                 Val::Rigid(y, sp) => sub.has(*y) || spine(sp, sub),
                 Val::Flex(_, sp) | Val::Decl(_, sp) => spine(sp, sub),
+                // 卡住内建的 spine 实参是值，可能引用 σ 的已解层级
+                Val::Prim(_, _, sp) => spine(sp, sub),
                 Val::Obj(o, _, sp) => mentions_level(o, sub) || spine(sp, sub),
                 Val::Lam(_, _, cl) => env_slots(&cl.0, sub),
                 Val::Pi(_, _, a, cl) => mentions_level(a, sub) || env_slots(&cl.0, sub),
@@ -439,6 +463,7 @@ pub(crate) fn v_applicable(v: &Val) -> bool {
             | Val::Rigid(..)
             | Val::Decl(..)
             | Val::Obj(..)
+            | Val::Prim(..)
             | Val::Call(..)
             | Val::VSub(..)
     )
@@ -503,7 +528,9 @@ fn val_mentions_lvl(v: &Val, x: Lvl) -> bool {
         // 出现（对齐旧世界"occurs 只看解的裸值"的语义；更深间接环由 force
         // 的 fuel 兜底）。
         Val::VSub(v, _) => val_mentions_lvl(v, x),
-        Val::U(_) | Val::LiteralType | Val::LiteralIntro(_) | Val::Prim(..) => false,
+        // 卡住内建的 spine 实参可能引用解值层级（occurs 守卫同口径）
+        Val::Prim(_, _, sp) => spine(sp, x),
+        Val::U(_) | Val::LiteralType | Val::LiteralIntro(_) => false,
     }
 }
 
@@ -718,6 +745,20 @@ impl Infer {
             Val::Call(name, args, body) => {
                 Val::Call(name.clone(), args.clone(), self.force(decl, body)).into()
             }
+            // 卡住的内建：实参按自然序（应用序）交给 PrimFunc（args 版）
+            // 归约；元数不足 / 实参不合 / 缺名 → None 保持卡住（不再读
+            // 求值环境槽，也不再重建 Prim 值——spine 原样保留）。
+            Val::Prim(typ, func, sp) => {
+                if sp.head().is_none() {
+                    return t.clone();
+                }
+                let mut args: Vec<Rc<Val>> = sp.iter().map(|(v, _)| self.force(decl, v)).collect();
+                args.reverse(); // spine 头 = 最后应用 → 自然序
+                match (func.f)(self, decl, &args) {
+                    Some(v) => self.force(decl, &v),
+                    None => t.clone(),
+                }
+            }
             _ => t.clone(),
         }
     }
@@ -844,9 +885,14 @@ impl Infer {
                         .map(|(n, args)| (n, args.into_iter().map(|a| wrap_sub(sub, a)).collect())),
                 ))
             }
-            // U / 字面量 / Prim：σ 无从推进（Prim 携带的 typ 是内建登记类型，
-            // 与精化解无关）
-            Val::U(_) | Val::LiteralType | Val::LiteralIntro(_) | Val::Prim(..) => v,
+            // 卡住内建：typ / func 与 σ 无关，spine 槽只包裹（交回 force
+            // 重走 Prim 归约臂，保持“σ 之下的值 force 到同一 WHNF 形态”）
+            Val::Prim(typ, func, sp) => self.force(
+                decl,
+                &Rc::new(Val::Prim(typ.clone(), func.clone(), self.wrap_sp(sub, sp.clone()))),
+            ),
+            // U / 字面量：σ 无从推进
+            Val::U(_) | Val::LiteralType | Val::LiteralIntro(_) => v,
         }
     }
 
@@ -949,6 +995,15 @@ impl Infer {
             Val::Rigid(x, sp) => Val::Rigid(*x, sp.prepend((u, i))).into(),
             Val::Decl(x, sp) => Val::Decl(x.clone(), sp.prepend((u, i))).into(),
             Val::Obj(x, name, sp) => Val::Obj(x.clone(), name.clone(), sp.prepend((u, i))).into(),
+            // 卡住内建头：实参压 spine 后**立刻尝试归约**（对齐旧 λ 链模型
+            // “eval(App) 到达元数即执行 builtin 体”的求值期副作用时序：
+            // create_global 等即使绑定值被丢弃/只在后续 get_global 读取，
+            // 副作用也必须在应用求值时发生）。不满足元数/实参合 → 保持卡住。
+            Val::Prim(typ, func, sp) => {
+                let applied: Rc<Val> =
+                    Val::Prim(typ.clone(), func.clone(), sp.prepend((u, i))).into();
+                self.force(decl, &applied)
+            }
             Val::Call(_, _, body) => self.v_app(decl, body, u, i),
             x => panic!("impossible apply\n  {:?}\nto\n  {:?}", x, u),
         }
@@ -1029,7 +1084,9 @@ impl Infer {
             Tm::AppPruning(t, pr) => self.v_app_pruning(decl, env, self.eval(decl, env, t), pr),
             Tm::LiteralIntro(x) => Val::LiteralIntro(x.clone()).into(),
             Tm::LiteralType => Val::LiteralType.into(),
-            Tm::Prim(typ, func) => func.0(self, decl, env, typ.clone()),
+            // 零元卡住头：实参一律经 App 到达（spine 由 v_app 压栈），
+            // 归约统一在 force；不读现场 env，也不再在求值时调用函数
+            Tm::Prim(typ, func) => Val::Prim(typ.clone(), func.clone(), List::new()).into(),
             Tm::Sum(name, params, cases, is_trait) => {
                 let new_params = params
                     .iter()
@@ -1116,7 +1173,9 @@ impl Infer {
             Val::U(x) => Tm::U(*x).into(),
             Val::LiteralIntro(x) => Tm::LiteralIntro(x.clone()).into(),
             Val::LiteralType => Tm::LiteralType.into(),
-            Val::Prim(typ, func) => Tm::Prim(typ.clone(), func.clone()).into(),
+            Val::Prim(typ, func, sp) => {
+                self.quote_sp(decl, l, Tm::Prim(typ.clone(), func.clone()).into(), sp)
+            },
             Val::Sum(name, params, cases, is_trait) => {
                 let new_params = params.iter()
                     .map(|x| {

@@ -255,7 +255,7 @@ fn pretty_tm_inner(prec: i32, ns: List<String>, tm: &Tm, gn: GlobalNames<'_>) ->
         Tm::AppPruning(t, pr) => go_app_pruning(prec, ns.clone(), ns, t, pr, gn),
         Tm::LiteralType => "String".to_owned(),
         Tm::LiteralIntro(span) => span.data.clone(),
-        Tm::Prim => "Prim Func".to_owned(),
+        Tm::Prim(name) => name.to_string(),
         Tm::Sum(span, tms, items) => format!(
             "{}{}",
             span.data,

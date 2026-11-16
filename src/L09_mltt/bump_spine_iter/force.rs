@@ -11,7 +11,8 @@ use super::parser::syntax::Icit;
 
 use super::env::{CloCell, Env, EnvCons, PiCell, env_ext, env_len, env_nth};
 use super::eval::{W, eval_iter};
-use super::spine::{HK_FLEX, MetaEntry, Spine};
+use super::prim::prim_reduce;
+use super::spine::{HK_FLEX, HK_PRIM, MetaEntry, Spine};
 use super::subst::{SubstV, wrap_sub};
 use super::syntax::{SumDataV, SumParamV, V, XCell, v_clo, v_clo_of, v_lvl, v_lvl_of, v_meta_of, v_pi, v_pi_of, v_spine_of, v_tag, v_xcell, v_xcell_of};
 
@@ -51,7 +52,7 @@ pub(super) fn val_mentions_lvl(spine: &Spine, defs: &[V], v: V, x: u32) -> bool 
         1 | 4 => false, // Lam/Pi 闭包跳过（参考版同）
         3 | 6 => false,
         7 => match v_xcell_of(v) {
-            XCell::Lit(_) | XCell::Prim => false,
+            XCell::Lit(_) | XCell::Prim(_) => false,
             // VSub：只扫解值自身的结构，**不扫 σ 的映射值**
             XCell::VSub { val, .. } => val_mentions_lvl(spine, defs, *val, x),
             XCell::Obj { val, .. } => val_mentions_lvl(spine, defs, *val, x),
@@ -167,7 +168,7 @@ fn project<'a>(v: V, name: &str) -> Option<V> {
 
 /// 独立应用（eval_iter 之外的 v_app：force 的解值展开等）。λ → β；其余
 /// 形态逐项对齐参考版 v_app：Rigid/Flex（裸或链）与卡住投影 Obj → spine
-/// 压栈；字面量 / Prim / U / Π / LiteralType / Sum / SumCase / 卡住 match
+/// 压栈；字面量 / U / Π / LiteralType / Sum / SumCase / 卡住 match
 /// → panic（"impossible apply"，参考版同款——两版同时不可达 / 同时
 /// panic，判定一致）。
 pub(super) fn vapp1<'a>(
@@ -189,7 +190,8 @@ pub(super) fn vapp1<'a>(
         eval_iter(bump, spine, work, vals, icits, defs, metas, globals, env, c.body)
     } else if v_tag(f) == 7 {
         match v_xcell_of(f) {
-            XCell::Obj { .. } => spine.push(f, a, i),
+            // 中性头（卡住投影 / 卡住内建）：实参压 spine 链
+            XCell::Obj { .. } | XCell::Prim(_) => spine.push(f, a, i),
             // 精化包裹的值先推开再分发（eval(App) 等不经 force 的调用点会
             // 把 VSub 头送进来——如臂上下文里 Var 引用了被解槽；force 顶层
             // 不再产出 VSub，递归必终止）
@@ -211,7 +213,7 @@ pub(super) fn vapp1<'a>(
 /// η 展开的可应用性守卫（参考版 `unification::v_applicable` 的快版对应，
 
 /// L11 同款）：只有 `vapp1` 不会 panic 的形态能吃 η 新变量。tag 7 仅
-/// `Obj` 可（`Sum`/`SumCase`/`Prim` → panic）；tag 3(U)/4(Pi)/6(Lit) 不可；
+/// `Obj`/`Prim` 可（`Sum`/`SumCase` → panic）；tag 3(U)/4(Pi)/6(Lit) 不可；
 /// 其余（Rigid 0 / Clo 1 / 链 2 / Flex 5）可。防止 λ 值以类型/值身份流入
 /// unify 的 η 臂时触发 `impossible apply`（守卫失败落后续臂判败，与参考
 /// 版守卫后落 `_` → Err 同判定）。
@@ -220,7 +222,7 @@ pub(super) fn vapp1<'a>(
 pub(super) fn vapp_ok(v: V) -> bool {
     match v_tag(v) {
         3 | 4 | 6 => false,
-        7 => matches!(v_xcell_of(v), XCell::Obj { .. }),
+        7 => matches!(v_xcell_of(v), XCell::Obj { .. } | XCell::Prim(_)),
         _ => true,
     }
 }
@@ -258,28 +260,53 @@ pub(super) fn force<'a>(
             },
             2 => {
                 let h = v_spine_of(v);
-                if spine.stack[h].hk != HK_FLEX {
-                    // Rigid / Obj 头的链：卡住（参考版 force 无对应臂）。
-                    // O(1) 读顶端槽种类，省去非 flex 链的整趟走底
-                    return v;
-                }
-                let hd = spine.spine_head(h);
-                // flex 链：解应用到全部实参（应用序 = 收集序的逆序）；
-                // 每步都可能 β（参考版 vAppSp 逐步 vApp 同款）
-                match &metas[v_meta_of(hd) as usize] {
-                    MetaEntry::Unsolved(_) => return v,
-                    MetaEntry::Solved(sol, _) => {
+                match spine.stack[h].hk {
+                    HK_FLEX => {
+                        let hd = spine.spine_head(h);
+                        // flex 链：解应用到全部实参（应用序 = 收集序的逆序）；
+                        // 每步都可能 β（参考版 vAppSp 逐步 vApp 同款）
+                        match &metas[v_meta_of(hd) as usize] {
+                            MetaEntry::Unsolved(_) => return v,
+                            MetaEntry::Solved(sol, _) => {
+                                args.clear();
+                                spine.collect_args(h, &mut args);
+                                let mut t = *sol;
+                                for &(a, i) in args.iter().rev() {
+                                    t = vapp1(
+                                        bump, spine, &mut work, &mut vals, &mut icits, defs,
+                                        metas, globals, t, a, i,
+                                    );
+                                }
+                                v = t;
+                            }
+                        }
+                    }
+                    HK_PRIM => {
+                        // 卡住的内建：实参先 force（spine 槽可能存未归约的
+                        // 嵌套 prim），反转自然序后交 prim_reduce；元数不足 /
+                        // 实参不合保持卡住。与参考版每次 force 烧 1 燃料对齐。
+                        if !burn() {
+                            return v;
+                        }
+                        let name = match v_xcell_of(spine.spine_head(h)) {
+                            XCell::Prim(n) => n,
+                            _ => unreachable!("hk=Prim 的链头必是 Prim 单元"),
+                        };
                         args.clear();
                         spine.collect_args(h, &mut args);
-                        let mut t = *sol;
-                        for &(a, i) in args.iter().rev() {
-                            t = vapp1(
-                                bump, spine, &mut work, &mut vals, &mut icits, defs, metas,
-                                globals, t, a, i,
-                            );
+                        args.reverse(); // 逆应用序 → 自然序（最先应用在前）
+                        for k in 0..args.len() {
+                            let a = args[k].0;
+                            args[k].0 = force(bump, spine, defs, metas, globals, a);
                         }
-                        v = t;
+                        match prim_reduce(bump, name, &args) {
+                            Some(r) => v = r,
+                            None => return v,
+                        }
                     }
+                    // Rigid / Obj 头的链：卡住（参考版 force 无对应臂）。
+                    // O(1) 读顶端槽种类，省去非 flex 链的整趟走底。
+                    _ => return v,
                 }
             }
             // 显式替换（dpm-nbe `frc`）：把模式精化的解推进值的结构。入口
@@ -360,7 +387,7 @@ fn frcs<'a>(
                 }))
             }
             XCell::Lit(_) => v0,
-            XCell::Prim => force(bump, spine, defs, metas, globals, v0),
+            XCell::Prim(_) => force(bump, spine, defs, metas, globals, v0),
             XCell::Obj { val, name } => {
                 let inner = frcs(bump, spine, defs, metas, globals, sub, *val);
                 force(

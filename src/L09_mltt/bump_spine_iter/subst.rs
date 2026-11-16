@@ -217,7 +217,7 @@ fn mentions_level(spine: &Spine, defs: &[V], v: V, sub: &SubstV) -> bool {
         }
         7 => match v_xcell_of(v) {
             XCell::VSub { .. } => true,
-            XCell::Lit(_) | XCell::Prim => false,
+            XCell::Lit(_) | XCell::Prim(_) => false,
             XCell::Obj { val, .. } => mentions_level(spine, defs, *val, sub),
             XCell::Sum { params, .. } => params.iter().any(|p| {
                 mentions_level(spine, defs, p.val, sub)

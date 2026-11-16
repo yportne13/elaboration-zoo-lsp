@@ -33,7 +33,7 @@ use super::subst::{vsub_reclaim, SpecSolve, SubstV, wrap_sub};
 use super::syntax::{
     LCons, PrCons, SumDataT, SumParamT, SumParamV, Tm, V, XCell, v_clo, v_clo_of, v_lit_ty,
     v_lvl, v_lvl_of, v_meta, v_meta_of, v_pi, v_pi_of, v_spine_of, v_tag, v_u, v_u_of,
-    v_xcell_of,
+    v_xcell, v_xcell_of,
 };
 use super::typeclass::{TraitState, val_to_typ};
 use super::unify::{
@@ -1793,7 +1793,7 @@ fn free_var_indices(t: &Tm<'_>) -> Vec<u32> {
                 stack.push((a, d));
             }
             Tm::AppPruning(h, _) => stack.push((h, d)),
-            Tm::U(_) | Tm::Meta(_) | Tm::LiteralType | Tm::LiteralIntro(_) | Tm::Prim => {}
+            Tm::U(_) | Tm::Meta(_) | Tm::LiteralType | Tm::LiteralIntro(_) | Tm::Prim(_) => {}
             Tm::Obj(h, _) => stack.push((h, d)),
             Tm::Pi(_, _, a, b) => {
                 stack.push((a, d));
@@ -1870,7 +1870,7 @@ fn remap_free_vars<'a>(
                     bump.alloc(Tm::AppPruning(h2, pr))
                 }
             }
-            Tm::U(_) | Tm::Meta(_) | Tm::LiteralType | Tm::LiteralIntro(_) | Tm::Prim => t,
+            Tm::U(_) | Tm::Meta(_) | Tm::LiteralType | Tm::LiteralIntro(_) | Tm::Prim(_) => t,
             Tm::Obj(h, f) => {
                 let h2 = go(bump, h, d, map);
                 if std::ptr::eq(h2, h) {
@@ -2041,7 +2041,7 @@ fn has_free_var(t: &Tm<'_>) -> bool {
                 stack.push((a, d));
             }
             Tm::AppPruning(h, _) => stack.push((h, d)),
-            Tm::U(_) | Tm::Meta(_) | Tm::LiteralType | Tm::LiteralIntro(_) | Tm::Prim => {}
+            Tm::U(_) | Tm::Meta(_) | Tm::LiteralType | Tm::LiteralIntro(_) | Tm::Prim(_) => {}
             Tm::Obj(h, _) => stack.push((h, d)),
             Tm::Pi(_, _, a, b) => {
                 stack.push((a, d));
@@ -3340,6 +3340,11 @@ fn debug_val_go(spine: &Spine, defs: &[V], v: V, out: &mut String) {
                         debug_spine(spine, defs, h, out);
                         out.push(')');
                     }
+                    XCell::Prim(s) => {
+                        out.push_str(&format!("Prim({:?}, ", s));
+                        debug_spine(spine, defs, h, out);
+                        out.push(')');
+                    }
                     _ => {
                         // 其余头不可达（v_app panic，进不了链）；防御输出
                         out.push_str("Neutral(...)");
@@ -3370,7 +3375,9 @@ fn debug_val_go(spine: &Spine, defs: &[V], v: V, out: &mut String) {
             XCell::Lit(s) => {
                 out.push_str(&format!("LiteralIntro({})", dbg_span_str(s)));
             }
-            XCell::Prim => out.push_str("Prim"),
+            XCell::Prim(s) => {
+                out.push_str(&format!("Prim({:?}, [])", s));
+            }
             XCell::Obj { val, name } => {
                 out.push_str(&format!(
                     "Obj({}, {}, [])",
@@ -3560,7 +3567,7 @@ fn debug_tm_go(t: &Tm<'_>, out: &mut String) {
         Tm::Meta(m) => out.push_str(&format!("Meta(MetaVar({}))", m)),
         Tm::LiteralType => out.push_str("LiteralType"),
         Tm::LiteralIntro(s) => out.push_str(&format!("LiteralIntro({})", dbg_span_str(s))),
-        Tm::Prim => out.push_str("Prim"),
+        Tm::Prim(s) => out.push_str(&format!("Prim({:?})", s)),
         Tm::Obj(h, name) => {
             out.push_str("Obj(");
             debug_tm_go(h, out);
@@ -3633,10 +3640,10 @@ fn debug_tm_go(t: &Tm<'_>, out: &mut String) {
 // --------------------------------------------------------------------------------
 
 impl Machine {
-    /// 每轮注册（参考版 `Cxt::new`）：String 类型 + string_concat。两者的
-    /// **值按参考版手工构造**——string_concat 的 λ/Π 闭包 env 里钉着
-    /// `LiteralType` 填充槽（使 `Tm::Prim` 读 env 前两槽、Π 类型的
-    /// `Var(2)` 指回 String），与 eval 出来的形态逐槽一致。
+    /// 每轮注册（参考版 `Cxt::new`）：String 类型 + string_concat。builtin 的
+    /// 值 = **单个中性 `XCell::Prim(name)` 头**（不再构造 λ 链、不再读 env
+    /// 槽）；实参经 App 进 spine 链，归约统一在 force 的 `prim_reduce`。
+    /// 类型仍是 Π 链值（手工构造，与 eval 出来的形态逐槽一致）。
     pub(super) fn prime_round<'a>(&mut self, bump: &'a Bump) -> Cxt<'a> {
         let lit_ty: &'a Tm<'a> = bump.alloc(Tm::LiteralType);
         let u0_t: &'a Tm<'a> = bump.alloc(Tm::U(0));
@@ -3651,13 +3658,9 @@ impl Machine {
             v_lit_ty(),
             v_u(0),
         );
-        // string_concat：λ x y → Prim；类型 Π x:String. Π y:String. String
+        // string_concat：值 = 中性 Prim 头；类型 Π x:String. Π y:String. String
         // （体 Tm 的 Var 索引与参考版一致：域 Var(0)/Var(1)，返回 Var(2)）
-        let sc_lam_tm: &'a Tm<'a> = bump.alloc(Tm::Lam(
-            "x",
-            Icit::Expl,
-            bump.alloc(Tm::Lam("y", Icit::Expl, bump.alloc(Tm::Prim))),
-        ));
+        let sc_tm: &'a Tm<'a> = bump.alloc(Tm::Prim("string_concat"));
         let sc_pi_tm: &'a Tm<'a> = bump.alloc(Tm::Pi(
             "x",
             Icit::Expl,
@@ -3669,14 +3672,9 @@ impl Machine {
                 bump.alloc(Tm::Var(2)),
             )),
         ));
-        // 值 = Lam("x", Expl, Closure([LiteralType], Lam("y", Expl, Prim)))
+        // 值 = 中性 Prim 头（空实参 spine）
         let filled = env_ext(bump, EMPTY_ENV, v_lit_ty());
-        let sc_val = v_clo(bump.alloc(CloCell {
-            name: "x",
-            icit: Icit::Expl,
-            env: filled,
-            body: sc_lam_body(bump),
-        }));
+        let sc_val = v_xcell(bump.alloc(XCell::Prim("string_concat")));
         // 类型 = Pi("x", Expl, LiteralType, Closure([LiteralType], Pi 体))
         let sc_ty = v_pi(bump.alloc(PiCell {
             name: "x",
@@ -3685,7 +3683,7 @@ impl Machine {
             env: filled,
             body: sc_pi_cod(bump),
         }));
-        self.define_name_in(bump, &mut cxt, "string_concat", sc_pi_tm, sc_lam_tm, sc_val, sc_ty)
+        self.define_name_in(bump, &mut cxt, "string_concat", sc_pi_tm, sc_tm, sc_val, sc_ty)
     }
 
     /// 参考版 `bench_check` 的主循环（无输出变体）：返回 (是否通过，最终
@@ -3713,11 +3711,6 @@ impl Machine {
         solve_probe::dump();
         (Ok(()), cxt, last)
     }
-}
-
-/// `Lam("y", Expl, Prim)`（string_concat 值闭包的体）。
-fn sc_lam_body<'a>(bump: &'a Bump) -> &'a Tm<'a> {
-    bump.alloc(Tm::Lam("y", Icit::Expl, bump.alloc(Tm::Prim)))
 }
 
 /// `Pi("y", Expl, Var(1), Var(2))`（string_concat 类型闭包的体）。

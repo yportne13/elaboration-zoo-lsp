@@ -88,7 +88,7 @@ pub(super) fn export(t: &Tm<'_>) -> CTm {
             J::Do(Tm::Meta(m)) => done.push(CTm::Meta(MetaVar(*m))),
             J::Do(Tm::LiteralType) => done.push(CTm::LiteralType),
             J::Do(Tm::LiteralIntro(s)) => done.push(CTm::LiteralIntro(name(s))),
-            J::Do(Tm::Prim) => done.push(CTm::Prim),
+            J::Do(Tm::Prim(s)) => done.push(CTm::Prim(smol_str::SmolStr::new(s))),
             J::Do(Tm::Obj(h, n)) => {
                 tasks.push(J::Obj2(n));
                 tasks.push(J::Do(h));
@@ -190,7 +190,7 @@ fn tm_size(t: &Tm<'_>) -> u64 {
         n += 1;
         match x {
             Tm::Var(_) | Tm::U(_) | Tm::Meta(_) | Tm::LiteralType | Tm::LiteralIntro(_)
-            | Tm::Prim => {}
+            | Tm::Prim(_) => {}
             Tm::Obj(h, _) => stack.push(h),
             Tm::Lam(_, _, b) => stack.push(b),
             Tm::App(f, a, _) => {

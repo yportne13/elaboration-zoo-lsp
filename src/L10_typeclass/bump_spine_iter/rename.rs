@@ -388,6 +388,7 @@ pub(super) fn rename_iter<'a>(
                                         Tm::Obj(inner, name)
                                     }
                                     XCell::Lit(s) => Tm::LiteralIntro(s),
+                                    XCell::Prim(n) => Tm::Prim(n),
                                     _ => return None,
                                 });
                                 spine_case!(dom, cod, h, head_tm, tasks);
@@ -453,7 +454,7 @@ pub(super) fn rename_iter<'a>(
                     6 => done.push(bump.alloc(Tm::LiteralType)),
                     7 => match v_xcell_of(v) {
                         XCell::Lit(s) => done.push(bump.alloc(Tm::LiteralIntro(s))),
-                        XCell::Prim => done.push(bump.alloc(Tm::Prim)),
+                        XCell::Prim(s) => done.push(bump.alloc(Tm::Prim(s))),
                         // 不变式：force 后顶层无 VSub（防御臂；参考版 rename
                         // 的 VSub 臂同款判定失败）
                         XCell::VSub { .. } => return None,
