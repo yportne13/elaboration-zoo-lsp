@@ -61,7 +61,7 @@ pub mod L09_mltt;
 pub mod L10_typeclass;
 #[allow(non_snake_case)]
 #[cfg_attr(not(test), allow(dead_code))]
-mod L11_macro;
+pub mod L11_macro;
 #[allow(non_snake_case)]
 #[cfg_attr(not(test), allow(dead_code))]
 pub mod L12_canonical;

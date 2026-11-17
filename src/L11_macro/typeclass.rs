@@ -1,9 +1,16 @@
+//! L10 trait/typeclass 求解器（`Typ` 世界 + 表驱动 Prolog `Synth`）。
+//!
+//! 2026-11-17 重建：从旧 L10 原样承接求解算法（`Assertion`/`Instance`/
+//! `Synth`/`match_typ` 与单向一阶匹配语义），只把 `Val::to_typ` 适配到
+//! 新 L09 基线的值表示（`Val` 不裹 Rc、`Val::Sum` 3 字段、名字 span 为
+//! `VSpan`）。trait 身份不再进 Val/Tm（不设 `is_trait` 标记），改由
+//! `Infer::trait_out_param` 按名字判形——对 trait 层语义等价。
 
 use rustc_hash::FxHashMap as HashMap;
 
 use crate::list::List;
 
-use super::{Val, Span, empty_span};
+use super::{Val, Span, empty_span, tmspan};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Typ {
@@ -14,38 +21,35 @@ pub enum Typ {
     Fn(Box<Typ>, Box<Typ>),
     Trait(Span<String>),
 }
-
 impl Val {
+    /// 值 → `Typ`（trait 求解世界）。不可作类型的形态返回 None。
     pub fn to_typ(&self) -> Option<Typ> {
         match self {
             Val::Flex(..) => None,
-            Val::Rigid(lvl, list) if list.is_empty() => Some(Typ::Var(lvl.0)),
+            Val::Rigid(lvl, sp) if sp.is_empty() => Some(Typ::Var(lvl.0)),
             Val::Rigid(_, _) => None,
-            Val::Decl(x, list) if list.is_empty() => Some(Typ::Val(x.clone())),
-            Val::Decl(_, _) => None,
-            Val::Obj(val, span, sp) => None,
+            Val::Obj(..) => None,
             Val::Lam(..) => None,
-            Val::Pi(span, icit, val, closure) => None,
+            Val::Pi(..) => None,
             Val::U(x) => Some(Typ::Val(empty_span(format!("Type {x}")))),
-            // 字面量 / Prim 无 trait 求解器类型：返回 None。快版孪生
-            // `bump_spine_iter::val_to_typ` 对同形值一律 None；此前这里是
-            // `todo!()`，字符串字面量取字段（`"a".foo`）或作 trait 实参
-            // （`impl Foo["x"] for T`）会直接 panic。
-            Val::LiteralType | Val::LiteralIntro(_) | Val::Prim(..) => None,
-            Val::Sum(span, items, _, _) => Some(
-                if items.is_empty() {
-                    Typ::Val(span.clone())
-                } else {
-                    Typ::Construct(
-                        span.clone(),
-                        items.iter().map(|x| x.1.to_typ()).collect::<Option<Vec<_>>>()?,//TODO:
-                    )
-                }
-            ),
-            Val::SumCase { case_name, .. } => Some(Typ::Val(case_name.clone())),
+            Val::LiteralType => None,
+            Val::LiteralIntro(_) => None,
+            Val::Decl(..) => None,
+            Val::Prim(..) => None,
+            // 任一参数不可转换则**静默剔除**（刻意语义，见旧 L10 README §1.3：
+            // 实例登记侧拒绝不可转类型；trait_wrap 接收者路径依赖该剔除）。
+            Val::Sum(span, params, _) => Some(if params.is_empty() {
+                Typ::Val(tmspan(span))
+            } else {
+                Typ::Construct(
+                    tmspan(span),
+                    params.iter().flat_map(|x| x.1.to_typ()).collect(),
+                )
+            }),
+            Val::SumCase { .. } => None,
             Val::Match(..) => None,
-            // 精化 σ 包裹：调用点（trait_wrap / solve_trait / ImplDecl）已
-            // force 推开，此臂不可达；保守返回 None（不得出类型）而非误判形态。
+            // 精化 σ 包裹：调用点（trait_wrap / ImplDecl）已 force 推开，
+            // 保守返回 None（不得出类型）而非误判形态。
             Val::VSub(..) => None,
         }
     }
@@ -127,7 +131,7 @@ pub struct Synth {
     /// A more in-depth explanation can be found in [`Synth::synth`].
     resume_stack: Vec<(ConsumerNode, Assertion)>,
     /// The instances available for a type class.
-    pub class_instances: HashMap<String, Vec<Instance>>,
+    class_instances: HashMap<String, Vec<Instance>>,
     /// Information about each `subgoal` being solved.
     assertion_table: HashMap<Assertion, TableEntry>,
     /// The "final" answer for the algorithm.

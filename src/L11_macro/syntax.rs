@@ -1,77 +1,35 @@
+use std::rc::Rc;
+
 use crate::{list::List, parser_lib::Span};
 
-use super::{Tm, Ty, parser::syntax::Icit, Val, Infer, Lvl, Rc, Decl};
+use super::{Ty, parser::syntax::Icit};
 
 pub type Pruning = List<Option<Icit>>;
 
+/// 词法作用域的链式表示：`Bind` 是 λ/Π 引入的变量，`Define` 是 let 绑定的变量。
+/// `close_ty` 把一个开放类型按 locals 重新封口（fresh_meta 存元变量类型时用）。
+///
+/// L13 参考版同款：子链用 `Rc` 而不是 `Box`。`Box` 版每次 `locals.clone()`
+/// 都深拷整条链（O(深度)），n 个嵌套 binder ⇒ O(n²)；`Rc` 版 clone 是 O(1)，
+/// 这是深作用域路径上剩余的最大平方项。
 #[derive(Debug, Clone)]
 pub enum Locals {
     Here,
-    Define(Rc<Locals>, Span<String>, Rc<Ty>, Rc<Tm>),
-    Bind(Rc<Locals>, Span<String>, Rc<Ty>),
+    Define(Rc<Locals>, Span<String>, Ty, Tm),
+    Bind(Rc<Locals>, Span<String>, Ty),
 }
 
-impl Locals {
-    pub fn update_at(&self, x: usize, v: Rc<Tm>) -> Self {
-        match self {
-            Locals::Here => Locals::Here,
-            Locals::Define(mcl, name, ty, tm) => if x == 0 {
-                //println!("update {:?} to {:?}", tm, v);
-                Locals::Define(mcl.clone(), name.clone(), ty.clone(), v)
-            } else {
-                Locals::Define(Rc::new(mcl.update_at(x - 1, v)), name.clone(), ty.clone(), tm.clone())
-            },
-            Locals::Bind(mcl, name, ty) => if x == 0 {
-                //println!("update bind to {:?}", v);
-                Locals::Define(mcl.clone(), name.clone(), ty.clone(), v)
-            } else {
-                Locals::Bind(Rc::new(mcl.update_at(x - 1, v)), name.clone(), ty.clone())
-            },
-        }
-    }
-    pub fn update_by_cxt(&self, infer: &Infer, decl: &Decl, lvl: Lvl, cxt: &List<Rc<Val>>) -> Self {
-        match (self, cxt) {
-            (Locals::Here, _) => Locals::Here,
-            (Locals::Define(mcl, name, ty, tm), cxt) => {
-                Locals::Define(Rc::new(mcl.update_by_cxt(infer, decl, lvl, &cxt.tail())), name.clone(), ty.clone(), tm.clone())
-                /*match cxt.head() {
-                    Some(v) => match v.as_ref() {
-                        Val::Rigid(_, _) => Locals::Bind(Rc::new(mcl.update_by_cxt(infer, decl, lvl, &cxt.tail())), name.clone(), ty.clone()),
-                        _ => Locals::Define(
-                            Rc::new(mcl.update_by_cxt(infer, decl, lvl, &cxt.tail())),
-                            name.clone(),
-                            ty.clone(),
-                            //infer.quote(lvl, v),
-                            tm.clone(),
-                        )
-                    },
-                    _ => panic!("Internal error: unexpected value in context"),
-                }*/
-            }
-            (Locals::Bind(mcl, name, ty), cxt) => {
-                match cxt.head() {
-                    Some(v) => match v.as_ref() {
-                        Val::Rigid(_, _) => Locals::Bind(Rc::new(mcl.update_by_cxt(infer, decl, lvl, &cxt.tail())), name.clone(), ty.clone()),
-                        _ => Locals::Define(
-                            Rc::new(mcl.update_by_cxt(infer, decl, lvl, &cxt.tail())),
-                            name.clone(),
-                            ty.clone(),
-                            infer.quote(decl, lvl, v),
-                        )
-                    },
-                    _ => panic!("Internal error: unexpected value in context"),
-                }
-            }
-        }
-    }
-}
+use super::Tm;
 
-pub fn close_ty(mcl: &Locals, b: Rc<Ty>) -> Rc<Ty> {
+pub fn close_ty(mcl: Locals, b: Ty) -> Ty {
     match mcl {
         Locals::Here => b,
-        Locals::Bind(mcl, x, a) => close_ty(mcl, Tm::Pi(x.clone(), Icit::Expl, a.clone(), b.clone()).into()),
-        Locals::Define(mcl, x, a, t) => {
-            close_ty(mcl, Tm::Let(x.clone(), a.clone(), t.clone(), b).into())
+        Locals::Bind(mcl, x, a) => {
+            close_ty(mcl.as_ref().clone(), Tm::Pi(x, Icit::Expl, Rc::new(a), Rc::new(b)))
         }
+        Locals::Define(mcl, x, a, t) => close_ty(
+            mcl.as_ref().clone(),
+            Tm::Let(x, Box::new(a), Box::new(t), Box::new(b)),
+        ),
     }
 }

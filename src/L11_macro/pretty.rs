@@ -1,27 +1,53 @@
+//! 项的 pretty printing。约定与 L07/L07a 保持一致：
+//! 隐式参数用 `[..]`、构造子值打印成 `Enum::case(...)`、卡住的 match
+//! 打印出完整的分支结构。相比 L07a 修复：`AppPruning` 不再 `todo!()`，
+//! `SumCase.typ` 不是展开的 `Tm::Sum` 时也不再 panic（沿 App 链找头名）。
+
 use crate::list::List;
-use super::syntax::Pruning;
 
-use super::parser::syntax::Icit;
+use super::{parser::syntax::Icit, Tm};
 
-use super::Tm;
+/// 显示层递归深度上限（README §7.6b 的"定深拒绝"路线）。
+///
+/// `go` 对 `Tm` 结构递归；深值（`succ^N zero` 经 quote 得到 10^5 层
+/// `Tm::SumCase`）在默认 2 MB 栈下会爆栈。显示层不需要完整性：超过上限
+/// 输出 `…` 截断即可（不 panic、不改变类型检查结果）。取 1024 是因为
+/// 正常教学程序远低于此（最深是嵌套 def 的项），且 1024 帧在默认 2 MB
+/// 测试栈下留足余量（实测 256/1024 均通过；2000 帧偏高，保守取 1024）。
+const MAX_DEPTH: u32 = 1_024;
 
-const ATP: i32 = 3;  // atomp
-const APPP: i32 = 2; // appp
-const PIP: i32 = 1;  // pip
-const LETP: i32 = 0; // letp
+thread_local! {
+    static DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
 
-fn paren(s: &str) -> String {
-    format!("({})", s)
+struct DepthGuard;
+
+impl Drop for DepthGuard {
+    fn drop(&mut self) {
+        DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+    }
+}
+
+const ATP: i32 = 3; // atom
+const APPP: i32 = 2; // app
+const PIP: i32 = 1; // pi
+const LETP: i32 = 0; // let / lam
+
+fn bracket(s: String) -> String {
+    format!("[{s}]")
+}
+
+fn paren(f: String) -> String {
+    format!("({f})")
 }
 
 fn fresh(ns: List<String>, suggested: &str) -> String {
     if suggested == "_" {
         return "_".to_string();
     }
-
     let mut candidate = suggested.to_string();
-    while ns.iter().find(|x| *x == &candidate).is_some() {
-        candidate = format!("{}'", candidate);
+    while ns.iter().any(|x| *x == candidate) {
+        candidate = format!("{candidate}'");
     }
     candidate
 }
@@ -32,28 +58,38 @@ fn go_ix(ns: List<String>, ix: u32) -> String {
     while let Some(name) = current_ns.next() {
         if current_ix == 0 {
             if name == "_" {
-                return format!("@{}", ix)
-            } else {
-                return name.to_string()
+                return format!("@{ix}");
             }
+            return name.to_string();
         }
         current_ix -= 1;
     }
+    // 越界说明显示上下文里没有这个名字，退化显示索引而不是 panic
+    format!("@{ix}")
+}
 
-    // 越界说明显示上下文里没有这个名字（错误文案对更浅上下文的项做
-    // pretty 时可达），退化显示索引而不是 panic（L08/L09/L10 `go_ix`
-    // 同款）。
-    format!("@{}", ix)
-
+/// `AppPruning` 只显示内核（它几乎总是 fresh_meta 的 `?m` 包装，
+/// pruning 只表示"元变量取哪些可见参数"，对显示无益）。
+fn go_app_pruning(prec: i32, ns: List<String>, t: &Tm) -> String {
+    pretty_tm(prec, ns, t)
 }
 
 /// `pretty_tm` 的增量核心：逐节点写入单个输出缓冲，任何字节只写一次。
 /// 旧实现逐节点 `format!` 从子串拼新串——深度 d 处的字符串上下文 O(d)，
-/// 嵌套链全链 O(n²) 字节复制（perf-debt P3）。输出与旧实现逐字节一致。
+/// 嵌套链全链 O(n²) 字节复制（perf-debt 剩余机会 9，同 L11/L12 P3 模板）。
+/// 输出与旧实现逐字节一致。
 fn go(prec: i32, ns: List<String>, tm: &Tm, out: &mut String) {
+    // 显示层定深截断：深值不爆栈（见 `MAX_DEPTH`）
+    let depth = DEPTH.with(|d| d.get());
+    if depth >= MAX_DEPTH {
+        out.push('…');
+        return;
+    }
+    DEPTH.with(|d| d.set(depth + 1));
+    let _guard = DepthGuard;
     match tm {
         Tm::Var(ix) => out.push_str(&go_ix(ns, ix.0)),
-        Tm::Decl(x) => out.push_str(&x.data),
+        Tm::Decl(name) => out.push_str(name),
         Tm::Obj(x, name) => {
             go(prec, ns, x, out);
             out.push('.');
@@ -62,14 +98,12 @@ fn go(prec: i32, ns: List<String>, tm: &Tm, out: &mut String) {
         Tm::App(t, u, i) => {
             let need_paren = prec > APPP;
             if need_paren {
-                out.push('{');
+                out.push('(');
             }
             go(APPP, ns.clone(), t, out);
             out.push(' ');
             match i {
                 Icit::Expl => go(ATP, ns, u, out),
-                // 隐含实参用 parser 的 `f[x]` 语法；花括号只留给优先级分组
-                // （与 L13/L07 一致）。
                 Icit::Impl => {
                     out.push('[');
                     go(ATP, ns, u, out);
@@ -77,20 +111,18 @@ fn go(prec: i32, ns: List<String>, tm: &Tm, out: &mut String) {
                 }
             }
             if need_paren {
-                out.push('}');
+                out.push(')');
             }
         }
         Tm::Lam(span, i, body) => {
             let need_paren = prec > LETP;
             let x = fresh(ns.clone(), &span.data);
             let new_ns = ns.prepend(x.clone());
-
             if need_paren {
                 out.push('(');
             }
             match i {
                 Icit::Expl => out.push_str(&x),
-                // 隐含 λ binder 用 parser 的 `[x] => ...` 语法。
                 Icit::Impl => {
                     out.push('[');
                     out.push_str(&x);
@@ -120,9 +152,8 @@ fn go(prec: i32, ns: List<String>, tm: &Tm, out: &mut String) {
                 // binder 里的域类型是小串，单独渲染（binder 需要整体加括号）
                 let dom = pretty_tm(LETP, ns, a);
                 match i {
-                    Icit::Expl => out.push_str(&paren(&format!("{x}: {dom}"))),
-                    // 隐含 Π binder 用 parser 的 `[x: A]` 语法。
-                    Icit::Impl => out.push_str(&format!("[{x}: {dom}]")),
+                    Icit::Expl => out.push_str(&paren(format!("{x}: {dom}"))),
+                    Icit::Impl => out.push_str(&bracket(format!("{x}: {dom}"))),
                 }
                 out.push_str(" → ");
                 go(PIP, new_ns, b, out);
@@ -144,160 +175,92 @@ fn go(prec: i32, ns: List<String>, tm: &Tm, out: &mut String) {
             go(LETP, ns.clone(), a, out);
             out.push_str(" = ");
             go(LETP, ns, t, out);
-            out.push_str(";\n  ");
+            out.push_str(";\n");
             go(LETP, new_ns, u, out);
             if need_paren {
                 out.push(')');
             }
         }
         Tm::Meta(m) => out.push_str(&format!("?{}", m.0)),
-        Tm::AppPruning(t, pr) => go_app_pruning(prec, ns.clone(), ns, t, pr, out),
+        Tm::AppPruning(t, _) => out.push_str(&go_app_pruning(prec, ns, t)),
         Tm::LiteralType => out.push_str("String"),
         Tm::LiteralIntro(span) => out.push_str(&span.data),
-        Tm::Prim(_, _) => out.push_str("Prim Func"),
-        Tm::Sum(span, tms, items, _) => {
+        Tm::Prim(name) => out.push_str(name),
+        Tm::Sum(span, params, _) => {
             out.push_str(&span.data);
-            if !tms.is_empty() {
+            if !params.is_empty() {
                 out.push('[');
-                for (idx, tm) in tms.iter().enumerate() {
+                for (idx, (_, v, _, i)) in params.iter().enumerate() {
                     if idx > 0 {
                         out.push_str(", ");
                     }
-                    go(prec, ns.clone(), &tm.1, out);
+                    match i {
+                        Icit::Expl => go(ATP, ns.clone(), v, out),
+                        Icit::Impl => {
+                            out.push('[');
+                            go(ATP, ns.clone(), v, out);
+                            out.push(']');
+                        }
+                    }
                 }
                 out.push(']');
             }
         }
-        Tm::SumCase { is_trait, typ, case_name, datas: params } => {
-            // 头部：typ 的隐式参数串（小串，单独渲染）
-            let head = match typ.as_ref() {
-                Tm::Sum(name, params, _, _) => {
-                    let impls: Vec<String> = params
-                        .iter()
-                        .filter(|x| x.3 == Icit::Impl)
-                        .map(|x| pretty_tm(prec, ns.clone(), &x.1))
-                        .collect();
-                    if impls.is_empty() {
-                        name.data.to_string()
-                    } else {
-                        format!("{}[{}]", name.data, impls.join(", "))
-                    }
-                }
-                // typ 非 `Tm::Sum`（构造子的 `-> ret` 原样存储，可以是 App
-                // 链）：沿链找头部 Sum 名字，找不到退化 `?` 而不是 panic
-                // （L08/L09/L10 `sum_head_name` 同款降级）。
-                _ => sum_head_name(typ.as_ref()),
+        Tm::SumCase {
+            typ,
+            case_name,
+            datas,
+        } => {
+            // L08：struct 脱糖产生的构造子名自带 `{类型名}.mk` 前缀——已含
+            // 头名时不再叠 `::`，显示与源码写法 `Point.mk(...)` 对齐。
+            let head = sum_head_name(typ);
+            let ctor = if case_name.data.starts_with(&format!("{head}.")) {
+                case_name.data.clone()
+            } else {
+                format!("{head}::{}", case_name.data)
             };
-            out.push_str(&head);
-            out.push_str("::");
-            out.push_str(&case_name.data);
-            if !params.is_empty() {
+            out.push_str(&ctor);
+            if !datas.is_empty() {
                 out.push('(');
-                for (idx, tm) in params.iter().enumerate() {
+                for (idx, (_, v, i)) in datas.iter().enumerate() {
                     if idx > 0 {
-                        out.push_str(", ");
+                        out.push(' ');
                     }
-                    go(prec, ns.clone(), &tm.1, out);
+                    match i {
+                        Icit::Expl => go(ATP, ns.clone(), v, out),
+                        Icit::Impl => {
+                            out.push('[');
+                            go(ATP, ns.clone(), v, out);
+                            out.push(']');
+                        }
+                    }
                 }
                 out.push(')');
             }
         }
-        Tm::Match(tm, _) => {
-            out.push_str("(unsolved match ");
-            go(prec, ns, tm, out);
-            out.push(')');
-        }
-        /*Tm::Match(tm, cases) => format!(
-            "(match {} {{\n{}\n}})",
-            pretty_tm(prec, ns.clone(), tm),
-            cases
-                .iter()
-                .map(|(pat, tm)| format!("{:?} => {}", pat, pretty_tm(prec, ns.prepend("n".to_owned()), tm)))
-                .reduce(|acc, x| acc + ",\n" + &x)
-                .unwrap_or("".to_owned())
-        ),*/
-    }
-}
-
-fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &Pruning, out: &mut String) {
-    fn go_pr_inner(
-        p: i32,
-        top_ns: &List<String>,
-        mut ns: List<String>,
-        t: &Tm,
-        mut pr: Pruning,
-        arg_index: u32,
-        out: &mut String,
-    ) {
-        loop {
-            match (ns.split(), pr.split()) {
-                ((None, _), (None, _)) => {
-                    go(p, top_ns.clone(), t, out);
-                    return;
+        Tm::Match(scrut, cases) => {
+            let need_paren = prec > LETP;
+            if need_paren {
+                out.push('(');
+            }
+            out.push_str("match ");
+            go(ATP, ns.clone(), scrut, out);
+            out.push_str(" { ");
+            for (idx, (pat, body)) in cases.iter().enumerate() {
+                if idx > 0 {
+                    out.push_str("; ");
                 }
-                ((Some(n), rest_ns), (Some(prune), rest_pr)) => {
-                    if let Some(i) = prune {
-                        let need_paren = p > APPP;
-                        let arg_str = if n == "_" {
-                            format!("@{}", arg_index)
-                        } else {
-                            n.clone()
-                        };
-                        let arg_display = match i {
-                            Icit::Expl => arg_str,
-                            Icit::Impl => format!("[{arg_str}]"),
-                        };
-                        if need_paren {
-                            out.push('(');
-                        }
-                        go_pr_inner(APPP, top_ns, rest_ns, t, rest_pr, arg_index + 1, out);
-                        out.push(' ');
-                        out.push_str(&arg_display);
-                        if need_paren {
-                            out.push(')');
-                        }
-                        return;
-                    } else {
-                        // Skip implicit argument
-                        ns = rest_ns;
-                        pr = rest_pr;
-                        // continue loop
-                    }
-                }
-                // A pruning longer than the display name list (e.g. a decl
-                // type printed under a shallower context than the meta's
-                // elaboration depth) degrades to positional placeholders
-                // instead of panicking.
-                ((None, _), (Some(prune), rest_pr)) => {
-                    if let Some(i) = prune {
-                        let need_paren = p > APPP;
-                        let arg_str = format!("@{}", arg_index);
-                        let arg_display = match i {
-                            Icit::Expl => arg_str,
-                            Icit::Impl => format!("[{arg_str}]"),
-                        };
-                        if need_paren {
-                            out.push('(');
-                        }
-                        go_pr_inner(APPP, top_ns, ns.clone(), t, rest_pr, arg_index + 1, out);
-                        out.push(' ');
-                        out.push_str(&arg_display);
-                        if need_paren {
-                            out.push(')');
-                        }
-                        return;
-                    } else {
-                        pr = rest_pr;
-                    }
-                }
-                ((Some(_), rest_ns), (None, _)) => {
-                    ns = rest_ns;
-                }
+                out.push_str("case ");
+                out.push_str(&pretty_pattern(pat));
+                out.push_str(" => ");
+                go(LETP, prepend_pattern_ns(ns.clone(), pat), body, out);
+            }
+            out.push_str(" }");
+            if need_paren {
+                out.push(')');
             }
         }
     }
-
-    go_pr_inner(p, &top_ns, ns, t, pr.clone(), 0, out)
 }
 
 pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {
@@ -306,13 +269,46 @@ pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {
     out
 }
 
-/// `SumCase.typ` 可能不是展开的 `Tm::Sum`（构造子的 `-> ret` 原样存储，
-/// 可以是 App 链）：沿 App 链找头部的 Sum 名字，找不到就显示 `?`
-/// （L08/L09/L10 同款降级，不再 panic）。
+/// SumCase.typ 可能是 `Decl` / 应用链（构造子的 `-> ret` 原样存储），
+/// 沿 App 链找头部的 Sum/Decl 名字；找不到就显示 `?`。
 fn sum_head_name(tm: &Tm) -> String {
     match tm {
-        Tm::Sum(name, ..) => name.data.clone(),
+        Tm::Sum(name, _, _) => name.data.clone(),
+        Tm::Decl(name) => name.to_string(),
         Tm::App(f, _, _) => sum_head_name(f),
         _ => "?".to_owned(),
+    }
+}
+
+fn pretty_pattern(pat: &super::PatternDetail) -> String {
+    match pat {
+        super::PatternDetail::Any(_) => "_".to_owned(),
+        super::PatternDetail::Bind(name) => name.data.clone(),
+        super::PatternDetail::Con(name, subs) => {
+            if subs.is_empty() {
+                name.data.clone()
+            } else {
+                format!(
+                    "{}({})",
+                    name.data,
+                    subs.iter()
+                        .map(pretty_pattern)
+                        .reduce(|a, b| format!("{a}, {b}"))
+                        .unwrap_or_default()
+                )
+            }
+        }
+    }
+}
+
+/// 分支体的显示名字表：按 bind_count 前置哑名（Con 自身占一槽，名字未知用 `_`）。
+fn prepend_pattern_ns(ns: List<String>, pat: &super::PatternDetail) -> List<String> {
+    match pat {
+        super::PatternDetail::Any(_) => ns.prepend("_".to_owned()),
+        super::PatternDetail::Bind(name) => ns.prepend(name.data.clone()),
+        super::PatternDetail::Con(_, subs) => {
+            let ns = ns.prepend("_".to_owned());
+            subs.iter().rev().fold(ns, |ns, sub| prepend_pattern_ns(ns, sub))
+        }
     }
 }

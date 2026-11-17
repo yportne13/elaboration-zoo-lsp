@@ -1,78 +1,115 @@
-//! force：迭代 force（L11 参考版臂集：Flex 展开 / Obj 重建 / VSub 推进）、
-//! 显式替换推进（`frcs`/`frcs_env`）、深读点（`force_deep`）、参数视角 WHNF
-//! （`force_arg`）、occurs 守卫（`val_mentions_lvl`）、独立应用（`vapp1`/
-//! `vapp_ok`/`project`）与精化展开燃料（`PM_FUEL`/`refuel`/`burn`）。原
-//! bump_spine_iter.rs 的 "force" + "frcs" 两节 + val_mentions_lvl +
-//! metacontext 节尾的 project/vapp/fuel 块（按内容归属），逐行搬运
-//! （2026-09-23 拆分）。
+//! force：迭代 force 主循环与 `frcs`/`frcs_env`/`force_arg`，独立应用
+//! （`vapp1`/`vapp_ok`/`project`）与 occurs 守卫 `val_mentions_lvl`。
+//! 原 bump_spine_iter.rs 的 "force（迭代）" 节及其前的 v_app 族，逐行
+//! 搬运（2026-09-23 拆分）。
 
 use bumpalo::Bump;
 use rustc_hash::FxHashMap;
-use std::cell::RefCell;
 use std::rc::Rc;
-use smol_str::SmolStr;
 
 use super::parser::syntax::Icit;
 
-use super::env::{env_ext, env_len, env_nth, CloCell, Decls, Env, EnvCons, PiCell};
-use super::eval::{eval_aux, eval_iter, prim_exec, W};
-use super::spine::{MetaEntry, Spine, HK_FLEX, HK_PRIM};
-use super::subst::{wrap_sub, SubstV};
-use super::syntax::{
-    SumDataV, SumParamV, V, XCell, v_clo, v_clo_of, v_lvl, v_lvl_of, v_meta_of, v_pi,
-    v_pi_of, v_spine_of, v_tag, v_xcell, v_xcell_of,
-};
+use super::env::{CloCell, Env, env_ext, env_len, env_nth, EnvCons, PiCell};
+use super::eval::{eval_aux, eval_iter, W};
+use super::prim::{burn, DeclEntryF, Fuel, is_selfref_val, MutableMap, prim_reduce};
+use super::spine::{HK_DECL, HK_OBJ, HK_PRIM, MetaEntry, Spine, xcell_head_name};
+use super::subst::{SubstV, wrap_sub};
+use super::syntax::{SumDataV, SumParamV, V, v_clo, v_clo_of, v_lvl, v_lvl_of, v_meta_of, v_pi, v_pi_of, v_spine_of, v_tag, v_xcell, v_xcell_of, XCell};
 
-/// occurs 环守卫（参考版 `val_mentions_lvl` 同款）：只扫**解值自身**的浅层
-/// 结构，闭包体 / Match 分支体跳过；**不扫 Flex/Decl 的 spine**（spine 是
-/// 作用域事实，合法含当前方程的 rigid；旧 update_cxt 无 occurs 守卫，扫
-/// spine 会把 GADT 嵌套 match 的合法解误判成环）。真环由运行时结构兜底。
-pub(super) fn val_mentions_lvl(spine: &Spine, defs: &[V], v: V, x: u32) -> bool {
+/// 独立应用（eval_iter 之外的 v_app：force 的解值/pending 应用、prim 的
+/// `change_mutable`）。λ → β；卡住 match → pending 累积（值层保存，分支
+/// 选中后逐个应用——项层 splice 会把实参自由变量引到错误上下文）；其余
+/// → spine 压栈（Rigid/Flex/Decl/Prim/Obj 头的链）。参考版对 Π/U/字面量/
+/// Sum/SumCase 的应用 panic（"impossible apply"）——快版照做（两版同时
+/// 不可达 / 同时 panic，判定一致）。
+#[allow(clippy::too_many_arguments)]
+pub(super) fn vapp1<'a>(
+    bump: &'a Bump,
+    spine: &mut Spine,
+    work: &mut Vec<W<'a>>,
+    vals: &mut Vec<V>,
+    icits: &mut Vec<Icit>,
+    defs: &mut Vec<V>,
+    metas: &[MetaEntry],
+    decls: &FxHashMap<String, DeclEntryF>,
+    mmap: &MutableMap,
+    fuel: &Fuel,
+    f: V,
+    a: V,
+    i: Icit,
+) -> V {
+    if v_tag(f) == 1 {
+        let c = v_clo_of(f);
+        let env = env_ext(bump, c.env, a);
+        eval_iter(
+            bump, spine, work, vals, icits, defs, metas, decls, mmap, fuel, env, c.body,
+        )
+    } else if v_tag(f) == 7 {
+        match v_xcell_of(f) {
+            XCell::Match {
+                scrutinee,
+                env,
+                cases,
+                pending,
+            } => {
+                // 卡住 match 吸收实参进 pending（新单元——bump 内不可变）
+                let mut p: Vec<(V, Icit)> = Vec::with_capacity(pending.len() + 1);
+                p.extend_from_slice(pending);
+                p.push((a, i));
+                v_xcell(bump.alloc(XCell::Match {
+                    scrutinee: *scrutinee,
+                    env: *env,
+                    cases,
+                    pending: bump.alloc_slice_fill_iter(p),
+                }))
+            }
+            // Lit / Sum / SumCase 不可应用（参考版 panic）；Decl/Prim/Obj
+            // 压栈成链
+            XCell::Lit(_) | XCell::Sum { .. } | XCell::SumCase { .. } => {
+                panic!("impossible apply")
+            }
+            // 精化包裹的值先推开再分发（eval(App) 等不经 force 的调用点
+            // 会把 VSub 头送进来——如臂上下文里 Var 引用了被解槽；force
+            // 顶层不再产出 VSub，递归必终止）
+            XCell::VSub { .. } => {
+                let ff = force(bump, spine, defs, metas, decls, mmap, fuel, f);
+                return vapp1(
+                    bump, spine, work, vals, icits, defs, metas, decls, mmap, fuel, ff, a, i,
+                );
+            }
+            _ => spine.push(f, a, i),
+        }
+    } else if v_tag(f) == 3 || v_tag(f) == 4 || v_tag(f) == 6 {
+        // U / Π / LiteralType 不可应用（参考版 panic）
+        panic!("impossible apply")
+    } else {
+        spine.push(f, a, i)
+    }
+}
+
+/// η 展开的可应用性守卫（参考版 `unification::v_applicable` 的快版对应，
+/// L06 同款）：只有 `vapp1` 能吃 η 新变量的形态——裸 Rigid(0)/未解
+/// Flex(5)/链(2)，以及 Decl/Prim/Obj/Match/VSub 头的 tag 7 单元；字面量 /
+/// Sum / SumCase 单元与 U(3)/Π(4)/LiteralType(6) 不可应用（`vapp1`
+/// panic 集）。λ 与不可应用值相遇时 η 臂不展开，落空后按合一失败返回
+/// （与参考版守卫同判；守卫为真时行为照旧）。frcs 的解析应用读点共用
+/// 同一守卫（"解值带实参但头不可应用 ⇒ 卡回原值"）。
+#[inline]
+pub(super) fn vapp_ok(v: V) -> bool {
     match v_tag(v) {
-        0 => v_lvl_of(v) == x,
-        3 | 5 | 6 => false,
-        2 => {
-            let h = spine.spine_head(v_spine_of(v));
-            if val_mentions_lvl(spine, defs, h, x) {
-                return true;
-            }
-            let mut args: Vec<(V, Icit)> = Vec::new();
-            spine.collect_args(v_spine_of(v), &mut args);
-            args.iter().any(|(a, _)| val_mentions_lvl(spine, defs, *a, x))
-        }
-        1 => {
-            let n = env_len(v_clo_of(v).env);
-            (0..n).any(|i| val_mentions_lvl(spine, defs, env_nth(defs, v_clo_of(v).env, i), x))
-        }
-        4 => {
-            let p = v_pi_of(v);
-            val_mentions_lvl(spine, defs, p.dom, x)
-                || (0..env_len(p.env)).any(|i| val_mentions_lvl(spine, defs, env_nth(defs, p.env, i), x))
-        }
-        7 => match v_xcell_of(v) {
-            XCell::Lit(_) | XCell::Decl { .. } | XCell::Prim { .. } => false,
-            XCell::Obj { val, .. } => val_mentions_lvl(spine, defs, *val, x),
-            XCell::Sum { params, .. } => params
-                .iter()
-                .any(|p| val_mentions_lvl(spine, defs, p.val, x) || val_mentions_lvl(spine, defs, p.ty, x)),
-            XCell::SumCase { typ, datas, .. } => {
-                val_mentions_lvl(spine, defs, *typ, x)
-                    || datas.iter().any(|d| val_mentions_lvl(spine, defs, d.val, x))
-            }
-            XCell::Match { scrutinee, env, .. } => {
-                val_mentions_lvl(spine, defs, *scrutinee, x)
-                    || (0..env_len(*env)).any(|i| val_mentions_lvl(spine, defs, env_nth(defs, *env, i), x))
-            }
-            XCell::VSub { val, .. } => val_mentions_lvl(spine, defs, *val, x),
-        },
-        _ => false,
+        3 | 4 | 6 => false,
+        7 => !matches!(
+            v_xcell_of(v),
+            XCell::Lit(_) | XCell::Sum { .. } | XCell::SumCase { .. }
+        ),
+        _ => true,
     }
 }
 
 /// `v.field` 的值级投影：Sum 取索引参数的值；SumCase 先查 typ 的参数（索引）
-/// 再查构造子字段。其余返回 None。（参考版 eval 的 Tm::Obj 臂自带
-/// unwrap-panic 语义，调用方处理；本函数只在命中时给出值。）
-fn project<'a>(v: V, name: &str) -> Option<V> {
+/// 再查构造子字段。其余（Rigid / Flex / Decl / 卡住的 Obj / 函数……）返回
+/// None → 卡住成 `Obj`。（参考版 mod.rs `project` 同款。）
+pub(super) fn project<'a>(v: V, name: &str) -> Option<V> {
     match v_tag(v) {
         7 => match v_xcell_of(v) {
             XCell::Sum { params, .. } => {
@@ -95,133 +132,127 @@ fn project<'a>(v: V, name: &str) -> Option<V> {
     }
 }
 
-/// 独立应用（eval_iter 之外的 v_app：force 的解值展开等）。λ → β；其余
-/// 形态逐项对齐参考版 v_app：Rigid/Flex（裸或链）、卡住声明 Decl 与卡住
-/// 投影 Obj → spine 压栈；字面量 / Prim / U / Π / LiteralType / Sum /
-/// SumCase / 卡住 match → panic（"impossible apply"，参考版同款——两版
-/// 同时不可达 / 同时 panic，判定一致）。
-#[allow(clippy::too_many_arguments)]
-pub(super) fn vapp1<'a>(
-    bump: &'a Bump,
-    spine: &mut Spine,
-    work: &mut Vec<W<'a>>,
-    vals: &mut Vec<V>,
-    icits: &mut Vec<Icit>,
-    defs: &mut Vec<V>,
-    metas: &[MetaEntry],
-    decl: &Decls<'a>,
-    mutable: &RefCell<FxHashMap<SmolStr, V>>,
-    f: V,
-    a: V,
-    i: Icit,
-) -> V {
-    // 精化包裹的头先 force 推开再分发（eval 等不经 force 的调用点会把
-    // VSub 头送进来——如臂上下文里 Var 引用了被解槽）
-    if v_tag(f) == 7 {
-        if let XCell::VSub { .. } = v_xcell_of(f) {
-            let f2 = force(bump, spine, defs, metas, decl, mutable, f);
-            return vapp1(bump, spine, work, vals, icits, defs, metas, decl, mutable, f2, a, i);
-        }
-    }
-    let r = if v_tag(f) == 1 {
-        let c = v_clo_of(f);
-        let env = env_ext(bump, c.env, a);
-        eval_iter(bump, spine, work, vals, icits, defs, metas, decl, mutable, env, c.body)
-    } else if v_tag(f) == 7 {
-        match v_xcell_of(f) {
-            // 卡住内建头：实参压 spine（不再 panic）
-            XCell::Obj { .. } | XCell::Decl { .. } | XCell::Prim { .. } => spine.push(f, a, i),
-            _ => panic!("impossible apply"),
-        }
-    } else if v_tag(f) == 3 || v_tag(f) == 4 || v_tag(f) == 6 {
-        panic!("impossible apply")
-    } else {
-        spine.push(f, a, i)
-    };
-    // 内建链：应用后**立刻尝试归约**（对齐旧 λ 链模型“eval(App) 到达
-    // 元数即执行 builtin 体”的求值期副作用时序）；未饱和/实参不合保持卡住。
-    if v_tag(r) == 2 && spine.stack[v_spine_of(r)].hk == HK_PRIM {
-        force(bump, spine, defs, metas, decl, mutable, r)
-    } else {
-        r
-    }
-}
-
-/// η 展开的可应用性守卫（参考版 `unification::v_applicable` 的快版对应）：
-/// 只有 `vapp1` 不会 panic 的形态能吃 η 新变量。tag 7 仅 `Obj`/`Decl` 可
-/// （`Lit`/`Prim`/`Sum`/`SumCase`/`Match` → panic）；tag 3(U)/4(Pi)/6(Lit)
-/// 不可；其余（Rigid 0 / Clo 1 / 链 2 / Flex 5）可。防止 λ 值以类型身份
-/// 流入 unify 时（`get_global "f"` 取到 `x => x` 的登记值）触发
-/// `impossible apply`。
-#[inline]
-pub(super) fn vapp_ok(v: V) -> bool {
+/// 值树里是否出现某层级（浅层结构扫描；闭包跳过——那里的环由 force 的
+/// fuel 兜底）。特化解的环守卫（`pm_solve`）用。（参考版
+/// `val_mentions_lvl` 同款遍历面。）
+pub(crate) fn val_mentions_lvl(spine: &Spine, defs: &[V], v: V, x: u32) -> bool {
     match v_tag(v) {
-        3 | 4 | 6 => false,
-        7 => matches!(
-            v_xcell_of(v),
-            XCell::Obj { .. } | XCell::Decl { .. } | XCell::Prim { .. } | XCell::VSub { .. }
-        ),
-        _ => true,
+        // Rigid 裸头
+        0 => v_lvl_of(v) == x,
+        2 => {
+            // 链形态也要查链头：Rigid 头链查头层级、Obj 头链查被投影者
+            // （参考版 `Val::Rigid(y, sp) => *y == x || spine(sp, x)`、
+            // `Val::Obj(o, _, sp) => val_mentions_lvl(o, x) || spine(sp, x)`）
+            let h = v_spine_of(v);
+            let hd = spine.spine_head(h);
+            let head_hit = match v_tag(hd) {
+                0 => v_lvl_of(hd) == x,
+                7 => match v_xcell_of(hd) {
+                    XCell::Obj { val, .. } => val_mentions_lvl(spine, defs, *val, x),
+                    _ => false,
+                },
+                _ => false,
+            };
+            let mut args: Vec<(V, Icit)> = Vec::new();
+            spine.collect_args(h, &mut args);
+            head_hit || args.iter().any(|(a, _)| val_mentions_lvl(spine, defs, *a, x))
+        }
+        // Flex 裸头（链在 tag 2）
+        5 => false,
+        1 | 4 => false, // Lam/Pi 闭包跳过（参考版同）
+        3 | 6 => false,
+        7 => match v_xcell_of(v) {
+            XCell::Lit(_) => false,
+            XCell::Decl(_) | XCell::Prim(_) => false, // 空实参（链在 tag 2）
+            // VSub：只扫解值自身的结构，**不扫 σ 的映射值**——σ 的其它条目
+            // （如头部精化的构造子值）合法引用别的模式变量，扫进来会把无害
+            // 的解误判成环。σ 槽位若真引用 x，解包后的结构里自会以裸
+            // Rigid(x) 出现（对齐旧世界"occurs 只看解的裸值"的语义；更深
+            // 的间接环仍由 force 的 fuel 兜底）。
+            XCell::VSub { val, .. } => val_mentions_lvl(spine, defs, *val, x),
+            XCell::Obj { val, .. } => val_mentions_lvl(spine, defs, *val, x),
+            XCell::Sum { params, .. } => params
+                .iter()
+                .any(|p| val_mentions_lvl(spine, defs, p.val, x) || val_mentions_lvl(spine, defs, p.ty, x)),
+            XCell::SumCase { typ, datas, .. } => {
+                val_mentions_lvl(spine, defs, *typ, x)
+                    || datas.iter().any(|d| val_mentions_lvl(spine, defs, d.val, x))
+            }
+            XCell::Match {
+                scrutinee,
+                env,
+                pending,
+                ..
+            } => {
+                // env 槽序与 env_nth 一致：链段（头 = 最内层）先走，平坦区
+                // 倒序——单趟遍历替代 (0..env_len).any(env_nth) 的 O(d²)
+                let env_hit = {
+                    let mut hit = false;
+                    let mut n = env.binds;
+                    while let Some(e) = n {
+                        if val_mentions_lvl(spine, defs, e.val, x) {
+                            hit = true;
+                            break;
+                        }
+                        n = e.next;
+                    }
+                    if !hit {
+                        for k in 0..env.flat_len {
+                            if val_mentions_lvl(
+                                spine,
+                                defs,
+                                defs[(env.flat_base + env.flat_len - 1 - k) as usize],
+                                x,
+                            ) {
+                                hit = true;
+                                break;
+                            }
+                        }
+                    }
+                    hit
+                };
+                val_mentions_lvl(spine, defs, *scrutinee, x)
+                    || env_hit
+                    || pending.iter().any(|(u, _)| val_mentions_lvl(spine, defs, *u, x))
+            }
+        },
+        _ => false,
     }
 }
-
-// 精化传播的展开燃料（线程局部：每个测试/运行线程独立，与参考版
-// `Infer::unify_fuel` 的"每次运行新建"口径一致）。仅 frcs 的 lookup 命中
-// 与 Match 重选燃烧；外部入口（unify_catch / check_pm / check_pm_final /
-// nf / bench_nf）充值。
-const UNIFY_FUEL: u32 = 4096;
-thread_local! {
-    static PM_FUEL: std::cell::Cell<u32> = const { std::cell::Cell::new(UNIFY_FUEL) };
-}
-
-pub(super) fn refuel() {
-    PM_FUEL.with(|c| c.set(UNIFY_FUEL));
-}
-
-#[inline]
-fn burn() -> bool {
-    PM_FUEL.with(|c| {
-        let f = c.get();
-        if f == 0 {
-            false
-        } else {
-            c.set(f - 1);
-            true
-        }
-    })
-}
-
-/// fuel 是否已耗尽（探测侧的降级判定用，2026-09-18 评审修复 L07 同款）：
-/// probe 的索引方程失败时区分"结构冲突"与"预算耗尽"——后者按可达处理
-/// （保守要求覆盖），否则深负载下的非穷尽 match 会被静默接受。
-pub(super) fn pm_fuel_exhausted() -> bool {
-    PM_FUEL.with(|c| c.get() == 0)
-}
-
-// force（迭代；L11 参考版只有 Flex + Obj 两臂）
+// force（迭代）
 // --------------------------------------------------------------------------------
 
-/// **force**：把值更新到 metacontext 的当前状态。参考版 `Infer::force`
-/// 只有 Flex 臂（已解 → 展开应用；未解原样）与 Obj 臂（递归进内层重建）——
-/// 无 pm 精化读点展开、无 Decl unfold（求值期替换 + 卡住存根，递归自然
-/// 停在 `Val::Decl`）、无 Match 重选、无投影归约。无燃料（meta 解由
-/// occurs check 保证无环，参考版同款裸递归）。
+/// **force**：把值更新到 metacontext / 模式特化的当前状态。L07 增量（参考
+/// 版 `Infer::force` 的迭代化——保序语义）：
+/// - Flex 已解 → 展开应用（burn fuel）；
+/// - VSub → frcs：把模式精化的解 σ 推进值的结构（入口不烧 fuel——真正的
+///   精化传播只发生在被解变量的读点，见 [`frcs`]）；
+/// - Match → force scrutinee；是 SumCase 且 burn → eval_aux 选分支：选中 →
+///   值 = eval(分支体) 后逐个 v_app(pending)，再 force；否则原样卡住返回；
+/// - Decl → 查表 unfold（burn，自引用占位直接按中性返回）；
+/// - Prim → prim_reduce（15 个 builtin；字面量/元数检查不满足保持卡住；
+///   空实参同样烧 1 fuel——与参考版逐 force 调用消耗对齐）；
+/// - Obj → force 被投影者 → project 命中且 burn → 应用链上实参，否则卡回
+///   Obj（参考版返回 forced 内层的新单元，快版同款重建）。
 ///
 /// 内部的 eval_iter 调用用**本调用私有的草稿栈**：外层 eval/unify 循环的
 /// work/vals 不能被清空（force 可能在它们循环体中途被调用，且经 eval_aux
 /// 与本函数互递归）。L04-L06 的 force 借用调用方的栈，是因为那几章的
 /// eval_iter 不回调 force——这个差异**不是**漏同步，别往那方向改。四个
 /// `Vec::new()` 本身不分配，只有真正下钻时才增长，早退路径零成本。
+#[allow(clippy::too_many_arguments)]
 pub(super) fn force<'a>(
     bump: &'a Bump,
     spine: &mut Spine,
     defs: &mut Vec<V>,
     metas: &[MetaEntry],
-    decl: &Decls<'a>,
-    mutable: &RefCell<FxHashMap<SmolStr, V>>,
+    decls: &FxHashMap<String, DeclEntryF>,
+    mmap: &MutableMap,
+    fuel: &Fuel,
     v0: V,
 ) -> V {
     let mut v = v0;
+    // 实参缓冲在本次 force 调用内的展开轮间复用（clear 保容量）
     let mut work: Vec<W<'a>> = Vec::new();
     let mut vals: Vec<V> = Vec::new();
     let mut icits: Vec<Icit> = Vec::new();
@@ -229,123 +260,276 @@ pub(super) fn force<'a>(
     loop {
         match v_tag(v) {
             5 => match &metas[v_meta_of(v) as usize] {
-                MetaEntry::Solved(sol, _) => v = *sol,
+                MetaEntry::Solved(sol, _) if burn(fuel) => v = *sol,
                 _ => return v,
             },
             2 => {
                 let h = v_spine_of(v);
-                if spine.stack[h].hk == HK_PRIM {
-                    // 卡住内建链：收集实参（逆应用序 → 自然序）交 prim_exec
-                    // 归约；成功则继续 force 归约值，失败保持卡住（参考版
-                    // force 的 Prim 臂同款）。O(1) 读顶端槽种类。
-                    let hd = spine.spine_head(h);
-                    let pid = match v_xcell_of(hd) {
-                        XCell::Prim { pid, .. } => *pid,
-                        _ => return v,
-                    };
-                    args.clear();
-                    spine.collect_args(h, &mut args);
-                    args.reverse();
-                    match prim_exec(
-                        bump, spine, defs, metas, decl, mutable, pid, &args,
-                    ) {
-                        Some(val) => {
-                            v = val;
-                            continue;
-                        }
-                        None => return v,
-                    }
-                }
-                if spine.stack[h].hk != HK_FLEX {
-                    // Rigid / Obj / Decl 头的链：卡住（参考版 force 无对应臂）。
-                    // O(1) 读顶端槽种类，省去非 flex 链的整趟走底
-                    return v;
-                }
                 let hd = spine.spine_head(h);
-                // flex 链：解应用到全部实参（应用序 = 收集序的逆序）；
-                // 每步都可能 β（参考版 vAppSp 逐步 vApp 同款）
-                match &metas[v_meta_of(hd) as usize] {
-                    MetaEntry::Unsolved(_) => return v,
-                    MetaEntry::Solved(sol, _) => {
-                        args.clear();
-                        spine.collect_args(h, &mut args);
-                        let mut t = *sol;
-                        for &(a, i) in args.iter().rev() {
-                            t = vapp1(
-                                bump, spine, &mut work, &mut vals, &mut icits, defs, metas, decl, mutable, t, a, i,
-                            );
+                if v_tag(hd) == 5 {
+                    // flex 链：解应用到全部实参（应用序 = 收集序的逆序）；
+                    // 每步都可能 β / 触发 prim / 吸收进 pending——参考版
+                    // vAppSp 逐步 vApp 同款
+                    match &metas[v_meta_of(hd) as usize] {
+                        MetaEntry::Unsolved(_) => return v,
+                        MetaEntry::Solved(sol, _) => {
+                            if !burn(fuel) {
+                                return v;
+                            }
+                            args.clear();
+                            spine.collect_args(h, &mut args);
+                            let mut t = *sol;
+                            for &(a, i) in args.iter().rev() {
+                                t = vapp1(
+                                    bump, spine, &mut work, &mut vals, &mut icits, defs, metas,
+                                    decls, mmap, fuel, t, a, i,
+                                );
+                            }
+                            v = t;
                         }
-                        v = t;
+                    }
+                } else {
+                    match spine.stack[h].hk {
+                        HK_DECL => {
+                            let name = xcell_head_name(spine, hd);
+                            match decls.get(name) {
+                                // L13 式 prim：归约函数挂在 decl 条目；spine
+                                // 是应用实参。实参先逐个 force 再交给
+                                // prim_reduce；元数不足/实参不合保持卡住。
+                                Some(e) if e.prim.is_some() => {
+                                    if !burn(fuel) {
+                                        return v;
+                                    }
+                                    args.clear();
+                                    spine.collect_args(h, &mut args);
+                                    for i in 0..args.len() {
+                                        let a = args[i].0;
+                                        args[i].0 = force(
+                                            bump, spine, defs, metas, decls, mmap, fuel, a,
+                                        );
+                                    }
+                                    match prim_reduce(
+                                        bump, spine, &mut work, &mut vals, &mut icits, defs,
+                                        metas, decls, mmap, fuel, name, &args,
+                                    ) {
+                                        Some(r) => v = r,
+                                        None => return v,
+                                    }
+                                }
+                                Some(e) if !is_selfref_val(e.val, name) && burn(fuel) => {
+                                    args.clear();
+                                    spine.collect_args(h, &mut args);
+                                    let mut t = e.val;
+                                    for &(a, i) in args.iter().rev() {
+                                        t = vapp1(
+                                            bump, spine, &mut work, &mut vals, &mut icits, defs,
+                                            metas, decls, mmap, fuel, t, a, i,
+                                        );
+                                    }
+                                    v = t;
+                                }
+                                _ => return v,
+                            }
+                        }
+                        HK_PRIM => {
+                            // 卡住的内建：实参按自然序交给 builtin 体归约；
+                            // 元数不足 / 实参不合 / 缺名时保持卡住。参考版对
+                            // 每次 force 调用烧 1 fuel（归约成功与否皆然）。
+                            // 实参先逐个 force 再交给 prim_reduce（与参考版
+                            // Val::Prim 分支对齐）：spine 槽可能存着未归约的
+                            // 嵌套 prim，不 force 外层永远过不了字面量检查。
+                            if !burn(fuel) {
+                                return v;
+                            }
+                            let name = xcell_head_name(spine, hd);
+                            args.clear();
+                            spine.collect_args(h, &mut args);
+                            for i in 0..args.len() {
+                                let a = args[i].0;
+                                args[i].0 =
+                                    force(bump, spine, defs, metas, decls, mmap, fuel, a);
+                            }
+                            match prim_reduce(
+                                bump, spine, &mut work, &mut vals, &mut icits, defs, metas,
+                                decls, mmap, fuel, name, &args,
+                            ) {
+                                Some(r) => v = r,
+                                None => return v,
+                            }
+                        }
+                        HK_OBJ => {
+                            // 卡住投影：先 force 被投影者，project 命中 →
+                            // 应用链上实参；miss → 重建 forced 内层的卡住
+                            // Obj（参考版 `Val::Obj(Box::new(v), name, sp)`）
+                            let (inner, oname) = match v_xcell_of(hd) {
+                                XCell::Obj { val, name } => (*val, *name),
+                                _ => unreachable!("hk=Obj 的链头必是 Obj 单元"),
+                            };
+                            let v2 = force(
+                                bump, spine, defs, metas, decls, mmap, fuel, inner,
+                            );
+                            match project(v2, oname) {
+                                Some(p) if burn(fuel) => {
+                                    args.clear();
+                                    spine.collect_args(h, &mut args);
+                                    let mut t = p;
+                                    for &(a, i) in args.iter().rev() {
+                                        // 命中路径须走 vapp1（参考版 vAppSp
+                                        // 逐步 vApp 同款）：字段值可能是 Lam
+                                        // 闭包（β）或卡住 Match（吸收 pending）
+                                        // ——spine.push 只压中性槽，会搁浅
+                                        t = vapp1(
+                                            bump, spine, &mut work, &mut vals, &mut icits,
+                                            defs, metas, decls, mmap, fuel, t, a,
+                                            i,
+                                        );
+                                    }
+                                    v = t;
+                                }
+                                _ => {
+                                    args.clear();
+                                    spine.collect_args(h, &mut args);
+                                    let mut t =
+                                        v_xcell(bump.alloc(XCell::Obj { val: v2, name: oname }));
+                                    for &(a, i) in args.iter().rev() {
+                                        t = spine.push(t, a, i);
+                                    }
+                                    return t;
+                                }
+                            }
+                        }
+                        _ => return v,
                     }
                 }
             }
+            // 裸 Rigid：精化的解只对被 VSub 包裹的值可见（显式替换读点），
+            // 裸 rigid 不再查任何全局表——槽位引用是作用域事实
+            0 => return v,
             7 => match v_xcell_of(v) {
-                // force 递归进卡住投影的内层并**重建** Obj（参考版 force
-                // 的 Obj 臂：`Val::Obj(self.force(x), a, b)`，重建后即返回）。
-                // 不能把新 Obj 赋回 v 继续循环：内层已是 force 的不动点，
-                // 下一轮又落进本臂重建出同形值，死循环
-                //（binder 下的嵌套投影 `l.a.x` 即触发）。
-                XCell::Obj { val, name } => {
-                    let v2 = force(bump, spine, defs, metas, decl, mutable, *val);
-                    // 内层未变则原样返回（L13 口径）：省一次 bump 分配，
-                    // 更保住**位相等**——unify 的 `t == u` 捷径与 memo 不会
-                    // 因同形重建而失配
-                    if v2.0 == val.0 {
+                XCell::Lit(_) | XCell::Sum { .. } | XCell::SumCase { .. } => return v,
+                // 显式替换（参考版 force 的 VSub 臂 / dpm-nbe `frc`）：入口
+                // 不烧 fuel——frcs 的 Rigid 读点 lookup 命中时才烧 1，对齐
+                // 旧 pm_defs 时代"force(Rigid) 查表展开烧 1"的燃烧剖面。
+                // 组合 σ 的机械开销免费，fuel 耗尽的降级点在 lookup 命中处。
+                XCell::VSub { val, sub } => {
+                    v = frcs(bump, spine, defs, metas, decls, mmap, fuel, sub, *val);
+                }
+                XCell::Decl(n) => match decls.get(*n) {
+                    // L13 式 prim：空 spine 的 builtin 头，元数必不足 ⇒
+                    // 与参考版一致只烧 1 fuel 后保持卡住（不展开 λ 链）。
+                    Some(e) if e.prim.is_some() => {
+                        let _ = burn(fuel);
                         return v;
                     }
-                    return v_xcell(bump.alloc(XCell::Obj { val: v2, name }));
+                    Some(e) if !is_selfref_val(e.val, n) && burn(fuel) => {
+                        v = e.val; // 空实参：直接继续 force 展开值
+                    }
+                    _ => return v,
+                },
+                XCell::Prim(_) => {
+                    // 空实参：prim_reduce 元数检查必败；与参考版一致仍按
+                    // force 调用消耗 1 fuel
+                    if !burn(fuel) {
+                        return v;
+                    }
+                    return v;
                 }
-                // 显式替换（参考版 force 的 VSub 臂 / dpm-nbe `frc`）：把
-                // 模式精化的解推进值的结构。入口不烧燃料（本层无燃料池），
-                // 真正的精化传播只发生在被解 rigid 的读点。
-                XCell::VSub { val, sub } => {
-                    return frcs(bump, spine, defs, metas, decl, mutable, sub, *val);
+                XCell::Obj { val, name } => {
+                    let v2 = force(bump, spine, defs, metas, decls, mmap, fuel, *val);
+                    match project(v2, name) {
+                        Some(p) if burn(fuel) => v = p,
+                        _ => {
+                            // 内层未变则原样返回（L13 口径）：省一次 bump
+                            // 分配，更保住**位相等**——unify 的 `t == u`
+                            // 捷径与 memo 才不会因同形重建而失配
+                            if v2.0 == val.0 {
+                                return v;
+                            }
+                            return v_xcell(bump.alloc(XCell::Obj { val: v2, name }));
+                        }
+                    }
                 }
-                _ => return v,
+                XCell::Match {
+                    scrutinee,
+                    env,
+                    cases,
+                    pending,
+                } => {
+                    // 卡住的 match：scrutinee 在创建之后才被特化/解出时，
+                    // 这里重新尝试选分支（精化传播进"卡住 match 里面"）。
+                    // 选中 → eval 分支体 → 值层逐个应用 pending → 继续
+                    // force；否则原样卡住返回（pending 原样保留）。
+                    let s2 = force(bump, spine, defs, metas, decls, mmap, fuel, *scrutinee);
+                    let mut matched = false;
+                    if v_tag(s2) == 7 && matches!(v_xcell_of(s2), XCell::SumCase { .. }) {
+                        if burn(fuel) {
+                            if let Some((body_tm, env2)) = eval_aux(
+                                bump, spine, defs, metas, decls, mmap, fuel, s2, *env,
+                                cases,
+                            ) {
+                                let mut vb = eval_iter(
+                                    bump, spine, &mut work, &mut vals, &mut icits, defs, metas,
+                                    decls, mmap, fuel, env2, body_tm,
+                                );
+                                for &(u, i) in *pending {
+                                    vb = vapp1(
+                                        bump, spine, &mut work, &mut vals, &mut icits, defs,
+                                        metas, decls, mmap, fuel, vb, u, i,
+                                    );
+                                }
+                                v = vb;
+                                matched = true;
+                            }
+                        }
+                    }
+                    if !matched {
+                        return v;
+                    }
+                }
             },
             _ => return v,
         }
     }
 }
 
-// frcs：把显式替换推进值结构（参考版 Infer::frcs / dpm-nbe frcS）
-// --------------------------------------------------------------------------------
-
-/// 把替换 `σ` 推进值 `v` 的结构（参考版 `Infer::frcs` 同构）。σ 只作用于
-/// **被包裹过**的值；推进到中性头为止——spine 逐槽推进，闭包 env 逐槽包裹
-/// （惰性）。槽位命中裸 rigid 且 σ 有解时经 `vapp1` 应用（λ ⇒ β；中性头 ⇒
-/// 收链），对应 dpm-nbe `napp (lookupSub sb v) (frcS sb sp)`。
+/// 把替换 `σ` 推进值 `v` 的结构（参考版 `Infer::frcs` / dpm-nbe `frcS` 的
+/// 快版对应）。与 `force` 的分工：σ 是本次精化的局部解，只作用于**被包裹
+/// 过**的值；头部与 scrutinee 推进、闭包 env 逐槽包裹（惰性，不进入闭包体
+/// 重求值）；spine 槽与 Sum/SumCase 槽**只包裹不物化**（设计文档 §4 的槽位
+/// 纪律——槽位引用是作用域事实，物化会破坏后续 solve 的 invert）。
 ///
-/// 本层无燃料池（模块注释：force 无燃料）：lookup 命中直接推进，不做有界
-/// 降级——与快版 force 对 meta 解无条件展开的既有权衡一致。
+/// fuel 剖面：入口与各包裹臂不烧 fuel；唯一的燃烧点是 Rigid 读点的
+/// `lookup_hit` 命中（对齐旧 pm_defs 的 force(Rigid) 查表展开烧 1）；
+/// fuel 耗尽按未解处理（返回裸 rigid，有界降级，防闭环无限推进）。
+#[allow(clippy::too_many_arguments)]
 fn frcs<'a>(
     bump: &'a Bump,
     spine: &mut Spine,
     defs: &mut Vec<V>,
     metas: &[MetaEntry],
-    decl: &Decls<'a>,
-    mutable: &RefCell<FxHashMap<SmolStr, V>>,
+    decls: &FxHashMap<String, DeclEntryF>,
+    mmap: &MutableMap,
+    fuel: &Fuel,
     sub: &Rc<SubstV>,
     v0: V,
 ) -> V {
     if sub.is_empty() {
-        return force(bump, spine, defs, metas, decl, mutable, v0);
+        return force(bump, spine, defs, metas, decls, mmap, fuel, v0);
     }
+    let mut work: Vec<W<'a>> = Vec::new();
+    let mut vals: Vec<V> = Vec::new();
+    let mut icits: Vec<Icit> = Vec::new();
     match v_tag(v0) {
+        // 内层先应用、外层后应用：组合后一次推进（frcS (subst sb sb') v）
         7 => match v_xcell_of(v0) {
-            // 内层先应用、外层后应用：组合后一次推进（frcS (subst sb sb') v）
             XCell::VSub { val, sub: sub2 } => {
                 let composed = SubstV::compose(sub, sub2);
-                frcs(bump, spine, defs, metas, decl, mutable, &composed, *val)
+                frcs(bump, spine, defs, metas, decls, mmap, fuel, &composed, *val)
             }
-            // Sum/SumCase 槽位只**包裹**不推进（槽位引用是作用域事实；
-            // 旧 force 不进入这些结构——与参考版 frcs 同）
-            XCell::Sum {
-                name,
-                params,
-                cases,
-                is_trait,
-            } => {
+            // 中性头单元：包裹后交回 force 重走既有臂（meta 解 / decl 展开
+            // / prim 归约 / 投影），保持"σ 之下的值 force 到同一 WHNF 形态"
+            // 的旧语义。Sum/SumCase 槽位只**包裹**不推进。
+            XCell::Sum { name, params, cases } => {
                 let ps: Vec<SumParamV<'_>> = params
                     .iter()
                     .map(|p| SumParamV {
@@ -359,14 +543,12 @@ fn frcs<'a>(
                     name,
                     params: bump.alloc_slice_fill_iter(ps),
                     cases,
-                    is_trait: *is_trait,
                 }))
             }
             XCell::SumCase {
                 typ,
                 case_name,
                 datas,
-                is_trait,
             } => {
                 let ds: Vec<SumDataV<'_>> = datas
                     .iter()
@@ -380,85 +562,73 @@ fn frcs<'a>(
                     typ: wrap_sub(bump, sub, *typ),
                     case_name,
                     datas: bump.alloc_slice_fill_iter(ds),
-                    is_trait: *is_trait,
                 }))
             }
-            // 字面量 / builtin 体 / 全局声明头：σ 无从推进（参考版 frcs 的
-            // `_ => v.clone()`；Decl 无 spine 槽可包）
-            XCell::Lit(_) | XCell::Decl { .. } | XCell::Prim { .. } => {
-                force(bump, spine, defs, metas, decl, mutable, v0)
+            XCell::Lit(_) => v0,
+            XCell::Decl(_) | XCell::Prim(_) => {
+                force(bump, spine, defs, metas, decls, mmap, fuel, v0)
             }
             XCell::Obj { val, name } => {
-                let inner = frcs(bump, spine, defs, metas, decl, mutable, sub, *val);
+                let inner = frcs(bump, spine, defs, metas, decls, mmap, fuel, sub, *val);
                 force(
                     bump,
                     spine,
                     defs,
                     metas,
-                    decl,
-                    mutable,
+                    decls,
+                    mmap,
+                    fuel,
                     v_xcell(bump.alloc(XCell::Obj { val: inner, name })),
                 )
             }
-            // scrutinee **推进**；捕获 env 只包裹。推进后若已是构造子值则
-            // 按首匹配重选（旧 refresh 重求值卡住 match 槽值的等价物）。
+            // scrutinee **推进**（重选分支需要解出的构造子值）；捕获 env 与
+            // pending 只包裹。交回 force：scrutinee 若已是构造子值，force
+            // 的 Match 臂按同一纪律重选分支
             XCell::Match {
                 scrutinee,
                 env,
                 cases,
+                pending,
             } => {
-                let s2 = frcs(bump, spine, defs, metas, decl, mutable, sub, *scrutinee);
+                let ps: Vec<(V, Icit)> = pending
+                    .iter()
+                    .map(|(u, i)| (wrap_sub(bump, sub, *u), *i))
+                    .collect();
+                let s2 = frcs(bump, spine, defs, metas, decls, mmap, fuel, sub, *scrutinee);
                 let e2 = frcs_env(bump, defs, sub, *env);
-                let s3 = force(bump, spine, defs, metas, decl, mutable, s2);
-                // Match 重选：推进后已是构造子值即重选分支（参考版
-                // `frcs` 的 Match 臂同款）；重选本身烧 1，耗尽则不重选、
-                // 按卡住 match 原样重建（有界降级）。
-                if v_tag(s3) == 7
-                    && matches!(v_xcell_of(s3), XCell::SumCase { .. })
-                    && burn()
-                {
-                    if let Some((body, env3)) =
-                        eval_aux(bump, spine, defs, metas, decl, mutable, s3, e2, cases)
-                    {
-                        let mut w2: Vec<W<'a>> = Vec::new();
-                        let mut v2: Vec<V> = Vec::new();
-                        let mut i2: Vec<Icit> = Vec::new();
-                        let bv = eval_iter(
-                            bump, spine, &mut w2, &mut v2, &mut i2, defs, metas, decl, mutable,
-                            env3, body,
-                        );
-                        return force(bump, spine, defs, metas, decl, mutable, bv);
-                    }
-                }
                 force(
                     bump,
                     spine,
                     defs,
                     metas,
-                    decl,
-                    mutable,
+                    decls,
+                    mmap,
+                    fuel,
                     v_xcell(bump.alloc(XCell::Match {
-                        scrutinee: s3,
+                        scrutinee: s2,
                         env: e2,
                         cases,
+                        pending: bump.alloc_slice_fill_iter(ps),
                     })),
                 )
             }
         },
-        // 裸 rigid 的读点：lookup 命中（真正的精化传播）烧 1 fuel；fuel
-        // 耗尽按未解处理（返回裸 rigid）。未命中零成本直通。
+        // 裸 Rigid 的读点：lookup 命中（真正的精化传播）烧 1 fuel——对齐旧
+        // pm_defs 的 force(Rigid) 查表展开烧 1 剖面；fuel 耗尽按未解处理
+        // （返回裸 rigid）。未命中零成本直通。
         0 => match SubstV::lookup_hit(bump, spine, defs, sub, v_lvl_of(v0)) {
             Some(hit) => {
-                if !burn() {
+                if !burn(fuel) {
                     return v0;
                 }
-                force(bump, spine, defs, metas, decl, mutable, hit)
+                force(bump, spine, defs, metas, decls, mmap, fuel, hit)
             }
             None => v0,
         },
-        // spine 链分派：rigid 头 = 解析应用（对齐 dpm-nbe
+        // spine 链分派：Rigid 头 = 解析应用（对齐 dpm-nbe 的
         // `napp (lookupSub sb v) (frcS sb sp)`——解值按应用序经 vapp1 拼接，
-        // λ ⇒ β）；Flex/Obj/Decl 头 = 槽位只包裹，重建链后交回 force。
+        // λ ⇒ β、Match ⇒ pending、中性头 ⇒ 收链）；Flex/Decl/Prim/Obj 头
+        // = 槽位只包裹，重建链后交回 force。
         2 => {
             let h = v_spine_of(v0);
             let hd = spine.spine_head(h);
@@ -466,41 +636,37 @@ fn frcs<'a>(
                 let x = v_lvl_of(hd);
                 let mut head = match SubstV::lookup_hit(bump, spine, defs, sub, x) {
                     Some(hit) => {
-                        if !burn() {
+                        if !burn(fuel) {
                             return v0;
                         }
-                        force(bump, spine, defs, metas, decl, mutable, hit)
+                        force(bump, spine, defs, metas, decls, mmap, fuel, hit)
                     }
                     None => v_lvl(x),
                 };
-                // 解出值带实参但头不可应用（ill-typed 形态）时卡回原值
+                // 解出值带实参但头不可应用（对非函数解变量做应用的
+                // ill-typed 形态）时卡回原值，不进 vapp1（η 臂的 vapp_ok
+                // 守卫同款加固；fuel 耗尽的裸 rigid 回退同型）
                 if !vapp_ok(head) {
                     return v0;
                 }
                 let mut args: Vec<(V, Icit)> = Vec::new();
                 spine.collect_args(h, &mut args);
-                let mut w2: Vec<W<'a>> = Vec::new();
-                let mut v2: Vec<V> = Vec::new();
-                let mut i2: Vec<Icit> = Vec::new();
                 for &(u, i) in args.iter().rev() {
                     head = vapp1(
-                        bump, spine, &mut w2, &mut v2, &mut i2, defs, metas, decl, mutable, head,
-                        wrap_sub(bump, sub, u), i,
+                        bump, spine, &mut work, &mut vals, &mut icits, defs, metas, decls, mmap,
+                        fuel, head, wrap_sub(bump, sub, u), i,
                     );
                 }
                 head
             } else {
-                // 槽位只包裹；Obj 头先推进被投影者；VSub 头（防御）先 force
-                // 材料化再收链
+                // 槽位只包裹（VSub 值从不进 spine 的函数侧）；Obj 头先推进
+                // 被投影者（tag 7 判定保证 v_xcell_of 安全）
                 let base = if v_tag(hd) == 7 {
                     match v_xcell_of(hd) {
                         XCell::Obj { val, name } => v_xcell(bump.alloc(XCell::Obj {
-                            val: frcs(bump, spine, defs, metas, decl, mutable, sub, *val),
+                            val: frcs(bump, spine, defs, metas, decls, mmap, fuel, sub, *val),
                             name,
                         })),
-                        XCell::VSub { .. } => {
-                            force(bump, spine, defs, metas, decl, mutable, hd)
-                        }
                         _ => hd,
                     }
                 } else {
@@ -512,10 +678,11 @@ fn frcs<'a>(
                 for &(u, i) in args.iter().rev() {
                     t = spine.push(t, wrap_sub(bump, sub, u), i);
                 }
-                force(bump, spine, defs, metas, decl, mutable, t)
+                force(bump, spine, defs, metas, decls, mmap, fuel, t)
             }
         }
-        // 闭包 env 逐槽包裹（返回同型值，不再 force）
+        // 闭包 env 逐槽包裹（dpm-nbe `subst sb cl` 的惰性形态）；返回同型
+        // 值，不再 force（参考版 Lam/Pi 臂直通）
         1 => {
             let c = v_clo_of(v0);
             v_clo(bump.alloc(CloCell {
@@ -530,19 +697,21 @@ fn frcs<'a>(
             v_pi(bump.alloc(PiCell {
                 name: p.name,
                 icit: p.icit,
-                dom: frcs(bump, spine, defs, metas, decl, mutable, sub, p.dom),
+                dom: frcs(bump, spine, defs, metas, decls, mmap, fuel, sub, p.dom),
                 env: frcs_env(bump, defs, sub, p.env),
                 body: p.body,
             }))
         }
-        // 裸 flex：无槽位可包，交回 force 走既有解链；U/LiteralType 原样
-        5 => force(bump, spine, defs, metas, decl, mutable, v0),
+        // 裸 flex：无槽位可包，交回 force 走既有解链（与参考版
+        // force(Flex(m, wrap_sp(σ, []))) 等价）；U / LiteralType 原样
+        5 => force(bump, spine, defs, metas, decls, mmap, fuel, v0),
         _ => v0,
     }
 }
 
 /// 闭包 env 逐槽包裹：全部槽换成"原槽值的 VSub 包裹"。包裹值不进 defs
-/// 平坦区，整体退化为 binder 链表示（槽序与 `env_nth` 严格一致）。
+/// 平坦区，整体退化为 binder 链表示（槽序与 `env_nth` 严格一致——链段
+/// 在前、平坦区倒序）。
 pub(super) fn frcs_env<'a>(bump: &'a Bump, defs: &[V], sub: &Rc<SubstV>, env: Env<'a>) -> Env<'a> {
     if sub.is_empty() {
         return env;
@@ -563,83 +732,25 @@ pub(super) fn frcs_env<'a>(bump: &'a Bump, defs: &[V], sub: &Rc<SubstV>, env: En
     }
 }
 
-/// `to_typ` 等"结构消费者"的深读点（参考版 `Infer::force_deep` 同款）：force
-/// 到 WHNF 后，Sum/SumCase 的槽位值也 force 推开（旧机制下这些槽位已被
-/// update_cxt/refresh 物化）。只服务 trait 求解边界，不进 spine/闭包体。
-pub(super) fn force_deep<'a>(
-    bump: &'a Bump,
-    spine: &mut Spine,
-    defs: &mut Vec<V>,
-    metas: &[MetaEntry],
-    decl: &Decls<'a>,
-    mutable: &RefCell<FxHashMap<SmolStr, V>>,
-    v: V,
-) -> V {
-    let v = force(bump, spine, defs, metas, decl, mutable, v);
-    match v_tag(v) {
-        7 => match v_xcell_of(v) {
-            XCell::Sum {
-                name,
-                params,
-                cases,
-                is_trait,
-            } => {
-                let ps: Vec<SumParamV<'_>> = params
-                    .iter()
-                    .map(|p| SumParamV {
-                        name: p.name,
-                        val: force_deep(bump, spine, defs, metas, decl, mutable, p.val),
-                        ty: force_deep(bump, spine, defs, metas, decl, mutable, p.ty),
-                        icit: p.icit,
-                    })
-                    .collect();
-                v_xcell(bump.alloc(XCell::Sum {
-                    name,
-                    params: bump.alloc_slice_fill_iter(ps),
-                    cases,
-                    is_trait: *is_trait,
-                }))
-            }
-            XCell::SumCase {
-                typ,
-                case_name,
-                datas,
-                is_trait,
-            } => {
-                let ds: Vec<SumDataV<'_>> = datas
-                    .iter()
-                    .map(|d| SumDataV {
-                        name: d.name,
-                        val: force_deep(bump, spine, defs, metas, decl, mutable, d.val),
-                        icit: d.icit,
-                    })
-                    .collect();
-                v_xcell(bump.alloc(XCell::SumCase {
-                    typ: force_deep(bump, spine, defs, metas, decl, mutable, *typ),
-                    case_name,
-                    datas: bump.alloc_slice_fill_iter(ds),
-                    is_trait: *is_trait,
-                }))
-            }
-            _ => v,
-        },
-        _ => v,
-    }
-}
-
-/// 合一器**参数视角**的 WHNF（参考版 `Infer::force_arg` 同款）：不推开
-/// VSub 精化包裹、不做 Match 重选——invert/prune_vflex 关心的是"元变量被
-/// 应用在哪些槽位上"，物化会把可逆 spine 变成含构造子值的不可逆 spine。
-/// 逐层解包 VSub 后：裸 rigid 返回裸值；带实参的 rigid 链 / 卡住 match 返回
-/// **原值**（包裹保留）；其余形态全量 force 推开。
+/// 合一器**参数视角**的 WHNF：与 force 相同，但不推开 VSub 精化包裹、不做
+/// Match 重选。`invert` / `prune_vflex` 关心的是"元变量被应用在哪些槽位
+/// 上"——槽位引用（裸 Rigid）本身就是作用域事实，分支内的精化等式不改变
+/// 槽位的存在；在它们身上展开反而会把可逆 spine 变成含构造子值的不可逆
+/// spine。（参考版 `Infer::force_arg` 同款守卫。）
+///
+/// 逐层解包 VSub（嵌套 match 的上下文被外层臂与内层臂各 subst_cxt 一次，
+/// 单层解包会漏）后：裸 rigid 返回裸值（已解也不推开——invert 视角，对
+/// 齐旧"pm_defs 不参与 invert"的行为）；带实参的 rigid 链 / Match 返回
+/// **原值**（包裹原样保留）；其余形态全量 force 推开。
 #[allow(clippy::too_many_arguments)]
 pub(super) fn force_arg<'a>(
     bump: &'a Bump,
     spine: &mut Spine,
     defs: &mut Vec<V>,
     metas: &[MetaEntry],
-    decl: &Decls<'a>,
-    mutable: &RefCell<FxHashMap<SmolStr, V>>,
+    decls: &FxHashMap<String, DeclEntryF>,
+    mmap: &MutableMap,
+    fuel: &Fuel,
     v: V,
 ) -> V {
     let mut cur = v;
@@ -653,10 +764,11 @@ pub(super) fn force_arg<'a>(
         }
     }
     match v_tag(cur) {
+        // 解到底仍是裸 rigid ⇒ 槽位保留（返回裸值）
         0 => cur,
+        // 带实参的 rigid 链 / 卡住 match：返回原值（含 VSub 包裹）
         2 if v_tag(spine.spine_head(v_spine_of(cur))) == 0 => v,
         7 if matches!(v_xcell_of(cur), XCell::Match { .. }) => v,
-        _ => force(bump, spine, defs, metas, decl, mutable, v),
+        _ => force(bump, spine, defs, metas, decls, mmap, fuel, v),
     }
 }
-

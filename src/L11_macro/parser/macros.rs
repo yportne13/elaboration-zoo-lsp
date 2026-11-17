@@ -1,8 +1,14 @@
+//! macro_rules 匹配器/转写器与展开拼接（L11 增量；自旧 L11 承接）。
+//!
+//! 2026-11-17 重建：算法保持不变（Matcher 组合子 / Transcriber 树 /
+//! 直接 token 拼接），适配新 L10 parser 基础设施（MacroState 元组、
+//! parser_lib_resilient 组合子）。
+
 use crate::parser_lib::ToSpan;
 use crate::{parser_lib::Span, parser_lib_resilient::Parser};
 
 use super::lex::TokenKind;
-use super::{TokenNode, IError, HashMap, ErrMsg, BaseMsg, extract_base, string, p_raw, p_pi_binder, empty_span, owned_tokens_to_string, ParserExt, kw, MacroState, MacroExpansionInfo};
+use super::{TokenNode, IError, HashMap, ErrMsg, BaseMsg, string, p_raw, p_pi_binder, empty_span, owned_tokens_to_string, ParserExt, kw, MacroState, MacroExpansionInfo};
 
 pub type OwnedToken = Span<(String, TokenKind)>;
 pub type OwnedTokenSlice = [Span<(String, TokenKind)>];

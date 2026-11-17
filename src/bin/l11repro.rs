@@ -32,12 +32,12 @@ fn main() {
                 if twin_first {
                     match L11_macro::bump_spine_iter::run_fast(&src, 0) {
                         Ok(o) => eprintln!("[twin] Ok: {}", o.trim()),
-                        Err(e) => eprintln!("[twin] Err: {}", e.0.data),
+                        Err(e) => eprintln!("[twin] Err: {}", e.0),
                     }
                 }
                 match L11_macro::run(&src, 0) {
                     Ok(out) => println!("[ref run {i}] Ok: {}", out.trim()),
-                    Err(e) => println!("[ref run {i}] Err: {}", e.0.data),
+                    Err(e) => println!("[ref run {i}] Err: {}", e.0),
                 }
             }
         })
