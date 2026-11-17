@@ -104,6 +104,8 @@ decl 表 + LSP/HDL/prelude 产品面**；与 L12（σ 精化、无原生 Nat、d
 - 更新审计报告附录；跨层门禁加“L13 接受 L12 语料”回归；
 - 全链 final gates + 推送。
 
+> P1 的桥接口与工作包拆分见 `docs/l13-p1-double-carrier-design-2026-11-17.md`。
+
 ## 4. 风险与硬约束
 
 - **载体不可强迁**：σ 路线与 `update_cxt` 是两条机制路线；审计记录 L13 的 σ
