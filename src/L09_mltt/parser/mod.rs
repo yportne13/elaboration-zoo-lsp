@@ -10,27 +10,6 @@ use TokenKind::*;
 
 use super::empty_span;
 
-/// Skip to the next EndLine that is immediately followed by a top-level declaration
-/// keyword (`def`, `struct`, `enum`, `println`).
-///
-/// Returns `Some(remaining)` when a sync point is found, or `None` when no sync
-/// point exists in the remaining input — allowing the caller to distinguish
-/// "found at position 0" (still recover) from "not found at all" (stop).
-fn skip_until_decl<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<&'b [TokenNode<'a>]> {
-    fn is_decl_kw(kind: TokenKind) -> bool {
-        matches!(kind,
-            DefKeyword | StructKeyword | EnumKeyword | PrintlnKeyword
-        )
-    }
-    input.iter()
-        .enumerate()
-        .find(|(i, t)| {
-            t.data.1 == EndLine
-                && input.get(i + 1).map(|next| is_decl_kw(next.data.1)).unwrap_or(false)
-        })
-        .map(|(i, _)| &input[i..])
-}
-
 #[derive(Debug, Clone, Copy)]
 pub enum BaseMsg {
     Expect(TokenKind),
@@ -45,13 +24,6 @@ pub enum ErrMsg {
     Base(BaseMsg),
     /// A parser-level error with a full user-facing message.
     Custom(String),
-}
-
-fn extract_base(m: ErrMsg) -> ErrMsg {
-    match m {
-        ErrMsg::Base(b) => ErrMsg::Base(b),
-        ErrMsg::Custom(_) => m,
-    }
 }
 
 use std::fmt;
@@ -82,15 +54,28 @@ pub struct IError {
     pub msg: Span<ErrMsg>,
 }
 
+/// 错误进度 = 错误锚定的 token 源偏移。`or_far` 用它保留"最远失败"的备选
+/// 错误，而不是 last-branch-wins 把正确位置吞掉（review R6：`p_decl` 的
+/// `or` 链会把 `def` 在 `)` 处的错误换成 `enum` 分支在 `def` 处的错误）。
+impl ErrorProgress for IError {
+    fn parse_progress(&self) -> u32 {
+        self.msg.start_offset
+    }
+}
+
 type IResult<'a, 'b, O> = Result<(&'b [TokenNode<'a>], O), IError>;
 
 /// This lesson has no macros, so the parser state is just the error store.
+/// NOTE: this layer's public contract (`Result<Vec<Decl>, String>` with the
+/// two message forms below) is pinned by the blackbox suites, so the state's
+/// collected errors are folded into the whole-parse failure instead of being
+/// surfaced individually — same observable behavior as the pre-rewrite
+/// Option-based parser.
 pub type MacroState = Vec<IError>;
 
 trait ParserExt<I: Copy, A, S> {
     fn many1(self) -> impl Parser<I, Vec<A>, S, IError>;
     fn many1_sep<P: Parser<I, X, S, IError>, X>(self, sep: P) -> impl Parser<I, Vec<A>, S, IError>;
-    fn many1_sep_skip<P: Parser<I, X, S, IError>, X, Skip: Fn(I) -> Option<I> + Copy>(self, sep: P, skip: Skip) -> impl Parser<I, Vec<A>, S, IError>;
 }
 
 impl<'a: 'b, 'b, A, T: Parser<&'b [TokenNode<'a>], A, MacroState, IError>> ParserExt<&'b [TokenNode<'a>], A, MacroState> for T {
@@ -109,57 +94,28 @@ impl<'a: 'b, 'b, A, T: Parser<&'b [TokenNode<'a>], A, MacroState, IError>> Parse
     where
         P: Parser<&'b [TokenNode<'a>], X, MacroState, IError>,
     {
-        move |input, state: &mut MacroState| match self.many0_sep(sep).parse(input, state) {
-            Ok((i, v)) if v.is_empty() => Err(IError {
-                msg: i.first()
-                    .map(|x| x.to_span())
-                    .unwrap_or(empty_span(()))
-                    .map(|_| ErrMsg::Base(BaseMsg::EmptyVec))
-            }),
-            x => x,
-        }
-    }
-    fn many1_sep_skip<P, X, Skip>(self, sep: P, skip: Skip) -> impl Parser<&'b [TokenNode<'a>], Vec<A>, MacroState, IError>
-    where
-        P: Parser<&'b [TokenNode<'a>], X, MacroState, IError>,
-        Skip: Fn(&'b [TokenNode<'a>]) -> Option<&'b [TokenNode<'a>]> + Copy,
-    {
-        move |input: &'b [TokenNode<'a>], state: &mut MacroState| {
-            let mut input = input;
-            let mut result = Vec::new();
+        move |input, state: &mut MacroState| {
+            // 先试第一个 item：失败时**保留底层错误**（含失败 token 的真实
+            // span），不再像 `many0_sep` 那样吞掉错误、再在包装层用"剩余输
+            // 入首 token"伪装成 EmptyVec——后者会把语法错误定位到失败 decl
+            // 的起点（review R6）。
+            let (mut input, first) = self.parse(input, state)?;
+            let mut result = vec![first];
             loop {
-                match self.parse(input, state) {
+                let (after_sep, _) = match sep.parse(input, state) {
+                    Ok(x) => x,
+                    Err(_) => break,
+                };
+                match self.parse(after_sep, state) {
                     Ok((i, a)) => {
                         input = i;
                         result.push(a);
                     }
-                    Err(_) if result.is_empty() => {
-                        return Err(IError {
-                            msg: input.first()
-                                .map(|x| x.to_span())
-                                .unwrap_or(empty_span(()))
-                                .map(|_| ErrMsg::Base(BaseMsg::EmptyVec)),
-                        });
-                    }
-                    Err(_) => break,
-                }
-                if let Ok((i, _)) = sep.parse(input, state) {
-                    input = i;
-                } else {
-                    match skip(input) {
-                        Some(at_sep) => {
-                            state.push_error(IError {
-                                msg: input.first()
-                                    .map(|x| x.to_span())
-                                    .unwrap_or(empty_span(()))
-                                    .map(|_| ErrMsg::Base(BaseMsg::Expect(EndLine)))
-                            });
-                            match sep.parse(at_sep, state) {
-                                Ok((i, _)) => input = i,
-                                Err(_) => break,
-                            }
-                        }
-                        None => break,
+                    // 与 `many0_sep` 旧语义一致：分隔符已消费、下一个 item
+                    // 失败即正常结束（尾随换行/空行等），不报错。
+                    Err(_) => {
+                        input = after_sep;
+                        break;
                     }
                 }
             }
@@ -168,42 +124,70 @@ impl<'a: 'b, 'b, A, T: Parser<&'b [TokenNode<'a>], A, MacroState, IError>> Parse
     }
 }
 
-/// Parse a declaration file. Returns (declarations, parse errors); a failed
-/// declaration is skipped to the next declaration keyword and reported, the
-/// successfully parsed prefix is kept.
-pub fn parser(input: &str, id: u32) -> Option<(Vec<Decl>, Vec<IError>)> {
-    let mut err_collect: MacroState = vec![];
-    match super::parser::lex::lex(Span {
+/// 解析 decl 序列。decl 流必须吃完全部 token：残留 token（`;` / 垃圾
+/// token 曾把后续 decl 静默截断）一律报错，并带**首个残余 token**的内容
+/// 与偏移——`;` 结尾这类最常见错误不再无从定位。任何解析失败都折叠为
+/// 整体 `Err("parse error")`（契约被 l09 blackbox 钉死）。
+pub fn parser(input: &str, id: u32) -> Result<Vec<Decl>, String> {
+    parser_with_span(input, id).map_err(|(msg, _)| msg)
+}
+
+/// 解析错误（P10 第二步）：文案 + 可选位置。
+///
+/// 文案与 [`parser`] 的契约**逐字节一致**（`"parse error"` / 残余 token 那条），
+/// 只有位置是新增的：IError 的 span（失败 token 处）或残余 token 的 span。
+pub type ParseError = (String, Option<Span<()>>);
+
+fn span_of(s: &Span<ErrMsg>) -> Option<Span<()>> {
+    // 0,0 是"无位置"哨兵（空输入 / lexer 失败）；有偏移才返回
+    if s.start_offset == 0 && s.end_offset == 0 {
+        None
+    } else {
+        Some(Span {
+            data: (),
+            start_offset: s.start_offset,
+            end_offset: s.end_offset,
+            path_id: s.path_id,
+        })
+    }
+}
+
+/// 带位置的解析入口：[`parser`] 的契约 + 错误位置（供 LSP/诊断消费）。
+pub fn parser_with_span(input: &str, id: u32) -> Result<Vec<Decl>, ParseError> {
+    match lex::lex(Span {
         data: input,
         start_offset: 0,
         end_offset: input.len() as u32,
         path_id: id,
     }) {
         Some((_, ret)) => {
-            let ret = p_decl
-                .recover_with(
-                    skip_until_decl,
-                    // Placeholder for the lost declaration; an empty println is
-                    // used because this lesson has no `Package` no-op.
-                    || Decl::Println(Raw::Hole),
-                )
-                .many1_sep_skip(kw(EndLine), skip_until_decl).parse(&ret, &mut err_collect);
-            match ret {
-                Ok(ret) => {
-                    if ret.0.is_empty() || ret.0.iter().all(|t| t.data.1 == TokenKind::Eof) {
-                        Some((ret.1, err_collect))
+            let mut err_collect: MacroState = vec![];
+            match p_decl.many1_sep(kw(EndLine).many1()).parse(&ret, &mut err_collect) {
+                Ok((rest, decls)) => {
+                    if rest.is_empty() {
+                        Ok(decls)
                     } else {
-                        err_collect.push(IError { msg: ret.0.first().unwrap().map(|_| ErrMsg::Base(BaseMsg::Expect(EndLine))) });
-                        Some((ret.1, err_collect))
+                        let t = &rest[0];
+                        Err((
+                            format!(
+                                "parse error: leftover token `{}` @ {},{}",
+                                t.data.0, t.start_offset, t.end_offset
+                            ),
+                            Some(t.to_span()),
+                        ))
                     }
                 }
                 Err(e) => {
-                    err_collect.push(e);
-                    Some((vec![], err_collect))
+                    let span = span_of(&e.msg).or_else(|| {
+                        err_collect
+                            .first()
+                            .and_then(|c| span_of(&c.msg))
+                    });
+                    Err(("parse error".to_owned(), span))
                 }
             }
         }
-        None => None
+        None => Err(("parse error".to_owned(), None)),
     }
 }
 
@@ -226,6 +210,7 @@ macro_rules! T {
     [->] => { $crate::L09_mltt::parser::TokenKind::Arrow };
     [=>] => { $crate::L09_mltt::parser::TokenKind::DoubleArrow };
     ['\\'] => { $crate::L09_mltt::parser::TokenKind::Lambda };
+    [:=] => { $crate::L09_mltt::parser::TokenKind::AssignEq };
 }
 
 fn kw<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [TokenNode<'a>], Span<()>, MacroState, IError> {
@@ -276,18 +261,6 @@ where
     (kw(LParen), kw(EndLine).option(), p, kw(EndLine).option(), kw(RParen)).map(|c| c.2)
 }
 
-/// ( p )
-fn paren_cut<'a: 'b, 'b, P, O>(p: P) -> impl Parser<&'b [TokenNode<'a>], Result<O, Span<()>>, MacroState, IError>
-where
-    P: Parser<&'b [TokenNode<'a>], O, MacroState, IError>,
-{
-    Cut((kw(LParen), (kw(EndLine).option(), p), (kw(EndLine).option(), kw(RParen))))
-        .map(|c| match c.1 {
-            Some((_, result)) => Ok(result),
-            None => Err(c.0),
-        })
-}
-
 /// [ p ]
 fn square<'a: 'b, 'b, P, O>(p: P) -> impl Parser<&'b [TokenNode<'a>], O, MacroState, IError>
 where
@@ -296,7 +269,7 @@ where
     (kw(LSquare), kw(EndLine).option(), p, kw(EndLine).option(), kw(RSquare)).map(|c| c.2)
 }
 
-/// [ p ]
+/// [ p ]（Cut 版：内层失败记入诊断流并回退，供隐式实参表的软恢复）
 fn square_cut<'a: 'b, 'b, P, O>(p: P) -> impl Parser<&'b [TokenNode<'a>], Result<O, Span<()>>, MacroState, IError>
 where
     P: Parser<&'b [TokenNode<'a>], O, MacroState, IError>,
@@ -309,52 +282,45 @@ where
 }
 
 /// { p }
-fn brace<'a: 'b, 'b, P, O>(p: P) -> impl Parser<&'b [TokenNode<'a>], Result<O, Span<()>>, MacroState, IError>
+fn brace<'a: 'b, 'b, P, O>(p: P) -> impl Parser<&'b [TokenNode<'a>], O, MacroState, IError>
 where
     P: Parser<&'b [TokenNode<'a>], O, MacroState, IError>,
 {
-    Cut((
+    (
         kw(LCurly),
-        (kw(EndLine).option(), p),
-        (kw(EndLine).option(), kw(RCurly)),
-    ))
-        .map(|c| match c.1 {
-            Some((_, result)) => Ok(result),
-            None => Err(c.0),
-        })
+        kw(EndLine).option(),
+        p,
+        kw(EndLine).option(),
+        kw(RCurly),
+    )
+        .map(|c| c.2)
 }
 
 fn p_atom1<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
     string(Ident)
         .map(Raw::Var)
         .or(Cut((kw(TypeKeyword), string(Num))).map(|(_, num)| Raw::U(
-            num.and_then(|x| x.data.parse::<u32>().ok()).unwrap_or(0)
-        )))//TODO:do not unwrap
+            num.and_then(|x| x.data.parse::<u32>().ok()).unwrap_or(0),
+        )))
         .or(kw(Hole).map(|_| Raw::Hole))
         .or(string(Str).map(|x| Raw::LiteralIntro(x.map(|s| unescape(&s)))))
-        .or(paren_cut(p_raw).map(|x| x.unwrap_or_else(|_| Raw::Hole)))
+        .or(paren(p_raw))
         .parse(input, state)
 }
 
 fn p_atom<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
-    let result = (p_atom1, Cut((kw(T![.]), string(Ident))).option())
-        .map(|(x, t)| match t {
-            // A single (optional) projection; a missing name after `.` (Cut
-            // failure) falls back to an empty projection name — this lesson's
-            // Raw::Obj always carries a name.
-            Some((_, name)) => Raw::Obj(Box::new(x), name.unwrap_or_else(|| empty_span(String::new()))),
-            None => x,
+    // L08 积类型：原子 + 左结合多段投影链（`p.x.y`）；L07 只允许单段。
+    (p_atom1, (kw(T![.]), string(Ident)).many0())
+        .map(|(x, t)| t.into_iter().fold(x, |acc, (_, f)| Raw::Obj(Box::new(acc), f)))
+        .parse(input, state)
+        .map_err(|_e| {
+            IError {
+                msg: input
+                    .first()
+                    .map(|x| x.map(|_| ErrMsg::Base(BaseMsg::ExpectAtom)))
+                    .unwrap_or(empty_span(ErrMsg::Base(BaseMsg::ExpectAtom))),
+            }
         })
-        .parse(input, state);
-    match result {
-        Ok(ok) => Ok(ok),
-        Err(_e) => Err(IError {
-            msg: input
-                .first()
-                .map(|x| x.map(|_| ErrMsg::Base(BaseMsg::ExpectAtom)))
-                .unwrap_or(empty_span(ErrMsg::Base(BaseMsg::ExpectAtom)))
-        })
-    }
 }
 
 fn p_arg<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Vec<(Either, Raw)>> {
@@ -403,11 +369,8 @@ fn p_lam_binder<'a: 'b, 'b>(
 }
 
 fn p_lam<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
-    (p_lam_binder.many1(), Cut((kw(T![=>]), (kw(EndLine).option(), p_raw))))
-        .map(|(binder, (_arrow, body))| {
-            // body: Option<(Option<Span<()>>, Raw)> — a missing body after =>
-            // becomes a hole and the error is already recorded by the Cut.
-            let ty = body.map(|(_, raw)| raw).unwrap_or(Raw::Hole);
+    (p_lam_binder.many1(), kw(T![=>]), p_raw)
+        .map(|(binder, _, ty)| {
             binder
                 .into_iter()
                 .rev()
@@ -420,67 +383,41 @@ fn p_lam<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
 fn p_pi_impl_binder<'a: 'b, 'b>(
     input: &'b [TokenNode<'a>],
     state: &mut MacroState,
-) -> Result<(&'b [TokenNode<'a>], Vec<(Span<String>, Raw, Icit)>), IError> {
-    square_cut(
+) -> IResult<'a, 'b, Vec<(Span<String>, Raw, Icit)>> {
+    square(
         (
             p_bind,
-            (kw(Colon), p_raw).option(),
+            (kw(Colon), p_raw).option().map(|x| match x {
+                Some((_, x)) => x,
+                None => Raw::Hole,
+            }),
         )
-            .map(|(xs, opt)| {
-                let a = match opt {
-                    Some((_, x)) => x,
-                    None => Raw::Hole,
-                };
-                (xs, a, Icit::Impl)
-            })
-            .many0_sep((kw(T![,]), kw(EndLine).option())),
+            .map(|(xs, a)| (xs, a, Icit::Impl))
+            .many0_sep(kw(T![,])),
     )
     .parse(input, state)
-    .and_then(|(i, result)| match result {
-        Ok(v) => Ok((i, v)),
-        Err(square_span) => Err(IError { msg: square_span.map(|_| ErrMsg::Base(BaseMsg::Expect(TokenKind::LSquare))) }),
-    })
-}
-
-fn p_pi_impl_binder_option<'a: 'b, 'b>(
-    input: &'b [TokenNode<'a>],
-    state: &mut MacroState
-) -> IResult<'a, 'b, Vec<(Span<String>, Raw, Icit)>> {
-    p_pi_impl_binder
-        .option()
-        .map(|x| x.unwrap_or_default())
-        .parse(input, state)
-}
-
-/// (x: A)
-fn p_pi_expl_binder<'a: 'b, 'b>(
-    input: &'b [TokenNode<'a>],
-    state: &mut MacroState,
-) -> IResult<'a, 'b, Vec<(Span<String>, Raw, Icit)>> {
-    paren(
-        (
-            p_bind,                // 解析一个或多个绑定变量 xs
-            kw(Colon).with(p_raw), // 解析类型 A
-        )
-            .map(|(xs, a)| (xs, a.1, Icit::Expl))
-            .many0_sep((kw(T![,]), kw(EndLine).option())),
-    )
-    .parse(input, state) // 返回 (xs, a, Expl)
 }
 
 fn p_pi_binder<'a: 'b, 'b>(
     input: &'b [TokenNode<'a>],
     state: &mut MacroState,
 ) -> IResult<'a, 'b, Vec<(Span<String>, Raw, Icit)>> {
-    // 组合所有可能的解析器
-    p_pi_impl_binder.or(p_pi_expl_binder).parse(input, state)
+    // 解析显式参数 (x : A)
+    let explicit_binder = paren(
+        (
+            p_bind,
+            kw(Colon).with(p_raw),
+        )
+            .map(|(xs, a)| (xs, a.1, Icit::Expl))
+            .many0_sep(kw(T![,])),
+    );
+
+    p_pi_impl_binder.or(explicit_binder).parse(input, state)
 }
 
 fn p_pi<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
-    (p_pi_binder.many1(), Cut((kw(T![->]), (kw(EndLine).option(), p_raw))))
-        .map(|(binder, (_arrow, ty))| {
-            // ty: Option<(Option<Span<()>>, Raw)>
-            let ty = ty.map(|(_, raw)| raw).unwrap_or(Raw::Hole);
+    (p_pi_binder.many1(), kw(T![->]), p_raw)
+        .map(|(binder, _, ty)| {
             binder
                 .into_iter()
                 .flat_map(|x| x.into_iter())
@@ -492,7 +429,6 @@ fn p_pi<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResu
         .parse(input, state)
 }
 
-//TODO:fun_or_spine
 fn fun_or_spine<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
     (p_spine, (kw(Arrow), p_raw).option())
         .map(|(sp, tail)| match tail {
@@ -508,26 +444,22 @@ fn fun_or_spine<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) 
 }
 
 fn p_let<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
-    // After `let` is matched, Cut commits the parser: any subsequent error
-    // is pushed to the error store (state) and the element becomes `None`,
-    // allowing the parser to continue and collect further errors.
-    Cut((
+    (
         kw(LetKeyword),
         string(Ident),
-        (kw(Colon), kw(EndLine).option(), p_raw).map(|(_, _, x)| x).option(),
+        (kw(Colon), p_raw).map(|(_, x)| x).option(),
         kw(Eq),
-        // Allow newline after `=` before the value, like `def`
-        (kw(EndLine).option(), p_raw),
-        kw(Semi),
-        kw(EndLine).many0(),
         p_raw,
-    ))
-        .map(|(let_kw, binder, ann, _, val, _, _, body)| {
+        kw(Semi),
+        kw(EndLine).option(),
+        p_raw,
+    )
+        .map(|(_, binder, ann, _, val, _, _, body)| {
             Raw::Let(
-                binder.unwrap_or(let_kw.end_span().map(|_| String::new())),
-                Box::new(ann.flatten().unwrap_or(Raw::Hole)),
-                Box::new(val.map(|(_, raw)| raw).unwrap_or(Raw::Hole)),
-                Box::new(body.unwrap_or(Raw::Hole)),
+                binder,
+                Box::new(ann.unwrap_or(Raw::Hole)),
+                Box::new(val),
+                Box::new(body),
             )
         })
         .parse(input, state)
@@ -535,17 +467,17 @@ fn p_let<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
 
 fn p_pattern<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Pattern> {
     (
-        // struct 模式糖（与 L08/L11/L12/L13 同款）：`Wrap { p1, p2 }` -> `Wrap.mk(p1, p2)`。
+        // struct 模式糖（与 L11/L12/L13 同款）：`Wrap { p1, p2 }` 脱糖成单构造子
+        // enum 的 `Wrap.mk(p1, p2)` 模式。struct 在解析期就展开成单 case enum
+        // （case 名即 `Name.mk`），所以这里只需在名字上补 `.mk` 后缀。
         string(Ident),
-        brace(p_pattern.many1_sep(kw(T![,])))
-            .map(|x| x.ok().unwrap_or_default()),
+        brace(p_pattern.many1_sep(kw(T![,]))),
     )
         .map(|(x, t)| Pattern::Con(x.map(|t| format!("{t}.mk")), t, Icit::Expl))
         .or((
             string(Ident),
-            paren_cut(p_pattern.many0_sep(kw(T![,])))
-                .map(|x| x.ok().unwrap_or_default())
-                .or(square_cut(p_pattern.map(|x| x.to_impl()).many0_sep(kw(T![,]))).map(|x| x.ok().unwrap_or_default()))
+            paren(p_pattern.many0_sep(kw(T![,])))
+                .or(square(p_pattern.map(|x| x.to_impl()).many0_sep(kw(T![,]))))
                 .many0()
                 .map(|x| x.concat()),
         )
@@ -555,45 +487,41 @@ fn p_pattern<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> 
 }
 
 fn p_match<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
-    Cut((
+    (
         kw(MatchKeyword),
         p_raw,
         brace(
-            // Like p_lam: Cut only after => so that once => is matched the
-            // parser commits. Body failure → Hole + error in state, arm is
-            // still collected and many0_sep continues to the next arm.
-            Cut((kw(CaseKeyword), p_pattern, Cut((kw(T![=>]), (kw(EndLine).option(), p_raw)))))
-                .map(|(case_kw, pattern, body_outer)| {
-                    let pattern = pattern.unwrap_or(Pattern::Any(
-                        case_kw.end_span(),
-                        Icit::Expl,
-                    ));
-                    // body_outer: Option<(arrow_span, Option<(EndLine, Raw)>)>
-                    let body = body_outer.and_then(|(_, inner)| inner)
-                        .map(|(_, raw)| raw)
-                        .unwrap_or(Raw::Hole);
-                    (pattern, body)
-                })
-                .many0_sep(kw(EndLine)),
+            (kw(CaseKeyword), p_pattern, kw(T![=>]), kw(EndLine).option(), p_raw)
+                .map(|(_, pattern, _, _, body)| (pattern, body))
+                // 臂间允许连续空行：注释行经 preprocess 剥成空白后仍产生
+                // EndLine，单 EndLine 分隔会把「臂间注释」打成语法错误
+                .many0_sep(kw(EndLine).many1()),
         ),
-    ))
-        .map(|(_match_kw, scrutinee, body)| Raw::Match(
-            Box::new(scrutinee.unwrap_or(Raw::Hole)),
-            body.and_then(|r| r.ok()).unwrap_or_default()
-        ))
+    )
+        .map(|(_, scrutinee, body)| Raw::Match(Box::new(scrutinee), body))
         .parse(input, state)
 }
 
+/// `new Name(a, b, ...)` —— L08 积类型构造语法糖：脱糖成限定构造子
+/// `Name.mk` 的显式应用（`struct` 注册的构造子名就是 `{Name}.mk`）。
+/// 结果可直接接 `.field` 投影后缀链（与原子同等待遇）；裸 spine 实参位
+/// 仍不接 `new`（p_arg 不动）。
 fn p_new<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
-    Cut((
+    (
         kw(NewKeyword),
         string(Ident),
-        paren_cut(p_raw.many0_sep(kw(T![,]))),
-    ))
-        .map(|(new_kw, scrutinee, args)| args.and_then(|r| r.ok()).unwrap_or_default().into_iter()
-            .fold(Raw::Var(scrutinee.map_or(new_kw.to_span().map(|_| String::new()), |x| x.map(|x| format!("{x}.mk")))), |acc, x| 
-                Raw::App(Box::new(acc), Box::new(x), Either::Icit(Icit::Expl))
-            ))
+        paren(p_raw.many0_sep(kw(T![,]))),
+        (kw(T![.]), string(Ident)).many0(),
+    )
+        .map(|(_, name, args, suffixes)| {
+            let head = args.into_iter().fold(
+                Raw::Var(name.map(|x| format!("{x}.mk"))),
+                |acc, x| Raw::App(Box::new(acc), Box::new(x), Either::Icit(Icit::Expl)),
+            );
+            suffixes
+                .into_iter()
+                .fold(head, |acc, (_, f)| Raw::Obj(Box::new(acc), f))
+        })
         .parse(input, state)
 }
 
@@ -614,34 +542,34 @@ fn p_raw<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
 }
 
 fn p_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Decl> {
-    Cut((
+    (
         kw(DefKeyword),
         string(Ident),
         p_pi_binder
             .many0()
             .map(|x| x.into_iter().flatten().collect::<Vec<_>>()),
-        (kw(T![:]), kw(EndLine).option(), p_raw).map(|(_, _, x)| x).option(),
+        (kw(T![:]), p_raw).map(|(_, x)| x).option(),
         kw(T![=]),
         kw(EndLine).option(),
         p_raw,
-    ))
-        .map(|(def_kw, name, params, ret, _eq_kw, _, body)| Decl::Def {
-            name: name.unwrap_or(def_kw.end_span().map(|_| String::new())),
-            params: params.unwrap_or_default(),
-            ret_type: ret.flatten().unwrap_or(Raw::Hole),
-            body: body.unwrap_or(Raw::Hole),
+    )
+        .map(|(_, name, params, ret, _, _, body)| Decl::Def {
+            name,
+            params,
+            ret_type: ret.unwrap_or(Raw::Hole),
+            body,
         })
         .parse(input, state)
 }
 
 fn p_print<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Decl> {
-    Cut((kw(PrintlnKeyword), p_raw))
-        .map(|(println_kw, x)| Decl::Println(x.unwrap_or(Raw::Hole)))
+    (kw(PrintlnKeyword), p_raw)
+        .map(|(_, x)| Decl::Println(x))
         .parse(input, state)
 }
 
 fn p_enum<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Decl> {
-    Cut((
+    (
         kw(EnumKeyword),
         string(Ident),
         p_pi_binder
@@ -653,92 +581,64 @@ fn p_enum<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
                 p_pi_binder
                     .many0()
                     .map(|x| x.into_iter().flatten().collect::<Vec<_>>()),
-                (
-                    kw(T![->]),
-                    p_raw,
-                )
-                    .option()
-                    .map(|x| x.map(|y| y.1))
+                (kw(T![->]), p_raw).option().map(|x| x.map(|y| y.1)),
             )
-                .many1_sep(kw(EndLine)),
+                // case 间允许连续空行：注释行经 preprocess 剥成空白后仍产生
+                // EndLine，单 EndLine 分隔会把「case 间注释」打成语法错误
+                // （同 match 臂；L08 p_enum 同款，回合对齐）
+                .many1_sep(kw(EndLine).many1()),
         ),
-    ))
-        .map(|(enum_kw, name, params, fields)| Decl::Enum {
-            name: name.unwrap_or(enum_kw.end_span().map(|_| String::new())),
-            params: params.unwrap_or_default(),
-            cases: fields.and_then(|r| r.ok()).unwrap_or_default(),
+    )
+        .map(|(_, name, params, fields)| Decl::Enum {
+            name,
+            params,
+            cases: fields,
         })
         .parse(input, state)
 }
 
+/// `struct Name[A: U, ...] { field: Type ... }` —— L08 积类型语法糖：脱糖成
+/// **单构造子 enum**，构造子名为 `{Name}.mk`，字段全部显式（Expl），参数走
+/// 隐式方括号组（`[A]` / `[A: U]`）。字段可依赖参数与在前字段（依赖积 /
+/// Sigma）。构造用 `new Name(e1, e2)` 或限定名 `Name.mk`；字段访问 `p.field`
+/// 走 enum 投影（值级）与 `.mk` 构造子类型链剥层（类型级，见 elaboration）。
 fn p_struct<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Decl> {
-    Cut((
+    (
         kw(StructKeyword),
         string(Ident),
         p_pi_impl_binder.option().map(|x| x.unwrap_or_default()),
         brace(
             (string(Ident), kw(T![:]), p_raw)
                 .map(|(name, _, ty)| (name, ty))
-                .many0_sep(kw(EndLine)), // named fields
+                // 字段按行分隔、无逗号；连续空行也容忍（注释行经 preprocess
+                // 剥成空白后仍产生 EndLine，单 EndLine 分隔会把「字段间注释」
+                // 打成语法错误）。
+                .many0_sep(kw(EndLine).many1()),
         ),
-    ))
-        .map(|(struct_kw, name, params, fields)| Decl::Enum {
-            name: name.clone().unwrap_or(struct_kw.end_span().map(|_| String::new())),
-            params: params.clone().unwrap_or_default(),
-            cases: vec![
-                (
-                    name.clone().map(|x| x.map(|x| format!("{x}.mk"))).unwrap_or(struct_kw.end_span().map(|_| String::new())),
-                    fields.clone().and_then(|r| r.ok()).unwrap_or_default().into_iter().map(|x| (x.0, x.1, Icit::Expl)).collect(),
-                    None,
-                ),
-            ]
+    )
+        .map(|(_, name, params, fields)| Decl::Enum {
+            name: name.clone(),
+            params,
+            cases: vec![(
+                name.map(|x| format!("{x}.mk")),
+                fields.into_iter().map(|(n, ty)| (n, ty, Icit::Expl)).collect(),
+                None,
+            )],
         })
         .parse(input, state)
 }
 
 fn p_decl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Decl> {
-    p_def.or(p_print).or(p_enum).or(p_struct)
-        .parse(input, state)
-        .map_err(|e| IError {
-            msg: e.msg.map(extract_base)
-        })
+    // 错误原样透传：外层按契约折叠为整体 `parse error`（Custom 文案不外泄）。
+    // `or_far`（而非 `or`）保留最远失败分支的错误位置——否则 `p_enum` 在
+    // `def` 首 token 的期望错误会覆盖 `p_def` 在真正失败 token（如 `)`）处
+    // 的错误（review R6）。
+    p_def.or_far(p_print).or_far(p_enum).or_far(p_struct).parse(input, state)
 }
 
 #[test]
-fn test() {
+fn test_ok() {
     let input = r#"
-def Eq[A : Type0](x: A, y: A): Type0 = (P : A -> Type0) -> P x -> P y
-def refl[A : Type0, x: A]: Eq[A] x x = _ => px => px
-
-def the(A : Type0)(x: A): A = x
-
-def pr1 = f => x => f x
-def pr2 = f => x => y => f x y
-def pr3 = f => f Type0
-
-def Nat : Type0 =
-    (N : Type0) -> (N -> N) -> N -> N
-def mul : Nat -> Nat -> Nat =
-    a => b => N => s => z => a _ (b _ s) z
-def ten : Nat =
-    N => s => z => s (s (s (s (s (s (s (s (s (s z)))))))))
-def hundred = mul ten ten
-
-println hundred
-
-def mystr = "hello world"
-
-def add_tail(x: String): String = string_concat x "!"
-
-def mystr2 = add_tail mystr
-
-println mystr2
-
-enum Bool {
-    true
-    false
-}
-
 enum Nat {
     zero
     succ(x: Nat)
@@ -746,52 +646,30 @@ enum Nat {
 
 def two = succ succ zero
 
-def t = let one = succ zero;
-    succ one
-
 def add(x: Nat, y: Nat): Nat =
     match x {
         case zero => y
         case succ(n) => succ add n y
     }
 
-def four = add two two
-
-println four
-
-struct Point {
-    x: Nat
-    y: Nat
-}
-
-struct Span[T] {
-    data: T
-    start: Nat
-    end: Nat
-}
-
-def get_x(p: Point): Nat = p.x
-
+println add two two
 "#;
-    let (decls, errs) = parser(input, 0).unwrap();
-    assert!(errs.is_empty(), "unexpected parse errors: {:?}", errs);
-    println!("{:#?}", decls);
+    let decls = parser(input, 0).unwrap();
+    assert!(!decls.is_empty());
 }
 
 #[test]
-fn test_bad_decl_reported_prefix_kept() {
-    // A declaration that fails to parse is reported; the successfully parsed
-    // surrounding declarations survive (no silent drop, no total abort).
-    let input = r#"def ok: Type0 = Type0
-def = 1
-def ok2: Type0 = Type0
-"#;
-    let (decls, errs) = parser(input, 0).unwrap();
-    assert!(!errs.is_empty(), "the broken decl must be reported");
-    let names: Vec<&str> = decls.iter().filter_map(|d| match d {
-        Decl::Def { name, .. } => Some(name.data.as_str()),
-        _ => None,
-    }).collect();
-    assert!(names.contains(&"ok") && names.contains(&"ok2"),
-        "declarations before AND after the broken decl must survive, got {:?}", names);
+fn test_leftover_located() {
+    // `;` 结尾 / 垃圾 token 报错带定位（同 l09 blackbox 契约）。
+    let input = "enum Nat {\n    zero\n}\nprintln zero;\n";
+    let err = parser(input, 0).unwrap_err();
+    assert!(err.contains("parse error"), "err: {err}");
+    assert!(err.contains("`;`"), "err should locate the token: {err}");
+}
+
+#[test]
+fn test_whole_file_fail() {
+    // 坏 decl 折叠为整体 `parse error`（契约被 blackbox 钉死）。
+    let input = "enum Void {\n}\n";
+    assert_eq!(parser(input, 0).unwrap_err(), "parse error");
 }

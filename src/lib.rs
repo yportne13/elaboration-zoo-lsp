@@ -55,7 +55,7 @@ pub mod L07_sum_type;
 pub mod L08_product_type;
 #[allow(non_snake_case)]
 #[cfg_attr(not(test), allow(dead_code))]
-mod L09_mltt;
+pub mod L09_mltt;
 #[allow(non_snake_case)]
 #[cfg_attr(not(test), allow(dead_code))]
 mod L10_typeclass;

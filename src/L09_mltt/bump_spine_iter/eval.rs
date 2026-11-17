@@ -1,60 +1,45 @@
-//! eval：运行时分支选择（`eval_aux`/`eval_aux_case`，值层首匹配）+ 双栈迭代
-//! eval（`W`/`eval_iter`，右链快速路径 + AppPruning + L09 变体）。原
-//! bump_spine_iter.rs 的 "运行时分支选择" + "eval" 两节，逐行搬运（2026-09-23 拆分）。
+//! eval：双栈迭代 eval（`W`/`eval_iter`）+ 运行时分支选择（`eval_aux`/
+//! `eval_aux_case`，值层首匹配）。原 bump_spine_iter.rs 的 "运行时分支
+//! 选择" 与 "eval" 两节，逐行搬运（2026-09-23 拆分）。
 
 use bumpalo::Bump;
+use rustc_hash::FxHashMap;
 
 use super::parser::syntax::Icit;
 use super::PatternDetail;
 
-use super::env::{CloCell, Env, PiCell, env_ext, env_nth};
-use super::force::{force, vapp1};
-use super::spine::{MetaEntry, Spine, lit_of, meta_val_of};
-use super::syntax::{GLOBAL_BASE, PrCons, SumDataT, SumDataV, SumParamT, SumParamV, Tm, V, XCell, v_clo, v_clo_of, v_lit_ty, v_pi, v_spine_of, v_tag, v_u, v_xcell, v_xcell_of};
+use super::env::{CloCell, Env, env_ext, env_len, env_nth, PiCell};
+use super::force::{force, project, vapp1};
+use super::prim::{DeclEntryF, Fuel, MutableMap};
+use super::spine::{meta_val_of, MetaEntry, Spine};
+use super::syntax::{PrCons, SumDataT, SumDataV, SumParamT, SumParamV, Tm, V, v_clo, v_clo_of, v_lit_ty, v_pi, v_tag, v_u, v_xcell, v_xcell_of, XCell};
 
-// 运行时分支选择（值层首匹配，无合一；L09 参考版 Compiler::eval_aux 同款）
+// 运行时分支选择（值层首匹配，无合一）
 // --------------------------------------------------------------------------------
 
-/// 按模式首匹配。参考版语义逐句对齐：
-/// - 入口 force(head)；force 后非 SumCase → 任何 Con 模式都按"不在类型构造
-///   子表里"的变量模式命中（`$unknown$` + 空表）。
-/// - force 后是 SumCase：typ 必须 force 成 Sum（**否则 panic**——参考版
-///   `panic!("by now only can match a sum type")`）；Con 模式名不在 Sum 的
-///   cases 里 → 按变量模式命中（prepend head）；名 == case_name → datas 与
-///   子模式 zip（**zip 截断**）逐个递归（每步单臂表，env 累积——**head 本身
-///   不 prepend**，参考版 Con 臂从 cxt 起步）；同名异构造子 → 试下一分支。
-fn eval_aux<'a>(
+/// 按模式首匹配。返回 (分支体, 扩展后的 env)。任何 head 都不会 panic——
+/// 不命中就返回 None，由调用方停成卡住 Match。（参考版
+/// `Compiler::eval_aux` 同款：Any/Bind → 命中；Con → head 是同名 SumCase
+/// （ctor 名在 typ 的 Sum cases 里）→ 逐 datas×子模式递归；名字不在 typ
+/// 的 ctor 表里 → 按变量模式命中（保守兼容）；同类型不同构造子 → 试下一
+/// 分支。入口 force(head)。）
+#[allow(clippy::too_many_arguments)]
+pub(super) fn eval_aux<'a>(
     bump: &'a Bump,
     spine: &mut Spine,
     defs: &mut Vec<V>,
     metas: &[MetaEntry],
-    globals: &[V],
+    decls: &FxHashMap<String, DeclEntryF>,
+    mmap: &MutableMap,
+    fuel: &Fuel,
     head: V,
     env: Env<'a>,
     cases: &'a [(PatternDetail, &'a Tm<'a>)],
 ) -> Option<(&'a Tm<'a>, Env<'a>)> {
-    let head = force(bump, spine, defs, metas, globals, head);
-    let (case_name, datas, ctor_names): (&str, &[SumDataV<'a>], &[&str]) = if v_tag(head) == 7 {
-        match v_xcell_of(head) {
-            XCell::SumCase { typ, case_name, datas } => {
-                // typ 槽可能被 frcs 包成 VSub（只包裹不物化）——判 Sum 前先
-                // force（参考版 eval_aux 同款）
-                let typ_f = force(bump, spine, defs, metas, globals, *typ);
-                let cases_list = match v_xcell_of(typ_f) {
-                    XCell::Sum { cases, .. } => *cases,
-                    // 参考 panic：typ 不是 Sum（中性 global 下的重求值可达）
-                    _ => panic!("by now only can match a sum type"),
-                };
-                (case_name, *datas, cases_list)
-            }
-            _ => ("$unknown$", &[], &[]),
-        }
-    } else {
-        ("$unknown$", &[], &[])
-    };
+    let head = force(bump, spine, defs, metas, decls, mmap, fuel, head);
     for (pat, body) in cases.iter() {
         if let Some(r) = eval_aux_case(
-            bump, spine, defs, metas, globals, head, case_name, datas, ctor_names, env, pat, *body,
+            bump, spine, defs, metas, decls, mmap, fuel, head, env, pat, *body,
         ) {
             return Some(r);
         }
@@ -63,19 +48,16 @@ fn eval_aux<'a>(
 }
 
 /// 单 (模式, 分支体) 的匹配（`eval_aux` 的内层；返回 None = 试下一分支）。
-/// 子模式的下钻走**完整 eval_aux**（对子值重新派生 case 信息——参考版
-/// 递归同款，`[(pat.clone(), body)]` 单臂表也照克隆）。
 #[allow(clippy::too_many_arguments)]
 fn eval_aux_case<'a>(
     bump: &'a Bump,
     spine: &mut Spine,
     defs: &mut Vec<V>,
     metas: &[MetaEntry],
-    globals: &[V],
+    decls: &FxHashMap<String, DeclEntryF>,
+    mmap: &MutableMap,
+    fuel: &Fuel,
     head: V,
-    case_name: &str,
-    datas: &[SumDataV<'a>],
-    ctor_names: &[&str],
     env: Env<'a>,
     pat: &PatternDetail,
     body: &'a Tm<'a>,
@@ -85,21 +67,36 @@ fn eval_aux_case<'a>(
             Some((body, env_ext(bump, env, head)))
         }
         PatternDetail::Con(name, subs) => {
+            let (case_name, typ, datas) = match v_tag(head) {
+                7 => match v_xcell_of(head) {
+                    XCell::SumCase {
+                        typ,
+                        case_name,
+                        datas,
+                    } => (*case_name, *typ, *datas),
+                    _ => return None, // 非 SumCase：试下一分支
+                },
+                _ => return None,
+            };
+            let ctor_names = match v_xcell_of(typ) {
+                XCell::Sum { cases, .. } => *cases,
+                _ => return None, // typ 不是 Sum：试下一分支
+            };
             let in_type = ctor_names.iter().any(|c| *c == name.data);
-            if !in_type {
-                // 不是该类型的构造子名 → 变量模式（保守兼容；参考版首臂）
-                Some((body, env_ext(bump, env, head)))
-            } else if case_name == name.data {
-                // datas 与子模式按序 zip（zip 截断；参考版 try_fold 同款：
-                // 每步单臂完整 eval_aux，body 原样传递，env 累积——head 不
-                // prepend）
+            if in_type && case_name == name.data {
+                if subs.len() != datas.len() {
+                    return None; // 子模式数失配：试下一分支（参考版 continue）
+                }
+                // datas 与子模式按声明序 zip，逐个下钻；先 prepend 被匹配值
+                // 本身（head 槽，编译期 walk_con 入口同序绑定），再逐字段
+                // prepend 子模式槽值（编译期字段槽在后）
                 let mut cur_body = body;
-                let mut cur_env = env;
+                let mut cur_env = env_ext(bump, env, head);
                 for (d, sub) in datas.iter().zip(subs.iter()) {
-                    let arms1: &'a [(PatternDetail, &'a Tm<'a>)] =
-                        bump.alloc([(sub.clone(), cur_body)]);
-                    match eval_aux(
-                        bump, spine, defs, metas, globals, d.val, cur_env, arms1,
+                    let df = force(bump, spine, defs, metas, decls, mmap, fuel, d.val);
+                    match eval_aux_case(
+                        bump, spine, defs, metas, decls, mmap, fuel, df, cur_env, sub,
+                        cur_body,
                     ) {
                         Some((b, e)) => {
                             cur_body = b;
@@ -109,6 +106,9 @@ fn eval_aux_case<'a>(
                     }
                 }
                 Some((cur_body, cur_env))
+            } else if !in_type {
+                // 不是该类型的构造子名 → 变量模式（保守兼容）
+                Some((body, env_ext(bump, env, head)))
             } else {
                 None // 同类型不同构造子 → 试下一分支
             }
@@ -116,15 +116,17 @@ fn eval_aux_case<'a>(
     }
 }
 
-// eval（双栈迭代 + 右链快速路径 + AppPruning 实参应用 + L09 变体）
+// eval（双栈迭代 + 右链快速路径 + AppPruning 实参应用 + decl 表 + L07 变体）
 // --------------------------------------------------------------------------------
 
 /// eval 的 work 栈条目。
 pub(super) enum W<'a> {
     Tm(&'a Tm<'a>, Env<'a>),
-    /// 应用（icit 来自 `Tm::App`）：vals 顶两个（先函数后实参）。
+    /// 应用（icit 来自 `Tm::App`）：vals 顶两个（先函数后实参）——β、
+    /// pending 累积或入栈。
     Apply(Icit),
-    /// vals 顶上是实参；函数值已知是闭包，直接 β（icit 无关）。
+    /// vals 顶上是实参；函数值已知是闭包（β 岔路下降时已 `env_nth` 出来），
+    /// 直接 β（icit 无关）。
     ApplyKnown(V),
     /// vals 顶上是 base 值，其下 `k` 个是待应用的链头（内层最上；每个链头
     /// 的 icit 在 `icits` 侧栈平行压弹）。
@@ -136,10 +138,10 @@ pub(super) enum W<'a> {
     /// vals 顶是 `vAppPruning` 的当前值；沿 (env, pr) 平行走完剩余槽位
     /// （外层先应用，icit 取自掩码；`None` 槽跳过）。
     AppPrun(Env<'a>, Option<&'a PrCons<'a>>),
-    /// vals 顶是 `vAppPruning` 的当前值；本步把 `arg` 以 `icit` 应用上去。
+    /// vals 顶是 `vAppPruning` 的当前值；本步把 `arg` 以 `icit` 应用上去
+    /// （Clo → β；卡住 match → pending；其它 → spine.push）。
     AppPrunOne(V, Icit),
-    /// vals 顶是投影接收者的值：Sum/SumCase 命中给投影值（**miss panic**，
-    /// 参考版 unwrap 同款）；Rigid（裸或链）卡成 Obj；其余 panic。
+    /// vals 顶是投影接收者的值：project 命中给投影值，miss 卡成 Obj。
     ObjSel(&'a str),
     /// vals 顶自底向上是 (v0,t0,...,v_{n-1},t_{n-1})（求值序）：装配 Sum。
     SumAsm {
@@ -153,16 +155,15 @@ pub(super) enum W<'a> {
         datas: &'a [SumDataT<'a>],
     },
     /// vals 顶是 scrutinee 的值：force 后是 SumCase → eval_aux 选分支
-    /// （**None 即 panic**，参考版 unwrap 同款）；否则卡成 Match（无
-    /// pending）。
+    /// （选中 → 尾推分支体）；否则卡成 Match（pending 空）。
     MatchSel {
         cases: &'a [(PatternDetail, &'a Tm<'a>)],
         env: Env<'a>,
     },
 }
 
-/// 双栈迭代 eval（L06 版 + L09 变体：global 大下标、中性 Prim 头（名字）
-/// 拼接、投影的 panic 语义、match 的编译期选择与卡住停等）。
+/// 双栈迭代 eval（L06 版 + L07 增量：decl 表 panic 语义、Prim 体、投影、
+/// Sum/SumCase 装配、match 的编译期选择与卡住停等）。
 #[allow(clippy::too_many_arguments)]
 pub(super) fn eval_iter<'a>(
     bump: &'a Bump,
@@ -172,7 +173,9 @@ pub(super) fn eval_iter<'a>(
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
     metas: &[MetaEntry],
-    globals: &[V],
+    decls: &FxHashMap<String, DeclEntryF>,
+    mmap: &MutableMap,
+    fuel: &Fuel,
     env0: Env<'a>,
     tm0: &'a Tm<'a>,
 ) -> V {
@@ -190,15 +193,7 @@ pub(super) fn eval_iter<'a>(
             None => break,
         };
         match w {
-            W::Tm(Tm::Var(i), env) => {
-                // 越过哨兵的下标查 global 表（参考版 eval 的 Var 臂：env 走
-                // 完才落 global——env 槽数远小于哨兵，次序无观察面）
-                if *i >= GLOBAL_BASE {
-                    vals.push(globals[(*i - GLOBAL_BASE) as usize]);
-                } else {
-                    vals.push(env_nth(defs, env, *i));
-                }
-            }
+            W::Tm(Tm::Var(i), env) => vals.push(env_nth(defs, env, *i)),
             W::Tm(Tm::Lam(name, icit, body), env) => {
                 let c = bump.alloc(CloCell {
                     name,
@@ -208,13 +203,32 @@ pub(super) fn eval_iter<'a>(
                 });
                 vals.push(v_clo(c));
             }
-            W::Tm(Tm::U(l), _) => vals.push(v_u(*l)),
+            W::Tm(Tm::U(lvl), _) => vals.push(v_u(*lvl)),
             W::Tm(Tm::LiteralType, _) => vals.push(v_lit_ty()),
             W::Tm(Tm::LiteralIntro(s), _) => vals.push(v_xcell(bump.alloc(XCell::Lit(s)))),
-            // builtin 体：**不读 env**——只产中性的 `XCell::Prim(name)` 头；
-            // 实参经 App 进 spine 链，归约统一在 force 的 `prim_reduce`
-            // （旧实现把 env 前两槽当实参，env 不足时越界 panic）。
-            W::Tm(Tm::Prim(name), _) => vals.push(v_xcell(bump.alloc(XCell::Prim(name)))),
+            // 按名查 decl 表：命中给登记值；miss panic（"unbound global"，
+            // 参考版 eval 的 Tm::Decl 臂同款——良型项不可达）。
+            // L13 式 prim：builtin 条目求值成中性的 `Decl(自身名)` 头，
+            // 应用实参经 spine 累积，归约统一在 force 的 Decl 链头。
+            W::Tm(Tm::Decl(name), _) => vals.push(match decls.get(*name) {
+                Some(e) if e.prim.is_some() => v_xcell(bump.alloc(XCell::Decl(*name))),
+                Some(e) => e.val,
+                None => panic!("unbound global {}", name),
+            }),
+            // builtin 体：实参 = env 全部槽（应用序 = 外层槽先应用）→ 链头
+            // = 最后应用 = 最内槽。归约统一在 force（不在求值点按 env 触发
+            // ——quote → eval 往返时项已改成 `Prim 实参` 的应用形态，按
+            // 现场 env 触发会把无关的字面量拼进来；参考版注释同款论证）
+            W::Tm(Tm::Prim(name), env) => {
+                let n = env_len(env);
+                let mut acc = v_xcell(bump.alloc(XCell::Prim(name)));
+                let mut i = n;
+                while i > 0 {
+                    i -= 1;
+                    acc = spine.push(acc, env_nth(defs, env, i), Icit::Expl);
+                }
+                vals.push(acc);
+            }
             W::Tm(Tm::Pi(name, icit, dom, cod), env) => {
                 work.push(W::PiBody(name, *icit, cod, env));
                 cur = Some(W::Tm(dom, env));
@@ -228,9 +242,8 @@ pub(super) fn eval_iter<'a>(
                 work.push(W::AppPrun(env, *pr));
                 cur = Some(W::Tm(head, env));
             }
-            // 投影：求值接收者（不 force——参考版同）。Sum/SumCase 命中给
-            // 投影值（miss panic，参考版 unwrap 同款）；Rigid（裸或链）卡成
-            // Obj；其余形态 panic（参考版 "impossible" 臂同款）。
+            // 投影：求值接收者（不 force——参考版同），project 命中给投影
+            // 值，miss 卡成 `Obj`
             W::Tm(Tm::Obj(h, name), env) => {
                 work.push(W::ObjSel(name));
                 cur = Some(W::Tm(h, env));
@@ -258,8 +271,8 @@ pub(super) fn eval_iter<'a>(
                 cur = Some(W::Tm(typ, env));
             }
             // match：求值 scrutinee → force → 选分支 / 卡住（参考版 eval 的
-            // Tm::Match 臂：SumCase + eval_aux 命中给分支体（**None 即
-            // panic**）；其它 neutral 卡 Match，无 pending）
+            // Tm::Match 臂：SumCase + eval_aux 命中给分支体（eval_aux 是值
+            // 层首匹配，无合一）；其它 neutral 卡 Match，pending 空）
             W::Tm(Tm::Match(s, cases), env) => {
                 work.push(W::MatchSel { cases, env });
                 cur = Some(W::Tm(s, env));
@@ -282,11 +295,7 @@ pub(super) fn eval_iter<'a>(
                     let i = *i;
                     match f {
                         Tm::Var(ix) => {
-                            let vf = if *ix >= GLOBAL_BASE {
-                                globals[(*ix - GLOBAL_BASE) as usize]
-                            } else {
-                                env_nth(defs, env, *ix)
-                            };
+                            let vf = env_nth(defs, env, *ix);
                             if v_tag(vf) == 1 {
                                 // β 岔路：函数值已在手上（闭包），ApplyKnown
                                 // 直接管 β（icit 无关）；heads>0 时 ChainWrap
@@ -326,7 +335,8 @@ pub(super) fn eval_iter<'a>(
                     cur = Some(W::Tm(c.body, env));
                 } else {
                     let r = vapp1(
-                        bump, spine, work, vals, icits, defs, metas, globals, vf, va, i,
+                        bump, spine, work, vals, icits, defs, metas, decls, mmap, fuel,
+                        vf, va, i,
                     );
                     vals.push(r);
                 }
@@ -343,7 +353,8 @@ pub(super) fn eval_iter<'a>(
                     let vf = vals.pop().expect("eval 栈：ChainWrap 缺链头");
                     let i = icits.pop().expect("eval 栈：ChainWrap 缺 icit");
                     v = vapp1(
-                        bump, spine, work, vals, icits, defs, metas, globals, vf, v, i,
+                        bump, spine, work, vals, icits, defs, metas, decls, mmap, fuel,
+                        vf, v, i,
                     );
                 }
                 vals.push(v);
@@ -418,62 +429,17 @@ pub(super) fn eval_iter<'a>(
                     cur = Some(W::Tm(c.body, env));
                 } else {
                     let r = vapp1(
-                        bump, spine, work, vals, icits, defs, metas, globals, v, arg, i,
+                        bump, spine, work, vals, icits, defs, metas, decls, mmap, fuel,
+                        v, arg, i,
                     );
                     vals.push(r);
                 }
             }
             W::ObjSel(name) => {
                 let v = vals.pop().expect("eval 栈：ObjSel 缺接收者");
-                // 精化包裹的接收者（subst_cxt 包裹的 env 槽会以 VSub 流出）
-                // 先推开 σ 再判形态（参考版 eval 的 Obj 臂同款）；force 对
-                // 非 VSub 是恒等，旧行为不变。
-                let v = if v_tag(v) == 7 && matches!(v_xcell_of(v), XCell::VSub { .. }) {
-                    force(bump, spine, defs, metas, globals, v)
-                } else {
-                    v
-                };
-                match v_tag(v) {
-                    7 => match v_xcell_of(v) {
-                        XCell::Sum { params, .. } => {
-                            match params.iter().find(|p| p.name == name) {
-                                Some(p) => vals.push(p.val),
-                                None => panic!("impossible"), // 参考 unwrap：字段必在
-                            }
-                        }
-                        XCell::SumCase { typ, datas, .. } => {
-                            // typ 必须是 Sum（参考版 match 同款，否则
-                            // panic "impossible"）；索引参数优先，字段在后。
-                            // typ 槽可能被 frcs 包成 VSub（只包裹不物化）——
-                            // 判 Sum 前先 force（参考版 eval 的 Obj 臂同款）。
-                            let typ_f = force(bump, spine, defs, metas, globals, *typ);
-                            let sparams = match v_xcell_of(typ_f) {
-                                XCell::Sum { params, .. } => *params,
-                                _ => panic!("impossible"),
-                            };
-                            match sparams
-                                .iter()
-                                .find(|p| p.name == name)
-                                .map(|p| p.val)
-                                .or_else(|| datas.iter().find(|d| d.name == name).map(|d| d.val))
-                            {
-                                Some(p) => vals.push(p),
-                                None => panic!("impossible"),
-                            }
-                        }
-                        _ => panic!("impossible"),
-                    },
-                    // Rigid（裸或链）：卡住投影（参考版 `x @ Val::Rigid` 臂）
-                    0 => vals.push(v_xcell(bump.alloc(XCell::Obj { val: v, name }))),
-                    2 => {
-                        let hd = spine.spine_head(v_spine_of(v));
-                        if v_tag(hd) == 0 {
-                            vals.push(v_xcell(bump.alloc(XCell::Obj { val: v, name })));
-                        } else {
-                            panic!("impossible"); // Flex/Obj 头接收者：参考版同 panic
-                        }
-                    }
-                    _ => panic!("impossible"),
+                match project(v, name) {
+                    Some(p) => vals.push(p),
+                    None => vals.push(v_xcell(bump.alloc(XCell::Obj { val: v, name }))),
                 }
             }
             W::SumAsm { name, params, cases } => {
@@ -520,22 +486,25 @@ pub(super) fn eval_iter<'a>(
             }
             W::MatchSel { cases, env } => {
                 let sv = vals.pop().expect("eval 栈：MatchSel 缺 scrutinee");
-                let s2 = force(bump, spine, defs, metas, globals, sv);
+                let s2 = force(bump, spine, defs, metas, decls, mmap, fuel, sv);
+                let mut stuck = true;
                 if v_tag(s2) == 7 && matches!(v_xcell_of(s2), XCell::SumCase { .. }) {
-                    match eval_aux(bump, spine, defs, metas, globals, s2, env, cases) {
-                        Some((body_tm, env2)) => {
-                            // 分支选中：体在本 eval 循环里尾推
-                            cur = Some(W::Tm(body_tm, env2));
-                        }
-                        // 参考 unwrap：编译期已保证可穷尽，运行时无臂可命中
-                        // 即崩溃（两版同崩，判定一致）
-                        None => panic!("match: no branch matched at runtime"),
+                    // 不烧 fuel：参考版 eval(Tm::Match) 直呼 eval_aux，无
+                    // burn（force 的 Match 重选臂才烧——见 force 的 Match 臂）。
+                    if let Some((body_tm, env2)) = eval_aux(
+                        bump, spine, defs, metas, decls, mmap, fuel, s2, env, cases,
+                    ) {
+                        // 分支选中：体在本 eval 循环里尾推（pending 空）
+                        cur = Some(W::Tm(body_tm, env2));
+                        stuck = false;
                     }
-                } else {
+                }
+                if stuck {
                     vals.push(v_xcell(bump.alloc(XCell::Match {
                         scrutinee: s2,
                         env,
                         cases,
+                        pending: &[],
                     })));
                 }
             }

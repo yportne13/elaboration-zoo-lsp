@@ -1,21 +1,28 @@
-//! subst：显式替换（`SubstV`/`SubEntryV`/`SUBSTV_ALIVE`）、σ 克隆的跨轮回收
-//! （`vsub_reclaim`）、浅扫描（`mentions_level`）、读点包裹（`wrap_sub`）、
-//! 穿参状态（`SpecSolve`）。原 bump_spine_iter.rs 的 SubstV 定义 +
-//! "σ 克隆的跨轮回收" 节，逐行搬运（2026-09-23 拆分）。
+//! subst：模式特化的显式替换（`SubstV`/`SubEntryV`/`SUBSTV_ALIVE`）、σ 克隆
+//! 的跨轮回收（`VSUB_REGS`/`vsub_reclaim`）、读点包裹（`wrap_sub`）、浅扫描
+//! （`mentions_level`）、传递 occurs（`occurs_transitive`，L07 P1 的 L08
+//! 孪生移植）、穿参状态（`SpecSolve`），以及卡住 match 分支体
+//! 重求值用的 `simpl_decl`。原 bump_spine_iter.rs 的 SubstV 定义 +
+//! "σ 克隆的跨轮回收" 节 + simpl_decl 块，逐行搬运（2026-09-23 拆分）。
 
 use bumpalo::Bump;
+use rustc_hash::FxHashMap;
 use std::rc::Rc;
 
 use super::parser::syntax::Icit;
 
 use super::env::Env;
+use super::prim::DeclEntryF;
 use super::spine::Spine;
-use super::syntax::{V, XCell, v_clo_of, v_lvl_of, v_pi_of, v_spine_of, v_tag, v_xcell, v_xcell_of};
+use super::syntax::{V, v_clo_of, v_lvl_of, v_pi_of, v_spine_of, v_tag, v_xcell, v_xcell_of, XCell};
 
 /// 模式特化的解：层级 → 值 的**持久化单链**（参考版 `Subst` 同构；链头 =
 /// 最新的解）。仅由模式编译器经 [`SubstV::extend`] / 特化合一的
 /// [`SpecSolve::acc`] 构建；`Rc` 共享让臂边界回滚 = 指针赋值、VSub 包裹
-/// = O(1)。取代旧 `update_cxt` 的上下文改写（改写目标槽 + 全槽 refresh）。
+/// = O(1)。与旧 `pm_defs` 事实表的对应：`extend` ≙ `pm_solve` + push
+/// （链头即最新，查询沿链首个命中 ≙ `rev().find` 取最新），`lookup_hit`
+/// ≙ force 读点的查表展开——区别在于解只对**被包裹过的值**可见（读点
+/// 显式），不再是全局查找表。
 #[derive(Clone, Default)]
 pub(crate) struct SubstV {
     head: Option<Rc<SubEntryV>>,
@@ -31,11 +38,10 @@ struct SubEntryV {
 
 /// 存活的 σ 链条目数（`SubEntryV` 各计 1；头壳 `SubstV` 带 `Clone` derive、
 /// 值级复制会破坏计数配对，故不计）。仅为跨轮回收的回归测试提供观察口
-/// （[SUBSTV_ALIVE]）；一次原子加减发生在 extend / compose 的分配与 Rc
+/// ([SUBSTV_ALIVE])；一次原子加减发生在 extend / compose 的分配与 Rc
 /// 归零的 Drop 时机，均非热路径。观察泄漏同样有效：arena 克隆泄漏 ⇒ 其
 /// head 链的条目引用不归还 ⇒ 计数不回落。
-pub(crate) static SUBSTV_ALIVE: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
+pub(crate) static SUBSTV_ALIVE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 impl Drop for SubEntryV {
     fn drop(&mut self) {
@@ -44,29 +50,20 @@ impl Drop for SubEntryV {
 }
 
 // --------------------------------------------------------------------------------
-// σ 克隆的跨轮回收（L07 2026-09-18 修复轮的 L09 移植，README §7.7 的落地）
+// σ 克隆的跨轮回收（2026-09-18，README §7.7 的落地；L07 孪生版同款移植）
 // --------------------------------------------------------------------------------
 // bump `reset()` 不跑 Drop：arena 内 `XCell::VSub` 持有的 `Rc<SubstV>` 克隆
 // 的强引用永不归还，链（及后缀）跨轮慢泄漏。登记表在 [`wrap_sub`] 构造
 // 克隆的**同一时刻**记录 `Rc::as_ptr`，轮界（[`Machine::clear_round`]，与
 // 三处 `bump.reset()` 严格伴生）逐指针 `Rc::from_raw` + drop。
 //
-// SAFETY（恰好归还"arena 那一份"强引用，等价于被跳过的 Drop）——按 L09
-// 实际代码逐条核对（2026-09-18 移植轮）：
-// - **构造点唯一**：`XCell::VSub` 在本层孪生里仅 [`wrap_sub`] 一处构造
-//   （subst_cxt / frcs / unify_pm 的包裹全部经 [`wrap_sub`]），登记点与
-//   构造点一一对应，不存在绕过登记的 arena 克隆；
-// - 指针在登记到归还之间始终有效：Rc 节点在全局堆上（arena 只持有
-//   克隆），arena 克隆持强引用 ⇒ 计数 ≥ 1，节点不会在归还前释放；外部
-//   持有者（编译器局部 σ、链共享）只会让计数更多，不会提前释放节点；
+// SAFETY（恰好归还"arena 那一份"强引用，等价于被跳过的 Drop）：
+// - 指针在登记到归还之间始终有效：arena 克隆持强引用，外部持有者
+//   （`Compiler.sub`、链共享）只会让计数更多，不会提前释放节点；
 // - 同一节点被 wrap 多次 = 多个克隆 = 多次登记 = 多次减一，各归还各的；
 // - 表外持有者不受影响：归还后节点若仍有引用则继续存活（正常 Rc 语义），
 //   归零则连同后缀级联释放（后缀条目有自己的计数与 Drop）；
-// - [`vsub_reclaim`] 后表已清空（drain），旧指针不会跨轮重复 drop；
-// - **线程模型**：`Rc<SubstV>` 非 Send ⇒ 持有 σ 的 Tycker 不可跨线程移动，
-//   wrap_sub 与 clear_round 必在同一线程执行，thread_local 登记表所见即
-//   所用；线程退出时表随 thread_local 析构（只丢指针，不 from_raw），
-//   未归还份额即普通泄漏，无悬垂解引用。
+// - [`vsub_reclaim`] 后表已清空，旧指针不会跨轮重复 drop。
 thread_local! {
     static VSUB_REGS: std::cell::RefCell<Vec<*const SubstV>> =
         const { std::cell::RefCell::new(Vec::new()) };
@@ -114,7 +111,7 @@ impl SubstV {
         None
     }
 
-    /// x 是否已有解。
+    /// x 是否已有解（旧 `pm_def(x).is_none()` 的否定形式）。
     pub(super) fn has(&self, x: u32) -> bool {
         let mut cur = self.head.clone();
         while let Some(e) = cur {
@@ -126,7 +123,8 @@ impl SubstV {
         false
     }
 
-    /// 叠加一条解 `x := v`：O(1) cons 到链头（链头 = 最新）。
+    /// 叠加一条解 `x := v`：O(1) cons 到链头（链头 = 最新 ≙ 旧 `pm_def`
+    /// 的 `rev().find` 取最新；同键旧条目留在链上但永不命中）。
     pub(super) fn extend(sub: &Rc<SubstV>, x: u32, v: V) -> Rc<SubstV> {
         SUBSTV_ALIVE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Rc::new(SubstV {
@@ -164,10 +162,11 @@ impl SubstV {
 }
 
 /// 解值的浅结构是否引用 σ 的某个已解层级（参考版 `Subst::mentions_level`
-/// 同款遍历面）。含闭包 **env 槽**与 Match 的 scrutinee/captured env；不含
-/// 闭包体 / Match 分支体。VSub 保守记为引用。Flex 只扫 spine。误报只多
-/// 一次包裹，漏报才会丢精化——宁宽勿窄。
-fn mentions_level(spine: &Spine, defs: &[V], v: V, sub: &SubstV) -> bool {
+/// 同款遍历面）。含闭包 **env 槽**（它们是值，读点会流出）与 Match 的
+/// scrutinee/captured env/pending；不含闭包体 / Match 分支体（Tm，求值时
+/// 才经 env 读到槽值）。VSub 保守记为引用（已包过 σ 的值再包一层无害）。
+/// Flex 只扫 spine。误报只多一次包裹，漏报才会丢精化——宁宽勿窄。
+pub(super) fn mentions_level(spine: &Spine, defs: &[V], v: V, sub: &SubstV) -> bool {
     fn env_slots(spine: &Spine, defs: &[V], env: Env<'_>, sub: &SubstV) -> bool {
         let mut n = env.binds;
         while let Some(e) = n {
@@ -177,18 +176,15 @@ fn mentions_level(spine: &Spine, defs: &[V], v: V, sub: &SubstV) -> bool {
             n = e.next;
         }
         for k in 0..env.flat_len {
-            if mentions_level(
-                spine,
-                defs,
-                defs[(env.flat_base + env.flat_len - 1 - k) as usize],
-                sub,
-            ) {
+            let v = defs[(env.flat_base + env.flat_len - 1 - k) as usize];
+            if mentions_level(spine, defs, v, sub) {
                 return true;
             }
         }
         false
     }
     match v_tag(v) {
+        // Rigid 裸头：该层级已被 σ 解出即引用
         0 => sub.has(v_lvl_of(v)),
         2 => {
             let h = v_spine_of(v);
@@ -202,10 +198,14 @@ fn mentions_level(spine: &Spine, defs: &[V], v: V, sub: &SubstV) -> bool {
                 },
                 _ => false,
             };
+            if head_hit {
+                return true;
+            }
             let mut args: Vec<(V, Icit)> = Vec::new();
             spine.collect_args(h, &mut args);
-            head_hit || args.iter().any(|(a, _)| mentions_level(spine, defs, *a, sub))
+            args.iter().any(|(a, _)| mentions_level(spine, defs, *a, sub))
         }
+        // Flex 裸头 / U / LiteralType：无引用
         5 | 3 | 6 => false,
         1 => {
             let c = v_clo_of(v);
@@ -216,23 +216,160 @@ fn mentions_level(spine: &Spine, defs: &[V], v: V, sub: &SubstV) -> bool {
             mentions_level(spine, defs, p.dom, sub) || env_slots(spine, defs, p.env, sub)
         }
         7 => match v_xcell_of(v) {
+            // 已被包裹的值保守视为引用（内层结构不再探查）
             XCell::VSub { .. } => true,
-            XCell::Lit(_) | XCell::Prim(_) => false,
+            XCell::Lit(_) | XCell::Decl(_) | XCell::Prim(_) => false,
             XCell::Obj { val, .. } => mentions_level(spine, defs, *val, sub),
             XCell::Sum { params, .. } => params.iter().any(|p| {
-                mentions_level(spine, defs, p.val, sub)
-                    || mentions_level(spine, defs, p.ty, sub)
+                mentions_level(spine, defs, p.val, sub) || mentions_level(spine, defs, p.ty, sub)
             }),
             XCell::SumCase { typ, datas, .. } => {
                 mentions_level(spine, defs, *typ, sub)
                     || datas.iter().any(|d| mentions_level(spine, defs, d.val, sub))
             }
             XCell::Match {
-                scrutinee, env, ..
-            } => mentions_level(spine, defs, *scrutinee, sub) || env_slots(spine, defs, *env, sub),
+                scrutinee,
+                env,
+                pending,
+                ..
+            } => {
+                mentions_level(spine, defs, *scrutinee, sub)
+                    || env_slots(spine, defs, *env, sub)
+                    || pending
+                        .iter()
+                        .any(|(u, _)| mentions_level(spine, defs, *u, sub))
+            }
         },
         _ => false,
     }
+}
+
+/// 传递 occurs：`v` 在 σ 之下是否**经已解层级**提到 `target`（参考版
+/// `Subst::occurs_transitive` 同款；L07 P1 的 L08 孪生移植）。
+///
+/// 与 [`mentions_level`] 同一遍历面（含闭包 env 槽 / Match 的 scrutinee+env+
+/// pending；不含闭包体与分支体），区别只在前者遇已解 rigid 就返回 true，
+/// 这里则**跟随解值**继续扫——这正是 `x := a`、`a := succ x` 两跳环的
+/// 检测点。带 2048 步预算，耗尽按「未出现」（宁漏不误杀：误杀会把合法
+/// 分支判成不可达）。`VSub` 跟随内层 σ（外层 σ 对该值不再适用）。
+pub(super) fn occurs_transitive(
+    bump: &Bump,
+    spine: &Spine,
+    defs: &[V],
+    v: V,
+    target: u32,
+    sub: &Rc<SubstV>,
+) -> bool {
+    const BUDGET: u32 = 2048;
+    let mut budget = BUDGET;
+    let mut stack: Vec<(V, Rc<SubstV>)> = vec![(v, sub.clone())];
+    let mut args: Vec<(V, Icit)> = Vec::new();
+
+    fn push_env(defs: &[V], stack: &mut Vec<(V, Rc<SubstV>)>, env: Env<'_>, sub: &Rc<SubstV>) {
+        let mut n = env.binds;
+        while let Some(e) = n {
+            stack.push((e.val, sub.clone()));
+            n = e.next;
+        }
+        for k in 0..env.flat_len {
+            stack.push((defs[(env.flat_base + env.flat_len - 1 - k) as usize], sub.clone()));
+        }
+    }
+
+    /// 已解 rigid / 裸头：命中 target ⇒ true；有解 ⇒ 把解值压栈跟随。
+    fn visit_rigid(
+        bump: &Bump,
+        spine: &Spine,
+        defs: &[V],
+        stack: &mut Vec<(V, Rc<SubstV>)>,
+        sub: &Rc<SubstV>,
+        lvl: u32,
+        target: u32,
+    ) -> bool {
+        if lvl == target {
+            return true;
+        }
+        if sub.has(lvl) {
+            if let Some(hit) = SubstV::lookup_hit(bump, spine, defs, sub, lvl) {
+                stack.push((hit, sub.clone()));
+            }
+        }
+        false
+    }
+
+    while let Some((v, sub)) = stack.pop() {
+        if budget == 0 {
+            return false;
+        }
+        budget -= 1;
+        match v_tag(v) {
+            0 => {
+                if visit_rigid(bump, spine, defs, &mut stack, &sub, v_lvl_of(v), target) {
+                    return true;
+                }
+            }
+            2 => {
+                let h = v_spine_of(v);
+                let hd = spine.spine_head(h);
+                match v_tag(hd) {
+                    0 => {
+                        if visit_rigid(bump, spine, defs, &mut stack, &sub, v_lvl_of(hd), target) {
+                            return true;
+                        }
+                    }
+                    7 => {
+                        if let XCell::Obj { val, .. } = v_xcell_of(hd) {
+                            stack.push((*val, sub.clone()));
+                        }
+                    }
+                    _ => {}
+                }
+                args.clear();
+                spine.collect_args(h, &mut args);
+                for (a, _) in args.iter() {
+                    stack.push((*a, sub.clone()));
+                }
+            }
+            5 | 3 | 6 => {}
+            1 => push_env(defs, &mut stack, v_clo_of(v).env, &sub),
+            4 => {
+                let p = v_pi_of(v);
+                stack.push((p.dom, sub.clone()));
+                push_env(defs, &mut stack, p.env, &sub);
+            }
+            7 => match v_xcell_of(v) {
+                XCell::VSub { val, sub: s2 } => stack.push((*val, s2.clone())),
+                XCell::Lit(_) | XCell::Decl(_) | XCell::Prim(_) => {}
+                XCell::Obj { val, .. } => stack.push((*val, sub.clone())),
+                XCell::Sum { params, .. } => {
+                    for p in params.iter() {
+                        stack.push((p.val, sub.clone()));
+                        stack.push((p.ty, sub.clone()));
+                    }
+                }
+                XCell::SumCase { typ, datas, .. } => {
+                    stack.push((*typ, sub.clone()));
+                    for d in datas.iter() {
+                        stack.push((d.val, sub.clone()));
+                    }
+                }
+                XCell::Match {
+                    scrutinee,
+                    env,
+                    pending,
+                    ..
+                } => {
+                    stack.push((*scrutinee, sub.clone()));
+                    push_env(defs, &mut stack, *env, &sub);
+                    for (a, _) in pending.iter() {
+                        stack.push((*a, sub.clone()));
+                    }
+                }
+            },
+            _ => {}
+        }
+    }
+    false
 }
 
 /// "解前构建、解后消费"的值的读点纪律：用当前精化替换包裹（O(1) Rc
@@ -250,15 +387,35 @@ pub(super) fn wrap_sub<'a>(bump: &'a Bump, sub: &Rc<SubstV>, v: V) -> V {
         });
         // 注册后置：alloc 成功（cell 内 clone 的 +1 已落账）才登记。若注册
         // 在前而 alloc 失败 panic 又被 catch_unwind 捕获，轮界 reclaim 的
-        // Rc::from_raw + drop 会按未发生的 +1 过度递减引用计数（L07 评审
-        // P2，2026-09-18 修复 7 的同步移植）。
+        // Rc::from_raw + drop 会按未发生的 +1 过度递减引用计数（评审 P2）
         VSUB_REGS.with(|r| r.borrow_mut().push(Rc::as_ptr(sub)));
         v_xcell(cell)
     }
 }
+
 /// 特化合一的进行时状态（参考版 `SpecSolve` 同构）。`solvable` = 本子句
-/// 可解的 rigid 层级；`acc` = 已解出的替换。
+/// 可解的 rigid 层级（模式槽 + 外层 bind 槽基线）；`acc` = 已解出的替换
+/// ——编译器的 σ 作种子，方程途中叠加，调用方在方程结束后取走 `acc`
+/// 作为新 σ（臂边界回滚 = 恢复快照指针）。
 pub(crate) struct SpecSolve<'a> {
     pub(crate) solvable: &'a [u32],
     pub(crate) acc: Rc<SubstV>,
+}
+// quote/rename 卡住 match 的分支体时用的 decl 表：所有全局值换成指向自身
+// 的中性 `Decl`，防止递归定义在求值分支体时被重展开。enum 类型本体的值
+// （`Sum`）保持原样——构造子值的 `typ` 槽需要真实的 Sum 值。（参考版
+// `simpl_decl` 同款；快版直接克隆表替换 val——与参考版逐条目换值同构，
+// 无需给内核加"中性全局"开关。）
+pub(super) fn simpl_decl(bump: &Bump, decls: &FxHashMap<String, DeclEntryF>) -> FxHashMap<String, DeclEntryF> {
+    decls
+        .iter()
+        .map(|(k, e)| {
+            let val = if v_tag(e.val) == 7 && matches!(v_xcell_of(e.val), XCell::Sum { .. }) {
+                e.val
+            } else {
+                v_xcell(bump.alloc(XCell::Decl(bump.alloc_str(k))))
+            };
+            (k.clone(), DeclEntryF { ty: e.ty, val, prim: e.prim, prim_names: e.prim_names })
+        })
+        .collect()
 }

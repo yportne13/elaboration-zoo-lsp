@@ -1,95 +1,96 @@
-//! L09 核心机（eval / quote / unify / rename / solve / prune / check /
-//! infer / check_universe / 模式编译）的极致性能版：L08 冠军配方
-//! （`bump_spine_iter`）向 MLTT/universe 层的移植。继承 L05-L08 的全部
-//! 机制（见 L06/L08 版模块注释与 readme）：bump arena、打包值 [`V`]、
-//! 扁平中性 + spine 栈（含链头种类 `Entry.hk` 的 O(1) 头判定）、复合环境、
-//! 迭代内核（eval 双栈 / quote 任务栈 / unify 工作表 / rename 任务栈）、
-//! quote 记忆化、O(1) 名字解析、`Tycker` 稳态复用。
+//! L09 核心机（eval / quote / unify / force / rename / solve / prune / check /
+//! infer / decl 表 / builtin prim / enum 注册 / 模式编译）的极致性能版：
+//! L08 冠军配方（`bump_spine_iter`）原样继承，叠加 `Type N` 宇宙的孪生实现
+//! （打包值 tag 3 携带层级、`check_universe`、enum universe_lvl 扫描）。继承 L05/L06/L07
+//! 的全部机制（见 L06 版模块注释与 readme）：
 //!
-//! **L09 自己的增量与差异**（参考版 = `super` 的分文件实现，语义以其为
-//! 准）——参考版是 init 时期架构的现代残存层，与 L06-L08 的 decl 表世界
-//! 有系统性不同，孪生版逐项对齐：
+//! 1. bump arena；打包值 [`V`]（低 3 位 tag）；扁平中性 + spine 栈；
+//! 2. 复合环境（平坦 def 区域 + 持久 binder 链）；
+//! 3. 迭代内核：eval 双栈 / quote 任务栈 / unify 工作表 / rename 任务栈 /
+//!    force 循环；
+//! 4. quote 记忆化（println 输出口径）+ unify 判等记忆化（`L06_NO_CONV_MEMO=1`
+//!    消融）+ O(1) 名字解析（`L06_NO_NAME_MAP=1` 消融）；
+//! 5. `Tycker` 稳态复用（跨轮 `Bump::reset`）、热路径草稿常驻、
+//!    `Pruning` 跳段（none-run）、`RenBuf` 换代缓冲、fresh meta 免 eval 快捷路径。
 //!
-//! - **宇宙层级**：`U(u32)`（`Type N` 语法；裸 `U` 只是普通变量名）。
-//!   打包值 tag 3 从立即数改为携带层级（`V = lvl<<3|3`，61 位余量）。
-//!   类型注解一律过 [`Machine::check_universe`]（参考版完整版：可解
-//!   meta——pren.dom==0 时 meta 类型 force 后是 U 即解 `U(0)`，否则
-//!   rename 出 `U(0)` 的解；两分支都返回层级 0）。
-//! - **全局 = env 外的 `global` 表 + 大下标**：没有 decl 表。def/enum 在
-//!   `Infer.global: HashMap<Lvl, Val>` 里按 `global_idx` 登记，项层引用是
-//!   `Tm::Var(Ix(global_idx + 1919810))`（[`GLOBAL_BASE`] 哨兵）；eval 的
-//!   Var 臂对越过哨兵的下标查 global 表，quote/rename 对越过哨兵的 Rigid
-//!   原样产出大下标 Var。递归 def = fake_bind（src_names 里以全局层级占
-//!   位）+ 检查前 global 表放 `VVar(自身大层级)` 占位 + 检查后覆盖真值。
-//! - **builtin 只有 `string_concat`**：builtin 的**值 = 中性
-//!   `XCell::Prim(name)` 头**（不再构造 λ 链、不再读 env 槽）；实参经
-//!   App 进 spine 链，force 在 Prim 链头按 `prim_reduce` 归约（全为字面
-//!   量才拼接，否则保持卡住）。没有可变全局 / 文件 IO / 其余 builtin。
-//! - **卡住 match 无 pending、force 只展开 Flex**：v_app 对 Match panic
-//!   （不可能吸收实参）；参考版 force 只有一个 Flex 臂——meta 解开后
-//!   不会重选 match、不展开投影/decl。卡住投影 `Val::Obj` 只在 eval 的
-//!   Tm::Obj 臂产生（接收者 Rigid 才卡，其余 panic）。
-//! - **模式特化不走 pm_defs**：参考版走 `check_pm`/`unify_pm` +
-//!   `Cxt::update_cxt`/`refresh`——把精化等式**直接改写进环境**（目标槽
-//!   替换 + 全槽在"更新后 env"下重求值重锚定），src_names 按层级取类型
-//!   （BiMap 的 map2 持久），快版镜像为 `lvl_types` 表 + 双轨迹撤销。
-//!   模式编译器（Compiler）与参考版 pattern_match.rs 同步维护（2026-09-18
-//!   自决策树矩阵重写为 L07 逐臂下钻，L10-L12 同款）：walk_pat 绑槽 +
-//!   check_pm_final 特化 + subst_cxt 臂上下文；覆盖探测 = 值级结构探测
-//!   （`run_pure_probe` 快照回滚）。
-//! - **unify 无燃料、无 pm 臂、无 (Obj,Obj)/宽松臂**：臂序 = U/Pi/Rigid/
-//!   Flex/Flex/Lam/η/Flex 求解/LiteralType 宽松/Sum/SumCase/Match；
-//!   flex_flex 单方向尝试无快照回滚；SumCase/SumCase 比 typ+datas（L07+
-//!   只比 datas）；Match/Match 分支体在**中性 global 克隆**下重求值
-//!   （参考版 avoid_recursive 同款——快版传中性 globals 视图）。
-//! - **重定义静默覆盖**（参考版无 redefine 检查）；构造子只以**裸名**登记
-//!   （无 `Enum.case` 别名；struct 的 case 名本身是 `Name.mk`）。
+//! L07 的增量（sum-type 层语义的落地）原样继承，不在此赘述——参考版 =
+//! `super` 的分文件实现，语义以其为准。**L08 自己的增量极薄**：积类型是
+//! 解析器侧语法糖（`struct` 脱糖成单 `mk` 构造子 enum、`new` 脱糖成限定
+//! 构造子应用），核心机变体/编码不动。镜像点两处：`infer_expr` 的
+//! `Raw::Obj` 臂——接收者类型是 `XCell::Sum`（struct 只有类型没有实例值）
+//! 且单 case 名字带 `.mk` 时，剥 `mk` 的构造子类型链取字段类型，前字段
+//! binder 以接收者卡住投影实例化，与参考版 elaboration 逐句对应；
+//! `unify_iter` 的 `(Obj, Obj)` 合同统一臂——对位参考版为剥链精确化补的
+//! 合一臂（L07 潜伏缺口，见 L08 README §2），裸 XCell 单元与带实参 spine
+//! 链两种形态同臂处理。
+//!
+//! 以下为 L07 增量机制的原始说明（保留备查）：
+//!
+//! - **值编码**：tag 7 的 [`XCell`] 从 Lit/Decl 扩到 `Prim`（卡住内建应用
+//!   头）、`Obj`（卡住投影）、`Sum` / `SumCase`（和类型与构造子值）、
+//!   `Match`（卡住 match：scrutinee + 捕获 env + 编译分支 + pending 实参）。
+//!   带实参的 Prim/Obj/Decl 与 Rigid/Flex 一样表示为 spine 栈上的链（头 =
+//!   `Entry.hk` 记录的头种类，push 时随函数侧传播，O(1) 判定）。
+//! - **builtin 触发点后移**：L06 在应用时触发（`decl_apply`）；L07 参考版
+//!   的 builtin 值是 `λ 参数链 → Tm::Prim(名)`，实参经 env 全槽进入
+//!   `Val::Prim(名, spine)`（链头 = 最后应用的实参），归约统一在 force
+//!   的 [`prim_reduce`]（L06 cxt.rs 函数体的逐句移植）。
+//! - **模式特化事实表**：`pm_defs`（子句变量 := 值）+ `pm_solvable`（当前
+//!   子句的可解 bind 槽）+ `pm_mark`/`pm_restore`（truncate 回滚）；force
+//!   在裸 Rigid 读点惰性展开；[`force_arg`] 不展开 pm_defs、不重选 Match
+//!   （invert / prune_vflex 专用——槽位引用是作用域事实）。
+//! - **unify_fuel**：force 的每次展开与 unify 的每次递归各消耗 1；耗尽即把
+//!   值当未解处理 / Err。充值点与参考版一致（unify_catch / 编译入口 / nf）。
+//! - **卡住 match 的三处特殊处理**：unify 的 Match/Match（struct_eq 快路径
+//!   + 逐分支在 fresh rigid 槽下用简化 decl 表重求值再比）、quote/rename
+//!   的分支体重求值（[`simpl_decl`] 防递归重展开）、v_app 的 pending 累积
+//!   （分支选中后在值层逐个应用——项层 splice 会把实参自由变量引到错误
+//!   上下文，参考版 `v_app` 的 Match 臂同款）。
+//! - **decl 表写时复制**：`Rc<FxHashMap>` + `Rc::make_mut` 镜像参考版
+//!   `Cxt::decl_insert`——递归 def 的"占位 → 覆盖"只对本定义可见；源码
+//!   名字解析 = 局部 name_map 之后查 decl 表（参考版 `Raw::Var` 同序）。
 //!
 //! 与参考版共用 parser / pretty / preprocess，**Ok 输出逐字节一致**（互检
 //! 测试 + `tests/l09_fast_parity.rs`）。已知偏差（仅错误消息内容，不影响
-//! 判定与 Ok 输出）：快版错误里内嵌的 Debug-Val/Tm 的名字 Span 全零
-//! （参考版携带源码偏移），套件比对前按 `start_offset/end_offset/path_id`
-//! 归一化。
+//! 判定与 Ok 输出）：快版导出项的名字 Span 全零，参考版错误文案里的
+//! Debug-Span 携带源码偏移，同构但数字不同。unify 的位相等捷径对 tag 7
+//! 与 **Obj 头的链**关闭：`(Lit, Lit)` 参考版无自反臂（同字面量也 Err），
+//! `(Obj, Obj)` 走专门合同臂（比较接收者 + 实参）——两者都不做字面
+//! 自反放行；捷径放行会误 Accept。
+
 //!
 //! # 分模块导览（2026-09-23 拆分：单文件 → 目录模块）
 //!
-//! 本文件原为约 7.5k 行单文件；按既有 `// xxx ----` 分节线拆为同目录
+//! 本文件原为约 8.3k 行单文件；按既有 `// xxx ----` 分节线拆为同目录
 //! `bump_spine_iter/` 下的子模块（纯机械搬运：函数体与注释逐行未动，
 //! 仅补各子模块 `use` 与跨子系统引用所需的 `pub(super)` 可见性）：
 //!
-//! - `syntax`：bump 项 Tm/PrCons/LCons + 打包值 V/XCell 与 v_* 构造/
-//!   访问器 + global 大下标哨兵 `GLOBAL_BASE`；
-//! - `subst`：显式替换 SubstV、σ 跨轮回收（`vsub_reclaim`）、
-//!   `mentions_level`、`wrap_sub`、`SpecSolve`；
+//! - `syntax`：bump 项 Tm/PrCons/LCons + 打包值 V/XCell 与 v_* 构造/访问器；
+//! - `subst`：显式替换 SubstV、σ 跨轮回收（VSUB_REGS/vsub_reclaim）、
+//!   wrap_sub、mentions_level、SpecSolve、simpl_decl；
 //! - `env`：复合环境（平坦 defs 区 + binder 链）与 CloCell/PiCell；
-//! - `spine`：扁平中性栈（Spine/Entry/HK_*）与 metacontext（MetaEntry/
-//!   meta_val_of/lit_of）；
-//! - `force`：force/frcs/force_arg + 展开燃料（`UNIFY_FUEL`/refuel/burn）+
-//!   vapp1/vapp_ok/project + val_mentions_lvl（条目按原行序跨三处拼装）；
-//! - `eval`：运行时分支选择（eval_aux/eval_aux_case）+ 双栈迭代 eval
-//!   （W/eval_iter）；
+//! - `spine`：扁平中性栈（Spine/Entry/HK_*）与 metacontext（MetaEntry）；
+//! - `prim`：decl 表基础设施（DeclEntryF/MutableMap/Fuel）与 builtin
+//!   归约 prim_reduce；
+//! - `force`：force/frcs/force_arg + vapp1/vapp_ok/project +
+//!   val_mentions_lvl；
+//! - `eval`：双栈迭代 eval（W/eval_iter）+ 运行时分支选择（eval_aux）；
 //! - `quote`：任务栈 quote（QJob/quote_iter + QuoteMemo 记忆化）；
 //! - `unify`：工作表 unify（UItem/unify_iter + intersect/flex-flex/
-//!   lockstep + NO_CONV_MEMO 消融 + ReclaimOnClear 缓冲归还口径）；
+//!   lockstep）；
 //! - `rename`：solve 族（RenBuf/invert/solve/rename/prune/lams，全迭代）；
-//! - `machine`：稳态 Machine + elaboration（Cxt/TCons/DeclOut）+ builtin
-//!   注册（每轮 prime + string_concat 源项）；
-//! - `compiler`：模式匹配编译（特化合一/覆盖探测，L07 逐臂下钻款）；
-//! - `debug`：错误消息内嵌 `{:?}` 的 Debug 复刻（L09 特有分节，独立成模块）；
-//! - `entry`：export/tm_size/Tycker/run_fast/parse；
+//! - `struct_eq`：结构相等快路径（EqBudget + struct_{tm,val,env}_eq）；
+//! - `machine`：稳态 Machine + elaboration（Cxt/decl 表/builtin 注册/
+//!   prime_round/elab_all）；
+//! - `compiler`：模式匹配编译（特化合一/覆盖检查/嵌套记账）；
+//! - `entry`：export/Tycker/run_fast/parse（+ NO_NAME_MAP 消融开关）；
 //! - `bench_src`：基准负载生成器（bins 引用）。
-//!
-//! 与 L07 拆分的差异（按本层实际内容）：无 decl 表与 struct_eq 快路径
-//!（`prim` 子模块仅含 string_concat 的 `prim_reduce`）；燃料块随 force、
-//! ReclaimOnClear 按原文件位置留在 unify；内嵌测试本层没有（entry 无
-//! 测试段）。
 //!
 //! 对外可见性面在下方以 `pub(crate) use` 原样恢复（外部消费者
 //! `L09_mltt::bump_spine_iter::XXX` 路径零改动）。
 
 mod bench_src;
 mod compiler;
-mod debug;
 mod entry;
 mod env;
 mod eval;
@@ -99,31 +100,40 @@ mod prim;
 mod quote;
 mod rename;
 mod spine;
+mod struct_eq;
 mod subst;
 mod syntax;
 mod unify;
 
-// L09_mltt 的外部项（parser / pretty / mod.rs 项）：以本模块的私有
-// use 绑定恢复原 `super::` 路径面——子模块内 `use super::parser::…` 等
-// 与拆分前单文件逐字一致。
+// L09_mltt 的外部项（parser / pretty / preprocess / mod.rs 项）：以
+// 本模块的私有 use 绑定恢复原 `super::` 路径面——子模块内
+// `use super::parser::…` 等与拆分前单文件逐字一致。
 use crate::L09_mltt::parser;
 use crate::L09_mltt::pretty;
-use crate::L09_mltt::{Error, Ix, MetaVar, PatternDetail, PosCover, cover_at, empty_span, fmt_path, preprocess};
+use crate::L09_mltt::{
+    cover_at, empty_span, fmt_path, preprocess, Error, Ix, MetaVar, PatternDetail, PosCover,
+};
 
 // 原 pub(crate) 可见面（拆分前单文件的全部 pub(crate) 项，逐一恢复）。
 #[allow(unused_imports)]
-pub(crate) use bench_src::{church_src, enum_src, match_src, strchain_src, struct_src};
+pub(crate) use bench_src::{church_src, enum_src, globals_src, match_src, strchain_src, struct_src};
 #[allow(unused_imports)]
-pub(crate) use compiler::{Compiler, Warning};
+pub(crate) use entry::{parse, run_fast, SourceDecl, Tycker};
 #[allow(unused_imports)]
-pub(crate) use entry::{SourceDecl, Tycker, parse, run_fast};
+pub(crate) use env::{env_ext, env_ext_defs, env_len, env_nth, CloCell, Env, EnvCons, PiCell};
 #[allow(unused_imports)]
-pub(crate) use env::{CloCell, Env, EnvCons, PiCell, env_collect, env_ext, env_ext_defs, env_len, env_nth};
+pub(crate) use force::val_mentions_lvl;
 #[allow(unused_imports)]
-pub(crate) use machine::{Machine, neutral_of};
+pub(crate) use machine::Machine;
+#[allow(unused_imports)]
+pub(crate) use prim::{DeclEntryF, Fuel, MutableMap};
 #[allow(unused_imports)]
 pub(crate) use spine::{MetaEntry, Spine};
 #[allow(unused_imports)]
 pub(crate) use subst::{SpecSolve, SubstV, SUBSTV_ALIVE};
 #[allow(unused_imports)]
-pub(crate) use syntax::{PrCons, SumDataT, SumDataV, SumParamT, SumParamV, Tm, V, XCell, v_clo, v_clo_of, v_lit_ty, v_lvl, v_lvl_of, v_meta, v_meta_of, v_pi, v_pi_of, v_spine, v_spine_of, v_tag, v_u, v_u_of, v_xcell, v_xcell_of};
+pub(crate) use syntax::{
+    PrCons, SumDataT, SumDataV, SumParamT, SumParamV, Tm, V, XCell, v_clo, v_clo_of,
+    v_lit_ty, v_lvl, v_lvl_of, v_meta, v_meta_of, v_pi, v_pi_of, v_spine, v_spine_of,
+    v_tag, v_u, v_xcell, v_xcell_of,
+};

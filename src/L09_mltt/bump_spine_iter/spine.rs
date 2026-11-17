@@ -1,20 +1,18 @@
 //! spine：扁平中性栈（`Spine`/`Entry`/链头种类 `HK_*`）与 metacontext
-//! （`MetaEntry`/`meta_val_of`/`lit_of`）。原 bump_spine_iter.rs 的
-//! "spine 栈" + "metacontext" 两节，逐行搬运（2026-09-23 拆分）。
+//! （`MetaEntry`/`meta_val_of`）。原 bump_spine_iter.rs 的 "spine 栈" 与
+//! "metacontext" 两节，逐行搬运（2026-09-23 拆分）。
 
 use super::parser::syntax::Icit;
 
-use super::syntax::{V, XCell, v_meta, v_meta_of, v_spine, v_spine_of, v_tag, v_xcell_of};
+use super::syntax::{V, v_meta, v_meta_of, v_spine, v_spine_of, v_tag, v_xcell_of, XCell};
 
 // spine 栈（扁平中性）
 // --------------------------------------------------------------------------------
 
-/// 链头种类（`Entry.hk`）：push 时随函数侧传播，O(1) 判定链头是 Flex
-/// （force 的 meta 展开臂）/ 卡住内建 Prim（force 的 prim_reduce 归约臂）/
-/// 卡住投影 Obj（unify 的位相等捷径对它关闭）还是 Rigid（force 直接原样
-/// 返回）。链头只可能是这几种（其余形态 v_app 即 panic，进不了链）。
-pub(super) const HK_OTHER: u8 = 0;
-pub(super) const HK_FLEX: u8 = 1;
+/// 链头种类（`Entry.hk`）：push 时随函数侧传播，O(1) 判定链头是 Decl /
+/// Prim / Obj（force 的三分派）还是其它（Rigid/Flex/Lit——直接中性）。
+const HK_OTHER: u8 = 0;
+pub(super) const HK_DECL: u8 = 1;
 pub(super) const HK_PRIM: u8 = 2;
 pub(super) const HK_OBJ: u8 = 3;
 
@@ -36,13 +34,13 @@ pub(crate) struct Spine {
 
 impl Spine {
     /// 中性应用 `f a`（icit i）压栈，返回句柄值。`hk` 随函数侧传播：
-    /// 裸单元直查种类，既有链延伸保持原种类（顶端槽已记下头种类）。
+    /// 裸 XCell 直查种类，既有链延伸保持原种类。
     #[inline]
     pub(super) fn push(&mut self, f: V, a: V, icit: Icit) -> V {
         let idx = self.stack.len();
         let hk = match v_tag(f) {
-            5 => HK_FLEX,
             7 => match v_xcell_of(f) {
+                XCell::Decl(_) => HK_DECL,
                 XCell::Prim(_) => HK_PRIM,
                 XCell::Obj { .. } => HK_OBJ,
                 _ => HK_OTHER,
@@ -56,7 +54,14 @@ impl Spine {
         } else {
             (1, idx as u32)
         };
-        self.stack.push(Entry { f, a, icit, len, base, hk });
+        self.stack.push(Entry {
+            f,
+            a,
+            icit,
+            len,
+            base,
+            hk,
+        });
         v_spine(idx)
     }
 
@@ -112,10 +117,10 @@ impl Spine {
             5 => Some(v_meta_of(v)),
             2 => {
                 let h = v_spine_of(v);
-                if self.stack[h].hk != HK_FLEX {
+                let hd = self.spine_head(h);
+                if v_tag(hd) != 5 {
                     return None;
                 }
-                let hd = self.spine_head(h);
                 self.collect_args(h, out);
                 Some(v_meta_of(hd))
             }
@@ -124,37 +129,50 @@ impl Spine {
     }
 }
 
-/// 取值（裸单元或链）的 Prim 头名字（非 Prim 头 → None）。参考版
-/// `unify` 的 (Prim,Prim) 同名臂用。
+/// 值侧头种类判定（裸单元直查；链查顶端槽的 `hk` 标志，O(1)）。
 #[inline]
-pub(super) fn prim_head_name<'a>(spine: &Spine, v: V) -> Option<&'a str> {
+pub(super) fn head_kind(spine: &Spine, v: V) -> u8 {
     match v_tag(v) {
         7 => match v_xcell_of(v) {
-            XCell::Prim(n) => Some(n),
-            _ => None,
+            XCell::Decl(_) => HK_DECL,
+            XCell::Prim(_) => HK_PRIM,
+            XCell::Obj { .. } => HK_OBJ,
+            _ => HK_OTHER,
         },
-        2 => {
-            let hd = spine.spine_head(v_spine_of(v));
-            if v_tag(hd) == 7 {
-                match v_xcell_of(hd) {
-                    XCell::Prim(n) => Some(n),
-                    _ => None,
-                }
-            } else {
-                None
-            }
-        }
-        _ => None,
+        2 => spine.stack[v_spine_of(v)].hk,
+        _ => HK_OTHER,
     }
 }
 
-/// 值是否 Flex（裸未解 meta 立即数或 meta 头的链——链查顶端槽的 `hk`，
-/// O(1)，无需沿链走底）。
+/// 链（或裸单元）是否 Obj 头——unify 的位相等捷径对它关闭（`(Obj, Obj)`
+/// 走专门合同臂比较接收者 + 实参；捷径关闭使同单元也进专臂而非字面放行）。
+#[inline]
+pub(super) fn is_objheaded(spine: &Spine, v: V) -> bool {
+    head_kind(spine, v) == HK_OBJ
+}
+
+/// 取链（或裸单元）头的 Decl / Prim 名（调用方已判定头种类）。
+#[inline]
+pub(super) fn xcell_head_name<'a>(spine: &Spine, v: V) -> &'a str {
+    let head = if v_tag(v) == 7 {
+        v
+    } else {
+        spine.spine_head(v_spine_of(v))
+    };
+    match v_xcell_of(head) {
+        XCell::Decl(n) => n,
+        XCell::Prim(n) => n,
+        _ => unreachable!("头名只对 Decl/Prim 链取"),
+    }
+}
+
+/// 值是否 Flex（裸未解 meta 立即数或 meta 头的链）。unify 的 pm 特化臂
+/// 要求另一侧"非 Flex"（交给 Flex 规则 meta := 值）。
 #[inline]
 pub(super) fn is_flex(spine: &Spine, v: V) -> bool {
     match v_tag(v) {
         5 => true,
-        2 => spine.stack[v_spine_of(v)].hk == HK_FLEX,
+        2 => v_tag(spine.spine_head(v_spine_of(v))) == 5,
         _ => false,
     }
 }
@@ -163,8 +181,7 @@ pub(super) fn is_flex(spine: &Spine, v: V) -> bool {
 // --------------------------------------------------------------------------------
 
 /// metacontext 条目（与参考版同构）：**类型一律保留**（pruning 检查与
-/// `lams` 都要读），解是 bump 内的打包值。Clone 供 temp-infer 探测的
-/// 快照换入换出。
+/// `lams` 都要读），解是 bump 内的打包值。Clone 供 flex_flex 的快照回滚。
 #[derive(Clone)]
 pub(crate) enum MetaEntry {
     Solved(V, V),
@@ -177,19 +194,5 @@ pub(super) fn meta_val_of(metas: &[MetaEntry], m: u32) -> V {
     match &metas[m as usize] {
         MetaEntry::Solved(v, _) => *v,
         MetaEntry::Unsolved(_) => v_meta(m),
-    }
-}
-
-/// 从实参值取字面量内容（非字面量 → None）。返回值的 `'a` 与入参无
-/// link——健全性依赖全局不变式：所有 `V` 的 XCell 都指向**当前轮的
-/// bump**或 `'static` 钉串，跨轮 `bump.reset()` 前一切句柄已消亡。
-#[inline]
-pub(super) fn lit_of<'a>(v: V) -> Option<&'a str> {
-    match v_tag(v) {
-        7 => match v_xcell_of(v) {
-            XCell::Lit(s) => Some(s),
-            _ => None,
-        },
-        _ => None,
     }
 }

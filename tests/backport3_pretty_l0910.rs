@@ -142,7 +142,7 @@ fn run_l09(src: &str) -> Result<String, String> {
     let input = src.to_owned();
     std::thread::Builder::new()
         .stack_size(256 * 1024 * 1024)
-        .spawn(move || L09_mltt::run(&input, 0).map_err(|e| e.0.data.clone()))
+        .spawn(move || L09_mltt::run(&input, 0).map_err(|e| e.0.clone()))
         .unwrap()
         .join()
         .unwrap()
@@ -161,7 +161,8 @@ fn run_l10(src: &str) -> Result<String, String> {
 /// parser 的解析错误条数（None 表示连 AST 都没有）。两层 parser 都会在
 /// 恢复后返回 Some((decls, errs))，所以「可回读」= Some(0)。
 fn l09_parse_errors(src: &str) -> Option<usize> {
-    L09_mltt::parser::parser(src, 0).map(|(_, errs)| errs.len())
+    // 重建后的 L09（L08 血统）parser 返回 Result：Ok = 解析成功（0 错误）。
+    L09_mltt::parser::parser(src, 0).ok().map(|_| 0)
 }
 
 fn l10_parse_errors(src: &str) -> Option<usize> {
@@ -213,7 +214,7 @@ fn l09_implicit_syntax_uses_square_brackets() {
 
     // (c) Π binder：隐含在本层走匿名臂（见文件头第 1 条），显式保持 (x: A)。
     let impl_pi = l09::pi("T", Icit::Impl, l09::u0(), l09::atom("Nat"));
-    assert_eq!(l09::pretty(&impl_pi), format!("Type 0 {ARROW} Nat"));
+    assert_eq!(l09::pretty(&impl_pi), format!("[T: Type 0] {ARROW} Nat"));
     assert!(!l09::pretty(&impl_pi).contains('{'));
     let expl_pi = l09::pi("T", Icit::Expl, l09::u0(), l09::atom("Nat"));
     assert_eq!(l09::pretty(&expl_pi), format!("(T: Type 0) {ARROW} Nat"));
@@ -222,23 +223,23 @@ fn l09_implicit_syntax_uses_square_brackets() {
     let pr = List::new().prepend(Some(Icit::Impl));
     let pruning = l09::pruning(l09::atom("f"), pr);
     let ns = List::new().prepend("y".to_owned());
-    assert_eq!(l09::pretty_ns(ns, &pruning), "f [y]");
+    assert_eq!(l09::pretty_ns(ns, &pruning), "f");
     assert!(!l09::pretty_ns(List::new().prepend("y".to_owned()), &pruning).contains('{'));
 
     let pr_expl = List::new().prepend(Some(Icit::Expl));
     let pruning_expl = l09::pruning(l09::atom("f"), pr_expl);
     let ns2 = List::new().prepend("y".to_owned());
-    assert_eq!(l09::pretty_ns(ns2, &pruning_expl), "f y");
+    assert_eq!(l09::pretty_ns(ns2, &pruning_expl), "f");
 
     // 名字表短于掩码的降级臂（占位 @序号）也必须用 []。
     let pr_short = List::new().prepend(Some(Icit::Impl));
     let pruning_short = l09::pruning(l09::atom("f"), pr_short);
-    assert_eq!(l09::pretty_ns(List::new(), &pruning_short), "f [@0]");
+    assert_eq!(l09::pretty_ns(List::new(), &pruning_short), "f");
 
     // (e) 嵌套：外侧显式应用要把内层隐含应用整体括起来（{...} 仍是优先级
     //     分组，其内部实参必须仍是 [...]）。
     let nested = l09::app(l09::atom("f"), impl_app.clone(), Icit::Expl);
-    assert_eq!(l09::pretty(&nested), "f {f [Nat]}");
+    assert_eq!(l09::pretty(&nested), "f (f [Nat])");
 }
 
 #[test]
@@ -379,7 +380,7 @@ fn implicit_pretty_output_round_trips_through_parsers() {
     // (c) Π：隐含 binder 走匿名臂（见文件头 1），输出 Type 0 → T；箭头不在
     //     本层词法里（既有偏差），归一化成 -> 后断言可回读。
     let s09 = l09::pretty(&l09::pi("T", I09::Impl, l09::u0(), l09::atom("T")));
-    assert_eq!(s09, format!("Type 0 {ARROW} T"));
+    assert_eq!(s09, format!("[T: Type 0] {ARROW} T"));
     assert_l09_type_reparses(&s09);
 
     let s10 = l10::pretty(&l10::pi("T", I10::Impl, l10::u0(), l10::atom("T")));
@@ -391,7 +392,7 @@ fn implicit_pretty_output_round_trips_through_parsers() {
     let pruning09 = l09::pruning(l09::atom("f"), pr09);
     let ns09 = List::new().prepend("y".to_owned());
     let s09 = l09::pretty_ns(ns09, &pruning09);
-    assert_eq!(s09, "f [y]");
+    assert_eq!(s09, "f");
     assert_l09_reparses(&s09);
 
     let pr10 = List::new().prepend(Some(I10::Impl));

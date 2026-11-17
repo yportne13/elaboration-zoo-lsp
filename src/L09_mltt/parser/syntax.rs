@@ -1,4 +1,4 @@
-use crate::{parser_lib::{Span, ToSpan}, L09_mltt::empty_span};
+use crate::parser_lib::Span;
 
 #[derive(Clone, Debug, Copy, PartialEq, Eq, Hash)]
 pub enum Icit {
@@ -23,6 +23,30 @@ impl Pattern {
         match self {
             Pattern::Any(span, _) => Pattern::Any(span, Icit::Impl),
             Pattern::Con(name, pats, _) => Pattern::Con(name, pats, Icit::Impl),
+        }
+    }
+
+    /// 错误文案用的模式渲染：`Con` 递归成 `name(sub, ...)`，`Any` 成 `_`。
+    ///
+    /// 诊断里**不要**用 `{:?}`——它会泄漏内部表示（`Con("refl" @ 166,170, …)`），
+    /// 对 IDE / 终端用户都不可读。
+    pub fn pretty(&self) -> String {
+        match self {
+            Pattern::Any(..) => "_".to_owned(),
+            Pattern::Con(name, subs, _) => {
+                let mut s = name.data.clone();
+                if !subs.is_empty() {
+                    s.push('(');
+                    for (i, sub) in subs.iter().enumerate() {
+                        if i > 0 {
+                            s.push_str(", ");
+                        }
+                        s.push_str(&sub.pretty());
+                    }
+                    s.push(')');
+                }
+                s
+            }
         }
     }
 
@@ -67,34 +91,6 @@ pub enum Raw {
     },
 }
 
-impl Raw {
-    pub fn to_span(&self) -> Span<()> {
-        match self {
-            Raw::Var(span) => span.to_span(),
-            Raw::Obj(raw, span) => raw.to_span() + span.to_span(),
-            Raw::Lam(span, _, raw) => span.to_span() + raw.to_span(),
-            Raw::App(raw, raw1, either) => raw.to_span() + match either {
-                Either::Name(span) => span.to_span(),
-                Either::Icit(_) => raw1.to_span(),
-            },
-            Raw::U(_) => empty_span(()),//TODO:
-            Raw::Pi(span, _, _, raw1) => span.to_span() + raw1.to_span(),
-            Raw::Let(span, _, _, raw2) => span.to_span() + raw2.to_span(),
-            Raw::Hole => empty_span(()),//TODO:
-            Raw::LiteralIntro(span) => span.to_span(),
-            Raw::Match(raw, items) => items.last()
-                .map(|x| raw.to_span() + x.1.to_span())
-                .unwrap_or(raw.to_span()),
-            Raw::Sum(span, params, items, _) => items.last()
-                .map(|x| span.to_span() + x.to_span())
-                .unwrap_or(params.last().map(|x| span.to_span() + x.2.to_span()).unwrap_or(span.to_span())),
-            Raw::SumCase { typ, case_name, datas } => datas.last()
-                .map(|x| case_name.to_span() + x.1.to_span())
-                .unwrap_or(case_name.to_span()),
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub enum Decl {
     Def {
@@ -109,4 +105,14 @@ pub enum Decl {
         params: Vec<(Span<String>, Raw, Icit)>,
         cases: Vec<(Span<String>, Vec<(Span<String>, Raw, Icit)>, Option<Raw>)>,
     },
+}
+
+impl Decl {
+    /// 声明名（调试用）
+    pub fn name(&self) -> String {
+        match self {
+            Decl::Def { name, .. } | Decl::Enum { name, .. } => name.data.clone(),
+            Decl::Println(_) => "<println>".to_owned(),
+        }
+    }
 }

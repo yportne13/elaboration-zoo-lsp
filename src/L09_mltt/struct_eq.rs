@@ -1,27 +1,25 @@
 //! 结构相等判定（快路径专用）：不 force、不展开、不求值，忽略 span。
 //!
-//! 用于 `unify` 对卡住 `Val::Match` 的自比较短路：同一份值在合一两侧各展开
-//! 一份相同的卡住 match 时，逐分支重求值会把分支体再展开一层卡住 match（fresh
-//! rigid 层级随深度递增，永不收敛）；先做纯结构比较即可短路。精化不改写槽位，
-//! "同一组变量"的两份捕获 env 字面相等，这条快路径即覆盖绝大多数比较。预算
-//! 封顶，超限按"不相等"处理——快路径只会把本可判等（但求值发散）的情形提前
-//! 判等，回落路径保持原行为。
+//! 用于 `unify` 对卡住 `Val::Match` 的自比较短路：同一个 decl 值在合一两侧
+//! 各展开一份相同的卡住 match 时，逐分支重求值会把分支体再展开一层卡住
+//! match（fresh rigid 层级随深度递增，永不收敛）；先做纯结构比较即可短路。
+//! 新架构下精化不改写槽位，"同一组变量"的两份捕获 env 字面相等，这条
+//! 快路径即覆盖绝大多数比较。预算封顶，超限按"不相等"处理——快路径只会
+//! 把本可判等（但求值发散）的情形提前判等，回落路径保持原行为。
 //!
-//! 迭代实现（L07 `struct_eq.rs` 的 L09 适配，2026-09-18 深值轮）：
-//! `succ^N zero` 型深值可由 eval 不烧 fuel 地构造（def 倍增链），递归版在预算
-//! 烧尽**之前**就会先在 ~万级深度爆栈（常规栈 1–8 MB）。显式任务栈保持旧递归
-//! 的两个可观测语义：
-//! - **短路顺序**：子任务逆序压栈，pop 序 = 旧递归的访问序；
-//! - **燃烧面**：值/项任务各烧 1，Env/Spine/Closure 展开不烧；零成本的字段
-//!   判定（icit / pat / 名字 / 长度）在压栈前完成，失败即 return。
-//!
-//! L09 差异：无 decl 表（无 `Val::Decl` / `Tm::Decl`）；`Val::U(u32)`、
-//! `Val::Prim(name, spine)`（名字 + 实参 spine）、`Tm::Prim(name)`；`Ix`
-//! 按字段比较。
+//! 迭代实现（2026-09-18，README §7.6）：`succ^N zero` 型深值可由 eval 不烧
+//! fuel 地构造（def 倍增链），递归版在预算（20k 层）烧尽**之前**就会先在
+//! ~万级深度爆栈（常规栈 1–8 MB）。显式任务栈保持旧递归的两个可观测语义：
+//! - **短路顺序**：子任务逆序压栈，pop 序 = 旧递归的访问序（`a && b` 里
+//!   a 失败即整体 false，b 不再燃烧）；
+//! - **燃烧面**：值/项任务各烧 1（≙ 旧 `val_eq_go`/`tm_eq_go` 入口），
+//!   Env/Spine/Closure 展开不烧（同旧 `env_eq_go`/`spine_eq`/`closure_eq`
+//!   无入口燃烧）。零成本的字段判定（icit / pat / 名字 / 长度）在压栈前
+//!   完成，失败即 return——与旧闭包内 `xi == yi && …` 的短路一致。
 
 use std::rc::Rc;
 
-use super::{Closure, Env, Icit, InlineStack, Spine, Tm, Val};
+use super::{Closure, Env, InlineStack, Spine, Tm, Val};
 
 struct EqBudget(usize);
 
@@ -47,7 +45,7 @@ pub fn env_eq(a: &Env, b: &Env) -> bool {
 
 pub fn val_eq(a: &Val, b: &Val) -> bool {
     // 同址：同一 Val 实例，免预算免递归（Sum/SumCase 的 Rc 槽位共享同一
-    // 展开的场景常见——同源值两份拷贝）
+    // 展开的场景常见——同源 decl 值两份拷贝）
     if std::ptr::eq(a, b) {
         return true;
     }
@@ -65,8 +63,8 @@ enum EqTask<'a> {
 
 fn eq_run(first: EqTask<'_>) -> bool {
     let mut budget = EqBudget(EQ_BUDGET);
-    // 主循环栈内联化：浅结构（match 自比较快路径的绝大多数调用）零堆分配，
-    // 与旧递归剖面一致；深/宽结构溢出转 Vec
+    // 主循环栈内联化（2026-09-18 性能轮）：浅结构（match 自比较快路径的
+    // 绝大多数调用）零堆分配，与旧递归剖面一致；深/宽结构溢出转 Vec
     let mut stack = InlineStack::<EqTask<'_>, 16>::with_first(first);
     while let Some(task) = stack.pop() {
         match task {
@@ -79,10 +77,10 @@ fn eq_run(first: EqTask<'_>) -> bool {
                     return false;
                 }
                 match (a, b) {
-                    // 精化包裹：仅同一替换实例（同 Rc）且内层结构相等才短路；
-                    // 异实例一律回落慢路径（慢路径的 force 会推开 VSub）
+                    // 精化包裹：仅同一替换实例（同 Rc）且内层结构相等才短路；异实例
+                    // 一律回落慢路径（慢路径的 force 会推开 VSub，正确性不受影响）
                     (Val::VSub(x, xs), Val::VSub(y, ys)) => {
-                        if !Rc::ptr_eq(xs, ys) {
+                        if !std::rc::Rc::ptr_eq(xs, ys) {
                             return false;
                         }
                         stack.push(EqTask::V(x, y));
@@ -95,6 +93,12 @@ fn eq_run(first: EqTask<'_>) -> bool {
                         stack.push(EqTask::Spine(xs, ys));
                     }
                     (Val::Rigid(x, xs), Val::Rigid(y, ys)) => {
+                        if x != y {
+                            return false;
+                        }
+                        stack.push(EqTask::Spine(xs, ys));
+                    }
+                    (Val::Decl(x, xs), Val::Decl(y, ys)) => {
                         if x != y {
                             return false;
                         }
@@ -126,16 +130,16 @@ fn eq_run(first: EqTask<'_>) -> bool {
                         }
                     }
                     (Val::LiteralType, Val::LiteralType) => {}
+                    (Val::LiteralIntro(x), Val::LiteralIntro(y)) => {
+                        if x != y {
+                            return false;
+                        }
+                    }
                     (Val::Prim(x, xs), Val::Prim(y, ys)) => {
                         if x != y {
                             return false;
                         }
                         stack.push(EqTask::Spine(xs, ys));
-                    }
-                    (Val::LiteralIntro(x), Val::LiteralIntro(y)) => {
-                        if x != y {
-                            return false;
-                        }
                     }
                     (Val::Sum(xn, xp, _), Val::Sum(yn, yp, _)) => {
                         if xn.data != yn.data || xp.len() != yp.len() {
@@ -147,7 +151,7 @@ fn eq_run(first: EqTask<'_>) -> bool {
                             }
                         }
                         for ((_, xv, xt, _), (_, yv, yt, _)) in xp.iter().zip(yp.iter()).rev() {
-                            // Rc 槽位同实例短路（共享同源展开时免递归）
+                            // Rc 槽位同实例短路（共享同源 decl 展开时免递归）
                             if !Rc::ptr_eq(xt, yt) {
                                 stack.push(EqTask::V(xt, yt));
                             }
@@ -185,10 +189,6 @@ fn eq_run(first: EqTask<'_>) -> bool {
                             stack.push(EqTask::V(xt, yt));
                         }
                     }
-                    // 卡住 match：scrutinee / 捕获 env / 模式 / 分支体 / pending
-                    // 实参**全部**比较——pending 的 icit 与值都是值的一部分，漏比
-                    // 会让「scrutinee 是另一个 pending 不同的卡住 match」的两份
-                    // match 被判等（可让 refl 证明两个闭实例化不同的函数相等）。
                     (Val::Match(xs, xe, xc, xp), Val::Match(ys, ye, yc, yp)) => {
                         if xc.len() != yc.len() || xp.len() != yp.len() {
                             return false;
@@ -198,8 +198,14 @@ fn eq_run(first: EqTask<'_>) -> bool {
                                 return false;
                             }
                         }
-                        // 访问序（旧递归）：scrutinee → env → 分支体 → pending；
-                        // LIFO ⇒ 先压 pending 值、最后弹出
+                        // 访问序（旧递归）：scrutinee → env → 分支体 → pending。
+                        // **pending 的 icit 与值都要比**：卡住期累积的实参是值的一部分，
+                        // 漏比会让「scrutinee 是另一个 pending 不同的卡住 match」的两份
+                        // match 被判等（S1：可让 refl 证明两个闭实例化不同的函数相等，
+                        // 进而证 False）。LIFO ⇒ 先压 pending 值、最后弹出。
+                        //
+                        // 回归：commit 2309e2a4 把本函数改为任务栈迭代时漏掉了这一压栈
+                        // （注释仍写"访问序含 pending"，实现对 pending 只比长度/icit）。
                         for ((xv, xi), (yv, yi)) in xp.iter().zip(yp.iter()) {
                             if xi != yi {
                                 return false;
@@ -221,19 +227,12 @@ fn eq_run(first: EqTask<'_>) -> bool {
                 }
                 match (a, b) {
                     (Tm::Var(x), Tm::Var(y)) => {
-                        if x.0 != y.0 {
+                        if x != y {
                             return false;
                         }
                     }
-                    (Tm::Global(x), Tm::Global(y)) => {
-                        if x.0 != y.0 {
-                            return false;
-                        }
-                    }
-                    // 同一全局常量的两种项编码（递归占位 Var 哨兵 vs 定名
-                    // Global 哨兵）：层级相同即同一常量。
-                    (Tm::Var(x), Tm::Global(y)) | (Tm::Global(x), Tm::Var(y)) => {
-                        if x.0 != y.0 {
+                    (Tm::Decl(x), Tm::Decl(y)) => {
+                        if x != y {
                             return false;
                         }
                     }
@@ -254,7 +253,7 @@ fn eq_run(first: EqTask<'_>) -> bool {
                         if i != j {
                             return false;
                         }
-                        stack.push(EqTask::T(&**x, &**y));
+                        stack.push(EqTask::T(x, y));
                     }
                     (Tm::U(x), Tm::U(y)) => {
                         if x != y {
@@ -265,13 +264,13 @@ fn eq_run(first: EqTask<'_>) -> bool {
                         if i != j {
                             return false;
                         }
-                        stack.push(EqTask::T(&**xb, &**yb));
-                        stack.push(EqTask::T(&**xa, &**ya));
+                        stack.push(EqTask::T(xb, yb));
+                        stack.push(EqTask::T(xa, ya));
                     }
                     (Tm::Let(_, xa, xb, xc), Tm::Let(_, ya, yb, yc)) => {
                         stack.push(EqTask::T(xc, yc));
-                        stack.push(EqTask::T(&**xb, &**yb));
-                        stack.push(EqTask::T(&**xa, &**ya));
+                        stack.push(EqTask::T(xb, yb));
+                        stack.push(EqTask::T(xa, ya));
                     }
                     (Tm::Meta(x), Tm::Meta(y)) => {
                         if x != y {
@@ -285,12 +284,12 @@ fn eq_run(first: EqTask<'_>) -> bool {
                         stack.push(EqTask::T(x, y));
                     }
                     (Tm::LiteralType, Tm::LiteralType) => {}
-                    (Tm::Prim(x), Tm::Prim(y)) => {
+                    (Tm::LiteralIntro(x), Tm::LiteralIntro(y)) => {
                         if x != y {
                             return false;
                         }
                     }
-                    (Tm::LiteralIntro(x), Tm::LiteralIntro(y)) => {
+                    (Tm::Prim(x), Tm::Prim(y)) => {
                         if x != y {
                             return false;
                         }

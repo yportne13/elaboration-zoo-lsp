@@ -1,76 +1,69 @@
 //! L09_mltt 黑盒测试套件（参考版 `L09_mltt::run`）。
 //!
-//! 被测对象：src/L09_mltt（MLTT 切片：`Type N` 分层宇宙 + 和类型 / match，
-//! 再定基层——def/enum 名字走大下标哨兵 global 表，无 decl 表；struct/new
-//! 脱糖、显式替换精化、逐臂下钻匹配编译器）。
-//! L09_mltt 在 lib.rs 中是私有模块，本套件用 `#[path]` 把层源码直接编入
-//! 测试 crate（与 tests/l09_fast_parity.rs 同款），唯一黑盒入口是
-//! `L09_mltt::run(input: &str, path_id: u32) -> Result<String, Error>`。
+//! 2026-11-17 重建：L09 按“L08 实现思路 + 本章增量”重构后，本套件以
+//! `l08_blackbox` 为基线继承其全部用例（黑盒契约与 L08 相同：解析失败
+//! 返回 `Err("parse error")`、`println` 逐行输出 pretty 值、构造子显示
+//! `Enum::case(...)` / struct 的 `.mk` 去重 + 空格分隔实参），并新增
+//! `Type N` 分层宇宙用例（层级推进 / 高宇宙 enum / 层级失配拒绝）。
 //!
-//! 黑盒契约（全部经独立探针实测确认，2026-11；同族套件 l07/l08_blackbox 同风格）：
-//!   - 输入是 typort 源码多语句文本；`println expr` 逐行把求值结果写进
-//!     `Ok(String)`（每行一个 pretty 值）；
-//!   - 成功：`Ok(String)`。显示形态为 L09–L13 的 **comma 血统**：
-//!     构造子值 `头名::分支名(实参, …)`（L08 的空格连接是 L08 本地形态，
-//!     不随 L08→L09 继承）；struct 脱糖分支名自带 `.mk`（`Point::Point.mk(...)`）；
-//!     未解隐式参数打印成 binder 形式（`[A] => List::nil`；b0694c96 起隐含位
-//!     用 parser 认的方括号，花括号只留给优先级分组）；卡住 match 是
-//!     `n => (unsolved match n)`；越哨兵大下标 Var 显示 `recursive_N`；
-//!   - 类型/合一错误：`Err(Error)`；`Error.0` 是带源码偏移的 `Span<String>`，
-//!     Debug 形如 `Error("..." @ start,end)`；
-//!   - **解析错误不返回 Err**（与 L08 的 `Err("parse error")` 契约不同）：
-//!     L09 的 parser 返回 (已解析前缀, 错误表)，运行器把错误 `println!` 到
-//!     进程 stdout 后继续检查已解析声明——因此坏 decl 前后的可解析声明都能
-//!     产出输出，本套件只钉 `Ok` 输出与已解析面；
-//!   - 覆盖性诊断（Warning）在本层被转成 `Err`：顶层缺构造子 = Debug 文本
-//!     含 `Unmatched(Con("ctor" ...))`；嵌套缺口 = 含
-//!     `match 不完整：模式位置 … 缺少构造子 …`；通配臂之后的臂 =
-//!     含 `Unreachable(...)`；
-//!   - 已知缺陷（本套件如实文档化，见 bb_struct_multi_projection_rejected）：
-//!     L09 解析多段投影 `l.a.x` 但类型检查报 can’t unify（L08 血统的
-//!     多段投影链在本层不成立；README 的"多段投影链"声称与实现不符）。
+//! 唯一黑盒入口：`elaboration_zoo_lsp::L09_mltt::run(input: &str, path_id: u32)
+//!   -> Result<String, Error>`；`Error(pub String, pub Option<Span<()>>)`。
 //!
-//! 运行：`cargo test --test l09_blackbox`。
-
-#[path = "../src/list.rs"]
-mod list;
-
-#[path = "../src/bimap.rs"]
-mod bimap;
-
-#[path = "../src/parser_lib.rs"]
-mod parser_lib;
-#[path = "../src/parser_lib_resilient.rs"]
-mod parser_lib_resilient;
-
-#[path = "../src/L09_mltt/mod.rs"]
-mod L09_mltt;
+//! 运行：`cargo test --release --test l09_blackbox`。
+use elaboration_zoo_lsp::L09_mltt::run;
 
 // helpers
 // --------------------------------------------------------------------------------
 
-/// 在 128MB 栈线程里跑参考版 `run`（深值/递归路径超出默认 2MB 栈）。
-fn run_big(src: &str) -> Result<String, L09_mltt::Error> {
+/// 在 64MB 栈线程里跑 `run`；期待成功，失败则 panic 并带出输出/错误。
+fn check(src: &str) -> String {
     let input = src.to_owned();
     std::thread::Builder::new()
-        .stack_size(128 * 1024 * 1024)
-        .spawn(move || L09_mltt::run(&input, 0))
+        .stack_size(64 * 1024 * 1024)
+        .spawn(move || {
+            run(&input, 0).unwrap_or_else(|e| panic!("expected ok, got Err: {e:?}\nsrc:\n{input}"))
+        })
         .unwrap()
         .join()
         .unwrap()
 }
 
-/// 期待成功，返回 Ok 输出。
-fn check(src: &str) -> String {
-    run_big(src).unwrap_or_else(|e| panic!("expected ok, got Err: {e:?}\nsrc:\n{src}"))
+/// 在 64MB 栈线程里跑 `run`；期待 Err，返回 `Debug` 文本（`Error("...")`）。
+fn check_err(src: &str) -> String {
+    let input = src.to_owned();
+    std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(move || match run(&input, 0) {
+            Err(e) => format!("{e:?}"),
+            Ok(out) => panic!("expected Err, got Ok:\n{out}\nsrc:\n{input}"),
+        })
+        .unwrap()
+        .join()
+        .unwrap()
 }
 
-/// 期待失败，返回 `Debug` 文本（`Error("..." @ start,end)`）。
-fn check_err(src: &str) -> String {
-    match run_big(src) {
-        Err(e) => format!("{e:?}"),
-        Ok(out) => panic!("expected Err, got Ok:\n{out}\nsrc:\n{src}"),
-    }
+/// 在 64MB 栈线程里跑 `run`；返回 panic 消息（若有），Ok/Err 返回 None。
+fn check_panic(src: &str) -> Option<String> {
+    let input = src.to_owned();
+    std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(move || {
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(&input, 0)));
+            match r {
+                Ok(_) => None,
+                Err(payload) => {
+                    let msg = payload
+                        .downcast_ref::<&str>()
+                        .map(|s| s.to_string())
+                        .or_else(|| payload.downcast_ref::<String>().cloned())
+                        .unwrap_or_else(|| format!("{payload:?}"));
+                    Some(msg)
+                }
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap()
 }
 
 /// 成功路径 + 逐行精确断言。
@@ -80,12 +73,28 @@ fn assert_lines(src: &str, expected: &[&str]) {
     assert_eq!(got, expected, "src:\n{src}\n--- actual ---\n{out}");
 }
 
-/// 错误路径 + 消息片段断言（可多个 needle）。
-fn assert_err(src: &str, needles: &[&str]) {
-    let dbg = check_err(src);
-    for needle in needles {
-        assert!(dbg.contains(needle), "err 缺 {needle:?}:\n{dbg}\nsrc:\n{src}");
-    }
+/// 错误路径 + 消息片段断言。
+fn assert_err(src: &str, needle: &str) {
+    let msg = check_err(src);
+    assert!(msg.contains(needle), "err 缺 {needle:?}:\n{msg}\nsrc:\n{src}");
+}
+
+/// 语法错误 → Err(Error("parse error"))（2026-09 起解析失败不再 panic）。
+fn assert_parse_err(src: &str) {
+    let msg = check_err(src);
+    assert!(
+        msg.contains("parse error"),
+        "expected parse error, got:\n{msg}\nsrc:\n{src}"
+    );
+}
+
+/// 语法错误 → Err 且消息含 needle（残余 token 定位等稳定片段）。
+fn assert_parse_err_contains(src: &str, needle: &str) {
+    let msg = check_err(src);
+    assert!(
+        msg.contains(needle),
+        "expected parse error containing {needle:?}, got:\n{msg}\nsrc:\n{src}"
+    );
 }
 
 /// 深度 n 的 `Nat::succ(...)` 嵌套输出文本。
@@ -93,576 +102,1759 @@ fn nat_succs(n: usize) -> String {
     "Nat::succ(".repeat(n) + "Nat::zero" + &")".repeat(n)
 }
 
-// tests
+/// 源码里构造深度 n 的 `succ (succ (... zero))` 项文本。
+fn succ_chain(n: usize) -> String {
+    "succ (".repeat(n) + "zero" + &")".repeat(n)
+}
+
+// 1. 成功路径
 // --------------------------------------------------------------------------------
 
-/// 空输入 → 空输出（parser 无 decl、无错误）。
+/// 构造子 / 字符串 / 和类型自身的打印格式（黑盒输出契约）。
+///
+/// 注意 `println nil`：nil 的隐式类型参数 [A] 未解，meta 按 spine 应用
+/// 打印为绑定器形式 `[A] => List::nil`（同 `bb_stuck_match_splice` 里
+/// 的 binder => 形式；无 meta 时才是裸 `List::nil`）。
 #[test]
-fn bb_empty_input_ok() {
-    assert_eq!(check(""), "");
-}
-
-/// 纯注释输入（行注释与块注释）→ 空输出。
-#[test]
-fn bb_comment_only_ok() {
-    assert_eq!(check("// line comment only\n/* block\ncomment */\n"), "");
-}
-
-/// 块注释在行内被预处理抹掉，后继代码照常解析。
-#[test]
-fn bb_block_comment_inline() {
+fn bb_output_formats() {
     assert_lines(
-        "enum Bool {\n    true\n    false\n}\n\n/* 注释 */ println true\n",
-        &["Bool::true"],
+        r#"
+enum Bool {
+    true
+    false
+}
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+println true
+println false
+println zero
+println (succ zero)
+println (succ (succ zero))
+println nil
+println (cons true nil)
+println (cons true (cons false nil))
+println "hello world"
+println Bool
+"#,
+        &[
+            "Bool::true",
+            "Bool::false",
+            "Nat::zero",
+            "Nat::succ(Nat::zero)",
+            "Nat::succ(Nat::succ(Nat::zero))",
+            "[A] => List::nil",
+            "List::cons(Bool::true List::nil)",
+            "List::cons(Bool::true List::cons(Bool::false List::nil))",
+            "hello world",
+            "Bool",
+        ],
     );
 }
 
-/// 行尾 // 注释被预处理抹掉。
+/// 隐式类型参数 [A] 的实例化：map/not 组合，输出精确。
 #[test]
-fn bb_inline_line_comment() {
+fn bb_implicit_type_params() {
     assert_lines(
-        "enum Bool {\n    true\n    false\n}\n\nprintln true // trailing comment\n",
-        &["Bool::true"],
+        r#"
+enum Bool {
+    true
+    false
+}
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Option[T] {
+    Some(t: T)
+    None
+}
+
+def not(x: Bool): Bool =
+    match x {
+        case true => false
+        case false => true
+    }
+
+def map[R, X](x: Option[R], f: R -> X): Option[X] =
+    match x {
+        case None => None
+        case Some(t) => Some (f t)
+    }
+
+println (map (Some true) not)
+println (map (Some (succ zero)) (x => x))
+println (map (Some true) (x => x))
+println (map None (x => x))
+"#,
+        &[
+            "Option::Some(Bool::false)",
+            "Option::Some(Nat::succ(Nat::zero))",
+            "Option::Some(Bool::true)",
+            "Option::None",
+        ],
     );
 }
 
-/// 非泛型构造子值显示：头名::分支名(实参, …)，succ 嵌套。
+/// 纯依赖 λ 演算（Church 编码）+ 字符串内建。
+///
+/// 注意：lambda 实参必须带 `: Nat` 标注——未标注的 λ 实参（推断类型带
+/// meta）在 binder 类型是具体 Pi 的位置会报 can't unify（见
+/// `bb_unannotated_lambda_arg_err`）。
 #[test]
-fn bb_nat_bool_ctor_display() {
+fn bb_church_and_strings() {
     assert_lines(
-        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\nenum Bool {\n    true\n    false\n}\n\ndef two = succ (succ zero)\n\ndef not(x: Bool): Bool =\n    match x {\n        case true => false\n        case false => true\n    }\n\nprintln two\nprintln zero\nprintln (not true)\nprintln (not false)\n",
-        &[nat_succs(2).as_str(), "Nat::zero", "Bool::false", "Bool::true"],
+        r#"
+def Eq[A : Type 0](x: A, y: A): Type 1 = (P : A -> Type 0) -> P x -> P y
+
+def refl[A : Type 0, x: A]: Eq[A] x x = _ => px => px
+
+def the(A : Type 0)(x: A): A = x
+
+def m : (A : Type 0) -> (B : Type 0) -> (C : Type 0) -> (D : Type 0) -> D -> D = _
+
+def test_free (a : Type 0)(b : Type 0)(c : Type 0) : Eq (m a a b c) (d => d) = refl
+
+def Nat : Type 1 =
+    (N : Type 0) -> (N -> N) -> N -> N
+
+def mul : Nat -> Nat -> Nat =
+    a => b => N => s => z => a _ (b _ s) z
+
+def two : Nat = N => s => z => s (s z)
+
+def four = mul two two
+
+println two
+println four
+
+def mystr = "hello world"
+
+def add_tail(x: String): String = string_concat x "!"
+
+println (add_tail mystr)
+"#,
+        &[
+            "N => s => z => s (s z)",
+            "N => s => z => s (s (s (s z)))",
+            "hello world!",
+        ],
     );
 }
 
-/// 字符串字面量按裸内容打印（LiteralIntro 臂）。
+/// 索引族 + 构造子返回类型 + 索引投影。
 #[test]
-fn bb_string_literal_display() {
+fn bb_indexed_family_projection() {
     assert_lines(
-        "def mystr = \"hello world\"\n\nprintln mystr\nprintln \"\"\n",
-        &["hello world", ""],
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Vec[A](len: Nat) {
+    nil -> Vec[A] zero
+    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
+}
+
+def two = succ (succ zero)
+
+def t = cons zero (cons two nil)
+
+def head[T, L: Nat](x: Vec[T] (succ L)): T =
+    match x {
+        case cons(x, _) => x
+    }
+
+def length[T, l: Nat](x: Vec[T] l): Nat =
+    match x {
+        case nil => zero
+        case cons(_, xs) => succ (xs.len)
+    }
+
+println t.len
+println (cons two nil).len
+println (head (cons zero nil))
+println (head (cons (succ (succ zero)) nil))
+println (length (cons zero (cons two nil)))
+"#,
+        &[
+            "Nat::succ(Nat::succ(Nat::zero))",
+            "Nat::succ(Nat::zero)",
+            "Nat::zero",
+            "Nat::succ(Nat::succ(Nat::zero))",
+            "Nat::succ(Nat::succ(Nat::zero))",
+        ],
     );
 }
 
-/// string_concat 全应用（两个字面量）直接拼接。
+/// 依赖模式匹配的运行时行为：`t` 的具体调用输出。
+/// 带隐式绑定器的构造子打印为 `ctor([隐式值] 显式值...)`。
 #[test]
-fn bb_string_concat_applied() {
+fn bb_dependent_match_runtime() {
     assert_lines(
-        "def mystr = \"hello world\"\n\ndef mystr2 = string_concat mystr \"!\"\n\nprintln mystr\nprintln mystr2\nprintln (string_concat \"hello \" \"world\")\n",
-        &["hello world", "hello world!", "hello world"],
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Vec[A](len: Nat) {
+    nil -> Vec[A] zero
+    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
+}
+
+def two = succ (succ zero)
+
+def t[len: Nat](x: Vec[Nat] len, y: Vec[Nat] len): Vec[Nat] (succ len) =
+    match x {
+        case nil => cons zero nil
+        case cons(x, xs) => match y {
+            case cons(y, ys) => cons x (t xs ys)
+        }
+    }
+
+def zero_one = t (cons zero nil) (cons two nil)
+
+println zero_one
+println (t nil nil)
+"#,
+        &[
+            "Vec::cons([Nat::succ(Nat::zero)] Nat::zero Vec::cons([Nat::zero] Nat::zero Vec::nil))",
+            "Vec::cons([Nat::zero] Nat::zero Vec::nil)",
+        ],
     );
 }
 
-/// string_concat 部分应用卡在 Prim Func（无 spine 裸 Prim）。
+/// 卡住 match 是一等中性值：直接打印（binder => match 形式）、被应用
+/// （splice）、归约；构造子函数值 η 展开成 λ 形式。
 #[test]
-fn bb_string_concat_partial_stuck() {
+fn bb_stuck_match_splice() {
     assert_lines(
-        "def mystr = \"hello world\"\n\ndef stuck_concat = string_concat mystr\n\nprintln stuck_concat\nprintln (stuck_concat \"!\")\n",
-        &["string_concat hello world", "hello world!"],
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def f(n: Nat): Nat -> Nat =
+    match n {
+        case zero => succ
+        case succ(k) => succ
+    }
+
+println f
+println (f zero)
+println ((f zero) zero)
+"#,
+        &[
+            "n => match n { case zero => succ; case succ(k) => succ }",
+            "x => Nat::succ(x)",
+            "Nat::succ(Nat::zero)",
+        ],
     );
 }
 
-/// 泛型构造子值显示：List::cons(a, b) 逗号血统；Enum 名本身打印为类型名。
+/// 卡住 match 作为类型族 / 成员，两侧可互证。
 #[test]
-fn bb_list_ctor_comma_display() {
+fn bb_stuck_match_typefamily() {
     assert_lines(
-        "enum Bool {\n    true\n    false\n}\n\nenum List[A] {\n    nil\n    cons(head: A, tail: List[A])\n}\n\nprintln nil\nprintln (cons true nil)\nprintln (cons true (cons false nil))\nprintln Bool\n",
-        // 隐含 binder 用 parser 的 [] 语法（花括号只留给优先级分组）。
-        &["[A] => List::nil", "List::cons(Bool::true, List::nil)", "List::cons(Bool::true, List::cons(Bool::false, List::nil))", "Bool"],
+        r#"
+enum Bool {
+    true
+    false
+}
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def V(n: Nat): Type 0 =
+    match n {
+        case zero => Bool
+        case succ(m) => Bool
+    }
+
+def useV(n: Nat)(x: V n): V n = x
+
+def intoV(n: Nat): V n =
+    match n {
+        case zero => true
+        case succ(m) => false
+    }
+
+println (useV zero (intoV zero))
+println (useV (succ zero) (intoV (succ zero)))
+println (useV (succ (succ zero)) (intoV (succ (succ zero))))
+"#,
+        &["Bool::true", "Bool::false", "Bool::false"],
     );
 }
 
-/// 构造子作为函数值打印成 η 展开：x => Nat::succ(x)。
+/// 等式推理核心（cong / symm / trans）+ 具体证明的打印。
 #[test]
-fn bb_ctor_function_eta() {
+fn bb_eq_reasoning_print() {
     assert_lines(
-        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\nprintln succ\n",
-        &["x => Nat::succ(x)"],
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def rfl[A][a: A]: Eq a a =
+    refl a
+
+def cong[A, B, f: A -> B, x: A, y: A](e: Eq x y): Eq (f x) (f y) =
+    match e {
+        case refl(a) => refl (f a)
+    }
+
+def symm[A, x, y: A](e: Eq[A] y x): Eq[A] x y =
+    match e {
+        case refl(a) => refl a
+    }
+
+def trans[A, x, y, z: A](e1: Eq[A] x y, e2: Eq[A] y z): Eq[A] x z =
+    match e1 {
+        case refl(a) => e2
+    }
+
+def two = succ (succ zero)
+
+def three = succ (succ (succ zero))
+
+def e1: Eq three three = cong[Nat][Nat][succ][two][two] (refl two)
+
+def e2: Eq two two = symm[Nat][two][two] (refl two)
+
+def e3: Eq two two = trans[Nat][two][two][two] (refl two) (refl two)
+
+println e1
+println e2
+println e3
+"#,
+        &[
+            "Eq::refl(Nat::succ(Nat::succ(Nat::succ(Nat::zero))))",
+            "Eq::refl(Nat::succ(Nat::succ(Nat::zero)))",
+            "Eq::refl(Nat::succ(Nat::succ(Nat::zero)))",
+        ],
     );
 }
 
-/// Unicode 字符串字面量原样输出。
+/// 归纳证明：`add_comm`（等号两侧都是卡住 match 的依赖递归推理）。
 #[test]
-fn bb_unicode_string_literal() {
-    assert_lines("println \"你好 世界\"\n", &["你好 世界"]);
+fn bb_inductive_add_comm() {
+    check(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
 }
 
-/// 只有 def 没有 println → 空输出（ret 仅由 println 累积）。
-#[test]
-fn bb_only_defs_no_println() {
-    assert_eq!(check("enum Nat {\n    zero\n    succ(x: Nat)\n}\n\ndef two = succ zero\n"), "");
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
 }
 
-/// let 绑定在 def 体内求值。
-#[test]
-fn bb_let_binding() {
-    assert_lines(
-        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\ndef two = succ (succ zero)\n\ndef with_let : Nat = let x = two; succ x\n\nprintln with_let\n",
-        &[nat_succs(3).as_str()],
+def rfl[A][a: A]: Eq a a =
+    refl a
+
+def cong[A, B, f: A -> B, x: A, y: A](e: Eq x y): Eq (f x) (f y) =
+    match e {
+        case refl(a) => refl (f a)
+    }
+
+def cong_succ[x: Nat, y: Nat](e: Eq x y): Eq (succ x) (succ y) =
+    cong[Nat][Nat][succ][x][y] e
+
+def symm[A, x, y: A](e: Eq[A] y x): Eq[A] x y =
+    match e {
+        case refl(a) => refl a
+    }
+
+def trans[A, x, y, z: A](e1: Eq[A] x y, e2: Eq[A] y z): Eq[A] x z =
+    match e1 {
+        case refl(a) => e2
+    }
+
+def add(x: Nat, y: Nat) =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def add_zero_right(a: Nat): Eq (add a zero) a =
+    match a {
+        case zero => refl zero
+        case succ(t) => cong_succ (add_zero_right t)
+    }
+
+def add_succ_right(a: Nat, b: Nat): Eq (add a (succ b)) (succ (add a b)) =
+    match a {
+        case zero => rfl[Nat][succ b]
+        case succ(t) => cong_succ (add_succ_right t b)
+    }
+
+def add_comm(a: Nat, b: Nat): Eq (add a b) (add b a) =
+    match a {
+        case zero => trans (refl b) (symm (add_zero_right b))
+        case succ(t) => trans (cong_succ (add_comm t b)) (symm (add_succ_right b t))
+    }
+
+def two = succ (succ zero)
+
+def prf: Eq (add two (succ zero)) (add (succ zero) two) = add_comm two (succ zero)
+
+println "add_comm ok"
+"#,
     );
 }
 
-/// let 作用域内再套两层 succ：four = succ(succ(two))。
+/// 分支体里的洞（未解 meta）不炸 pretty + 顶层 `_` 洞打印。
 #[test]
-fn bb_let_shadowing() {
+fn bb_hole_in_branch_and_top() {
     assert_lines(
-        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\ndef two = succ (succ zero)\n\ndef four = let x = two; succ (succ x)\n\nprintln four\n",
-        &[nat_succs(4).as_str()],
+        r#"
+enum Bool {
+    true
+    false
+}
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def n: Nat = _
+
+def f(b: Bool): Nat =
+    match b {
+        case true => zero
+        case false => _
+    }
+
+println n
+println (f true)
+println "done"
+"#,
+        &["?0", "Nat::zero", "done"],
     );
 }
 
-/// 自递归 def add：模式 match + succ 归约。
+/// 嵌套模式 + 深层绑定器 + 通配符子模式。
 #[test]
-fn bb_add_recursion() {
+fn bb_nested_patterns() {
     assert_lines(
-        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\ndef two = succ (succ zero)\n\ndef add(x: Nat, y: Nat) =\n    match x {\n        case zero => y\n        case succ(n) => succ (add n y)\n    }\n\ndef four = add two two\n\nprintln four\n",
-        &[nat_succs(4).as_str()],
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+def second_or_zero(x: List[Nat]): Nat =
+    match x {
+        case nil => zero
+        case cons(h, nil) => zero
+        case cons(h, cons(h2, t)) => h2
+    }
+
+println (second_or_zero (cons (succ zero) (cons (succ (succ zero)) (cons (succ (succ (succ zero))) nil))))
+println (second_or_zero (cons (succ zero) nil))
+println (second_or_zero nil)
+"#,
+        &[
+            "Nat::succ(Nat::succ(Nat::zero))",
+            "Nat::zero",
+            "Nat::zero",
+        ],
     );
 }
 
-/// 嵌套 match + 自递归 even：4 为 true。
+/// GADT 上的部分覆盖：只写可达构造子不报"不完整"；通配臂覆盖全部。
 #[test]
-fn bb_even_nested_match() {
-    assert_lines(
-        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\nenum Bool {\n    true\n    false\n}\n\ndef four = succ (succ (succ (succ zero)))\n\ndef even(n: Nat): Bool =\n    match n {\n        case zero => true\n        case succ(m) => match m {\n            case zero => false\n            case succ(k) => even k\n        }\n    }\n\nprintln (even four)\n",
-        &["Bool::true"],
+fn bb_gadt_partial_coverage() {
+    check(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Vec[A](len: Nat) {
+    nil -> Vec[A] zero
+    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
+}
+
+def only_nil(v: Vec[Nat] zero): Nat =
+    match v {
+        case nil => zero
+    }
+
+def any(v: Vec[Nat] zero): Nat =
+    match v {
+        case _ => zero
+    }
+"#,
     );
 }
 
-/// 三种嵌套模式的 list 匹配：cons(h,cons(h2,t)) / cons(h,nil) / nil。
+/// 首匹配语义：通配臂之后的臂在运行时被跳过（编译期不报错）。
 #[test]
-fn bb_second_or_zero_nested_patterns() {
-    assert_lines(
-        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\nenum List[A] {\n    nil\n    cons(head: A, tail: List[A])\n}\n\ndef second_or_zero(x: List[Nat]): Nat =\n    match x {\n        case nil => zero\n        case cons(h, nil) => zero\n        case cons(h, cons(h2, t)) => h2\n    }\n\nprintln (second_or_zero (cons (succ zero) (cons (succ (succ zero)) nil)))\nprintln (second_or_zero (cons (succ zero) nil))\nprintln (second_or_zero nil)\n",
-        &[nat_succs(2).as_str(), "Nat::zero", "Nat::zero"],
-    );
-}
-
-/// 0 号全局自引用（def f : String = f）显示为 recursive_0（哨兵边界修复的显示面）。
-#[test]
-fn bb_self_ref_recursive_0() {
-    assert_lines("def f : String = f\n\nprintln f\n", &["recursive_0"]);
-}
-
-/// 前向引用（先声明后定义）报 name not in scope：L09 只有 fake_bind 自占位，没有后向查找。
-#[test]
-fn bb_forward_reference_rejected() {
+fn bb_wildcard_first_match_wins() {
+    // owner 2026-09-20 口径：通配臂之后的臂运行时永不可达 → 报「分支不可达」。
+    // 本用例原先钉的是"首匹配语义（通配臂之后的臂静默跳过、返回首个臂的值）"，
+    // 该形态现在报错；而"首匹配"在无重叠模式（本语言里只有通配臂会与前臂
+    // 重叠）下不可观测，故改为负例钉子。
     assert_err(
-        "enum Vec[A](len: Nat) {\n    nil -> Vec[A] zero\n}\n",
-        &["name not in scope: Nat"],
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def pick(x: Nat): Nat =
+    match x {
+        case n => zero
+        case zero => succ zero
+        case succ(k) => succ k
+    }
+"#,
+        "分支不可达",
     );
 }
 
-/// 应用实参本身是应用/构造子时不额外加括号（pretty 恒等显示）。
+/// 构造子可以作为函数值使用（`succ` 部分应用）。
 #[test]
-fn bb_app_argument_parens_display() {
+fn bb_constructor_as_function() {
     assert_lines(
-        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\ndef two = succ (succ zero)\n\ndef id(x: Nat): Nat = x\n\nprintln (id two)\n",
-        &[nat_succs(2).as_str()],
+        r#"
+enum Bool {
+    true
+    false
+}
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def s: Nat -> Nat = succ
+
+def two = succ (succ zero)
+
+println (s zero)
+println (s (s zero))
+"#,
+        &["Nat::succ(Nat::zero)", "Nat::succ(Nat::succ(Nat::zero))"],
     );
 }
 
-/// 40 层 succ 链：深值 quote/pretty 路径（128MB 栈内）不崩。
+/// 自引用 def（指向自身的中性占位）：终止，打印名字本身。
 #[test]
-fn bb_deep_succ_40() {
+fn bb_self_referential_def() {
+    assert_lines(
+        r#"
+enum Bool {
+    true
+    false
+}
+
+def g: Bool = g
+
+println g
+"#,
+        &["g"],
+    );
+}
+
+/// 深层项：1000 层嵌套 succ 的构造 / 打印 / 相等（逐字节精确）。
+/// 深度边界实测：64MB 栈下 ~1500-2000 层即栈溢出（解析/求值阶段，
+/// 先于 4096 的 fuel 池），见 `bb_probe_depth_sweep`。
+#[test]
+fn bb_deep_nat() {
     let src = format!(
-        "enum Nat {{\n    zero\n    succ(x: Nat)\n}}\n\nprintln {}\n",
-        "succ (".repeat(40) + "zero" + &")".repeat(40)
+        r#"
+enum Nat {{
+    zero
+    succ(x: Nat)
+}}
+
+enum Eq[A](x: A, y: A) {{
+    refl(a: A) -> Eq a a
+}}
+
+def big = {chain}
+
+def ok: Eq big big = refl big
+
+println big
+"#,
+        chain = succ_chain(1000)
     );
-    assert_lines(&src, &[nat_succs(40).as_str()]);
+    let out = check(&src);
+    assert_eq!(out.trim(), nat_succs(1000));
 }
 
-/// 索引参数投影 t.len 化简为构造子链（4）。
+// 2. 错误路径
+// --------------------------------------------------------------------------------
+
+/// 覆盖缺失：缺构造子报"缺少构造子"。
 #[test]
-fn bb_vec_len_projection() {
-    assert_lines(
-        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\nenum Vec[A](len: Nat) {\n    nil -> Vec[A] zero\n    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)\n}\n\ndef two = succ (succ zero)\n\ndef three = succ (succ (succ zero))\n\ndef t = cons zero (cons two (cons three (cons two nil)))\n\nprintln t.len\n",
-        &[nat_succs(4).as_str()],
+fn bb_err_missing_case() {
+    assert_err(
+        r#"
+enum Bool {
+    true
+    false
+}
+
+def bad(x: Bool): Bool =
+    match x {
+        case true => false
+    }
+"#,
+        "缺少构造子",
     );
 }
 
-/// GADT 索引：head 取 Vec[T] (succ L) 上的 cons 首元素。
+/// 不可达分支：索引族上不可能的模式报"不可达"。
 #[test]
-fn bb_vec_head_indexed_singleton() {
+fn bb_err_unreachable_arm() {
+    assert_err(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Vec[A](len: Nat) {
+    nil -> Vec[A] zero
+    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
+}
+
+def bad(v: Vec[Nat] zero): Nat =
+    match v {
+        case cons(x, xs) => x
+    }
+"#,
+        "不可达",
+    );
+}
+
+/// match 在 infer 位置被接受（不报错）——前提是能解析到该位置
+/// （见 `bb_match_parse_positions`：println/无参 def 处直接解析 panic）。
+#[test]
+fn bb_match_infer_position_accepted() {
+    check(
+        r#"
+enum Bool {
+    true
+    false
+}
+
+def bad(x: Bool) =
+    match x {
+        case true => false
+        case false => true
+    }
+"#,
+    );
+}
+
+/// 对非和类型（函数类型）做 match。
+#[test]
+fn bb_err_match_on_function() {
+    assert_err(
+        r#"
+enum Bool {
+    true
+    false
+}
+
+def bad(f: Bool -> Bool): Bool =
+    match f {
+        case _ => true
+    }
+"#,
+        "和类型",
+    );
+}
+
+/// 模式元数错误：子模式多于构造子字段。
+#[test]
+fn bb_err_pattern_too_many() {
+    assert_err(
+        r#"
+enum Bool {
+    true
+    false
+}
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def bad(x: Nat): Nat =
+    match x {
+        case succ(a, b) => a
+    }
+"#,
+        "模式多了",
+    );
+}
+
+/// 模式元数错误：子模式少于构造子字段。
+#[test]
+fn bb_err_pattern_missing_field() {
+    assert_err(
+        r#"
+enum Bool {
+    true
+    false
+}
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+def bad(x: List[Nat]): Nat =
+    match x {
+        case nil => zero
+        case cons(h) => h
+    }
+"#,
+        "缺少字段",
+    );
+}
+
+/// 对 nullary 构造子给子模式。
+#[test]
+fn bb_err_pattern_on_nullary() {
+    assert_err(
+        r#"
+enum Bool {
+    true
+    false
+}
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def bad(x: Nat): Nat =
+    match x {
+        case zero(k) => k
+    }
+"#,
+        "模式多了",
+    );
+}
+
+/// 未定义名字（前向引用同此：decl 按声明顺序处理）。
+#[test]
+fn bb_err_name_not_in_scope() {
+    let msg = check_err(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def bad(x: Nat): Nat = undefined_name x
+"#,
+    );
+    assert!(
+        msg.contains("undefined_name") || msg.contains("not in scope"),
+        "unexpected err: {msg}"
+    );
+}
+
+/// 索引等式负例：`Eq two three` 不可证。
+#[test]
+fn bb_err_index_mismatch() {
+    assert_err(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def two = succ (succ zero)
+
+def three = succ (succ (succ zero))
+
+def bad: Eq two three = refl two
+"#,
+        "can't unify",
+    );
+}
+
+/// 位置显式实参不能供给隐式绑定器（`rfl two`）——实测报 can't unify
+/// （把 `two` 当第一个显式实参应用时类型合不上）。
+#[test]
+fn bb_err_positional_to_implicit_binder() {
+    assert_err(
+        r#"
+enum Bool {
+    true
+    false
+}
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def rfl[A][a: A]: Eq a a =
+    refl a
+
+def two = succ (succ zero)
+
+def bad: Eq two two = rfl two
+"#,
+        "can't unify",
+    );
+}
+
+/// 未标注 λ 实参应用给具体类型绑定器（Church 编码）：prune_ty/prune_vflex
+/// 排序修复（2026-09）前误报 can't unify（多层 telescope 的剪枝掩码错位）；
+/// 修复后正确通过（与 L02-L05 的 church 样例同款）。
+#[test]
+fn bb_unannotated_lambda_arg_ok() {
+    check(
+        r#"
+def Nat : Type 1 =
+    (N : Type 0) -> (N -> N) -> N -> N
+
+def mul : Nat -> Nat -> Nat =
+    a => b => N => s => z => a _ (b _ s) z
+
+def two = N => s => z => s (s z)
+
+def four = mul two two
+
+println four
+"#,
+    );
+}
+
+/// 投影不存在的字段（Sum 参数之外的名字，含构造子数据字段）。
+#[test]
+fn bb_err_projection_no_field() {
+    let msg = check_err(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Vec[A](len: Nat) {
+    nil -> Vec[A] zero
+    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
+}
+
+def two = succ (succ zero)
+
+def t = cons zero (cons two nil)
+
+println t.nope
+"#,
+    );
+    assert!(
+        msg.contains("nope") && (msg.contains("field") || msg.contains("投影")),
+        "unexpected err: {msg}"
+    );
+}
+
+/// 投影构造子数据字段：`(cons two nil).x` 报 `Vec has no field x`
+/// （实现只对 Sum 参数开放投影，与 README §2 "先查索引再查字段"的
+/// 字面描述不一致，以实际行为为准）。
+#[test]
+fn bb_err_projection_data_field() {
+    assert_err(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Vec[A](len: Nat) {
+    nil -> Vec[A] zero
+    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
+}
+
+def two = succ (succ zero)
+
+println (cons two nil).x
+"#,
+        "no field x",
+    );
+}
+
+/// 对 nullary 构造子值投影（无参数可取）。
+#[test]
+fn bb_err_projection_on_nullary_ctor() {
+    assert_err(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Vec[A](len: Nat) {
+    nil -> Vec[A] zero
+    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
+}
+
+println nil.len
+"#,
+        "cannot project",
+    );
+}
+
+/// string_concat 的类型约束：非 String 实参。
+#[test]
+fn bb_err_string_concat_type() {
+    assert_err(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def bad = string_concat zero "!"
+"#,
+        "can't unify",
+    );
+}
+
+/// 卡住 match 与任意值只能严格 eta 相等：`f x` 不能被证成 `x`。
+#[test]
+fn bb_err_strict_eta_only() {
+    assert_err(
+        r#"
+enum Bool {
+    true
+    false
+}
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def rfl[A][a: A]: Eq a a =
+    refl a
+
+def f(n: Nat): Nat =
+    match n {
+        case zero => zero
+        case succ(k) => k
+    }
+
+def bad(x: Nat): Eq (f x) x = rfl[Nat][x]
+"#,
+        "can't unify",
+    );
+}
+
+/// README「已知限制 #1」：期望类型里的洞被臂内约束解成含臂局部模式
+/// 变量的值 → rename 作用域越界失败，误报 can't unify（教学取舍）。
+#[test]
+fn bb_limitation1_outer_meta() {
+    assert_err(
+        r#"
+enum Bool {
+    true
+    false
+}
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def bad(n: Nat): Eq _ _ =
+    match n {
+        case succ(k) => refl k
+        case zero => refl zero
+    }
+"#,
+        "can't unify",
+    );
+}
+
+/// 已知限制 #1 的另一形态：两臂语义一致（都证 `Eq zero zero`）仍报错
+/// ——洞的求解在臂 1 上下文里发生，臂 2 重锚后对不上。
+#[test]
+fn bb_limitation1_agreeing_arms() {
+    assert_err(
+        r#"
+enum Bool {
+    true
+    false
+}
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def zero_zero(b: Bool): Eq _ _ =
+    match b {
+        case true => refl zero
+        case false => refl zero
+    }
+"#,
+        "can't unify",
+    );
+}
+
+// 3. 语法与预处理怪癖（黑盒可观测行为，如实文档化）
+// --------------------------------------------------------------------------------
+
+/// match 的**行级**解析位置怪癖：语法是行导向的，match 必须写在
+/// `=` 之后的下一行（`def bad(x: Bool) =` 换行 `match x { ... }`）；
+/// 与 `=` 同行（`def mf = match ...`、`def ok(x: Nat): Nat = match ...`）
+/// 以及 `println (match ...)` 中内联的 match 一律解析失败（Err）。
+#[test]
+fn bb_match_parse_positions() {
+    let src = r#"
+enum Bool {
+    true
+    false
+}
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+"#;
+    assert_parse_err(&format!("{src}\nprintln (match zero {{ case zero => true case succ(k) => false }})\n"));
+    assert_parse_err(&format!("{src}\ndef mf = match (succ zero) {{ case zero => true case succ(k) => false }}\n"));
+    // 与 `=` 同行也不行（虽然带参数列表 + 返回类型）
+    assert_parse_err(&format!("{src}\ndef bad(x: Bool): Bool = match x {{ case true => false case false => true }}\n"));
+    // 正确形态：match 从 `=` 的下一行开始
+    check(&format!(
+        "{src}\ndef ok(x: Nat): Nat =\n    match x {{\n        case zero => zero\n        case succ(k) => k\n    }}\n"
+    ));
+}
+
+/// `//` 行注释被剥离，不影响求值。
+#[test]
+fn bb_line_comments_ok() {
     assert_lines(
-        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\nenum Vec[A](len: Nat) {\n    nil -> Vec[A] zero\n    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)\n}\n\ndef head[T, L: Nat](x: Vec[T] (succ L)): T =\n    match x {\n        case cons(x, _) => x\n    }\n\nprintln (head (cons zero nil))\n",
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def two = succ (succ zero) // trailing comment
+
+println two
+"#,
+        &["Nat::succ(Nat::succ(Nat::zero))"],
+    );
+}
+
+/// `/* */` 块注释被剥离（跨行）。
+#[test]
+fn bb_block_comments_ok() {
+    assert_lines(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+/* a block
+   comment */
+def two = succ (succ zero)
+
+println two
+"#,
+        &["Nat::succ(Nat::succ(Nat::zero))"],
+    );
+}
+
+/// 预处理感知字符串字面量（2026-09 与 L06 同步）：字面量内的 `//` 与
+/// `/* */` 不再被当注释剥离——`"a//b"`、`"a/*b"` 原样输出（旧版把
+/// `//` 截断成未闭合字符串、把 `/*` 改写为空白破坏输出）。
+#[test]
+fn bb_string_comment_markers_kept() {
+    assert_lines(
+        r#"
+println "a//b"
+
+println "a/*b"
+
+println "say \"hi\""
+"#,
+        &["a//b", "a/*b", "say \"hi\""],
+    );
+}
+
+/// 空字符串字面量（lexer 曾把空内容误判为未闭合 → 整体解析失败）。
+#[test]
+fn bb_empty_string_literal() {
+    assert_lines(
+        r#"
+println ""
+
+def e : String = ""
+
+println (string_concat "" "x")
+"#,
+        &["", "x"],
+    );
+}
+
+/// 解析失败带首个残余 token 的内容与偏移（`;` 结尾不再无从定位）。
+#[test]
+fn bb_parse_error_locates_leftover() {
+    assert_parse_err_contains("def a : Type 0 = Type 0\n;\n", "leftover token `;`");
+}
+
+/// 顶层 `let` 不在 decl 语法里（Decl = Def/Println/Enum）→ 解析失败；
+/// `let` 只在 match 分支体内合法（`case succ(k) => let y = k; succ y`）。
+#[test]
+fn bb_top_level_let_parse_err() {
+    assert_parse_err(
+        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\ndef two = succ (succ zero)\n\nlet x = two;\nprintln x\n",
+    );
+    assert_lines(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def f(x: Nat): Nat =
+    match x {
+        case zero => zero
+        case succ(k) =>
+            let y = k;
+            succ y
+    }
+
+println (f (succ (succ zero)))
+"#,
+        &["Nat::succ(Nat::succ(Nat::zero))"],
+    );
+}
+
+// 4. 鲁棒性
+// --------------------------------------------------------------------------------
+
+/// 空输入 / 纯注释输入：parser 需要至少一个 decl → 解析失败。
+#[test]
+fn bb_empty_input_parse_err() {
+    assert_parse_err("");
+    assert_parse_err("   \n  \n");
+    assert_parse_err("// only a comment\n");
+}
+
+/// 乱码输入：解析失败（Err("parse error")）。
+#[test]
+fn bb_garbage_parse_err() {
+    assert_parse_err("def bad = @@@\n");
+    assert_parse_err("enum { }\n");
+}
+
+/// 前向引用（引用后定义的 decl）：当前实现按声明顺序处理 → Err
+/// `name not in scope`（panic 探针兜底两种可能）。
+#[test]
+fn bb_forward_reference() {
+    let src = r#"
+enum Bool {
+    true
+    false
+}
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def is_even(x: Nat): Bool =
+    match x {
+        case zero => true
+        case succ(n) => is_odd n
+    }
+
+def is_odd(x: Nat): Bool =
+    match x {
+        case zero => false
+        case succ(n) => is_even n
+    }
+
+println (is_even (succ (succ (succ zero))))
+"#;
+    match check_panic(src) {
+        None => {
+            let err = check_err(src);
+            assert!(
+                err.contains("is_odd") || err.contains("not in scope"),
+                "unexpected err: {err}"
+            );
+        }
+        Some(p) => panic!("unexpected panic: {p}\nsrc:\n{src}"),
+    }
+}
+
+/// 确定性：同一程序跑两次，输出逐字节一致（含卡住 match 打印）。
+#[test]
+fn bb_determinism() {
+    let src = r#"
+enum Bool {
+    true
+    false
+}
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def f(n: Nat): Nat -> Nat =
+    match n {
+        case zero => succ
+        case succ(k) => succ
+    }
+
+def V(n: Nat): Type 0 =
+    match n {
+        case zero => Bool
+        case succ(m) => Bool
+    }
+
+println f
+println (f (succ zero))
+"#;
+    let a = check(src);
+    let b = check(src);
+    assert_eq!(a, b, "non-deterministic output:\n{a}\n--- second ---\n{b}");
+    assert!(a.contains("match n"), "out:\n{a}");
+}
+
+/// 中段错误截断语义：某 decl 报错时整个程序 Err（之前的 println 不产生
+/// 输出，后续也不执行）。
+#[test]
+fn bb_error_truncates_program() {
+    let msg = check_err(
+        r#"
+enum Bool {
+    true
+    false
+}
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def two = succ (succ zero)
+
+def three = succ (succ (succ zero))
+
+println two
+
+def bad: Eq two three = refl two
+
+println three
+"#,
+    );
+    assert!(msg.contains("can't unify"), "err: {msg}");
+}
+
+/// 深度探针：可终止深结构的边界（fuel=4096 之前先栈溢出 ~1500-2000 层）。
+/// 单独跑：`cargo test --test l09_blackbox bb_probe_depth_sweep -- --ignored
+/// --nocapture`。注意：超过阈值的深度会让 64MB 线程栈溢出并终止整个
+/// 测试进程，因此探针只扫安全区间（实测 2000 已溢出）。
+#[test]
+#[ignore]
+fn bb_probe_depth_sweep() {
+    fn probe(depth: usize) -> String {
+        let src = format!(
+            r#"
+enum Nat {{
+    zero
+    succ(x: Nat)
+}}
+
+enum Eq[A](x: A, y: A) {{
+    refl(a: A) -> Eq a a
+}}
+
+def big = {chain}
+
+def ok: Eq big big = refl big
+"#,
+            chain = succ_chain(depth)
+        );
+        let input = src.to_owned();
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || match run(&input, 0) {
+                Ok(out) => format!("depth {depth}: OK ({})", out.len()),
+                Err(e) => format!("depth {depth}: ERR {e:?}"),
+            })
+            .unwrap()
+            .join()
+            .unwrap()
+    }
+    for depth in [100, 300, 600, 900, 1000] {
+        eprintln!("{}", probe(depth));
+    }
+    eprintln!("measured elsewhere: depth 2000 overflows the 64MB stack (process abort); higher depths slow down super-linearly");
+}
+
+// --------------------------------------------------------------------------------
+// L09 专项：产品类型（struct / new / 投影）。期望串先经独立探针实测，
+// 再对照语义手推确认（契约同文件头）。
+// --------------------------------------------------------------------------------
+
+const PRODUCT_PRELUDE: &str = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+struct Point {
+    x: Nat
+    y: Nat
+}
+
+struct Unit {
+}
+"#;
+
+/// struct 值打印：`{Name}.mk(...)`（单段前缀，不再叠 `::`）；投影逐字段；
+/// 空 struct 打印 `Unit.mk`；`Point.mk` 是 λ 链（η 展开）。
+#[test]
+fn product_print_forms() {
+    assert_lines(
+        &format!("{PRODUCT_PRELUDE}def p = new Point(zero, succ zero)\nprintln p\n"),
+        &["Point.mk(Nat::zero Nat::succ(Nat::zero))"],
+    );
+    assert_lines(
+        &format!("{PRODUCT_PRELUDE}def p = new Point(zero, succ zero)\nprintln p.x\nprintln p.y\n"),
+        &["Nat::zero", "Nat::succ(Nat::zero)"],
+    );
+    assert_lines(
+        &format!("{PRODUCT_PRELUDE}def u = new Unit()\nprintln u\n"),
+        &["Unit.mk"],
+    );
+    assert_lines(
+        &format!("{PRODUCT_PRELUDE}println Point.mk\n"),
+        &["x => y => Point.mk(x y)"],
+    );
+    // 未实例化字段访问 → 卡住投影，按 `p.x` 显示
+    assert_lines(
+        &format!("{PRODUCT_PRELUDE}def sf(p: Point): Nat = p.x\nprintln sf\n"),
+        &["p => p.x"],
+    );
+}
+
+/// 投影错误消息：值级 / 类型级 receiver 都给 `{类型} has no field {名}`；
+/// 投影链在**类型正确**的前缀上继续失败时，消息报**当前持有者类型**
+/// （`p.x.y` 的 `y` 落在 Nat 上）。
+#[test]
+fn product_projection_errors() {
+    assert!(
+        check_err(&format!(
+            "{PRODUCT_PRELUDE}def p = new Point(zero, zero)\ndef bad = p.zzz\n"
+        ))
+        .contains("Point has no field zzz")
+    );
+    assert!(
+        check_err(&format!("{PRODUCT_PRELUDE}def bad(p: Point) = p.zzz\n"))
+            .contains("Point has no field zzz")
+    );
+    assert!(
+        check_err(&format!(
+            "{PRODUCT_PRELUDE}def p = new Point(zero, zero)\nprintln p.x.y\n"
+        ))
+        .contains("Nat has no field y")
+    );
+    assert!(check_err("def bad = new Nope(zero)\n").contains("name not in scope: Nope.mk"));
+}
+
+/// 普通单 case enum 不享受 `.mk` 类型级剥链（门控是构造子名含 `.mk`，
+/// 即 struct 脱糖产物专属）——与 L07 行为一致。
+#[test]
+fn product_plain_enum_not_unfolded() {
+    assert!(
+        check_err(
+            r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Wrap {
+    only(x: Nat)
+}
+
+def bad(w: Wrap) = w.x
+"#
+        )
+        .contains("Wrap has no field x")
+    );
+}
+
+/// L09 语法扩展：投影是**左结合多段链**（L07 只允许单段，`l.a.x` 会以
+/// leftover `.` 解析失败）。类型级与值级都逐段推进。
+#[test]
+fn product_chained_projections() {
+    let pre = &format!("{PRODUCT_PRELUDE}struct Line {{\n    a: Point\n    b: Point\n}}\n");
+    // 类型级：def 参数只有类型信息，逐段剥 `.mk` 链
+    assert_lines(
+        &format!(
+            "{pre}def far(l: Line): Nat = l.a.x\ndef r : Nat = far(new Line((new Point(zero, succ zero)), (new Point(succ zero, zero))))\nprintln r\n"
+        ),
+        &["Nat::zero"],
+    );
+    // 值级：逐段 project
+    assert_lines(
+        &format!(
+            "{pre}def l = new Line((new Point(zero, succ zero)), (new Point(succ zero, zero)))\nprintln l.a.y\nprintln l.b.x\n"
+        ),
+        &["Nat::succ(Nat::zero)", "Nat::succ(Nat::zero)"],
+    );
+}
+
+/// `match` 一个 struct 值：构造子模式名写不出 `{Name}.mk`（p_pattern 的
+/// 头部是单个 Ident token），变量模式臂整体绑定，字段走投影。
+#[test]
+fn product_match_variable_arm() {
+    assert_lines(
+        &format!(
+            "{PRODUCT_PRELUDE}def f(p: Point): Nat =\n    match p {{\n        case pt => pt.x\n    }}\nprintln (f (new Point(zero, succ zero)))\n"
+        ),
         &["Nat::zero"],
     );
 }
 
-/// GADT refl 值显示：Eq::refl(实参)。
+/// 泛型 struct：隐式参数方括号组；类型级投影函数经隐式插入与显式实例化
+/// 两条路径给出同一结果。
 #[test]
-fn bb_gadt_refl_value_display() {
+fn product_generic_struct() {
     assert_lines(
-        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\nenum Eq[A](x: A, y: A) {\n    refl[a: A] -> Eq[A] a a\n}\n\ndef two = succ (succ zero)\n\ndef test: Eq two two = refl\n\nprintln test\n",
-        &[format!("Eq::refl({})", nat_succs(2)).as_str()],
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+struct P2[T] {
+    v: T
+}
+
+def g[T](p: P2[T]) = p.v
+
+def q = new P2(zero)
+println (g q)
+println (g [Nat] q)
+"#,
+        &["Nat::zero", "Nat::zero"],
     );
 }
 
-/// GADT 索引不合：Eq two three = refl 报 cannot unify（期望类型带两个 succ 链）。
+/// new 的实参本身可以是 `new ...`（实参走 p_raw，p_new 在链上）；但
+/// `f new Point(...)`（裸 spine 实参位）解析失败——p_arg 不含 p_new。
 #[test]
-fn bb_gadt_refl_bad() {
+fn product_new_nesting() {
+    assert_lines(
+        &format!(
+            "{PRODUCT_PRELUDE}struct Line {{\n    a: Point\n}}\n\ndef l = new Line(new Point(zero, zero))\nprintln l.a.x\n"
+        ),
+        &["Nat::zero"],
+    );
+    let e = check_err(&format!(
+        "{PRODUCT_PRELUDE}struct Line {{\n    a: Point\n}}\n\ndef mk(l: Line) = l.a\nprintln mk new Point(zero, zero)\n"
+    ));
+    assert!(e.contains("parse error"), "{e}");
+}
+
+/// `new` 结果直接接 `.field` 投影后缀链（评审补齐：`new P(a, b).x` ≡
+/// `(new P(a, b)).x`）；实参位嵌套 `new` 与裸 spine 实参位的界限不变。
+#[test]
+fn product_new_dot_chain() {
+    assert_lines(
+        &format!("{PRODUCT_PRELUDE}def d = new Point(zero, succ zero).y\nprintln d\n"),
+        &["Nat::succ(Nat::zero)"],
+    );
+    let pre = &format!("{PRODUCT_PRELUDE}struct Line {{\n    a: Point\n    b: Point\n}}\n");
+    assert_lines(
+        &format!(
+            "{pre}println new Line(new Point(zero, succ zero), new Point(succ zero, zero)).b.y\n"
+        ),
+        &["Nat::zero"],
+    );
+}
+
+/// struct 字段类型把关：Err。注意 `new Point(zero)`（少一个字段）**不是**
+/// 错误——构造子是 λ 链，少应用得到部分应用函数（与 enum 构造子同款语义）。
+#[test]
+fn product_type_errs_and_partial_app() {
+    check_err(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+struct Point {
+    x: Nat
+}
+
+def bad = new Point(true)
+"#,
+    );
+    assert_lines(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+struct Point {
+    x: Nat
+    y: Nat
+}
+
+def partial = new Point(zero)
+println (partial (succ zero))
+"#,
+        &["Point.mk(Nat::zero Nat::succ(Nat::zero))"],
+    );
+    // 部分应用的 struct 构造是函数——投影它报错（receiver 类型是 Pi）
+    check_err(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+struct Point {
+    x: Nat
+    y: Nat
+}
+
+def partial = new Point(zero)
+def bad = partial.y
+"#,
+    );
+}
+// 重定义报错（L13 fake_bind 移植）
+// --------------------------------------------------------------------------------
+
+/// 同名 def / enum / struct、def 与 builtin 撞名（`String` 已登记）→ 定向
+/// 报错，不再静默覆盖（last-wins 语义退出）。struct 脱糖成单构造子 enum，
+/// 走同一 Enum 检查路径。
+#[test]
+fn redefine_error() {
+    let nat = "enum Nat {\n    zero\n    succ(x: Nat)\n}\n";
+    let bool_ = "enum Bool {\n    true\n    false\n}\n";
+    // 同名 def
     assert_err(
-        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\nenum Eq[A](x: A, y: A) {\n    refl[a: A] -> Eq[A] a a\n}\n\ndef two = succ (succ zero)\n\ndef three = succ (succ (succ zero))\n\ndef bad: Eq two three = refl\n",
-        &["can't unify", "Eq[Nat", "expected:"],
+        &format!("{nat}def a : Nat = zero\ndef a : Nat = succ zero\nprintln a\n"),
+        "redefine a",
     );
-}
-
-/// 等式证明项（rfl 包装）打印为 Eq::refl(Nat::succ(...))。
-#[test]
-fn bb_eq_proof_term_display() {
-    assert_lines(
-        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\nenum Eq[A](x: A, y: A) {\n    refl(a: A) -> Eq a a\n}\n\ndef rfl[A][a: A]: Eq a a =\n    refl a\n\ndef two = succ (succ zero)\n\ndef ck: Eq two two = rfl\n\nprintln ck\n",
-        &[format!("Eq::refl({})", nat_succs(2)).as_str()],
-    );
-}
-
-/// 依赖 match：索引精化传播到分支体与返回类型（无 println，只要求检查通过）。
-#[test]
-fn bb_dependent_match_ok() {
-    let src = "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\nenum Vec[A](len: Nat) {\n    nil -> Vec[A] zero\n    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)\n}\n\ndef t[len: Nat](x: Vec[Nat] len, y: Vec[Nat] len): Vec[Nat] (succ len) =\n    match x {\n        case nil => cons zero nil\n        case cons(x, xs) => match y {\n            case cons(y, ys) => cons x (t xs ys)\n        }\n    }\n";
-    assert!(run_big(src).is_ok(), "依赖 match 应通过: {:?}", run_big(src));
-}
-
-/// 隐式实参逗号合写 f[A, B] 等价于 f[A][B]（e2d04bb 回移植）。
-#[test]
-fn bb_implicit_comma_args_equiv() {
-    assert_lines(
-        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\nenum Bool {\n    true\n    false\n}\n\nenum P1[A, B] {\n    p1[A, B](a: A, b: B) -> P1[A][B]\n}\n\nprintln (p1[Nat, Bool] zero true)\n",
-        &["P1::p1(Nat, Bool, Nat::zero, Bool::true)"],
-    );
-}
-
-/// 多隐式无标注参数 P1[A, B] + 显式实例化：域洞钉 U(0) 后可通过。
-#[test]
-fn bb_implicit_hole_pinned_u0() {
-    assert_lines(
-        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\nenum Bool {\n    true\n    false\n}\n\nenum P1[A, B] {\n    p1[A, B](a: A, b: B) -> P1[A][B]\n}\n\nprintln (p1[Nat][Bool] zero true)\n",
-        &["P1::p1(Nat, Bool, Nat::zero, Bool::true)"],
-    );
-}
-
-/// 高宇宙 enum：Type 0/1 显示 + HighLvl[Nat] 属于 Type 2。
-#[test]
-fn bb_high_lvl_enum_universes() {
-    assert_lines(
-        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\ndef test0: Type 1 = Type 0\n\ndef test1: Type 2 = Type 1 -> Type 0\n\nenum HighLvl[A] {\n    case1(a: A)\n    case2(a: test1)\n}\n\ndef test2: HighLvl[Nat] = case1 zero\n\ndef test3: Type 2 = HighLvl[Nat]\n\nprintln test0\nprintln test1\nprintln test3\n",
-        &["Type 0", "Type 1 → Type 0", "HighLvl[Nat]"],
-    );
-}
-
-/// struct 脱糖：分支名自带 .mk（Point::Point.mk）；值级投影 p.x 化简到字段。
-#[test]
-fn bb_struct_mk_projection() {
-    assert_lines(
-        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\ndef two = succ (succ zero)\n\nstruct Point {\n    x: Nat\n    y: Nat\n}\n\ndef p = new Point(two, zero)\n\nprintln p\nprintln p.x\n",
-        &[format!("Point::Point.mk({}, Nat::zero)", nat_succs(2)).as_str(), nat_succs(2).as_str()],
-    );
-}
-
-/// struct 字段投影 + new 组合：point_add = (4, 6)。
-#[test]
-fn bb_struct_point_add() {
-    assert_lines(
-        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\ndef two = succ (succ zero)\n\ndef four = succ (succ (succ (succ zero)))\n\nstruct Point {\n    x: Nat\n    y: Nat\n}\n\ndef add(x: Nat, y: Nat) =\n    match x {\n        case zero => y\n        case succ(n) => succ (add n y)\n    }\n\ndef point_add(p1: Point, p2: Point): Point =\n    new Point((add p1.x p2.x), (add p1.y p2.y))\n\ndef start_point = new Point(zero, four)\n\ndef end_point = new Point(four, two)\n\nprintln (point_add start_point end_point)\n",
-        &[format!("Point::Point.mk({}, {})", nat_succs(4), nat_succs(6)).as_str()],
-    );
-}
-
-/// 依赖字段投影：proof : Eq witness two 的 e.proof 取回 refl。
-#[test]
-fn bb_struct_dependent_field_projection() {
-    assert_lines(
-        "enum Nat {\n    zero\n    succ(x: Nat)\n}\nenum Eq[A](x: A, y: A) {\n    refl(a: A) -> Eq a a\n}\ndef two = succ (succ zero)\nstruct Ex {\n    witness: Nat\n    proof: Eq witness two\n}\ndef p = Ex.mk two (refl two)\ndef get_proof(e: Ex): Eq e.witness two = e.proof\nprintln (get_proof p)\n",
-        &[format!("Eq::refl({})", nat_succs(2)).as_str()],
-    );
-}
-
-/// struct 版高宇宙类型：HighLvl[Nat] 可打印为类型项。
-#[test]
-fn bb_struct_high_universe() {
-    assert_lines(
-        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\ndef test1: Type 2 = Type 1 -> Type 0\n\ndef test2_t: Type 1 -> Type 0 = t => Nat\n\nstruct HighLvl[A] {\n    case1: A\n    case2: test1\n}\n\ndef test2: HighLvl[Nat] = new HighLvl(zero, test2_t)\n\ndef test3: Type 2 = HighLvl[Nat]\n\nprintln test3\n",
-        &["HighLvl[Nat]"],
-    );
-}
-
-/// 【已知缺陷·如实钉住】L09 解析多段投影 l.a.x，但类型检查报 cannot unify（L08 血统多段投影链在本层不成立；README 的"多段投影链"声称与实现不符）。若未来修复，本测试失败即提示更新。
-#[test]
-fn bb_struct_multi_projection_rejected() {
+    // def 与 builtin 撞名
+    assert_err("def String : Type 0 = Type 0\nprintln String\n", "redefine String");
+    // 同名 enum
     assert_err(
-        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\ndef two = succ (succ zero)\n\nstruct Point {\n    x: Nat\n    y: Nat\n}\n\nstruct Line {\n    a: Point\n    b: Point\n}\n\ndef headX(l: Line): Nat = l.a.x\n\nprintln (headX (new Line(new Point(two, zero), new Point(zero, two))))\n",
-        &["can't unify"],
+        &format!("{nat}enum Nat2 {{\n    zero\n    succ(x: Nat2)\n}}\nenum Nat2 {{\n    zero\n}}\n"),
+        "redefine Nat2",
+    );
+    // def 与 enum 名互相撞名
+    assert_err(&format!("{nat}def Nat : Type 1 = Type 0\n"), "redefine Nat");
+    // enum 后 def 同名
+    assert_err(&format!("{bool_}def Bool : Type 0 = Type 0\n"), "redefine Bool");
+    // struct 同名（struct 脱糖为单构造子 enum，检查路径相同）
+    assert_err(
+        "struct Pair[A : Type 0] {\n    fst : A\n    snd : A\n}\nstruct Pair[A : Type 0] {\n    fst : A\n}\n",
+        "redefine Pair",
+    );
+    // struct 与 def 撞名
+    assert_err(
+        "struct Q {\n    x : String\n}\ndef Q : Type 0 = Type 0\n",
+        "redefine Q",
+    );
+}// 类型注解 universe 定向报错（L13 check_universe 轻量移植）
+// --------------------------------------------------------------------------------
+
+/// 注解形态确定非类型（字面量 / 名字的类型非 Type 0）→ 定向报错，不再落通用
+/// can't unify；洞与未解 meta、真类型（enum / struct / 构造子名放行）。
+#[test]
+fn expected_universe_on_bad_annotation() {
+    let nat = "enum Nat {\n    zero\n    succ(x: Nat)\n}\n";
+    // 名字注解且类型非 universe（builtin 函数型）
+    assert_err(
+        "def bad : string_concat = \"a\"\nprintln bad\n",
+        "expected universe, got",
+    );
+    // 字面量注解
+    assert_err(
+        "def bad : \"str\" = \"a\"\nprintln bad\n",
+        "expected universe, got",
+    );
+    // 构造子名注解（`zero` 的类型是 Nat，不是 Type 0）
+    assert_err(
+        &format!("{nat}def bad : zero = zero\nprintln bad\n"),
+        "expected universe, got",
+    );
+    // Π 参数类型同样校验
+    assert_err(
+        "def bad (x : string_concat) : String = \"a\"\nprintln bad\n",
+        "expected universe, got",
+    );
+    // let 注解同校验
+    assert_err(
+        "def f : Type 0 = let y : \"str\" = \"a\"; y\nprintln f\n",
+        "expected universe, got",
+    );
+    // 洞注解放行 + enum 名 / struct 名（真类型）放行
+    assert_lines(
+        &format!("{nat}def s : _ = zero\nprintln s\n"),
+        &["Nat::zero"],
+    );
+    assert_lines(
+        &format!("{nat}def t : Nat = succ zero\nprintln t\n"),
+        &["Nat::succ(Nat::zero)"],
+    );
+    assert_lines(
+        &format!("{nat}struct Pair[A : Type 0] {{\n    fst : A\n    snd : A\n}}\n\
+         def p : Pair[Nat] = new Pair((succ zero), zero)\n\
+         println (p.fst)\n"),
+        &["Nat::succ(Nat::zero)"],
     );
 }
+// Type N 分层宇宙（L09 相对 L08 的章节增量）
+// --------------------------------------------------------------------------------
 
-/// Type N 字面显示：Type 0 / Type 1 → Type 0（匿名 Π 箭头）。
+/// 宇宙值打印为 `Type N`；层级推进 Type N : Type N+1 由注解合法通过体现。
 #[test]
-fn bb_type_levels_display() {
+fn bb_universe_levels_output() {
     assert_lines(
-        "def test0: Type 1 = Type 0\n\ndef test1: Type 2 = Type 1 -> Type 0\n\nprintln test0\nprintln test1\n",
+        r#"
+def test0: Type 1 = Type 0
+
+def test1: Type 2 = Type 1 -> Type 0
+
+println test0
+println test1
+"#,
         &["Type 0", "Type 1 → Type 0"],
     );
 }
 
-/// 高阶 λ 类型注释：Pi 塔的 universe 推断（Type 1 上的类型构造）。
+/// 高宇宙 enum：字段域是 Type 2 上的类型时 enum 本体在 Type 3 层 Π 链，
+/// 实例化与出版均成立。
 #[test]
-fn bb_universe_arrow_higher_order_ok() {
-    let src = "def NatT : Type 1 = (N : Type 0) -> (N -> N) -> N -> N\n";
-    let r = run_big(src);
-    assert!(r.is_ok(), "高阶 λ 注释应通过: {r:?}");
+fn bb_high_universe_enum() {
+    let out = check(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
 }
 
-/// 宇宙注解与字面量体不匹配：find Type 0 / expected String。
-#[test]
-fn bb_universe_body_literal_error() {
-    assert_err(
-        "def bad : Type 0 = \"not a type\"\nprintln bad\n",
-        &["can't unify", "find: Type 0", "expected: String"],
+def test1: Type 2 = Type 1 -> Type 0
+
+enum HighLvl[A] {
+    case1(a: A)
+    case2(a: test1)
+}
+
+def hl : HighLvl[Nat] = case1 zero
+
+def t3 : Type 2 = HighLvl[Nat]
+
+println t3
+"#,
     );
+    assert!(out.contains("HighLvl"), "high-universe enum 输出缺头名: {out:?}");
 }
 
-/// 类型层级失配：def bad : Nat = Type 0 → find Nat / expected Type 1。
+/// 层级不匹配必须拒绝（Type 0 : Type 1，不能当 Type 0 用）。
 #[test]
 fn bb_universe_level_mismatch() {
+    assert_err("def bad : Type 0 = Type 0\nprintln bad\n", "can't unify");
+    assert_err("def bad : Type 1 = Type 1\nprintln bad\n", "can't unify");
     assert_err(
-        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\ndef bad : Nat = Type 0\nprintln bad\n",
-        &["can't unify", "find: Nat", "expected: Type 1"],
-    );
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
 }
-
-/// 构造子返回类型不是本 enum：c -> Nat 被 check_ctor_wf 拒绝。
-#[test]
-fn bb_ctor_wf_external_ret() {
-    assert_err(
-        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\nenum Foo {\n    c -> Nat\n}\n",
-        &["构造子 c 的返回类型是 Nat，不是 Foo"],
-    );
+def test1: Type 2 = Type 1 -> Type 0
+enum HighLvl[A] {
+    case1(a: A)
+    case2(a: test1)
 }
-
-/// 构造子返回类型参数被特化：c -> Foo[Bool] 拒绝（参数必须是参数变量）。
-#[test]
-fn bb_ctor_wf_param_specialized() {
-    assert_err(
-        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\nenum Bool {\n    true\n    false\n}\n\nenum Foo[A] {\n    c -> Foo[Bool]\n}\n",
-        &["构造子 c 的返回类型参数必须是 Foo 的参数变量"],
-    );
-}
-
-/// 构造子返回类型不是和类型：c -> Type 0 拒绝。
-#[test]
-fn bb_ctor_wf_not_sum() {
-    assert_err(
-        "enum Foo {\n    c -> Type 0\n}\n",
-        &["构造子 c 的返回类型不是和类型"],
-    );
-}
-
-/// 重绑定参数惯用法 pack[A, B](a, b) -> Pack[A][B] 放行。
-#[test]
-fn bb_ctor_wf_rebind_ok() {
-    assert_lines(
-        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\nenum Bool {\n    true\n    false\n}\n\nenum Pack[A, B] {\n    pack[A, B](a: A, b: B) -> Pack[A][B]\n}\n\ndef t = pack[Nat][Bool] zero true\n\nprintln t\n",
-        &["Pack::pack(Nat, Bool, Nat::zero, Bool::true)"],
-    );
-}
-
-/// 重定义报错（从 L07/L08 继承，L13 `fake_bind` 前传）：先前 def / enum /
-/// 构造子裸名 / `Cxt::new` 内建已被占用 → `redefine {名}` 定向报错，
-/// 不再静默覆盖。先类型后重定义（与 L07/L08/L13 同序）。
-#[test]
-fn bb_redefinition_rejected() {
-    // 同名 def
-    assert_err(
-        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\ndef f: Nat = zero\ndef f: Nat = succ zero\n",
-        &["redefine", "f"],
-    );
-    // def 撞 enum 名
-    assert_err(
-        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\ndef Nat: Type 1 = Type 0\n",
-        &["redefine", "Nat"],
-    );
-    // def 撞构造子裸名
-    assert_err(
-        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\ndef zero: Nat = zero\n",
-        &["redefine", "zero"],
-    );
-    // def 撞内建（Cxt::new 的 String）
-    assert_err("def String: Type 1 = Type 0\n", &["redefine", "String"]);
-    // enum 撞先前 def
-    assert_err(
-        "def Nat: Type 1 = Type 0\n\nenum Nat {\n    zero\n}\n",
-        &["redefine", "Nat"],
-    );
-}
-
-/// 顶层覆盖缺失：Bool 缺 false 臂 → Err 文本含 Unmatched(Con("false"...))。
-#[test]
-fn bb_coverage_missing_top() {
-    assert_err(
-        "enum Bool {\n    true\n    false\n}\n\ndef bad(x: Bool): Bool =\n    match x {\n        case true => false\n    }\n",
-        &["Unmatched", "false"],
-    );
-}
-
-/// 嵌套覆盖缺失：List 的 nil + cons(h,nil) 缺 cons(h,cons(...)) → IncompleteNested 文案。
-#[test]
-fn bb_coverage_nested_gap() {
-    assert_err(
-        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\nenum List[A] {\n    nil\n    cons(head: A, tail: List[A])\n}\n\ndef bad(x: List[Nat]): Nat =\n    match x {\n        case nil => zero\n        case cons(h, nil) => h\n    }\n",
-        &["IncompleteNested", "match 不完整：模式位置 cons#2 缺少构造子 cons"],
-    );
-}
-
-/// 补上嵌套臂后通过，且运行首匹配选 nil。
-#[test]
-fn bb_coverage_nested_complete_ok() {
-    assert_lines(
-        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\nenum List[A] {\n    nil\n    cons(head: A, tail: List[A])\n}\n\ndef ok(x: List[Nat]): Nat =\n    match x {\n        case nil => zero\n        case cons(h, nil) => h\n        case cons(h, cons(h2, t)) => h2\n    }\nprintln (ok nil)\n",
-        &["Nat::zero"],
-    );
-}
-
-/// 通配臂覆盖剩余构造子，不报 Unmatched。
-#[test]
-fn bb_coverage_wildcard_covers() {
-    assert_lines(
-        "enum Bool {\n    true\n    false\n}\n\ndef ok(x: Bool): Bool =\n    match x {\n        case true => false\n        case _ => true\n    }\nprintln (ok true)\n",
-        &["Bool::false"],
-    );
-}
-
-/// 通配臂之后的臂报 Unreachable（L09 只认通配臂之后的遮蔽）。
-#[test]
-fn bb_coverage_shadowed_after_catch_all() {
-    assert_err(
-        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\ndef const_zero(x: Nat): Nat =\n    match x {\n        case n => zero\n        case zero => zero\n        case succ(k) => succ k\n    }\n",
-        &["Unreachable"],
-    );
-}
-
-/// 索引族 Vec[Nat] zero 只写 cons 臂：实际报 Unmatched(nil)（该构造子可达而 cons 臂覆盖不到它；不是不可达臂告警）。
-#[test]
-fn bb_coverage_indexed_vec_nil_unmatched() {
-    assert_err(
-        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\nenum Vec[A](len: Nat) {\n    nil -> Vec[A] zero\n    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)\n}\n\ndef bad(v: Vec[Nat] zero): Nat =\n    match v {\n        case cons(x, xs) => x\n    }\n",
-        &["Unmatched", "nil"],
-    );
-}
-
-/// 未绑定名字：error name not in scope。
-#[test]
-fn bb_err_undefined_name() {
-    assert_err("println nope\n", &["name not in scope: nope"]);
-}
-
-/// Err 携带源码偏移：Error.0 是 Span，start/end offset 指向 token（println nope → 8,12）。
-#[test]
-fn bb_err_carries_span() {
-    let input = "println nope\n";
-    let e = run_big(input).unwrap_err();
-    assert_eq!(e.0.start_offset, 8, "start_offset: {:?}", e);
-    assert_eq!(e.0.end_offset, 12, "end_offset: {:?}", e);
-    let dbg = format!("{e:?}");
-    assert!(dbg.contains("@ 8,12"), "Debug 应含 @ 8,12: {dbg}");
-}
-
-/// 命名 λ 不可推断：infer named lambda。
-#[test]
-fn bb_err_named_lambda() {
-    assert_err("def h = [B = zero] y => y\nprintln h\n", &["infer named lambda"]);
-}
-
-/// 值级字段缺失（接收者类型未解）：has no object zzz。
-#[test]
-fn bb_err_field_missing_value() {
-    assert_err(
-        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\nstruct Point {\n    x: Nat\n}\n\ndef p = new Point(zero)\ndef bad = p.zzz\n",
-        &["has no object", "zzz"],
-    );
-}
-
-/// 类型级字段缺失：has no object zzz（Debug 内嵌 Sum 头）。
-#[test]
-fn bb_err_field_missing_type() {
-    assert_err(
-        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\nstruct Point {\n    x: Nat\n}\n\ndef bad(p: Point) = p.zzz\n",
-        &["has no object", "zzz"],
-    );
-}
-
-/// 【契约】解析错误不返回 Err：坏 decl 前后的可解析声明都被检查并输出（resilient 解析的前缀+后缀保留）。
-#[test]
-fn bb_parse_error_prefix_kept() {
-    assert_lines(
-        "enum Bool {\n    true\n    false\n}\nprintln true\n\ndef = 1\n\nprintln false\n",
-        &["Bool::true", "Bool::false"],
-    );
-}
-
-/// 【契约】只有坏 decl：run 仍 Ok，输出为空（错误走进程 stdout）。
-#[test]
-fn bb_parse_error_only_ok_empty() {
-    assert_eq!(check("def bad(\n"), "");
-}
-
-/// 坏 token 在文件尾：已解析前缀的输出保留。
-#[test]
-fn bb_parse_error_trailing_ok() {
-    assert_eq!(check("enum Bool {\n    true\n    false\n}\nprintln true\n@ # $\n"), "Bool::true\n");
-}
-
-/// README 的 -- 注释不支持，但当前 parser 容错为整行无 decl（Ok 空输出，不崩溃）。
-#[test]
-fn bb_dash_comment_tolerated() {
-    assert_eq!(check("-- not a comment\n"), "");
-}
-
-/// 负向事实：L09 无 print builtin（唯一 builtin 是 string_concat）。
-#[test]
-fn bb_no_print_builtin() {
-    assert_err("println (print \"x\")\n", &["name not in scope: print"]);
-}
-
-/// 负向事实：无 eq 内建，等式只能走 Eq/refl 编码。
-#[test]
-fn bb_no_equality_builtin() {
-    assert_err(
-        "enum Bool {\n    true\n    false\n}\nprintln (eq true true)\n",
-        &["name not in scope: eq"],
-    );
-}
-
-/// 负向事实：无文件 IO builtin。
-#[test]
-fn bb_no_io_builtin() {
-    assert_err("println (read_file \"x\")\n", &["name not in scope: read_file"]);
-}
-
-/// 唯一 builtin string_concat：内建字符串类型 String 可作类型使用。
-#[test]
-fn bb_only_builtin_string_concat_display() {
-    assert_lines(
-        "def idS(x: String): String = x\nprintln (idS \"s\")\n",
-        &["s"],
-    );
-}
-
-/// 高阶函数组合：多态 compose 应用于 succ/succ → 两层 succ。
-#[test]
-fn bb_higher_order_compose() {
-    assert_lines(
-        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\ndef compose[A, B, C](f: B -> C, g: A -> B, x: A): C = f (g x)\n\nprintln (compose succ succ zero)\n",
-        &[nat_succs(2).as_str()],
-    );
-}
-
-/// Church 编码自然数（纯 λ 演算 + 高阶类型 NatC : Type 1）：Church 数应用回
-/// enum Nat 的 toNat，four = addC twoC twoC → succ^4(zero)。
-#[test]
-fn bb_church_encoding_to_nat() {
-    assert_lines(
-        "def NatC : Type 1 = (N : Type 0) -> (N -> N) -> N -> N\n\ndef zeroC : NatC = N => s => z => z\n\ndef twoC : NatC = N => s => z => s (s z)\n\ndef addC : NatC -> NatC -> NatC =\n    a => b => N => s => z => a _ (b _ s) z\n\ndef fourC = addC twoC twoC\n\nenum Nat {\n    zero\n    succ(x: Nat)\n}\n\ndef toNat(n : NatC) : Nat = n Nat succ zero\n\nprintln (toNat fourC)\n",
-        &[nat_succs(4).as_str()],
+def bad : Type 1 = HighLvl[Nat]
+println bad
+"#,
+        "can't unify",
     );
 }

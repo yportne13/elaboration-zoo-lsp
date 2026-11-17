@@ -1,5 +1,4 @@
 use crate::parser_lib::*;
-use std::fmt;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TokenKind {
@@ -7,22 +6,13 @@ pub enum TokenKind {
     LetKeyword,
     PrintlnKeyword,
     EnumKeyword,
+    /// L08：`struct` 声明（积类型，脱糖为单 `mk` 构造子 enum）。
     StructKeyword,
-    TypeKeyword, //Universe
+    /// L08：`new Name(args)` 构造（脱糖为限定构造子 `Name.mk` 的应用）。
+    NewKeyword,
+    TypeKeyword, //Universe: Type N
     MatchKeyword,
     CaseKeyword,
-    NewKeyword,
-    TraitKeyword,
-    ImplKeyword,
-    ForKeyword,
-    ThisKeyword,
-    StaticKeyword,
-    MacroKeyword,
-    WhereKeyword,
-    PackageKeyword,
-    ImportKeyword,
-    ClassKeyword,
-    ByKeyword,
 
     Hole,
     LParen,
@@ -41,9 +31,9 @@ pub enum TokenKind {
     DoubleArrow,
     Lambda,
     Comma,
+    AssignEq,
 
     Ident,
-    MacroIdent,
     Num,
     Op,
     Str,
@@ -55,29 +45,18 @@ pub enum TokenKind {
     Eof,
 }
 
-impl fmt::Display for TokenKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl std::fmt::Display for TokenKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             TokenKind::DefKeyword     => write!(f, "`def`"),
             TokenKind::LetKeyword     => write!(f, "`let`"),
             TokenKind::PrintlnKeyword => write!(f, "`println`"),
             TokenKind::EnumKeyword    => write!(f, "`enum`"),
             TokenKind::StructKeyword  => write!(f, "`struct`"),
+            TokenKind::NewKeyword     => write!(f, "`new`"),
             TokenKind::TypeKeyword    => write!(f, "`Type`"),
             TokenKind::MatchKeyword   => write!(f, "`match`"),
             TokenKind::CaseKeyword    => write!(f, "`case`"),
-            TokenKind::NewKeyword     => write!(f, "`new`"),
-            TokenKind::TraitKeyword   => write!(f, "`trait`"),
-            TokenKind::ImplKeyword    => write!(f, "`impl`"),
-            TokenKind::ForKeyword     => write!(f, "`for`"),
-            TokenKind::ThisKeyword    => write!(f, "`this`"),
-            TokenKind::StaticKeyword  => write!(f, "`static`"),
-            TokenKind::MacroKeyword   => write!(f, "`macro_rules`"),
-            TokenKind::WhereKeyword   => write!(f, "`where`"),
-            TokenKind::PackageKeyword => write!(f, "`package`"),
-            TokenKind::ImportKeyword  => write!(f, "`import`"),
-            TokenKind::ClassKeyword   => write!(f, "`class`"),
-            TokenKind::ByKeyword      => write!(f, "`by`"),
             TokenKind::Hole           => write!(f, "`_`"),
             TokenKind::LParen         => write!(f, "`(`"),
             TokenKind::RParen         => write!(f, "`)`"),
@@ -93,8 +72,8 @@ impl fmt::Display for TokenKind {
             TokenKind::DoubleArrow    => write!(f, "`=>`"),
             TokenKind::Lambda         => write!(f, "`\\`"),
             TokenKind::Comma          => write!(f, "`,`"),
+            TokenKind::AssignEq       => write!(f, "`:=`"),
             TokenKind::Ident          => write!(f, "identifier"),
-            TokenKind::MacroIdent     => write!(f, "macro identifier"),
             TokenKind::Num            => write!(f, "number"),
             TokenKind::Op             => write!(f, "operator"),
             TokenKind::Str            => write!(f, "string"),
@@ -109,30 +88,19 @@ pub type Token<'a> = Span<(&'a str, TokenKind)>;
 
 use TokenKind::*;
 
-const KEYWORD: [(&str, TokenKind); 20] = [
-    ("package", PackageKeyword),
-    ("import", ImportKeyword),
+const KEYWORD: [(&str, TokenKind); 9] = [
     ("def", DefKeyword),
     ("let", LetKeyword),
     ("println", PrintlnKeyword),
     ("enum", EnumKeyword),
     ("struct", StructKeyword),
+    ("new", NewKeyword),
     ("Type", TypeKeyword),
     ("match", MatchKeyword),
     ("case", CaseKeyword),
-    ("new", NewKeyword),
-    ("trait", TraitKeyword),
-    ("impl", ImplKeyword),
-    ("for", ForKeyword),
-    ("this", ThisKeyword),
-    ("static", StaticKeyword),
-    ("macro_rules", MacroKeyword),
-    ("where", WhereKeyword),
-    ("class", ClassKeyword),
-    ("by", ByKeyword),
 ];
 
-const OP: [(&str, TokenKind); 15] = [
+const OP: [(&str, TokenKind); 16] = [
     ("_", Hole),
     ("(", LParen),
     (")", RParen),
@@ -148,6 +116,7 @@ const OP: [(&str, TokenKind); 15] = [
     ("->", Arrow),
     ("=>", DoubleArrow),
     ("\\", Lambda),
+    (":=", AssignEq),
 ];
 
 pub type TokenNode<'a> = Span<(&'a str, TokenKind)>;
@@ -166,6 +135,9 @@ fn string(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
             end += 1;
         }
     }
+    // 终止条件：闭引号必须存在（end==0 合法——`""` 的空内容；未闭合或
+    // 转义跳过越过末尾才算失败）。旧组合子版 `pmatch(c != '"')` 至少吃
+    // 一字符，空字面量 `""` 被误杀，且 `\` 转义不跳过（`\"` 提前截断）。
     if end >= bytes.len() || bytes[end] != b'"' {
         return None;
     }
@@ -190,23 +162,20 @@ fn string(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
 fn ident(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
     is(';')
         .map(|x| x.map(|t| (t, Semi)))
+        .or(is('_').map(|x| x.map(|t| (t, Hole))))
         .or(pmatch(|c: char| c.is_alphabetic() || c == '_')
             .with(pmatch(|c: char| c.is_alphanumeric() || c == '_').option())
             .map(|(head, tail)| {
                 let tail_len = tail.map(|t| t.len()).unwrap_or(0);
+                // SAFETY: 切片长度 = head（首字符）+ tail_len（后续字符）
+                // 之和，head/tail 都派生自同一 `input.data` 的 char 迭代，
+                // 字节长度恰好覆盖一个完整 UTF-8 子序列，不会切在字符中间。
                 let ident = unsafe {
                     input.data
                         .get_unchecked(..head.len() as usize + tail_len as usize)
                 };
-                let kind = if ident == "_" {
-                    Hole
-                } else if let Some((_, k)) = KEYWORD.into_iter().find(|(k, _)| ident == *k) {
+                let kind = if let Some((_, k)) = KEYWORD.into_iter().find(|(k, _)| ident == *k) {
                     k
-                } else if ident == "until" {
-                    // HDL range operator: `0 until 4` parses as infix
-                    // `0.until(4)` (kind+text matcher in macro patterns
-                    // compares this token exactly like any Op).
-                    Op
                 } else {
                     Ident
                 };
@@ -220,38 +189,14 @@ fn ident(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
         .parse(input)
 }
 
-fn macro_ident(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
-    is('$')
-        .with(pmatch(|c: char| c.is_alphabetic() || c == '_'))
-        .with(pmatch(|c: char| c.is_alphanumeric() || c == '_').option())
-        .map(|((head, tail0), tail)| {
-            let tail_len = tail.map(|t| t.len()).unwrap_or(0);
-            let ident = unsafe {
-                input.data
-                    .get_unchecked(..head.len() as usize + tail0.len() as usize + tail_len as usize)
-            };
-            Span {
-                data: (ident, MacroIdent),
-                start_offset: head.start_offset,
-                end_offset: head.start_offset + head.len() + tail0.len() + tail_len,
-                path_id: head.path_id,
-            }
-        })
-        .parse(input)
-}
-
 fn brace(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
-    let dot = is('.').map(|x| x.map(|y| (y, Dot)));
-    let comma = is(',').map(|x| x.map(|y| (y, Comma)));
     let lparen = is('(').map(|x| x.map(|y| (y, LParen)));
     let rparen = is(')').map(|x| x.map(|y| (y, RParen)));
     let lsquare = is('[').map(|x| x.map(|y| (y, LSquare)));
     let rsquare = is(']').map(|x| x.map(|y| (y, RSquare)));
     let lcurly = is('{').map(|x| x.map(|y| (y, LCurly)));
     let rcurly = is('}').map(|x| x.map(|y| (y, RCurly)));
-    dot
-        .or(comma)
-        .or(lparen)
+    lparen
         .or(rparen)
         .or(lsquare)
         .or(rsquare)
@@ -261,11 +206,9 @@ fn brace(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
 }
 
 fn op(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
-    // '.' is excluded from the operator character ranges so that it is never consumed
-    // as part of an operator token — it's always lexed as a standalone Dot.
     pmatch(|c: char| {
         ('!'..='\'').contains(&c)
-            || (('*'..='-').contains(&c) || c == '/')
+            || ('*'..='/').contains(&c)
             || ((':'..='@').contains(&c) && c != ';')
             || c == '\\'
             || (('^'..='`').contains(&c) && c != '_')
@@ -285,15 +228,7 @@ fn op(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
 
 pub fn lex(input: Span<&str>) -> Option<(Input<'_>, Vec<Token<'_>>)> {
     let num = pmatch(|c: char| c.is_ascii_digit()).map(|x| x.map(|y| (y, Num)));
-    let endline = ws(pmatch("\n")).many1().map(|x| {
-        let x0 = x.first().unwrap();
-        Span {
-            data: (x0.data, EndLine),
-            start_offset: x0.start_offset,
-            end_offset: x.last().unwrap().end_offset,
-            path_id: x0.path_id,
-        }
-    });
+    let endline = pmatch("\n").map(|x| x.map(|y| (y, EndLine)));
     let err_token = pmatch(|c: char| !c.is_ascii_whitespace()).map(|x| x.map(|y| (y, ErrToken)));
     fn ws<'a, A, P: Parser<Span<&'a str>, A>>(p: P) -> impl Parser<Span<&'a str>, A> {
         let whitespace = pmatch(|c: char| c == ' ' || c == '\t' || c == '\r').option();
@@ -305,28 +240,19 @@ pub fn lex(input: Span<&str>) -> Option<(Input<'_>, Vec<Token<'_>>)> {
     whitespace
         .with(
             //ws(brace.or(ident).or(num).or(op))
-            ws(string.or(macro_ident).or(brace).or(op).or(num).or(ident))
+            ws(string.or(brace).or(op).or(num).or(ident))
                 .or(ws(endline))
                 .or(ws(err_token))
                 .many0(),
         )
-        .map(|(_, token)| {
-            let mut token = token;
-            token.push(Span {
-                data: ("", Eof),
-                start_offset: input.end_offset,
-                end_offset: input.end_offset,
-                path_id: input.path_id,
-            });
-            token
-        })
+        .map(|(_, token)| token)
         .parse(input)
 }
 
 #[test]
 fn test() {
     let input = r#"
-def Eq[A : Type0](x: A, y: A): Type0 = (P : A -> Type0) -> P x -> P y
+def Eq[A : U](x: A, y: A): U = (P : A -> U) -> P x -> P y
 def refl[A : U, x: A]: Eq[A] x x = _ => px => px
 
 def the(A : U)(x: A): A = x
@@ -378,19 +304,6 @@ def add(x: Nat, y: Nat): Nat = {
 def four = add(two, two)
 
 println four
-
-struct SimplePoint(Nat, Nat)
-
-struct Point {
-    x: Nat,
-    y: Nat,
-}
-
-struct Span[T] {
-    data: T,
-    start: Nat,
-    end: Nat,
-}
 
 "#;
     let ret = lex(Span {
