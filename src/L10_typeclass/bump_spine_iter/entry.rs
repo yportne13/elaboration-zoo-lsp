@@ -1,27 +1,28 @@
-//! entry：对外入口——`export`（bump 项 → 参考 Box 树）、`tm_size`、稳态
-//! 检查器 `Tycker`（run_decls/run_input/bench 口径）、`run_fast`/`parse`/
-//! `SourceDecl`。原 bump_spine_iter.rs 的 "export 与对外入口" 节 + Tycker
-//! 各口径，逐行搬运（2026-09-23 拆分）。
+//! entry：对外入口——`export`（bump 项 → 参考 Box 树）、`tm_size`、
+//! 稳态检查器 `Tycker`（run_decls/run_input/bench 口径）、`run_fast`/
+//! `parse`/`SourceDecl` 与 `NO_NAME_MAP` 消融开关。原 bump_spine_iter.rs
+//! 的 "export 与对外入口" 节，逐行搬运（2026-09-23 拆分）。
+
+use std::rc::Rc;
 
 use bumpalo::Bump;
-use std::rc::Rc;
 
 use super::parser::syntax::{Decl, Icit};
 use super::pretty::pretty_tm;
 use super::{empty_span, Error, Ix, MetaVar, PatternDetail};
 
-use super::env::env_len;
-use super::force::refuel;
-use super::machine::{types_names_list, DeclOut, Machine};
+use crate::L10_typeclass::Tm as CTm;
+
+use super::machine::{DeclOut, Machine, types_names_list};
+use super::prim::unify_fuel_budget;
 use super::subst::vsub_reclaim;
 use super::syntax::{SumDataT, SumParamT, Tm};
-use crate::L10_typeclass::Tm as CTm;
 
 // export 与对外入口
 // --------------------------------------------------------------------------------
 
 /// 把 bump 结果项转回参考版的 `Box` 树（迭代任务栈；icit/掩码随任务
-/// 携带），复用参考版的 pretty。
+/// 携带），复用参考版的 pretty。L07 新变体的 span 全零（内容即输出）。
 pub(super) fn export(t: &Tm<'_>) -> CTm {
     use crate::list::List as CList;
     enum J<'a> {
@@ -36,12 +37,10 @@ pub(super) fn export(t: &Tm<'_>) -> CTm {
             name: &'a str,
             params: &'a [SumParamT<'a>],
             cases: &'a [&'a str],
-            is_trait: bool,
         },
         SumCase2 {
             case_name: &'a str,
             datas: &'a [SumDataT<'a>],
-            is_trait: bool,
         },
     }
     fn name(x: &str) -> crate::parser_lib::Span<String> {
@@ -76,7 +75,7 @@ pub(super) fn export(t: &Tm<'_>) -> CTm {
                 tasks.push(J::AppPrun2(list));
                 tasks.push(J::Do(h));
             }
-            J::Do(Tm::U(l)) => done.push(CTm::U(*l)),
+            J::Do(Tm::U(lvl)) => done.push(CTm::U(*lvl)),
             J::Do(Tm::Pi(x, i, a, b)) => {
                 tasks.push(J::Pi2(x, *i));
                 tasks.push(J::Do(b));
@@ -91,19 +90,14 @@ pub(super) fn export(t: &Tm<'_>) -> CTm {
             J::Do(Tm::Meta(m)) => done.push(CTm::Meta(MetaVar(*m))),
             J::Do(Tm::LiteralType) => done.push(CTm::LiteralType),
             J::Do(Tm::LiteralIntro(s)) => done.push(CTm::LiteralIntro(name(s))),
+            J::Do(Tm::Decl(s)) => done.push(CTm::Decl(smol_str::SmolStr::new(s))),
             J::Do(Tm::Prim(s)) => done.push(CTm::Prim(smol_str::SmolStr::new(s))),
             J::Do(Tm::Obj(h, n)) => {
                 tasks.push(J::Obj2(n));
                 tasks.push(J::Do(h));
             }
-            J::Do(Tm::Sum(nm, params, cases, is_trait)) => {
-                let is_trait = *is_trait;
-                tasks.push(J::Sum2 {
-                    name: nm,
-                    params,
-                    cases,
-                    is_trait,
-                });
+            J::Do(Tm::Sum(nm, params, cases)) => {
+                tasks.push(J::Sum2 { name: nm, params, cases });
                 for p in params.iter().rev() {
                     tasks.push(J::Do(p.ty));
                     tasks.push(J::Do(p.val));
@@ -113,28 +107,23 @@ pub(super) fn export(t: &Tm<'_>) -> CTm {
                 typ,
                 case_name,
                 datas,
-                is_trait,
             }) => {
-                let is_trait = *is_trait;
-                tasks.push(J::SumCase2 {
-                    case_name,
-                    datas,
-                    is_trait,
-                });
+                tasks.push(J::SumCase2 { case_name, datas });
                 for d in datas.iter().rev() {
                     tasks.push(J::Do(d.val));
                 }
                 tasks.push(J::Do(typ));
             }
             J::Do(Tm::Match(s, cases)) => {
-                // 分支体逐个内联导出（递归深度 = match 嵌套深度）；模式直接
-                // 克隆（PatternDetail 是参考版类型，两版共用）
+                // 分支体逐个内联导出（递归深度 = match 嵌套深度，体本身的
+                // 导出仍走任务栈）；模式直接克隆（PatternDetail 是参考版
+                // 类型，两版共用）
                 let s2 = export(s);
-                let mut cs: Vec<(PatternDetail, Rc<CTm>)> = Vec::with_capacity(cases.len());
+                let mut cs: Vec<(PatternDetail, CTm)> = Vec::with_capacity(cases.len());
                 for (p, b) in cases.iter() {
-                    cs.push((p.clone(), Rc::new(export(b))));
+                    cs.push((p.clone(), export(b)));
                 }
-                done.push(CTm::Match(Rc::new(s2), cs));
+                done.push(CTm::Match(Box::new(s2), cs));
             }
             J::Lam2(x, i) => {
                 let b = done.pop().expect("export 栈：Lam 缺体");
@@ -149,57 +138,47 @@ pub(super) fn export(t: &Tm<'_>) -> CTm {
                 let u = done.pop().expect("export 栈：Let 缺体");
                 let t = done.pop().expect("export 栈：Let 缺值");
                 let a = done.pop().expect("export 栈：Let 缺类型");
-                done.push(CTm::Let(name(x), Rc::new(a), Rc::new(t), Rc::new(u)));
+                done.push(CTm::Let(name(x), Box::new(a), Box::new(t), Box::new(u)));
             }
             J::App2(i) => {
                 let a = done.pop().expect("export 栈：App 缺实参");
                 let f = done.pop().expect("export 栈：App 缺函数");
-                done.push(CTm::App(Rc::new(f), Rc::new(a), i));
+                done.push(CTm::App(Box::new(f), Box::new(a), i));
             }
             J::AppPrun2(pr) => {
                 let h = done.pop().expect("export 栈：AppPruning 缺头");
-                done.push(CTm::AppPruning(Rc::new(h), pr));
+                done.push(CTm::AppPruning(Box::new(h), pr));
             }
             J::Obj2(n) => {
                 let h = done.pop().expect("export 栈：Obj 缺接收者");
-                done.push(CTm::Obj(Rc::new(h), name(n)));
+                done.push(CTm::Obj(Box::new(h), name(n)));
             }
-            J::Sum2 {
-                name: nm,
-                params,
-                cases,
-                is_trait,
-            } => {
-                let mut ps: Vec<(crate::parser_lib::Span<String>, Rc<CTm>, Rc<CTm>, Icit)> =
+            J::Sum2 { name: nm, params, cases } => {
+                let mut ps: Vec<(crate::parser_lib::Span<String>, CTm, CTm, Icit)> =
                     Vec::with_capacity(params.len());
                 for p in params.iter().rev() {
-                    let ty = Rc::new(done.pop().expect("export 栈：Sum 缺参数类型"));
-                    let val = Rc::new(done.pop().expect("export 栈：Sum 缺参数值"));
+                    let ty = done.pop().expect("export 栈：Sum 缺参数类型");
+                    let val = done.pop().expect("export 栈：Sum 缺参数值");
                     ps.push((name(p.name), val, ty, p.icit));
                 }
                 ps.reverse();
                 let cs: Vec<crate::parser_lib::Span<String>> =
                     cases.iter().map(|c| name(c)).collect();
-                done.push(CTm::Sum(name(nm), ps, cs, is_trait));
+                done.push(CTm::Sum(name(nm), ps, cs));
             }
-            J::SumCase2 {
-                case_name,
-                datas,
-                is_trait,
-            } => {
-                let mut ds: Vec<(crate::parser_lib::Span<String>, Rc<CTm>, Icit)> =
+            J::SumCase2 { case_name, datas } => {
+                let mut ds: Vec<(crate::parser_lib::Span<String>, CTm, Icit)> =
                     Vec::with_capacity(datas.len());
                 for d in datas.iter().rev() {
-                    let val = Rc::new(done.pop().expect("export 栈：SumCase 缺字段"));
+                    let val = done.pop().expect("export 栈：SumCase 缺字段");
                     ds.push((name(d.name), val, d.icit));
                 }
                 ds.reverse();
                 let typ = done.pop().expect("export 栈：SumCase 缺 typ");
                 done.push(CTm::SumCase {
-                    typ: Rc::new(typ),
+                    typ: Box::new(typ),
                     case_name: name(case_name),
                     datas: ds,
-                    is_trait,
                 });
             }
         }
@@ -208,14 +187,14 @@ pub(super) fn export(t: &Tm<'_>) -> CTm {
 }
 
 /// 参考版项的节点数（与 mod.rs `tm_size_ref` 同口径）。
-pub(super) fn tm_size(t: &Tm<'_>) -> u64 {
+fn tm_size(t: &Tm<'_>) -> u64 {
     let mut stack: Vec<&Tm<'_>> = vec![t];
     let mut n = 0u64;
     while let Some(x) = stack.pop() {
         n += 1;
         match x {
             Tm::Var(_) | Tm::U(_) | Tm::Meta(_) | Tm::LiteralType | Tm::LiteralIntro(_)
-            | Tm::Prim(_) => {}
+            | Tm::Decl(_) | Tm::Prim(_) => {}
             Tm::Obj(h, _) => stack.push(h),
             Tm::Lam(_, _, b) => stack.push(b),
             Tm::App(f, a, _) => {
@@ -239,7 +218,7 @@ pub(super) fn tm_size(t: &Tm<'_>) -> u64 {
                 stack.push(t);
                 stack.push(u);
             }
-            Tm::Sum(_, params, ..) => {
+            Tm::Sum(_, params, _) => {
                 for p in params.iter() {
                     stack.push(p.val);
                     stack.push(p.ty);
@@ -263,7 +242,14 @@ pub(super) fn tm_size(t: &Tm<'_>) -> u64 {
     n
 }
 
-/// 稳态类型检查器（同 L03-L08：owns 反复 `reset` 的 `Bump` 与跨调用复用
+/// A/B 实验开关（Raw::Var 名字解析消融）：置 `L06_NO_NAME_MAP=1` 回落为
+/// 沿 `types` 链的线性找名（`=0` 不关闭）。
+pub(super) static NO_NAME_MAP: std::sync::LazyLock<std::sync::atomic::AtomicBool> =
+    std::sync::LazyLock::new(|| {
+        std::sync::atomic::AtomicBool::new(std::env::var("L06_NO_NAME_MAP").is_ok_and(|v| v != "0"))
+    });
+
+/// 稳态类型检查器（同 L03-L06：owns 反复 `reset` 的 `Bump` 与跨调用复用
 /// 的 [`Machine`]）。
 pub(crate) struct Tycker {
     bump: Bump,
@@ -279,16 +265,16 @@ impl Tycker {
     }
 
     /// 参考版 `run` 的等价物：preprocess + parse 由调用方完成（与参考版
-    /// 共用 parser；参考版对 parse 失败 unwrap panic、对 parse 错误只
-    /// 打印后继续——快版同口径：None panic、错误静默），本方法做轮重置 +
-    /// builtin 重注册 + 逐 decl 推断，println 的 nf 经 pretty 输出（quote
-    /// 走记忆化口径——与无记忆化输出逐字节一致，L03-L06 已证）。
+    /// 共用 parser），本方法做轮重置 + builtin 重注册 + 逐 decl 推断，
+    /// println 的 nf 经 pretty 输出（quote 走记忆化口径——与无记忆化
+    /// 输出逐字节一致，L03-L06 已证；L07 新值形态不进 memo 表，口径与
+    /// 参考版的全量 quote 一致）。
     pub(crate) fn run_decls(&mut self, ast: &[Decl]) -> Result<String, Error> {
         self.bump.reset();
         self.machine.clear_round();
         // 轮尾/出错出口都归还本轮 arena 克隆（轮首 clear_round 覆盖不到
         // "最后一轮"——Tycker 长存时其 σ 会挂到进程结束；归还后 arena 内
-        // XCell::VSub 的 Rc 悬垂，但本轮出口已无人再读 arena）（L07 同款）
+        // XCell::VSub 的 Rc 悬垂，但本轮出口已无人再读 arena）
         struct ReclaimOnExit;
         impl Drop for ReclaimOnExit {
             fn drop(&mut self) {
@@ -300,15 +286,14 @@ impl Tycker {
         let mut cxt = self.machine.prime_round(bump);
         let mut ret = String::new();
         for d in ast {
-            let (out, nc) = self.machine.infer_decl(bump, &mut cxt, d)?;
+            let (out, nc) = self.machine.infer_decl(bump, &cxt, d)?;
             cxt = nc;
             if let DeclOut::Println(t) = out {
-                // nf：eval + quote（层级 = env 槽数，参考版 `Infer::nf` 同款）
-                // 一次 nf 充值精化燃料池（参考版 `nf` 同款）
-                refuel();
-                let v = self.machine.eval(bump, cxt.env, t);
-                let lvl = env_len(cxt.env);
-                let q = self.machine.quote_memo(bump, lvl, v);
+                let decls = cxt.decl.borrow();
+                // nf 入口充值 fuel（参考版 `Infer::nf` 同款）
+                self.machine.fuel.set(unify_fuel_budget());
+                let v = self.machine.eval(bump, &decls, cxt.env, t);
+                let q = self.machine.quote_memo(bump, &decls, cxt.lvl, v);
                 let names = types_names_list(cxt.types);
                 ret += &pretty_tm(0, names, &export(q));
                 ret += "\n";
@@ -319,11 +304,7 @@ impl Tycker {
 
     /// 参考版 `run` 的全流程等价物（含 preprocess/parse）。
     pub(crate) fn run_input(&mut self, input: &str, path_id: u32) -> Result<String, Error> {
-        let (ast, _parse_errs) = match super::parser::parser(&super::preprocess(input), path_id) {
-            Some(x) => x,
-            // 参考版 run 对 parse 失败 unwrap panic——同款
-            None => panic!("parse failed"),
-        };
+        let ast = super::parser::parser(&super::preprocess(input), path_id).map_err(Error::new)?;
         self.run_decls(&ast)
     }
 
@@ -335,8 +316,9 @@ impl Tycker {
         self.machine.elab_all(bump, ast).0.is_ok()
     }
 
-    /// 基准口径：check + nf（最后一个 def 的登记值空层级引读，与参考版
-    /// `bench_check_nf` 同口径——quote 无记忆化），返回结果树节点数。
+    /// 基准口径：check + nf（最后一个 def 在 decl 表登记的值空层级引读，
+    /// 与参考版 `bench_check_nf` 同口径——按名查表、quote 无记忆化），
+    /// 返回结果树节点数。
     pub(crate) fn bench_check_nf(&mut self, ast: &[Decl]) -> u64 {
         self.bench_nf_impl(ast, false)
     }
@@ -350,19 +332,20 @@ impl Tycker {
         self.bump.reset();
         self.machine.clear_round();
         let bump = &self.bump;
-        let (r, _cxt, last) = self.machine.elab_all(bump, ast);
+        let (r, cxt, last) = self.machine.elab_all(bump, ast);
         if r.is_err() {
             return 0;
         }
-        let Some(v) = last else {
+        let Some(name) = last else {
             return 0;
         };
-        // 一次 nf 充值精化燃料池（参考版 `bench_check_nf` 同款）
-        refuel();
+        let Some(entry) = cxt.decl.borrow().get(name).copied() else {
+            return 0;
+        };
         let q = if use_memo {
-            self.machine.quote_memo(bump, 0, v)
+            self.machine.quote_memo(bump, &cxt.decl.borrow(), 0, entry.val)
         } else {
-            self.machine.quote(bump, 0, v)
+            self.machine.quote(bump, &cxt.decl.borrow(), 0, entry.val)
         };
         tm_size(q)
     }
@@ -374,13 +357,10 @@ pub(crate) fn run_fast(input: &str, path_id: u32) -> Result<String, Error> {
     tycker.run_input(input, path_id)
 }
 
-/// 测试/基准辅助：共用参考版 parser（fast 是 L09_mltt 的子模块，可见
+/// 测试/基准辅助：共用参考版 parser（fast 是 L10_typeclass 的子模块，可见
 /// 私有 parser；产出的 `Decl` 同时喂参考版与快版的 bench 口径）。
 pub(crate) fn parse(input: &str, path_id: u32) -> Result<Vec<Decl>, String> {
-    match super::parser::parser(&super::preprocess(input), path_id) {
-        Some((ast, _errs)) => Ok(ast),
-        None => Err("parse failed".to_owned()),
-    }
+    super::parser::parser(&super::preprocess(input), path_id)
 }
 
 /// 解析产出的 decl AST 类型别名（测试/基准用；Decl 本身的 use 是私有的）。

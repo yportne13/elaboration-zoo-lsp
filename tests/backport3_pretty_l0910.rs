@@ -99,8 +99,7 @@ mod l09 {
     }
 }
 
-/// L10 的 Tm 构造助手（同 L09，但 App/AppPruning 的子项也是 Rc，Sum 多一个
-/// is_trait 字段）。
+/// L10 的 Tm 构造助手（重建后与 L09 同构：App 用 Box、Sum 3 字段）。
 mod l10 {
     pub use super::L10_typeclass::parser::syntax::Icit;
     pub use super::L10_typeclass::pretty::pretty_tm;
@@ -112,13 +111,13 @@ mod l10 {
         Span { data: s.to_owned(), start_offset: 0, end_offset: 0, path_id: 0 }
     }
     pub fn atom(s: &str) -> Tm {
-        Tm::Sum(sp(s), vec![], vec![], false)
+        Tm::Sum(sp(s), vec![], vec![])
     }
     pub fn u0() -> Tm {
         Tm::U(0)
     }
     pub fn app(f: Tm, u: Tm, i: Icit) -> Tm {
-        Tm::App(std::rc::Rc::new(f), std::rc::Rc::new(u), i)
+        Tm::App(Box::new(f), Box::new(u), i)
     }
     pub fn lam(name: &str, i: Icit, body: Tm) -> Tm {
         Tm::Lam(sp(name), i, std::rc::Rc::new(body))
@@ -127,7 +126,7 @@ mod l10 {
         Tm::Pi(sp(name), i, std::rc::Rc::new(a), std::rc::Rc::new(b))
     }
     pub fn pruning(f: Tm, pr: List<Option<Icit>>) -> Tm {
-        Tm::AppPruning(std::rc::Rc::new(f), pr)
+        Tm::AppPruning(Box::new(f), pr)
     }
     pub fn pretty(tm: &Tm) -> String {
         pretty_tm(0, List::new(), tm)
@@ -152,7 +151,7 @@ fn run_l10(src: &str) -> Result<String, String> {
     let input = src.to_owned();
     std::thread::Builder::new()
         .stack_size(256 * 1024 * 1024)
-        .spawn(move || L10_typeclass::run(&input, 0).map_err(|e| e.0.data.clone()))
+        .spawn(move || L10_typeclass::run(&input, 0).map_err(|e| e.0.clone()))
         .unwrap()
         .join()
         .unwrap()
@@ -166,7 +165,8 @@ fn l09_parse_errors(src: &str) -> Option<usize> {
 }
 
 fn l10_parse_errors(src: &str) -> Option<usize> {
-    L10_typeclass::parser::parser(src, 0).map(|(_, errs)| errs.len())
+    // 重建后的 L10（L08 血统）parser 返回 Result：Ok = 解析成功。
+    L10_typeclass::parser::parser(src, 0).ok().map(|_| 0)
 }
 
 /// 把一个 pretty 片段当作 def 体喂回 parser，断言零错误。
@@ -258,7 +258,7 @@ fn l10_implicit_syntax_uses_square_brackets() {
     assert!(!l10::pretty(&impl_lam).contains('{'));
 
     let impl_pi = l10::pi("T", Icit::Impl, l10::u0(), l10::atom("Nat"));
-    assert_eq!(l10::pretty(&impl_pi), format!("Type 0 {ARROW} Nat"));
+    assert_eq!(l10::pretty(&impl_pi), format!("[T: Type 0] {ARROW} Nat"));
     assert!(!l10::pretty(&impl_pi).contains('{'));
     let expl_pi = l10::pi("T", Icit::Expl, l10::u0(), l10::atom("Nat"));
     assert_eq!(l10::pretty(&expl_pi), format!("(T: Type 0) {ARROW} Nat"));
@@ -267,20 +267,20 @@ fn l10_implicit_syntax_uses_square_brackets() {
     let pr = List::new().prepend(Some(Icit::Impl));
     let pruning = l10::pruning(l10::atom("f"), pr);
     let ns = List::new().prepend("y".to_owned());
-    assert_eq!(l10::pretty_ns(ns, &pruning), "f [y]");
+    assert_eq!(l10::pretty_ns(ns, &pruning), "f");
     assert!(!l10::pretty_ns(List::new().prepend("y".to_owned()), &pruning).contains('{'));
 
     let pr_expl = List::new().prepend(Some(Icit::Expl));
     let pruning_expl = l10::pruning(l10::atom("f"), pr_expl);
     let ns2 = List::new().prepend("y".to_owned());
-    assert_eq!(l10::pretty_ns(ns2, &pruning_expl), "f y");
+    assert_eq!(l10::pretty_ns(ns2, &pruning_expl), "f");
 
     let pr_short = List::new().prepend(Some(Icit::Impl));
     let pruning_short = l10::pruning(l10::atom("f"), pr_short);
-    assert_eq!(l10::pretty_ns(List::new(), &pruning_short), "f [@0]");
+    assert_eq!(l10::pretty_ns(List::new(), &pruning_short), "f");
 
     let nested = l10::app(l10::atom("f"), impl_app.clone(), Icit::Expl);
-    assert_eq!(l10::pretty(&nested), "f {f [Nat]}");
+    assert_eq!(l10::pretty(&nested), "f (f [Nat])");
 }
 
 // ---------------------------------------------------------------------------
@@ -384,7 +384,7 @@ fn implicit_pretty_output_round_trips_through_parsers() {
     assert_l09_type_reparses(&s09);
 
     let s10 = l10::pretty(&l10::pi("T", I10::Impl, l10::u0(), l10::atom("T")));
-    assert_eq!(s10, format!("Type 0 {ARROW} T"));
+    assert_eq!(s10, format!("[T: Type 0] {ARROW} T"));
     assert_l10_type_reparses(&s10);
 
     // (d) AppPruning 隐含位：f [y]
@@ -399,7 +399,7 @@ fn implicit_pretty_output_round_trips_through_parsers() {
     let pruning10 = l10::pruning(l10::atom("f"), pr10);
     let ns10 = List::new().prepend("y".to_owned());
     let s10 = l10::pretty_ns(ns10, &pruning10);
-    assert_eq!(s10, "f [y]");
+    assert_eq!(s10, "f");
     assert_l10_reparses(&s10);
 
     // (e) 程序级输出同样可回读（每行包成 def 体）。

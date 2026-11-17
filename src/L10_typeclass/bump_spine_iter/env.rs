@@ -1,8 +1,6 @@
 //! env：复合环境（平坦 def 区域 + 持久 binder 链）与闭包/Π 单元
-//! （`CloCell`/`PiCell`）、tip/fallback 探针计数（`DN_TIP`/`DN_FB`）与
-//! packed-word 对齐的编译期断言。原 bump_spine_iter.rs 中位于 SpecSolve 与
-//! "spine 栈" 分节线之间的 Env/环境函数段（原文件无独立分节标题），
-//! 逐行搬运（2026-09-23 拆分）。
+//! （`CloCell`/`PiCell`）及 packed-word 对齐的编译期断言。原 bump_spine_iter.rs
+//! 的复合环境段（Env/EnvCons/env_* /CloCell/PiCell），逐行搬运（2026-09-23 拆分）。
 
 use bumpalo::Bump;
 
@@ -33,9 +31,6 @@ pub(crate) struct EnvCons<'a> {
     pub(super) next: Option<&'a EnvCons<'a>>,
 }
 
-pub(super) static DN_TIP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-pub(super) static DN_FB: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
 /// `i < binds 深度` → 走链；否则读平坦 def 区域。
 #[inline]
 pub(crate) fn env_nth(defs: &[V], env: Env<'_>, i: u32) -> V {
@@ -51,7 +46,8 @@ pub(crate) fn env_nth(defs: &[V], env: Env<'_>, i: u32) -> V {
     defs[(env.flat_base + env.flat_len - 1 - (i - j)) as usize]
 }
 
-/// 环境总槽数（链深 + 平坦区）。
+/// 环境总槽数（链深 + 平坦区）。`Tm::Prim` 的 env 全槽收集与
+/// struct_eq / val_mentions_lvl 的 env 遍历用。
 #[inline]
 pub(crate) fn env_len(env: Env<'_>) -> u32 {
     let mut n = env.flat_len;
@@ -61,21 +57,6 @@ pub(crate) fn env_len(env: Env<'_>) -> u32 {
         nb = e.next;
     }
     n
-}
-
-/// 环境全部槽按 [`env_nth`] 的下标序单趟拷进 `out`：链段直走 +
-/// 平坦区倒序读。`(0..env_len).map(env_nth)` 对链段每次从头重走，是
-/// O(d²)；本函数一趟 O(d)（同 L07/L08 的 struct_eq / val_mentions_lvl 口径）。
-#[inline]
-pub(crate) fn env_collect(defs: &[V], env: Env<'_>, out: &mut Vec<V>) {
-    let mut nb = env.binds;
-    while let Some(e) = nb {
-        out.push(e.val);
-        nb = e.next;
-    }
-    for k in 0..env.flat_len {
-        out.push(defs[(env.flat_base + env.flat_len - 1 - k) as usize]);
-    }
 }
 
 /// 环境扩展（**binder 链**：bind / β / 瞬时求值扩展）——O(1)。
@@ -101,7 +82,6 @@ pub(crate) fn env_ext_defs<'a>(
     v: V,
 ) -> Env<'a> {
     if env.binds.is_none() && env.flat_base + env.flat_len == defs.len() as u32 {
-        DN_TIP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         defs.push(v);
         Env {
             flat_base: env.flat_base,
@@ -109,7 +89,6 @@ pub(crate) fn env_ext_defs<'a>(
             binds: env.binds,
         }
     } else {
-        DN_FB.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Env {
             flat_base: env.flat_base,
             flat_len: env.flat_len,

@@ -1,23 +1,21 @@
-//! rename：solve 族（`RenBuf`/`invert_bump`/`solve_with_pren_bump`/
-//! `solve_bump`/`rename_iter`，全迭代）+ 剪枝（`prune_vflex_bump`/
-//! `prune_meta_bump`/`prune_ty_bump`）+ `lams_from_ty`/`alloc_xname`。原
-//! bump_spine_iter.rs 的 "solve" 节，逐行搬运（2026-09-23 拆分）。
+//! rename：solve 族全迭代——`RenBuf` 换代缓冲、`invert_bump`/
+//! `solve_with_pren_bump`/`solve_bump`、`RJob`/`rename_iter`、
+//! `prune_vflex_bump`/`prune_meta_bump`/`prune_ty_bump`、`lams_from_ty`。
+//! 原 bump_spine_iter.rs 的 "solve" 节，逐行搬运（2026-09-23 拆分）。
 
 use bumpalo::Bump;
+use rustc_hash::FxHashMap;
 
 use super::parser::syntax::Icit;
 use super::PatternDetail;
 
-use super::env::{env_ext, EMPTY_ENV, PiCell};
+use super::env::{EMPTY_ENV, env_ext, PiCell};
 use super::eval::{eval_iter, W};
 use super::force::{force, force_arg};
-use super::machine::{GLOBAL_BASE, solve_probe};
+use super::prim::{DeclEntryF, Fuel, MutableMap};
 use super::spine::{MetaEntry, Spine};
-use super::syntax::{
-    PrCons, SumDataT, SumParamT, Tm, V, XCell, v_clo_of, v_lvl, v_lvl_of, v_meta_of,
-    v_pi_of, v_spine_of, v_tag, v_u_of, v_xcell_of,
-};
-use super::typeclass::neutral_of;
+use super::subst::simpl_decl;
+use super::syntax::{PrCons, SumDataT, SumParamT, Tm, V, v_clo_of, v_lvl, v_lvl_of, v_meta_of, v_pi_of, v_spine_of, v_tag, v_u_of, v_xcell_of, XCell};
 
 // solve（invert + prune 验证 + rename + lams，全迭代）
 // --------------------------------------------------------------------------------
@@ -92,34 +90,38 @@ impl RenBuf {
     }
 }
 
-/// 上游 `invert`：实参（应用序）逐个 force 成**裸刚性变量**。非线性
+/// 上游 `invert`：实参（应用序）逐个 force_arg 成**裸刚性变量**。非线性
 /// （重复变量）移出 renaming、记 `NONE_MARK`，产出把重复变量的全部出现
 /// 记为 `None` 的掩码（**与 args 逆序 = 应用序**：最外层实参的槽在前；
 /// 消费端 [`prune_ty_bump`] rev 迭代配对 Π 层）；线性时返回空 vec。非变量
-/// 实参（字面量 / 带链变量 / Match）即失败（`None`）。
-/// **L09 参考版无 gamma 上界检查**——全局层级（越过哨兵）同样进映射
-/// （忠实移植，含其后果）。
+/// 实参（字面量 / Decl / 带链变量 / Match）即失败（`None`）。槽位探测用
+/// `force_arg`（不展开 pm 精化 / 不重选 Match——参考版 `invert_go` 同款）。
 #[allow(clippy::too_many_arguments)]
 pub(super) fn invert_bump<'a>(
     bump: &'a Bump,
     spine: &mut Spine,
     defs: &mut Vec<V>,
     metas: &[MetaEntry],
-    globals: &[V],
+    decls: &FxHashMap<String, DeclEntryF>,
+    mmap: &MutableMap,
+    fuel: &Fuel,
     ren: &mut RenBuf,
+    gamma: u32,
     args: &[(V, Icit)], // 内先序（spine 收集器的输出）
 ) -> Option<Vec<Option<Icit>>> {
-    let _ = bump;
     ren.reset(); // 换代：本反演的映射从空开始
     let mut lvs: Vec<u32> = Vec::with_capacity(args.len());
     let mut nonlinear = false;
     for &(a, _) in args.iter().rev() {
-        // 应用序（外先）；参数视角的 WHNF（不推开 VSub 包裹——保 invert 可逆）
-        let f = force_arg(bump, spine, defs, metas, globals, a);
+        // 应用序（外先）
+        let f = force_arg(bump, spine, defs, metas, decls, mmap, fuel, a);
         if v_tag(f) != 0 {
             return None;
         }
         let x = v_lvl_of(f);
+        if x >= gamma {
+            return None;
+        }
         let i = lvs.len() as u32;
         lvs.push(x);
         match ren.get(x as usize) {
@@ -162,74 +164,46 @@ pub(super) fn solve_with_pren_bump<'a>(
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
     metas: &mut Vec<MetaEntry>,
-    unsolved: &mut Vec<u32>,
-    globals: &[V],
+    decls: &FxHashMap<String, DeclEntryF>,
+    mmap: &MutableMap,
+    fuel: &Fuel,
     ren: &mut RenBuf,
+    gamma: u32,
     m: u32,
     dom: u32,
-    gamma: u32,
     mask: Vec<Option<Icit>>, // invert 的非线性掩码（空 vec = 线性）
     rhs: V,
 ) -> bool {
     let mty = match &metas[m as usize] {
         MetaEntry::Unsolved(a) => *a,
         // force 在 fuel 耗尽时会把已解 meta 当未解返回（拒绝展开），随后
-        // 走到的求解按合一失败降级，不 panic——L07 孪生同款防御降级（2026-
-        // 09-18 评审修复）。本层 force 的 meta 展开当前无 fuel 门（窗口不可
-        // 达），保留降级臂以防后续燃料位次变化。
+        // 走到的求解按合一失败降级，不 panic——与"fuel 耗尽按未解失败"的
+        // 既有降级故事一致（窗口：恰在 1→0 递减帧内）
         _ => return false,
     };
     // 非线性 spine：检查非线性的变量槽位可以从 meta 类型里剪掉
     if !mask.is_empty()
-        && prune_ty_bump(bump, spine, work, vals, icits, defs, metas, unsolved, globals, &mask, mty)
-            .is_none()
+        && prune_ty_bump(
+            bump, spine, work, vals, icits, defs, metas, decls, mmap, fuel, &mask, mty,
+        )
+        .is_none()
     {
         return false;
     }
-    let renamed = {
-        let t0 = solve_probe::on().then(|| std::time::Instant::now());
-        let r = rename_iter(
-            bump, spine, work, vals, icits, defs, ren, metas, unsolved, globals, Some(m), dom, gamma, rhs,
-        );
-        if let Some(t) = t0 {
-            solve_probe::C.sb_rename_ns.fetch_add(
-                t.elapsed().as_nanos() as u64,
-                std::sync::atomic::Ordering::Relaxed,
-            );
-        }
-        r
-    };
-    let Some(tm) = renamed else {
+    let Some(tm) = rename_iter(
+        bump, spine, work, vals, icits, defs, ren, metas, decls, mmap, fuel, Some(m),
+        dom, gamma, rhs,
+    ) else {
         return false;
     };
-    let lam_tm = {
-        let t0 = solve_probe::on().then(|| std::time::Instant::now());
-        let r = lams_from_ty(bump, spine, work, vals, icits, defs, metas, globals, dom, mty, tm);
-        if let Some(t) = t0 {
-            solve_probe::C.sb_lams_ns.fetch_add(
-                t.elapsed().as_nanos() as u64,
-                std::sync::atomic::Ordering::Relaxed,
-            );
-        }
-        r
-    };
-    let sol = {
-        let t0 = solve_probe::on().then(|| std::time::Instant::now());
-        let r = eval_iter(
-            bump, spine, work, vals, icits, defs, metas, globals, EMPTY_ENV, lam_tm,
-        );
-        if let Some(t) = t0 {
-            solve_probe::C.sb_eval_ns.fetch_add(
-                t.elapsed().as_nanos() as u64,
-                std::sync::atomic::Ordering::Relaxed,
-            );
-        }
-        r
-    };
+    let lam_tm = lams_from_ty(
+        bump, spine, work, vals, icits, defs, metas, decls, mmap, fuel, dom, mty, tm,
+    );
+    let sol = eval_iter(
+                    bump, spine, work, vals, icits, defs, metas, decls, mmap, fuel, EMPTY_ENV,
+        lam_tm,
+    );
     metas[m as usize] = MetaEntry::Solved(sol, mty);
-    if let Some(p) = unsolved.iter().position(|&x| x == m) {
-        unsolved.swap_remove(p); // A-2 worklist 出表
-    }
     true
 }
 
@@ -243,19 +217,19 @@ pub(super) fn solve_bump<'a>(
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
     metas: &mut Vec<MetaEntry>,
-    unsolved: &mut Vec<u32>,
-    globals: &[V],
+    decls: &FxHashMap<String, DeclEntryF>,
+    mmap: &MutableMap,
+    fuel: &Fuel,
     ren: &mut RenBuf,
     gamma: u32,
     m: u32,
     args: &[(V, Icit)],
     rhs: V,
 ) -> bool {
-    let _ = gamma;
-    match invert_bump(bump, spine, defs, metas, globals, ren, args) {
+    match invert_bump(bump, spine, defs, metas, decls, mmap, fuel, ren, gamma, args) {
         Some(mask) => solve_with_pren_bump(
-            bump, spine, work, vals, icits, defs, metas, unsolved, globals, ren, m, args.len() as u32,
-            gamma, mask, rhs,
+            bump, spine, work, vals, icits, defs, metas, decls, mmap, fuel, ren, gamma,
+            m, args.len() as u32, mask, rhs,
         ),
         None => false,
     }
@@ -279,11 +253,10 @@ enum RJob<'a> {
     Pi2(&'a PiCell<'a>),
 }
 
-/// partial renaming 的迭代版（L06 版 + L09 增量：tag 0 的大下标直通、
-/// tag 3 带层级、无 Decl 头、Prim 无名；Match 的分支体在"捕获 env + fresh
-/// rigid 槽"下用**中性 global 视图**重求值，再在**独立克隆的 renaming**
-/// （lift 过 count 次）下 rename——参考版按分支 clone 整个 HashMap，这里
-/// 逐代克隆 RenBuf）。
+/// partial renaming 的迭代版（L06 版 + L07 增量：Prim/Obj/Sum/SumCase/
+/// Match 的 rename 臂。Match 的分支体在"捕获 env + fresh rigid 槽"下用
+/// **简化 decl 表**重求值，再在**独立克隆的 renaming**（lift 过 count 次）
+/// 下 rename——参考版按分支 clone 整个 HashMap，这里逐代克隆 RenBuf）。
 #[allow(clippy::too_many_arguments)]
 pub(super) fn rename_iter<'a>(
     bump: &'a Bump,
@@ -294,8 +267,9 @@ pub(super) fn rename_iter<'a>(
     defs: &mut Vec<V>,
     ren: &mut RenBuf,
     metas: &mut Vec<MetaEntry>,
-    unsolved: &mut Vec<u32>,
-    globals: &[V],
+    decls: &FxHashMap<String, DeclEntryF>,
+    mmap: &MutableMap,
+    fuel: &Fuel,
     occ: Option<u32>,
     dom0: u32,
     cod0: u32,
@@ -335,7 +309,9 @@ pub(super) fn rename_iter<'a>(
     while let Some(job) = tasks.pop() {
         match job {
             RJob::Ren { dom, cod, v } => {
-                let v = force(bump, spine, defs, metas, globals, v);
+                let v = force(
+                bump, spine, defs, metas, decls, mmap, fuel, v,
+                );
                 match v_tag(v) {
                     5 => {
                         let m = v_meta_of(v);
@@ -346,16 +322,8 @@ pub(super) fn rename_iter<'a>(
                     }
                     0 => {
                         let x = v_lvl_of(v) as usize;
-                        // scope check（x 不在 spine 映射里；非线性哨兵也算缺项）。
-                        // 越过哨兵的全局层级不进映射——原样产出大下标 Var
-                        // （参考版 rename 的 Rigid 臂：ren miss 且 x >
-                        // 1919810 → Tm::Var(x) 照走 spine）
+                        // scope check（x 不在 spine 映射里；非线性哨兵也算缺项）
                         let Some(xp) = ren.get(x) else {
-                            let x32 = x as u32;
-                            if x32 >= GLOBAL_BASE {
-                                done.push(bump.alloc(Tm::Var(x32)));
-                                continue;
-                            }
                             return None;
                         };
                         done.push(bump.alloc(Tm::Var(dom - xp - 1)));
@@ -371,24 +339,26 @@ pub(super) fn rename_iter<'a>(
                                     return None; // occurs check
                                 }
                                 let t = prune_vflex_bump(
-                                    bump, spine, work, vals, icits, defs, ren, metas, unsolved, globals,
-                                    occ, dom, cod, m, h,
+                                    bump, spine, work, vals, icits, defs, ren, metas, decls,
+                                    mmap, fuel, occ, dom, cod, m, h,
                                 )?;
                                 done.push(t);
                             }
-                            // 卡住投影头的链：rename 内层再以 Tm::Obj 为头节点
-                            // 折叠实参（参考版 rename 的 Obj 臂同款）
+                            // Decl / Prim 头的链照参考版 rename_sp 重建 App 链
+                            // （头名直出，实参逐个 rename）；Obj 头的链先
+                            // rename 内层再以 Tm::Obj 为头节点折叠实参
                             7 => {
                                 let head_tm: &'a Tm<'a> = bump.alloc(match v_xcell_of(hd) {
+                                    XCell::Decl(s) => Tm::Decl(s),
+                                    XCell::Prim(s) => Tm::Prim(s),
                                     XCell::Obj { val, name } => {
-                            let inner = rename_iter(
-                                bump, spine, work, vals, icits, defs, ren, metas,
-                                unsolved, globals, occ, dom, cod, *val,
-                            )?;
+                                        let inner = rename_iter(
+                                            bump, spine, work, vals, icits, defs, ren, metas,
+                                            decls, mmap, fuel, occ, dom, cod, *val,
+                                        )?;
                                         Tm::Obj(inner, name)
                                     }
                                     XCell::Lit(s) => Tm::LiteralIntro(s),
-                                    XCell::Prim(n) => Tm::Prim(n),
                                     _ => return None,
                                 });
                                 spine_case!(dom, cod, h, head_tm, tasks);
@@ -396,13 +366,6 @@ pub(super) fn rename_iter<'a>(
                             _ => {
                                 let x = v_lvl_of(hd) as usize;
                                 let Some(xp) = ren.get(x) else {
-                                    // 越过哨兵的全局层级：大下标 Var 照走 spine
-                                    let x32 = x as u32;
-                                    if x32 >= GLOBAL_BASE {
-                                        let head_tm = bump.alloc(Tm::Var(x32));
-                                        spine_case!(dom, cod, h, head_tm, tasks);
-                                        continue;
-                                    }
                                     return None; // scope check
                                 };
                                 let head_tm = bump.alloc(Tm::Var(dom - xp - 1));
@@ -415,7 +378,8 @@ pub(super) fn rename_iter<'a>(
                         let bv = {
                             let env = env_ext(bump, c.env, v_lvl(cod));
                             eval_iter(
-                                bump, spine, work, vals, icits, defs, metas, globals, env, c.body,
+                                bump, spine, work, vals, icits, defs, metas, decls, mmap, fuel,
+                                env, c.body,
                             )
                         };
                         // lift：binder 槽 (cod → dom)
@@ -432,7 +396,8 @@ pub(super) fn rename_iter<'a>(
                         let bv = {
                             let env = env_ext(bump, cell.env, v_lvl(cod));
                             eval_iter(
-                                bump, spine, work, vals, icits, defs, metas, globals, env, cell.body,
+                                bump, spine, work, vals, icits, defs, metas, decls, mmap, fuel,
+                                env, cell.body,
                             )
                         };
                         // lift（同 Lam）
@@ -450,20 +415,21 @@ pub(super) fn rename_iter<'a>(
                         });
                     }
                     3 => done.push(bump.alloc(Tm::U(v_u_of(v)))),
-                    // 字面量类型与裸单元（Lit / Prim 空链）直出
+                    // 字面量类型与裸单元（Lit / Decl / Prim 空链）直出
                     6 => done.push(bump.alloc(Tm::LiteralType)),
                     7 => match v_xcell_of(v) {
                         XCell::Lit(s) => done.push(bump.alloc(Tm::LiteralIntro(s))),
-                        XCell::Prim(s) => done.push(bump.alloc(Tm::Prim(s))),
-                        // 不变式：force 后顶层无 VSub（防御臂；参考版 rename
-                        // 的 VSub 臂同款判定失败）
+                        // 不变式：force 的返回值顶层不会是 VSub（入口已推开；
+                        // fuel 耗尽的角落按失败处理，参考版 rename 同款）
                         XCell::VSub { .. } => return None,
+                        XCell::Decl(s) => done.push(bump.alloc(Tm::Decl(s))),
+                        XCell::Prim(s) => done.push(bump.alloc(Tm::Prim(s))),
                         XCell::Obj { val, name } => {
                             // 卡住投影：rename 内层 → 包 Tm::Obj（空实参；
                             // 带实参的链在 tag 2 臂处理）
                             let inner = rename_iter(
-                                bump, spine, work, vals, icits, defs, ren, metas, unsolved, globals,
-                                occ, dom, cod, *val,
+                                bump, spine, work, vals, icits, defs, ren, metas, decls, mmap,
+                                fuel, occ, dom, cod, *val,
                             )?;
                             done.push(bump.alloc(Tm::Obj(inner, name)));
                         }
@@ -471,17 +437,16 @@ pub(super) fn rename_iter<'a>(
                             name,
                             params,
                             cases,
-                            is_trait,
                         } => {
                             let mut ps: Vec<SumParamT<'_>> = Vec::with_capacity(params.len());
                             for p in params.iter() {
                                 let pv = rename_iter(
-                                    bump, spine, work, vals, icits, defs, ren, metas, unsolved, globals,
-                                    occ, dom, cod, p.val,
+                                    bump, spine, work, vals, icits, defs, ren, metas, decls,
+                                    mmap, fuel, occ, dom, cod, p.val,
                                 )?;
                                 let pt = rename_iter(
-                                    bump, spine, work, vals, icits, defs, ren, metas, unsolved, globals,
-                                    occ, dom, cod, p.ty,
+                                    bump, spine, work, vals, icits, defs, ren, metas, decls,
+                                    mmap, fuel, occ, dom, cod, p.ty,
                                 )?;
                                 ps.push(SumParamT {
                                     name: p.name,
@@ -494,24 +459,22 @@ pub(super) fn rename_iter<'a>(
                                 name,
                                 bump.alloc_slice_fill_iter(ps),
                                 cases,
-                                *is_trait,
                             )));
                         }
                         XCell::SumCase {
                             typ,
                             case_name,
                             datas,
-                            is_trait,
                         } => {
                             let tt = rename_iter(
-                                bump, spine, work, vals, icits, defs, ren, metas, unsolved, globals,
-                                occ, dom, cod, *typ,
+                                bump, spine, work, vals, icits, defs, ren, metas, decls, mmap,
+                                fuel, occ, dom, cod, *typ,
                             )?;
                             let mut ds: Vec<SumDataT<'_>> = Vec::with_capacity(datas.len());
                             for d in datas.iter() {
                                 let dv = rename_iter(
-                                    bump, spine, work, vals, icits, defs, ren, metas, unsolved, globals,
-                                    occ, dom, cod, d.val,
+                                    bump, spine, work, vals, icits, defs, ren, metas, decls,
+                                    mmap, fuel, occ, dom, cod, d.val,
                                 )?;
                                 ds.push(SumDataT {
                                     name: d.name,
@@ -523,23 +486,23 @@ pub(super) fn rename_iter<'a>(
                                 typ: tt,
                                 case_name,
                                 datas: bump.alloc_slice_fill_iter(ds),
-                                is_trait: *is_trait,
                             }));
                         }
                         XCell::Match {
                             scrutinee,
                             env: menv,
                             cases,
+                            pending,
                         } => {
                             // 分支体是裸 Tm：先在"捕获 env + fresh rigid 槽"
-                            // 下重新求值（**中性 global 视图**防重展开），再在
-                            // lift 过的独立 renaming 下 rename（参考版 rename
-                            // 的 Match 臂同款；scrutinee 用真实表）
-                            let neutral = neutral_of(globals);
+                            // 下重新求值（简化 decl 表防重展开），再在 lift
+                            // 过的独立 renaming 下 rename（参考版 rename 的
+                            // Match 臂同款；scrutinee 与 pending 用真实表）
                             let val_tm = rename_iter(
-                                bump, spine, work, vals, icits, defs, ren, metas, unsolved, globals,
-                                occ, dom, cod, *scrutinee,
+                                bump, spine, work, vals, icits, defs, ren, metas, decls, mmap,
+                                fuel, occ, dom, cod, *scrutinee,
                             )?;
+                            let declb = simpl_decl(bump, decls);
                             let mut nc: Vec<(PatternDetail, &'a Tm<'a>)> =
                                 Vec::with_capacity(cases.len());
                             for (pat, tm) in cases.iter() {
@@ -554,17 +517,28 @@ pub(super) fn rename_iter<'a>(
                                     c2 += 1;
                                 }
                                 let bv = eval_iter(
-                                    bump, spine, work, vals, icits, defs, metas, &neutral, env2, tm,
+                                    bump, spine, work, vals, icits, defs, metas, &declb, mmap,
+                                    fuel, env2, tm,
                                 );
                                 let bt = rename_iter(
                                     bump, spine, work, vals, icits, defs, &mut ren2, metas,
-                                    unsolved, globals, occ, d2, c2, bv,
+                                    &declb, mmap, fuel, occ, d2, c2, bv,
                                 )?;
                                 nc.push(((*pat).clone(), bt));
                             }
                             let cs: &'a [(PatternDetail, &'a Tm<'a>)] =
                                 bump.alloc_slice_fill_iter(nc);
-                            done.push(bump.alloc(Tm::Match(val_tm, cs)));
+                            let mut acc: &'a Tm<'a> = bump.alloc(Tm::Match(val_tm, cs));
+                            // 卡住期累积的实参：同 quote，包在 Match 外的
+                            // App 链里（应用序）
+                            for &(uu, ii) in *pending {
+                                let ut = rename_iter(
+                                    bump, spine, work, vals, icits, defs, ren, metas, decls,
+                                    mmap, fuel, occ, dom, cod, uu,
+                                )?;
+                                acc = bump.alloc(Tm::App(acc, ut, ii));
+                            }
+                            done.push(acc);
                         }
                     },
                     _ => return None, // 病态（Π/U/字面量被应用等）
@@ -608,8 +582,8 @@ enum SpinePruneStatus {
 }
 
 /// `pruneVFlex`：meta + 纯变量 renaming 判定与剪枝（L06 版原样；非变量
-/// 实参——含字面量/Obj/构造子值——嵌套 rename，与参考版 prune_vflex_go 的
-/// 非 Rigid 臂一致；实参探测用全量 force）。
+/// 实参——含字面量/Decl/Prim/Obj/构造子值——嵌套 rename，与参考版
+/// prune_vflex_go 的非 Rigid 臂一致；实参探测用 `force_arg`）。
 #[allow(clippy::too_many_arguments)]
 fn prune_vflex_bump<'a>(
     bump: &'a Bump,
@@ -620,8 +594,9 @@ fn prune_vflex_bump<'a>(
     defs: &mut Vec<V>,
     ren: &mut RenBuf,
     metas: &mut Vec<MetaEntry>,
-    unsolved: &mut Vec<u32>,
-    globals: &[V],
+    decls: &FxHashMap<String, DeclEntryF>,
+    mmap: &MutableMap,
+    fuel: &Fuel,
     occ: Option<u32>,
     dom: u32,
     cod: u32,
@@ -633,8 +608,10 @@ fn prune_vflex_bump<'a>(
     let mut slots: Vec<(Option<&'a Tm<'a>>, Icit)> = Vec::with_capacity(args.len());
     let mut status = SpinePruneStatus::OKRenaming;
     for &(a, i) in args.iter().rev() {
-        // 应用序（外先）；参数视角的 WHNF（不推开 VSub 包裹——保 invert 可逆）
-        let f = force_arg(bump, spine, defs, metas, globals, a);
+        // 应用序（外先）
+        let f = force_arg(
+                bump, spine, defs, metas, decls, mmap, fuel, a,
+        );
         if v_tag(f) == 0 {
             match ren.get(v_lvl_of(f) as usize) {
                 Some(xp) => slots.push((Some(bump.alloc(Tm::Var(dom - xp - 1))), i)),
@@ -649,7 +626,8 @@ fn prune_vflex_bump<'a>(
                 return None; // 上游：剪枝后 spine 必须全变量
             }
             let t = rename_iter(
-                bump, spine, work, vals, icits, defs, ren, metas, unsolved, globals, occ, dom, cod, f,
+                bump, spine, work, vals, icits, defs, ren, metas, decls, mmap, fuel,
+                occ, dom, cod, f,
             )?;
             slots.push((Some(t), i));
             status = SpinePruneStatus::OKNonRenaming;
@@ -661,7 +639,9 @@ fn prune_vflex_bump<'a>(
         for (st, i) in slots.iter().rev() {
             mask.push(if st.is_some() { Some(*i) } else { None });
         }
-        prune_meta_bump(bump, spine, work, vals, icits, defs, metas, unsolved, globals, &mask, m)?
+        prune_meta_bump(
+            bump, spine, work, vals, icits, defs, metas, decls, mmap, fuel, &mask, m,
+        )?
     } else {
         m
     };
@@ -686,26 +666,26 @@ pub(super) fn prune_meta_bump<'a>(
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
     metas: &mut Vec<MetaEntry>,
-    unsolved: &mut Vec<u32>,
-    globals: &[V],
+    decls: &FxHashMap<String, DeclEntryF>,
+    mmap: &MutableMap,
+    fuel: &Fuel,
     mask: &[Option<Icit>], // 内先序
     m: u32,
 ) -> Option<u32> {
     let mty = match &metas[m as usize] {
         MetaEntry::Unsolved(a) => *a,
-        // fuel 耗尽窗口（同 solve_with_pren_bump 注）：按失败降级（L07 孪生
-        // 同款防御降级，2026-09-18 评审修复）
+        // fuel 耗尽窗口（同 solve_with_pren_bump 注）：按失败降级
         _ => return None,
     };
     let pruned_tm = prune_ty_bump(
-        bump, spine, work, vals, icits, defs, metas, unsolved, globals, mask, mty,
+        bump, spine, work, vals, icits, defs, metas, decls, mmap, fuel, mask, mty,
     )?;
     let prunedty = eval_iter(
-        bump, spine, work, vals, icits, defs, metas, globals, EMPTY_ENV, pruned_tm,
+                    bump, spine, work, vals, icits, defs, metas, decls, mmap, fuel, EMPTY_ENV,
+        pruned_tm,
     );
     let mp = metas.len() as u32;
     metas.push(MetaEntry::Unsolved(prunedty));
-    unsolved.push(mp); // A-2 worklist 入表
     // AppPruning 项：掩码外先入链（新槽恒链头 → 最终头 = 最内层）
     let mut pr: Option<&'a PrCons<'a>> = None;
     for slot in mask.iter().rev() {
@@ -713,15 +693,14 @@ pub(super) fn prune_meta_bump<'a>(
     }
     let ap = bump.alloc(Tm::AppPruning(bump.alloc(Tm::Meta(mp)), pr));
     let lam_tm = lams_from_ty(
-        bump, spine, work, vals, icits, defs, metas, globals, mask.len() as u32, mty, ap,
+        bump, spine, work, vals, icits, defs, metas, decls, mmap, fuel,
+        mask.len() as u32, mty, ap,
     );
     let sol = eval_iter(
-        bump, spine, work, vals, icits, defs, metas, globals, EMPTY_ENV, lam_tm,
+                    bump, spine, work, vals, icits, defs, metas, decls, mmap, fuel, EMPTY_ENV,
+        lam_tm,
     );
     metas[m as usize] = MetaEntry::Solved(sol, mty);
-    if let Some(p) = unsolved.iter().position(|&x| x == m) {
-        unsolved.swap_remove(p); // A-2 worklist 出表
-    }
     Some(mp)
 }
 
@@ -735,8 +714,9 @@ pub(super) fn prune_ty_bump<'a>(
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
     metas: &mut Vec<MetaEntry>,
-    unsolved: &mut Vec<u32>,
-    globals: &[V],
+    decls: &FxHashMap<String, DeclEntryF>,
+    mmap: &MutableMap,
+    fuel: &Fuel,
     mask_inner_first: &[Option<Icit>],
     mty: V,
 ) -> Option<&'a Tm<'a>> {
@@ -745,7 +725,9 @@ pub(super) fn prune_ty_bump<'a>(
     let mut dom: u32 = 0;
     let mut cod: u32 = 0;
     let mut layers: Vec<(&'a str, Icit, &'a Tm<'a>)> = Vec::new();
-    let mut cur = force(bump, spine, defs, metas, globals, mty);
+    let mut cur = force(
+                bump, spine, defs, metas, decls, mmap, fuel, mty,
+    );
     for entry in mask_inner_first.iter().rev() {
         // 外→内
         if v_tag(cur) != 4 {
@@ -755,8 +737,8 @@ pub(super) fn prune_ty_bump<'a>(
         let (name, icit, pdom, env, body) = (p.name, p.icit, p.dom, p.env, p.body);
         if entry.is_some() {
             let dtm = rename_iter(
-                bump, spine, work, vals, icits, defs, &mut ren2, metas, unsolved, globals, None, dom,
-                cod, pdom,
+                bump, spine, work, vals, icits, defs, &mut ren2, metas, decls, mmap, fuel,
+                None, dom, cod, pdom,
             )?;
             // lift：binder 进映射
             ren2.set(cod as usize, dom);
@@ -764,15 +746,18 @@ pub(super) fn prune_ty_bump<'a>(
             dom += 1;
         }
         let next = eval_iter(
-            bump, spine, work, vals, icits, defs, metas, globals,
+                    bump, spine, work, vals, icits, defs, metas, decls, mmap, fuel,
             env_ext(bump, env, v_lvl(cod)),
             body,
         );
         cod += 1;
-        cur = force(bump, spine, defs, metas, globals, next);
+        cur = force(
+                bump, spine, defs, metas, decls, mmap, fuel, next,
+        );
     }
     let mut t = rename_iter(
-        bump, spine, work, vals, icits, defs, &mut ren2, metas, unsolved, globals, None, dom, cod, cur,
+        bump, spine, work, vals, icits, defs, &mut ren2, metas, decls, mmap, fuel, None,
+        dom, cod, cur,
     )?;
     // 保留层由内向外回包（layers 序 = 外→内，rev = 内→外 ✓）
     for (name, icit, dtm) in layers.iter().rev() {
@@ -783,7 +768,7 @@ pub(super) fn prune_ty_bump<'a>(
 
 /// `x{n}` 的 bump 拷贝：栈上格式化，省每 binder 一次 system-heap
 /// `String`（solve/prune 密集负载下 `lams_from_ty` 每 λ 层都要一个）。
-/// （a806ff0 的同款补齐——该 commit 只落到 L03-L05。）
+/// （a806ff0 的 L08 同款补齐——该 commit 只落到 L03-L05。）
 fn alloc_xname<'a>(bump: &'a Bump, n: u32) -> &'a str {
     let mut buf = [0u8; 11]; // 'x' + u32 十进制最多 10 位
     let mut i = buf.len();
@@ -812,23 +797,17 @@ pub(super) fn lams_from_ty<'a>(
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
     metas: &[MetaEntry],
-    globals: &[V],
+    decls: &FxHashMap<String, DeclEntryF>,
+    mmap: &MutableMap,
+    fuel: &Fuel,
     l: u32,
     ty: V,
     body: &'a Tm<'a>,
 ) -> &'a Tm<'a> {
     let mut names: Vec<(&'a str, Icit)> = Vec::with_capacity(l as usize);
-    let lams_pre = solve_probe::on().then(|| std::time::Instant::now());
-    let mut cur = force(bump, spine, defs, metas, globals, ty);
-    let mut lams_loop = solve_probe::on().then(|| std::time::Instant::now());
-    if let Some(p0) = lams_pre {
-        solve_probe::C.sb_lams_pre_ns.fetch_add(
-            p0.elapsed().as_nanos() as u64,
-            std::sync::atomic::Ordering::Relaxed,
-        );
-    }
-    solve_probe::C.sb_l_sum.fetch_add(l as u64, std::sync::atomic::Ordering::Relaxed);
-    solve_probe::C.sb_l_max.fetch_max(l as u64, std::sync::atomic::Ordering::Relaxed);
+    let mut cur = force(
+                bump, spine, defs, metas, decls, mmap, fuel, ty,
+    );
     for lp in 0..l {
         if v_tag(cur) != 4 {
             unreachable!(); // 类型 Π 层数不足（上游同款不可能）
@@ -841,39 +820,13 @@ pub(super) fn lams_from_ty<'a>(
             name
         };
         names.push((name, icit));
-        // 最后一层的余定义域值是死值（cur 只用于继续走层，循环到此为止）
-        // ——免一次 eval+force。traitchain 实测：meta 闭类型的 Π 体经 rename
-        // 后可达 O(D²) 节点（k≈D 的 close Let 链携带全部 def 项），且全部
-        // 4097 次调用 l≤1——这步死求值曾是 11.7s 的主体（11.7s/4097 次 ≈
-        // 2.85ms/次重走 1.6M 可达节点）。
-        if lp + 1 == l {
-            break;
-        }
-        let ev_t0 = solve_probe::on().then(|| std::time::Instant::now());
         let next = eval_iter(
-            bump, spine, work, vals, icits, defs, metas, globals,
+                    bump, spine, work, vals, icits, defs, metas, decls, mmap, fuel,
             env_ext(bump, env, v_lvl(lp)),
             body_tm,
         );
-        if let Some(e0) = ev_t0 {
-            solve_probe::C.sb_lams_eval_ns.fetch_add(
-                e0.elapsed().as_nanos() as u64,
-                std::sync::atomic::Ordering::Relaxed,
-            );
-        }
-        let fc_t0 = solve_probe::on().then(|| std::time::Instant::now());
-        cur = force(bump, spine, defs, metas, globals, next);
-        if let Some(f0) = fc_t0 {
-            solve_probe::C.sb_lams_force_ns.fetch_add(
-                f0.elapsed().as_nanos() as u64,
-                std::sync::atomic::Ordering::Relaxed,
-            );
-        }
-    }
-    if let Some(l0) = lams_loop {
-        solve_probe::C.sb_lams_loop_ns.fetch_add(
-            l0.elapsed().as_nanos() as u64,
-            std::sync::atomic::Ordering::Relaxed,
+        cur = force(
+                bump, spine, defs, metas, decls, mmap, fuel, next,
         );
     }
     let mut t = body;

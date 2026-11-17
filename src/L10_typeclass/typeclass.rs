@@ -1,9 +1,16 @@
+//! L10 trait/typeclass 求解器（`Typ` 世界 + 表驱动 Prolog `Synth`）。
+//!
+//! 2026-11-17 重建：从旧 L10 原样承接求解算法（`Assertion`/`Instance`/
+//! `Synth`/`match_typ` 与单向一阶匹配语义），只把 `Val::to_typ` 适配到
+//! 新 L09 基线的值表示（`Val` 不裹 Rc、`Val::Sum` 3 字段、名字 span 为
+//! `VSpan`）。trait 身份不再进 Val/Tm（不设 `is_trait` 标记），改由
+//! `Infer::trait_out_param` 按名字判形——对 trait 层语义等价。
 
 use rustc_hash::FxHashMap as HashMap;
 
 use crate::list::List;
 
-use super::{Val, Span, empty_span};
+use super::{Val, Span, empty_span, tmspan};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Typ {
@@ -14,56 +21,35 @@ pub enum Typ {
     Fn(Box<Typ>, Box<Typ>),
     Trait(Span<String>),
 }
-
 impl Val {
+    /// 值 → `Typ`（trait 求解世界）。不可作类型的形态返回 None。
     pub fn to_typ(&self) -> Option<Typ> {
         match self {
             Val::Flex(..) => None,
-            Val::Rigid(lvl, list) if list.is_empty() => Some(Typ::Var(lvl.0)),
+            Val::Rigid(lvl, sp) if sp.is_empty() => Some(Typ::Var(lvl.0)),
             Val::Rigid(_, _) => None,
-            Val::Obj(val, span, sp) => None,
+            Val::Obj(..) => None,
             Val::Lam(..) => None,
-            Val::Pi(span, icit, val, closure) => None,
+            Val::Pi(..) => None,
             Val::U(x) => Some(Typ::Val(empty_span(format!("Type {x}")))),
-            // 字面量类型 / 字面量值 / 裸 Prim 不是可参与实例求解的类型形态。
-            // 旧实现 `todo!()` 可被用户程序触发：`"s".foo` 使接收者类型为
-            // `LiteralType`，`trait_wrap` 走到此处即崩；快版
-            // `val_to_typ` 对这些 tag 恒返回 None（"has no object" Err）。
-            // 返回 None 与快版及非 Sum 接收者（Pi 等）的既有语义一致。
             Val::LiteralType => None,
             Val::LiteralIntro(_) => None,
+            Val::Decl(..) => None,
             Val::Prim(..) => None,
-            Val::Sum(span, items, _, _) => Some(
-                if items.is_empty() {
-                    Typ::Val(span.clone())
-                } else {
-                    // 任一参数不可转换则整体 None（L11 已修 flat_map 静默
-                    // 丢参导致实参错位，此处按继承连续性回传）
-                    Typ::Construct(
-                        span.clone(),
-
-                        // **刻意语义（本轮评审论证，勿"修"成 collect::<Option<..>>）**：
-                        // 参数槽里不可作类型的值（如未解 meta Flex）被静默剔除，
-                        // 产出 arity 短一的 Construct。这不是丢参 bug：
-                        // 1. 实例登记侧（elaboration ImplDecl 臂）对 to_typ()==None
-                        //    的实参直接 Err "Not a type"，实例断言永远不含被剔形态；
-                        // 2. 目标侧被剔后 arity 与实例失配 → try_resolve 判不失配
-                        //    → "no instance"，不会选出错误实例；
-                        // 3. trait_wrap 的接收者路径**依赖**该剔除：`x: List[?m]`
-                        //    （元素仍是未解 meta）时接收者类型化为
-                        //    Construct("List",[])，与 `impl[T] Say for List[T]` 的
-                        //    pattern 一阶匹配成功（pattern Var 吃掉整个目标）——
-                        //    改成整体 None 会让这类合法程序从 Ok 变 Err。
-                        // 快版 `val_to_typ` 的 filter_map 同款语义，两侧一致。
-                        items.iter().flat_map(|x| x.1.to_typ()).collect(),//TODO:
-
-                    )
-                }
-            ),
+            // 任一参数不可转换则**静默剔除**（刻意语义，见旧 L10 README §1.3：
+            // 实例登记侧拒绝不可转类型；trait_wrap 接收者路径依赖该剔除）。
+            Val::Sum(span, params, _) => Some(if params.is_empty() {
+                Typ::Val(tmspan(span))
+            } else {
+                Typ::Construct(
+                    tmspan(span),
+                    params.iter().flat_map(|x| x.1.to_typ()).collect(),
+                )
+            }),
             Val::SumCase { .. } => None,
             Val::Match(..) => None,
             // 精化 σ 包裹：调用点（trait_wrap / ImplDecl）已 force 推开，
-            // 此臂不可达；保守返回 None（不得出类型）而非误判形态。
+            // 保守返回 None（不得出类型）而非误判形态。
             Val::VSub(..) => None,
         }
     }
