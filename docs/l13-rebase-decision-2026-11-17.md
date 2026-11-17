@@ -71,6 +71,8 @@
   `audit_crosslayer_probe` 258、`backport3_pretty_l0910` 174，全绿。
 - `realbench --layer L13` / `l13bench` 等产品层基准路径未改动（L13 源码零修改）。
 
+> 方案细节、实测规模与分阶段执行计划见 `docs/l13-rebase-plan-2026-11-17.md`。
+
 ## 后续可选路线（若未来要把 L13 也纳入 copy-forward）
 
 1. **产品层维护模式（当前选择）**：L13 独立演进，只保证跨层语义/契约门禁通过；
