@@ -37,6 +37,11 @@ use super::PatternDetail;
 // unify（工作表迭代；L09 参考版臂序，无燃料、无 pm 臂、无 (Obj,Obj) 臂）
 // --------------------------------------------------------------------------------
 
+/// 卡住 match 相等性比较的**总次数**预算（镜像参考版 `MATCH_CMP_BUDGET = 64`，
+/// 与 L12 孪生同口径）：每顶层 `unify_iter` 一份；慢路径逐分支重求值前计数，
+/// 超出按"无法判定为相等"保守失败（参考版对 `(Match, Match)` 同点计数）。
+const MATCH_CMP_BUDGET: u32 = 64;
+
 /// A/B 实验开关（unify 工作表的判等记忆化消融）：置 `L06_NO_CONV_MEMO=1`
 /// 关闭（`=0` 不关闭）。
 pub(super) static NO_CONV_MEMO: std::sync::LazyLock<std::sync::atomic::AtomicBool> =
@@ -503,6 +508,8 @@ pub(super) fn unify_iter<'a>(
     trait_err: &mut Option<String>,
 ) -> bool {
     let memo_on = !NO_CONV_MEMO.load(std::sync::atomic::Ordering::Relaxed);
+    // 卡住 match 相等性比较的次数预算（见 `MATCH_CMP_BUDGET`）。
+    let mut match_cmp_budget: u32 = MATCH_CMP_BUDGET;
     // tick 补点（backlog §3）：unify 工作表循环此前零 tick（只有 `Machine::unify`
     // 入口那一个点，无法分辨循环体内部）。
     #[cfg(feature = "sampler")]
@@ -1255,6 +1262,15 @@ pub(super) fn unify_iter<'a>(
                 },
             ) = (xt, xu)
             {
+                // 卡住 match 相等性比较的次数预算（镜像参考版 / L12）：慢路径
+                // 逐分支在 fresh rigid 下重求值，递归 def 每层产生新的卡住
+                // match、永不结构收敛——原实现只能靠 fuel 烧完（L12 实测
+                // 4 def 的 `Eq (add x zero) (add y zero)` 要 256s）。耗尽按
+                // "无法判定为相等"保守失败。
+                if match_cmp_budget == 0 {
+                    return false;
+                }
+                match_cmp_budget -= 1;
                 stack.push(UItem::MatchStruct {
                     e1: *e1,
                     e2: *e2,

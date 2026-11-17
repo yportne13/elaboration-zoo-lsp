@@ -1354,6 +1354,35 @@ pub enum UnifyError {
     Trait(String),
 }
 
+/// 合一失败的**原因分档**（对齐 L12 / dpm-nbe 的 `UnifyRes = USucc | UAbs | UIDK`）。
+///
+/// `UnifyError` 本身保持无字段（既有构造点不动），分档挂在 [`Infer`] 上：
+/// 顶层合一入口先 [`Infer::reset_unify_kind`]，失败臂按语义 `note`，调用方取
+/// [`Infer::unify_kind`] 决定诊断与覆盖处理。**默认 = `Absurd`**：未被显式分档的
+/// 失败沿用旧行为（分支不可达）；这是有意的渐进策略——"确定无解"与"判不出来"
+/// 逐点分清需要逐臂论证。消费方是模式编译的可达性探测（`pattern_match.rs`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UnifyKind {
+    /// 结构性矛盾：确定无解（不同构造子 / 不同字面量 / 异名头）。
+    Absurd,
+    /// 无法判定：既不能证相等、也不是矛盾（rename/invert/solve 失败、卡住 match）。
+    Undecided,
+    /// 预算耗尽（fuel 池 / 卡住 match 比较次数 / 展开重试）：判定不可信，
+    /// 最保守；覆盖探测对唯一这一档做"按可达处理"的兜底。
+    Fuel,
+}
+
+impl UnifyKind {
+    /// 累积序：一处判不出 ⇒ 整个方程判不出；一处预算耗尽 ⇒ 结果不可信。
+    fn rank(self) -> u8 {
+        match self {
+            UnifyKind::Absurd => 0,
+            UnifyKind::Undecided => 1,
+            UnifyKind::Fuel => 2,
+        }
+    }
+}
+
 pub(crate) fn empty_span<T>(data: T) -> Span<T> {
     Span {
         data,
@@ -1417,6 +1446,13 @@ pub type HoverEntry = (Span<()>, Span<()>, String);
 /// 重试 / Match 归约臂，本池补齐 `force` meta 展开与 unify 结构递归的
 /// 深度防护（solve 无跨 meta occurs check，解链成环时防无界递归栈溢出）。
 const UNIFY_FUEL: u32 = 4096;
+
+/// 卡住 match 相等性比较的**总次数**上限（每个顶层合一入口一份，L12 同口径
+/// `MATCH_CMP_BUDGET = 64`）。`(Match, Match)` 臂逐分支在 fresh rigid 下重求值；
+/// 递归 def 的分支体每层再产生新的卡住 match，层级递增、永不结构收敛（L12 实测
+/// 4 个 def 的 `Eq (add x zero) (add y zero)` 要 256s 才靠 fuel 停下）。次数预算
+/// 把慢路径变成"有界失败"，超出按"无法判定为相等"保守失败（`Undecided`）。
+pub(crate) const MATCH_CMP_BUDGET: u32 = 64;
 
 pub struct Infer {
     pub meta: Vec<MetaEntry>,
@@ -1495,6 +1531,13 @@ pub struct Infer {
     /// 递归与 `force` 的 meta 展开各烧 1，耗尽时 unify 按不可合一失败、
     /// force 停止展开按未解处理。
     unify_fuel: std::cell::Cell<u32>,
+    /// 卡住 match 相等性比较的**总次数**预算（与 fuel 无关；每顶层合一入口
+    /// 重置，见 [`MATCH_CMP_BUDGET`]）。原实现只能靠共享 fuel 池兜底（深/宽
+    /// 负载下是长尾），预算把它变成确定性有界失败。
+    match_cmp_budget: std::cell::Cell<u32>,
+    /// 最近一次合一失败的**原因分档**（见 [`UnifyKind`]）。顶层入口 reset、
+    /// 失败臂 note、调用方读取；`Cell` 让 `&mut self` 的失败臂能直接标注。
+    unify_kind: std::cell::Cell<UnifyKind>,
     /// 构造子 hover 渲染缓存（`push_ctor_hover`，match 编译器 walk_pat
     /// Con 臂专用）：构造子 hover 值是 decl 条目的**闭合**值，渲染结果与
     /// 使用处上下文无关，按 decl 键缓存——同键第二次起免 quote/pretty
@@ -1528,6 +1571,10 @@ impl Clone for Infer {
             def_replay_memo: self.def_replay_memo.clone(),
             // 快照拿全新燃料池：fuel 是每轮 unify 的递归护栏，不跨快照继承
             unify_fuel: std::cell::Cell::new(self.unify_fuel.get()),
+            // 三档诊断/比较预算随快照复制：读取方只看"本轮失败的原因"，
+            // 快照间互不污染（值与燃料同口径）。
+            match_cmp_budget: std::cell::Cell::new(self.match_cmp_budget.get()),
+            unify_kind: std::cell::Cell::new(self.unify_kind.get()),
             // 快照不继承渲染缓存：条目与 hover_table 同生命周期纪律
             ctor_hover_memo: Default::default(),
             // accumulated_errors are ephemeral per-checking-pass;
@@ -2219,6 +2266,8 @@ impl Infer {
             println_jobs: vec![],
             def_replay_memo: Default::default(),
             unify_fuel: std::cell::Cell::new(UNIFY_FUEL),
+            match_cmp_budget: std::cell::Cell::new(MATCH_CMP_BUDGET),
+            unify_kind: std::cell::Cell::new(UnifyKind::Absurd),
             ctor_hover_memo: Default::default(),
         }
     }
@@ -2243,6 +2292,42 @@ impl Infer {
     /// 接受（L07 修复 2 同款，unsound → incomplete）。
     pub(crate) fn fuel_exhausted(&self) -> bool {
         self.unify_fuel.get() == 0
+    }
+
+    /// 顶层合一入口调用：重置"卡住 match 比较次数"预算（每份顶层合一一份，
+    /// 与孪生 `bump_spine_iter::unify::MATCH_CMP_BUDGET` 同口径）。
+    fn reset_match_cmp_budget(&self) {
+        self.match_cmp_budget.set(MATCH_CMP_BUDGET);
+    }
+
+    /// 进入一次"真正的"卡住 match 逐分支比较（L13 无结构快路径，慢路径一律
+    /// 计数）时消耗一次预算；返回 `false` 表示预算耗尽（调用方按"无法判定
+    /// 为相等"失败）。
+    fn burn_match_cmp_budget(&self) -> bool {
+        let b = self.match_cmp_budget.get();
+        if b == 0 {
+            false
+        } else {
+            self.match_cmp_budget.set(b - 1);
+            true
+        }
+    }
+
+    /// 顶层合一入口调用：把失败原因重置为中性值（`Absurd`，沿用旧行为）。
+    fn reset_unify_kind(&self) {
+        self.unify_kind.set(UnifyKind::Absurd);
+    }
+
+    /// 失败臂调用：按"最不结论化"的语义累积（`Absurd < Undecided < Fuel`）。
+    fn note_unify_kind(&self, k: UnifyKind) {
+        if k.rank() > self.unify_kind.get().rank() {
+            self.unify_kind.set(k);
+        }
+    }
+
+    /// 读取当前失败原因（只在 `unify` 返回 `Err` 后有意义）。
+    pub(crate) fn unify_kind(&self) -> UnifyKind {
+        self.unify_kind.get()
     }
 
     pub fn meta_len(&self) -> usize { self.meta.len() }
@@ -3853,6 +3938,9 @@ impl Infer {
     fn unify_catch(&mut self, cxt: &Cxt, t: &Rc<Val>, t_prime: &Rc<Val>, span: Span<()>) -> Result<(), Error> {
         self.meta_contrains.clear();
         self.refuel();
+        // 顶层合一入口：重置三档诊断与卡住 match 比较预算（L12 `unify_catch` 同款）。
+        self.reset_unify_kind();
+        self.reset_match_cmp_budget();
         let ret = self.unify(cxt.lvl, cxt, t, t_prime, 100)
             .map_err(|e| {
                 /*Error::CantUnify(

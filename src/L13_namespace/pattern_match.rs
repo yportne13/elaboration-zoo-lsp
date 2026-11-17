@@ -3,7 +3,7 @@ use smol_str::SmolStr;
 use crate::parser_lib::{Span, ToSpan};
 
 use super::{
-    Decl, Either, Env, Error, Infer, PatternDetail, Rc, Tm, Val,
+    Decl, Either, Env, Error, Infer, PatternDetail, Rc, Tm, UnifyKind, Val,
     cover_at, fmt_path, PosCover,
     cxt::Cxt,
     empty_span,
@@ -169,12 +169,25 @@ impl Compiler {
                     probe_cxt = probe_cxt.bind(bname, a_t, dom);
                     ty = infer.closure_apply(&probe_cxt.decl, &closure, u);
                 }
-                _ => break Self::unify_indices(infer, &probe_cxt, &sum_name, &head_params, &tyf)
-                    // fuel 耗尽的失败是预算问题而非结构冲突：按可达处理
-                    // （保守地要求覆盖）。反方向（判不可达 → 覆盖检查放
-                    // 过该构造子）会让深负载下的非穷尽 match 被静默接受
-                    // （L07 修复 2 同款，unsound → incomplete）。
-                    || infer.fuel_exhausted(),
+                _ => break match Self::unify_indices(
+                    infer,
+                    &probe_cxt,
+                    &sum_name,
+                    &head_params,
+                    &tyf,
+                ) {
+                    Ok(()) => true,
+                    // 三档诊断的**消费口径（L13 产品语义优先）**：只有预算
+                    // 耗尽（fuel 池 / 卡住 match 比较次数）才按可达处理（保守
+                    // 要求覆盖，避免深负载下非穷尽 match 被静默接受）。语义上
+                    // "判不出"（Undecided）与"矛盾"（Absurd）保持产品既有判定
+                    // ——update_cxt 精化载体下，臂上下文可能解出探测期判不出的
+                    // 索引方程，L13/twin 一直按不可达过滤（l13_fast_parity 的
+                    // GADT 函数索引用例即此口径；与 L12 的 σ 路线不同，记录为
+                    // 载体约束下的偏差）。
+                    Err(UnifyKind::Fuel) => true,
+                    Err(UnifyKind::Absurd | UnifyKind::Undecided) => false,
+                },
             }
         };
         infer.meta = snap;
@@ -190,20 +203,27 @@ impl Compiler {
         sum_name: &Span<SmolStr>,
         head_params: &[Rc<Val>],
         ret_ty: &Rc<Val>,
-    ) -> bool {
+    ) -> Result<(), UnifyKind> {
         let ret_sum = infer.force(&cxt.decl, ret_ty);
         let rp = match ret_sum.as_ref() {
             Val::Sum(name, params, ..) if name.data == sum_name.data => params,
-            _ => return false,
+            // 形状不合约（构造子/类型内部不变量）：判不可达（旧行为）。
+            _ => return Err(UnifyKind::Absurd),
         };
         if head_params.len() != rp.len() {
-            return false;
+            return Err(UnifyKind::Absurd);
         }
         let span = empty_span(());
-        head_params
-            .iter()
-            .zip(rp.iter())
-            .all(|(a, b)| infer.unify_pm(cxt, a, &b.1, span).is_ok())
+        for (a, b) in head_params.iter().zip(rp.iter()) {
+            // 每个方程独立记录失败原因/预算（L12 `unify_indices` 同口径：
+            // 卡住 match 比较次数预算"每方程一份"重置）。
+            infer.reset_unify_kind();
+            infer.reset_match_cmp_budget();
+            if infer.unify_pm(cxt, a, &b.1, span).is_err() {
+                return Err(infer.unify_kind());
+            }
+        }
+        Ok(())
     }
 
     /// 可达性判定 + 每 match 的 memo（`constrs[i]`；覆盖检查与臂前置过滤
