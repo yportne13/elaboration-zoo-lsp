@@ -62,7 +62,10 @@ decl 表 + LSP/HDL/prelude 产品面**；与 L12（σ 精化、无原生 Nat、d
 - 记录 L13 现状门禁：`cargo test --release --lib L13_namespace::`（615+6 ignored）、
   `cargo test --release --test l13_fast_parity`（630+6 ignored）、HDL/prelude 语料
   （`tools/bench_corpus` + `l13bench --file`）基线输出；
-- 产出“L13 行为快照”（全量 golden/输出 diff 作为后续每阶段回归 oracle）。
+- 产出“L13 行为快照”（全量 golden/输出 diff 作为后续每阶段回归 oracle）：
+  已落地 `tools/l13_rebase_baseline.ps1` + `tools/l13_baseline_2026-11-17.tsv`
+  （32 个 examples；脚本增量、单次默认最多 8 个、可断点续跑，首批 11 个已采；
+  门禁基线表见 `docs/l13-baseline-2026-11-17.md`），后续每阶段用同脚本增量重生成并 diff。
 
 **P1 核心机对齐（不含载体与产品面；风险最高的一步，建议先做可行性 spike）**
 
