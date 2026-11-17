@@ -670,3 +670,34 @@ target/release/l13bench.exe --file tools\bench_corpus\common\ladder_l07_large.ty
 
 
 
+
+## 附录 D. 2026-11-17 链重建（L09–L12）与 L13 决策
+
+2026-11-17 按“每章 = 上一章实现思路 + 本章新特性”完成了 L09–L12 的重建：
+
+| 层 | 新基线 | 本章增量 | 提交 |
+|---|---|---|---|
+| L09 | L08（dpm-nbe/decl 表） | `Type N` 分层宇宙 | `b6f4ca34` |
+| L10 | 新 L09 | trait/typeclass（Val/Typ 桥接版 Synth） | `1220b8a1` |
+| L11 | 新 L10 | macro_rules（解析期展开） | `13c4e56f` |
+| L12 | 新 L11 | Val 级 trait 求解 + Call 节点基础设施 | `73d68cf2` |
+
+重建口径（与本文 §3 的“三条血统”对照）：
+
+- L09 撤销旧 L09 的再定基（`Infer.global` + 哨兵、恢复式 parser、删
+  `tests.rs`/`struct_eq`/孪生模块），核心机回到 L08 实现思路 + 本章宇宙增量；
+- L10/L11/L12 依次以新前一层为基线重建，旧层的旧血统 parser 偷带面
+  （错误恢复、手写优先级、Verilog/package token、数字转 Church、元组字面量、
+  `Cxt.namespace` 等）不再继承；
+- 每层都恢复了层内 `tests.rs`，并新增/重建黑盒套件与 3–4 个本章增量 parity；
+- L12 的 canonical iddfs/search、SmolStr 化与算符中缀未移植，Call 仅保留
+  节点与透明语义（自动 quote 包装停用，避免 ref/twin 显示分叉）——偏差在
+  `src/L12_canonical/README.md` §3 登记。
+
+**L13 决策**：L13 是产品层（LSP/HDL/prelude/namespace，约 59.4k 行、613 个
+层内测试、独立 `update_cxt`/原生 Nat/package 键血统），不参与本轮 copy-forward
+重建。理由、L12↔L13 差异对照表与后续可选路线见
+`docs/l13-rebase-decision-2026-11-17.md`。L13 代码零修改，其层内与跨层门禁
+保持通过（见该文件“现状验证”节）。
+
+备份：分支 `backup/master-pre-rearch-20261117`、标签 `pre-rearch-20261117`。

@@ -1,5 +1,12 @@
 # L13：命名空间层（生产版：LSP / HDL 宿主）
 
+> **链定位（2026-11-17 重建后）**：L09–L12 已按“上一章实现思路 + 本章增量”
+> 重建为连续链（L09 宇宙 / L10 trait / L11 宏 / L12 Val 级求解）。本层是
+> **产品层**（LSP/HDL/prelude/namespace），不参与 copy-forward 重建：其核心机
+> 仍为旧血统（`update_cxt` 精化、原生 Nat、package 限定 decl 键、prim 挂 decl
+> 表等）。与 L12 的差异对照、决策与后续可选路线见
+> `docs/l13-rebase-decision-2026-11-17.md`。
+
 本层是全仓最复杂的一层，也是**产品层**：LSP 的 hover / completion /
 inlay 观察面、HDL prelude（moduletree codegen）与并行测试基建都压在这
 里。相对 L12 的核心机增量：全限定 decl 键的命名空间（package / import
