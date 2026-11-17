@@ -1,19 +1,99 @@
 use std::cell::RefCell;
+use std::rc::Rc;
 
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 
-use crate::parser_lib::ToSpan;
+use crate::{list::List, parser_lib::Span};
+use smol_str::SmolStr;
 
 use super::{
+    Env, Infer, Ix, Lvl, Tm, Ty, Val, VTy,
+    empty_span,
+    parser::syntax::Icit,
     syntax::{Locals, Pruning},
-    *,
 };
 
-/// 源码名表 + 撤销轨迹（L07 `d411debe` 的 `NameState` 的 L12 版；L08 孪生
-/// `name_map`+`name_trail` 的参考版对应物）。
+/// 全局 decl 表：名字 → (类型值, WHNF 值)。
 ///
-/// 旧实现是 `BiMap` 持久表：`bind`/`define` 里 `Rc::clone` + `Rc::make_mut`
-/// ——强计数恒为 2 ⇒ `make_mut` 每次**深拷整张表**（逐键 SmolStr 分配 +
+/// 顶层定义（def / enum / 构造子）都登记在这里；项层引用用 `Tm::Decl(名字)`，
+/// 求值时查表取缓存的 WHNF。递归通过"先插入指向自身的占位值、检查完再覆盖"实现。
+///
+/// 条目按 `Rc` 共享：`decl_insert` 的写时复制只需重建哈希桶 + 逐条 Rc 递增，
+/// 不再深拷贝 `DeclEntry` 里的值（`Val` 的 clone 对 `Lam`/`Pi` 是整棵
+/// `Box<Tm>` 闭包树的深拷贝、对 `LiteralIntro` 是 String 分配）。插入频次
+/// 随 decl 数增长（每 def 一次），值深拷贝是其中的主项——L07 的 `strchain`
+/// 参考版曾因此到 O(n²) 字节量级。
+///
+/// `ver` = 实例代数（性能评审 P1-2 的旁表缓存键）：`decl_insert` 每次 COW
+/// 出的新实例取全局单调的唯一代数——**同 ver ⟹ 同实例**（表创建后不可变，
+/// COW 只出新实例），`simpl_decl` 缓存以此判"同实例同内容"；`ver == 0` 的
+/// 手工空表内容恒等（空），命中同样安全。简化表继承源的 ver——`simpl` 对
+/// 自身幂等（非 Sum 条目归一为 `Decl(自身名, [])`），对简化表再简化内容
+/// 不变，命中缓存的简化表语义一致。
+#[derive(Debug, Clone, Default)]
+pub struct Decls {
+    /// crate 内可构造（mod.rs 的 simpl_decl 组装）；常规读写走 Deref(Mut)
+    /// 与 `decl_insert`。
+    pub(crate) map: FxHashMap<SmolStr, Rc<DeclEntry>>,
+    /// 实例代数（见上）：同 ver ⟹ 同实例同内容。crate 内可读
+    /// （simpl_decl 缓存键），写入只经 `decl_insert`。
+    pub(crate) ver: u64,
+}
+
+impl Decls {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl std::ops::Deref for Decls {
+    type Target = FxHashMap<SmolStr, Rc<DeclEntry>>;
+    fn deref(&self) -> &FxHashMap<SmolStr, Rc<DeclEntry>> {
+        &self.map
+    }
+}
+
+impl std::ops::DerefMut for Decls {
+    fn deref_mut(&mut self) -> &mut FxHashMap<SmolStr, Rc<DeclEntry>> {
+        &mut self.map
+    }
+}
+
+/// [`Decls`] 实例代数发生器（全局单调，进程级；单线程语义下仅用于保证
+/// ver 不重复）。
+static DECL_VERSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn next_decl_version() -> u64 {
+    std::sync::atomic::AtomicU64::fetch_add(&DECL_VERSION, 1, std::sync::atomic::Ordering::Relaxed) + 1
+}
+
+#[derive(Clone)]
+pub struct PrimFunc(pub Rc<dyn Fn(&Infer, &Decls, &[Val]) -> Option<Val>>);
+
+impl std::fmt::Debug for PrimFunc {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "PrimFunc")
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DeclEntry {
+    pub ty: VTy,
+    pub val: Val,
+    /// L13 式 prim：builtin 的归约函数挂在 decl 条目上，而不是
+    /// `Tm::Prim`/`Val::Prim` 特例。`force` 在 `Val::Decl` 上按 spine 调用。
+    pub prim: Option<PrimFunc>,
+    /// builtin 的 η 展示壳（仅 quote/pretty 用；不求值、不参与应用）。
+    pub eta: Option<Tm>,
+    /// builtin 的 Π 参数名（partial application 的 η 展开显示用）。
+    pub prim_names: Option<Rc<Vec<Span<String>>>>,
+}
+
+/// 源码名表 + 撤销轨迹（L08 孪生 `bump_spine_iter.rs` 的 `name_map` +
+/// `name_trail` 的参考版对应物）。
+///
+/// 旧实现是 `Rc<FxHashMap>` 持久表：`bind` 里 `Rc::clone` + `Rc::make_mut`
+/// ——强计数恒为 2，`make_mut` 于是每次**深拷整张表**（逐键 String 分配 +
 /// 逐条 Rc 递增），n 个绑定器的精化是 O(n²)。
 ///
 /// 新实现改为"单张表 + 撤销轨迹 + 按 mark 惰性回退"：`bind`/`define` 只做
@@ -24,9 +104,9 @@ use super::{
 /// 地标识一个名字表版本。
 #[derive(Debug, Default)]
 pub struct NameState {
-    map: FxHashMap<SmolStr, Rc<(Lvl, (Span<()>, Rc<VTy>))>>,
+    map: FxHashMap<String, Rc<(Lvl, VTy)>>,
     /// (名字, 旧值)；旧值 `None` = 该名字此前不在表里。
-    trail: Vec<(SmolStr, Option<Rc<(Lvl, (Span<()>, Rc<VTy>))>>)>,
+    trail: Vec<(String, Option<Rc<(Lvl, VTy)>>)>,
 }
 
 impl NameState {
@@ -54,8 +134,8 @@ impl NameState {
         }
     }
 
-    /// 插入一条（名字, (层级, (span, 类型))），旧值入轨迹。
-    fn insert(&mut self, k: SmolStr, v: Rc<(Lvl, (Span<()>, Rc<VTy>))>) {
+    /// 插入一条（名字, 层级, 类型），旧值入轨迹。
+    fn insert(&mut self, k: String, v: Rc<(Lvl, VTy)>) {
         let prev = self.map.insert(k.clone(), v);
         self.trail.push((k, prev));
     }
@@ -63,208 +143,172 @@ impl NameState {
 
 #[derive(Debug, Clone)]
 pub struct Cxt {
-    pub env: Env, // Used for evaluation
-    pub lvl: Lvl, // Used for unification
+    pub env: Env, // 求值环境（局部变量，内层在前）
+    pub lvl: Lvl, // 下一个 fresh 层级（unify / quote 用）
     pub locals: Locals,
-    pub pruning: Pruning,
-    /// 源码变量名 → (绑定层级, (span, 类型值))，共享可变表（见 [`NameState`]）。
-    /// 每次访问前先把轨迹裁回 `name_mark`，本上下文看到的名字集合恒等于
-    /// 创建时的快照；条目值仍是 `Rc`（O(1)）。
+    pub pruning: Pruning, // 与 env 一一对应：Some(icit) = 该槽是待插入的隐式参数
+    /// 源码变量名 → (绑定层级, 类型值)，共享可变表（见 [`NameState`]）。
+    /// 每次访问前先把轨迹裁回 `name_mark`，因此本上下文看到的名字集合
+    /// 恒等于创建时的快照；`bind` 条目值仍是 `Rc<(Lvl, VTy)>`（O(1)）。
     names: Rc<RefCell<NameState>>,
     /// 本上下文的名字表基线（轨迹长度）。
     name_mark: u32,
-    /// 全局 decl 表，按 `Rc` 共享（对齐 L13 与 L07/L11 口径）：`Cxt` 的每次
-    /// 构造（bind / define / new_binder / subst_cxt …）只需递增引用计数，
-    /// 不再克隆整张表。写入仍走写时复制（`fake_bind` / `decl` 里的
-    /// `Rc::make_mut`），占位语义不变。
-    pub decl: Rc<Decl>,
-    pub namespace: List<(Rc<Val>, FxHashSet<SmolStr>, Raw)>,
+    pub decl: Rc<Decls>,
 }
 
-// builtin 归约体（args 版）：实参自然序（最先应用在前），由 force 在
-// Prim 归约臂里收集 spine、逐个 force 后传入；元数不足 / 实参不合 / 缺名
-// 一律返回 None（保持卡住，不 panic）。下标映射对照旧 env 槽版：
-// env.nth(1) = 第一实参 = args[0]，env.nth(0) = 第二实参 = args[1]。
-fn string_concat(_: &Infer, _: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
-    match (args.get(0)?.as_ref(), args.get(1)?.as_ref()) {
-        (Val::LiteralIntro(a), Val::LiteralIntro(b)) => Some(
-            Val::LiteralIntro(a.clone().map(|x| format!("{x}{}", b.data))).into(),
-        ),
-        _ => None,
-    }
+/// `(name : dom) -> cod` 的 Tm 层 Π 链（builtin 注册期类型描述用）。
+fn tm_pi(name: &str, dom: Tm, cod: Tm) -> Tm {
+    Tm::Pi(
+        empty_span(name.to_owned()),
+        Icit::Expl,
+        Rc::new(dom),
+        Rc::new(cod),
+    )
 }
 
-fn string_to_global_type(infer: &Infer, decl: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
-    match args.get(0)?.as_ref() {
-        Val::LiteralIntro(a) => Some(infer.eval(
-            decl,
-            &List::new(),
-            &Tm::Decl(a.clone().map(|a| SmolStr::new(a))).into(),
-        )),
-        _ => None,
-    }
+/// `(String ->)^n ret` 的 Tm 层 Π 链——builtin 参数类型全部是 String。
+fn str_pi(params: &[&str], ret: Tm) -> Tm {
+    params
+        .iter()
+        .rev()
+        .fold(ret, |cod, name| tm_pi(name, Tm::LiteralType, cod))
 }
 
-fn create_global(infer: &Infer, _decl: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
-    match args.get(0)?.as_ref() {
-        Val::LiteralIntro(a) => {
-            let v = args.get(1)?.clone();
-            if let Ok(mut x) = infer.mutable_map.write() {
-                x.insert(a.data.clone(), v);
-            };
-            Some(Val::U(0).into())
-        }
-        _ => None,
-    }
-}
-
-fn change_mutable(infer: &Infer, decl: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
-    match args.get(0)?.as_ref() {
-        Val::LiteralIntro(a) => {
-            let f = args.get(1)?;
-            if let Ok(mut x) = infer.mutable_map.write() {
-                if let Some(x) = x.get_mut(&a.data) {
-                    *x = infer.v_app(decl, f, x.clone(), Icit::Expl)
-                }
-            };
-            Some(Val::U(0).into())
-        }
-        _ => None,
-    }
-}
-
-fn get_global(infer: &Infer, _: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
-    match args.get(0)?.as_ref() {
-        Val::LiteralIntro(a) => Some(
-            infer.mutable_map.write().unwrap().get(&a.data).unwrap().clone(),
-        ),
-        _ => None,
-    }
-}
-
-fn change_mutable_default(infer: &Infer, decl: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
-    match args.get(0)?.as_ref() {
-        Val::LiteralIntro(a) => {
-            let f = args.get(1)?;
-            let z = args.get(2)?;
-            if let Ok(mut x) = infer.mutable_map.write() {
-                if let Some(x) = x.get_mut(&a.data) {
-                    *x = infer.v_app(decl, f, x.clone(), Icit::Expl)
-                } else {
-                    x.insert(a.data.clone(), z.clone());
-                }
-            };
-            Some(Val::U(0).into())
-        }
-        _ => None,
-    }
-}
-
-// === helpers for building Tm trees ===
-
-fn tm_lam(names: &[&str], inner: Rc<Tm>) -> Rc<Tm> {
-    names.iter().rev().fold(inner, |acc, name|
-        Tm::Lam(empty_span(SmolStr::new(*name)), Icit::Expl, acc).into())
-}
-
-fn tm_pi(args: &[(&str, Rc<Tm>)], ret: Rc<Tm>) -> Rc<Tm> {
-    args.iter().rev().fold(ret, |acc, (name, ty)|
-        Tm::Pi(empty_span(SmolStr::new(*name)), Icit::Expl, ty.clone(), acc).into())
-}
-
-fn tm_decl(name: &str) -> Rc<Tm> {
-    Tm::Decl(empty_span(SmolStr::new(name))).into()
-}
-
-fn tm_app(f: Rc<Tm>, arg: Rc<Tm>) -> Rc<Tm> {
-    Tm::App(f, arg, Icit::Expl).into()
+/// `string_to_global_type Var(ix)`——de Bruijn 引用第 ix 个前导参数
+/// （动态类型：check 期求值时查 decl 表取登记类型；未登记名 → 卡住
+/// Decl 逃逸舱口）。
+fn st2g_app(ix: u32) -> Tm {
+    Tm::App(
+        Box::new(Tm::Decl(SmolStr::new("string_to_global_type"))),
+        Box::new(Tm::Var(Ix(ix))),
+        Icit::Expl,
+    )
 }
 
 impl Cxt {
+    /// builtin 注册表（L06 全组移植）：`String` 类型 + string /
+    /// report_check_issue / string_to_global_type / 可变全局族 / 文件 IO
+    /// 族。归约统一在 `Infer::force` 的 `prim_reduce`（L07 的 force 触发
+    /// 语义；L06 是应用时触发）。
+    ///
+    /// 注册顺序敏感：`string_to_global_type` 必须先于引用它的 global 族
+    /// （其类型的闭包体在 check 期才查表，但防御性保持 L06 顺序）。
     pub fn new(infer: &Infer) -> Self {
-        let f_concat = PrimFunc::new("string_concat", string_concat);
-        let f_to_global = PrimFunc::new("string_to_global_type", string_to_global_type);
-        let f_create = PrimFunc::new("create_global", create_global);
-        let f_change = PrimFunc::new("change_mutable", change_mutable);
-        let f_get = PrimFunc::new("get_global", get_global);
-        let f_change_def = PrimFunc::new("change_mutable_default", change_mutable_default);
-
         let mut cxt = Self::empty();
-
-        cxt.decl_mut(
-            empty_span(SmolStr::new("String")),
-            Tm::LiteralType.into(),
-            Val::LiteralType.into(),
-            Tm::U(0).into(),
-            Val::U(0).into(),
+        cxt.decl_insert_mut(
+            "String",
+            DeclEntry { prim: None, eta: None, prim_names: None,
+                ty: Val::U(0),
+                val: Val::LiteralType,
+            },
         );
-
-        let str_val = infer.eval(&cxt.decl, &cxt.env, &tm_decl("String"));
-
-        // builtin 值 = 中性 Prim 头（不再构造 λ 链）：实参经 App/spine 到达，
-        // 归约统一在 force 的 Prim 臂
-        cxt.add_builtin_mut(infer, "string_concat",
-            Tm::Prim(str_val.clone(), f_concat).into(),
-            tm_pi(&[("x", tm_decl("String")), ("y", tm_decl("String"))], tm_decl("String")),
-        );
-
-        cxt.add_builtin_mut(infer, "string_to_global_type",
-            Tm::Prim(str_val.clone(), f_to_global).into(),
-            tm_pi(&[("x", tm_decl("String"))], Tm::U(0).into()),
-        );
-
-        cxt.add_builtin_mut(infer, "create_global",
-            Tm::Prim(Val::U(0).into(), f_create).into(),
-            tm_pi(&[
-                ("x", tm_decl("String")),
-                ("y", tm_app(tm_decl("string_to_global_type"), Tm::Var(Ix(0)).into())),
-            ], Tm::U(0).into()),
-        );
-
-        cxt.add_builtin_mut(infer, "change_mutable",
-            Tm::Prim(Val::U(0).into(), f_change).into(),
-            tm_pi(&[
-                ("x", tm_decl("String")),
-                ("f", tm_pi(&[
-                    ("_", tm_app(tm_decl("string_to_global_type"), Tm::Var(Ix(0)).into())),
-                ], tm_app(tm_decl("string_to_global_type"), Tm::Var(Ix(1)).into()))),
-            ], Tm::U(0).into()),
-        );
-
-        cxt.add_builtin_mut(infer, "get_global",
-            Tm::Prim(Val::U(0).into(), f_get).into(),
-            tm_pi(&[("x", tm_decl("String"))],
-                tm_app(tm_decl("string_to_global_type"), Tm::Var(Ix(0)).into())),
-        );
-
-        cxt.add_builtin_mut(infer, "change_mutable_default",
-            Tm::Prim(Val::U(0).into(), f_change_def).into(),
-            tm_pi(&[
-                ("x", tm_decl("String")),
-                ("f", tm_pi(&[
-                    ("_", tm_app(tm_decl("string_to_global_type"), Tm::Var(Ix(0)).into())),
-                ], tm_app(tm_decl("string_to_global_type"), Tm::Var(Ix(1)).into()))),
-                ("z", tm_app(tm_decl("string_to_global_type"), Tm::Var(Ix(1)).into())),
-            ], Tm::U(0).into()),
-        );
-
-        cxt
+        cxt.add_builtin(infer, "string_concat", str_pi(&["x", "y"], Tm::LiteralType))
+            .add_builtin(infer, "str_eq", str_pi(&["x", "y"], Tm::LiteralType))
+            .add_builtin(infer, "str_indent2", str_pi(&["x"], Tm::LiteralType))
+            .add_builtin(
+                infer,
+                "report_check_issue",
+                str_pi(&["code", "module", "signal", "message"], Tm::U(0)),
+            )
+            .add_builtin(infer, "string_to_global_type", str_pi(&["x"], Tm::U(0)))
+            .add_builtin(
+                infer,
+                "create_global",
+                tm_pi("x", Tm::LiteralType, tm_pi("y", st2g_app(0), Tm::U(0))),
+            )
+            .add_builtin(
+                infer,
+                "change_mutable",
+                tm_pi(
+                    "x",
+                    Tm::LiteralType,
+                    tm_pi("f", tm_pi("_", st2g_app(0), st2g_app(1)), Tm::U(0)),
+                ),
+            )
+            .add_builtin(
+                infer,
+                "get_global",
+                tm_pi("x", Tm::LiteralType, st2g_app(0)),
+            )
+            .add_builtin(
+                infer,
+                "get_global_default",
+                tm_pi(
+                    "x",
+                    Tm::LiteralType,
+                    tm_pi("z", st2g_app(0), st2g_app(1)),
+                ),
+            )
+            .add_builtin(
+                infer,
+                "change_mutable_default",
+                tm_pi(
+                    "x",
+                    Tm::LiteralType,
+                    tm_pi(
+                        "f",
+                        tm_pi("_", st2g_app(0), st2g_app(1)),
+                        tm_pi("z", st2g_app(1), Tm::U(0)),
+                    ),
+                ),
+            )
+            .add_builtin(
+                infer,
+                "file_read_all_text",
+                str_pi(&["path"], Tm::LiteralType),
+            )
+            .add_builtin(
+                infer,
+                "file_write_all_text",
+                str_pi(&["path", "content"], Tm::U(0)),
+            )
+            .add_builtin(
+                infer,
+                "file_append_all_text",
+                str_pi(&["path", "content"], Tm::U(0)),
+            )
+            .add_builtin(infer, "file_exists", str_pi(&["path"], Tm::LiteralType))
+            .add_builtin(infer, "file_delete", str_pi(&["path"], Tm::U(0)))
     }
 
-    pub fn add_builtin(self, infer: &Infer, name: &str, val: Rc<Tm>, ty: Rc<Tm>) -> Result<Self, Error> {
-        let mut cxt = self;
-        cxt.add_builtin_mut(infer, name, val, ty);
-        Ok(cxt)
+    /// 注册一个 builtin（L13 式）：类型求值后挂在 decl 条目上，归约函数
+    /// `PrimFunc` 也挂在同一张表；值只是 `Val::Decl(自身名)` 的中性占位。
+    /// 应用后的实参由 spine 到达 `force`，由 `prim_reduce` 直接消费；
+    /// 不再生成 `Tm::Prim`/`Val::Prim` 特例。
+    fn add_builtin(mut self, infer: &Infer, name: &str, ty_tm: Tm) -> Self {
+        // Π 链参数名（η 展示壳用）先取出来。
+        let mut names = Vec::new();
+        let mut cur = &ty_tm;
+        while let Tm::Pi(n, _, _, body) = cur {
+            names.push(n.clone());
+            cur = body.as_ref();
+        }
+        let ty = infer.eval(&self.decl, &List::new(), &ty_tm);
+        let nm = SmolStr::new(name);
+        let prim_name = nm.clone();
+        let prim = PrimFunc(Rc::new(move |infer: &Infer, decl: &Decls, args: &[Val]| {
+            infer.prim_reduce(decl, &prim_name, args)
+        }));
+        // η 展示壳：`λ p1 … pn. ((Decl 名 p1) … pn)`，仅 quote/pretty 用。
+        let mut eta = Tm::Decl(nm.clone());
+        let n = names.len() as u32;
+        for k in 0..n {
+            eta = Tm::App(
+                Box::new(eta),
+                Box::new(Tm::Var(Ix(n - 1 - k))),
+                Icit::Expl,
+            );
+        }
+        for p in names.iter().rev() {
+            eta = Tm::Lam(p.clone(), Icit::Expl, Rc::new(eta));
+        }
+        let val = Val::Decl(nm.clone(), List::new());
+        self.decl_insert_mut(
+            nm,
+            DeclEntry { ty, val, prim: Some(prim), eta: Some(eta), prim_names: Some(Rc::new(names)) },
+        );
+        self
     }
-
-    /// 就地注册 builtin（顺序构造路径专用）：调用方持有 `Cxt` 所有权，
-    /// decl 表 `Rc` 强计数为 1，`decl_mut` 的 `Rc::make_mut` 原地写。
-    fn add_builtin_mut(&mut self, infer: &Infer, name: &str, val: Rc<Tm>, ty: Rc<Tm>) {
-        let vt = infer.eval(&self.decl, &self.env, &val);
-        let va = infer.eval(&self.decl, &self.env, &ty);
-        self.decl_mut(empty_span(SmolStr::new(name)), val, vt, ty, va);
-    }
-
     pub fn empty() -> Self {
         Cxt {
             env: List::new(),
@@ -273,20 +317,7 @@ impl Cxt {
             pruning: List::new(),
             names: Rc::new(RefCell::new(NameState::default())),
             name_mark: 0,
-            decl: Rc::new(FxHashMap::default()),
-            namespace: List::new(),
-        }
-    }
-    pub fn clone_without_src_names(&self) -> Self {
-        Cxt {
-            env: self.env.clone(),
-            lvl: self.lvl,
-            locals: self.locals.clone(),
-            pruning: self.pruning.clone(),
-            names: Rc::new(RefCell::new(NameState::default())),
-            name_mark: 0,
-            decl: self.decl.clone(),
-            namespace: self.namespace.clone(),
+            decl: Rc::new(Decls::new()),
         }
     }
 
@@ -298,22 +329,54 @@ impl Cxt {
         self.names.borrow_mut().unwind(self.name_mark);
     }
 
-    /// 查一个源码局部名（局部 binder 优先于 decl 表）：返回共享条目
-    /// `(绑定层级, (span, 类型值))`（克隆 = 一次 Rc 递增）。
-    pub fn lookup_src(&self, n: &SmolStr) -> Option<Rc<(Lvl, (Span<()>, Rc<VTy>))>> {
+    /// 查一个源码局部名（局部 binder 优先于 decl 表）：返回
+    /// `(绑定层级, 类型值)` 的共享条目（克隆 = 一次 Rc 递增）。
+    pub fn lookup_src(&self, n: &str) -> Option<Rc<(Lvl, VTy)>> {
         self.unwind_names();
         self.names.borrow().map.get(n).cloned()
     }
 
     /// 源码名是否已在本作用域绑定（`Enum.case` 限定构造子快捷路径的
     /// 局部遮蔽判定用）。
-    pub fn has_src(&self, n: &SmolStr) -> bool {
+    pub fn has_src(&self, n: &str) -> bool {
         self.unwind_names();
         self.names.borrow().map.contains_key(n)
     }
 
-    pub fn names(&self) -> List<SmolStr> {
-        fn go(locals: &Locals) -> List<SmolStr> {
+    pub fn decl(&self) -> &Decls {
+        &self.decl
+    }
+
+    pub fn decl_get(&self, k: &str) -> Option<&DeclEntry> {
+        self.decl.get(k).map(|e| &**e)
+    }
+
+    /// 写入一个 decl。写时复制：Rc 共享时才克隆整表，父上下文不受影响——
+    /// 这正是递归定义需要的"占位只对本定义的检查可见"。表克隆是逐条 `Rc`
+    /// 递增 + 重建哈希桶（条目本身共享，不深拷贝值）。新实例取唯一代数
+    /// （`ver`，见 [`Decls`] 文档）。
+    /// 就地写入一个 decl（顺序声明路径专用）：调用方持有 `Cxt` 所有权，
+    /// 表的 `Rc` 强计数为 1，`Rc::make_mut` 原地写，不深拷整表。
+    ///
+    /// 这是 L13 参考版 `fake_bind`/`decl` 就地写模式在 L07 的对应物。
+    /// 旧 [`Cxt::decl_insert`] 先 `self.decl.clone()` 再 `Rc::make_mut`，
+    /// 强计数恒为 2 ⇒ 每个顶层 def 都深拷一次整张 decl 表（strchain/global
+    /// 这类每 k 翻倍生成 2^(k+1) 个 def 的负载上是 O(D²) 放大器）。
+    pub fn decl_insert_mut(&mut self, k: impl Into<SmolStr>, e: DeclEntry) {
+        let d = Rc::make_mut(&mut self.decl);
+        d.ver = next_decl_version();
+        d.insert(k.into(), Rc::new(e));
+    }
+
+    /// 持久化插入包装（保持 `&Cxt` 调用方兼容）：浅克隆上下文后就地写。
+    pub fn decl_insert(&self, k: impl Into<SmolStr>, e: DeclEntry) -> Self {
+        let mut cxt = self.clone();
+        cxt.decl_insert_mut(k, e);
+        cxt
+    }
+
+    pub fn names(&self) -> List<String> {
+        fn go(locals: &Locals) -> List<String> {
             match locals {
                 Locals::Here => List::new(),
                 Locals::Define(locals, name, _, _) => go(locals).prepend(name.data.clone()),
@@ -323,67 +386,49 @@ impl Cxt {
         go(&self.locals)
     }
 
-    pub fn bind(&self, x: Span<SmolStr>, a_quote: Rc<Tm>, a: Rc<Val>) -> Self {
-        //println!("{} {x:?} {a:?} at {}", "bind".bright_purple(), self.lvl.0);
+    /// 引入一个源码变量（模式绑定 / λ 参数 / Π 域）：env 压入 fresh rigid。
+    ///
+    /// 名字表 O(1)：先裁轨迹回本上下文基线（丢弃兄弟作用域残留），插入
+    /// `(名字 → 本层级/类型)` 并把旧值追加进轨迹；子上下文只带新的
+    /// `name_mark`（= 轨迹长度）。语义等价于旧持久表（条目仍是共享 Rc，
+    /// 无 `Val` 深拷贝），但不再每次 `Rc::make_mut` 深拷整张表。
+    pub fn bind(&self, x: Span<String>, a_quote: Tm, a: VTy) -> Self {
         let name_mark = {
             let mut s = self.names.borrow_mut();
             s.unwind(self.name_mark);
-            s.insert(x.data.clone(), Rc::new((self.lvl, (x.to_span(), a))));
+            s.insert(x.data.clone(), Rc::new((self.lvl, a)));
             s.trail.len() as u32
         };
         Cxt {
-            env: self.env.prepend(Val::vvar(self.lvl).into()),
+            env: self.env.prepend(Val::vvar(self.lvl)),
             lvl: self.lvl + 1,
             locals: Locals::Bind(Rc::new(self.locals.clone()), x, a_quote),
             pruning: self.pruning.prepend(Some(Icit::Expl)),
             names: Rc::clone(&self.names),
             name_mark,
             decl: self.decl.clone(),
-            namespace: self.namespace.clone(),
         }
     }
 
-    /// 持久化 `fake_bind` 包装（保留旧 `&Cxt` 调用方）：浅克隆上下文后就地写。
-    pub fn fake_bind(&self, x: Span<SmolStr>, a_quote: Rc<Tm>, a: Rc<Val>) -> Result<Self, Error> {
-        let mut cxt = self.clone();
-        cxt.fake_bind_mut(x, a_quote, a)?;
-        Ok(cxt)
-    }
-
-    /// 就地插入递归定义占位（顺序声明路径专用）：调用方持有 `Cxt` 所有权，
-    /// `Rc::make_mut` 原地写，不再先 `clone` 整表（旧实现强计数恒 2 ⇒ 每个
-    /// 顶层 def 深拷一次整张 decl 表；port L07 c2fffd3f）。撞名报 redefine。
-    pub fn fake_bind_mut(&mut self, x: Span<SmolStr>, a_quote: Rc<Tm>, a: Rc<Val>) -> Result<(), Error> {
-        if self.decl.contains_key(x.data.as_str()) {
-            return Err(Error(x.to_span().map(|_| format!("redefine {}", x.data)), vec![]));
-        }
-        Rc::make_mut(&mut self.decl).insert(
-            x.data.clone(),
-            (x.to_span(), Tm::Decl(x.clone()).into(), Val::Decl(x.clone(), List::new()).into(), a_quote, a),
-        );
-        Ok(())
-    }
-
-    pub fn new_binder(&self, x: Span<SmolStr>, a_quote: Rc<Tm>) -> Self {
-        //println!("{} {x:?} {a:?} at {}", "bind".bright_purple(), self.lvl.0);
+    /// 引入一个"编译器插入"的绑定器（非 λ 项 against 隐式 Π 时）：不进名字表。
+    pub fn new_binder(&self, x: Span<String>, a_quote: Tm) -> Self {
         Cxt {
-            env: self.env.prepend(Val::vvar(self.lvl).into()),
+            env: self.env.prepend(Val::vvar(self.lvl)),
             lvl: self.lvl + 1,
             locals: Locals::Bind(Rc::new(self.locals.clone()), x, a_quote),
             pruning: self.pruning.prepend(Some(Icit::Expl)),
             names: Rc::clone(&self.names),
             name_mark: self.name_mark,
             decl: self.decl.clone(),
-            namespace: self.namespace.clone(),
         }
     }
 
-    pub fn define(&self, x: Span<SmolStr>, t: Rc<Tm>, vt: Rc<Val>, a: Rc<Ty>, va: Rc<VTy>) -> Self {
-        //println!("{} {}\n{t:?}\n{vt:?}\n{a:?}\n{va:?}", "define".bright_purple(), x.data);
+    /// let 绑定：env 压入定义的值，pruning 对应槽为 None（后续隐式插入不再经过它）。
+    pub fn define(&self, x: Span<String>, t: Tm, vt: Val, a: Ty, va: VTy) -> Self {
         let name_mark = {
             let mut s = self.names.borrow_mut();
             s.unwind(self.name_mark);
-            s.insert(x.data.clone(), Rc::new((self.lvl, (x.to_span(), va))));
+            s.insert(x.data.clone(), Rc::new((self.lvl, va)));
             s.trail.len() as u32
         };
         Cxt {
@@ -394,47 +439,29 @@ impl Cxt {
             names: Rc::clone(&self.names),
             name_mark,
             decl: self.decl.clone(),
-            namespace: self.namespace.clone(),
         }
     }
 
-    /// 持久化 `decl` 包装（保留旧 `&Cxt` 调用方）：浅克隆上下文后就地写。
-    pub fn decl(&self, x: Span<SmolStr>, t: Rc<Tm>, vt: Rc<Val>, a: Rc<Ty>, va: Rc<VTy>) -> Result<Self, Error> {
-        let mut cxt = self.clone();
-        cxt.decl_mut(x, t, vt, a, va);
-        Ok(cxt)
-    }
-
-    /// 就地注册一个顶层 decl（顺序声明路径专用，port L07 c2fffd3f）：
-    /// 调用方持有 `Cxt` 所有权 ⇒ 表 `Rc` 强计数为 1 ⇒ `Rc::make_mut` 原地写，
-    /// 不再深拷整表。重定义静默覆盖（与旧 `decl` 一致：其撞名检查曾注释）。
-    pub fn decl_mut(&mut self, x: Span<SmolStr>, t: Rc<Tm>, vt: Rc<Val>, a: Rc<Ty>, va: Rc<VTy>) {
-        Rc::make_mut(&mut self.decl).insert(x.data.clone(), (x.to_span(), t, vt, a, va));
-    }
-
     /// 把精化替换 σ 施加到上下文（dpm-nbe `subst sub ctx`）：env 槽与
-    /// src_names 的类型包 `VSub`；lvl / locals / pruning 不动——**槽位布局
-    /// （= 运行时布局）不变**，被解变量仍在原槽位，读点经 force 推开看到解。
-    /// σ 为空时零开销直通。
+    /// 名字表类型包 `VSub`；lvl / locals / pruning / decl 不动——
+    /// **槽位布局（= 运行时布局）不变**，被解变量仍在原槽位，读点经
+    /// force 展开看到解。σ 为空时零开销直通。
     ///
-    /// 替代旧的 `update_cxt`/`refresh`（改写 env 槽 + 全量重引用）：解不再
-    /// 改写既有值，只包在外面，消费点惰性展开——旧架构"已捕获旧上下文的值
-    /// 过期、槽位错位"的 bug 族按构造消除。
+    /// 名字表按轨迹改写：现有条目（父链 + 本作用域）逐条换成包了 `VSub`
+    /// 的新条目并记录旧值，`name_mark` 指到轨迹新长度；父上下文下次访问
+    /// 时惰性还原（与 `bind`/`define` 同一机制）。
     pub fn subst_cxt(&self, sub: &Rc<super::Subst>) -> Self {
         if sub.is_empty() {
             return self.clone();
         }
-        let wrap = |v: &Rc<Val>| Rc::new(Val::VSub(v.clone(), sub.clone()));
-        // 名字表按轨迹改写：现有条目（父链 + 本作用域）逐条换成包了 VSub 的
-        // 新条目并记录旧值，`name_mark` 指到轨迹新长度；父上下文下次访问时
-        // 惰性还原（与 bind/define 同一机制）。语义与旧的整表重建一致。
+        let wrap = |v: &super::Val| super::Val::VSub(Rc::new(v.clone()), sub.clone());
         let name_mark = {
             let mut s = self.names.borrow_mut();
             s.unwind(self.name_mark);
-            let entries: Vec<_> = s.map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            let entries: Vec<(String, Rc<(Lvl, VTy)>)> =
+                s.map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
             for (k, e) in entries {
-                let (lvl, (span, ty)) = e.as_ref();
-                let new_e = Rc::new((*lvl, (span.clone(), wrap(ty))));
+                let new_e = Rc::new((e.0, wrap(&e.1)));
                 let prev = s.map.insert(k.clone(), new_e);
                 s.trail.push((k, prev));
             }
@@ -448,19 +475,30 @@ impl Cxt {
             names: Rc::clone(&self.names),
             name_mark,
             decl: self.decl.clone(),
-            namespace: self.namespace.clone(),
         }
     }
-}
 
-impl Cxt {
-    #[allow(unused)]
-    pub fn print_env(&self, infer: &Infer) {
+    /// 当前上下文里"真变量"（bind 槽，env 槽仍指向自身 vvar）的层级集合：
+    /// 这些是模式特化方程可以求解的对象。let 定义槽（槽里是值不是
+    /// vvar）天然不在其中。嵌套 match 的入口上下文可能已被外层精化
+    /// 包裹（`subst_cxt`）——解包 VSub 看**槽的原始形态**；外层已解变量
+    /// 也按 raw 层级进入基线（无害：方程里它不再以 bare rigid 出现，
+    /// force 在读点已展开）。
+    pub fn bind_slots(&self) -> Vec<Lvl> {
+        let n = self.lvl.0;
         self.env
             .iter()
-            .zip(self.names().iter())
-            .for_each(|(x, name)| {
-                println!("{name}: {}", pretty_tm(0, self.names(), &infer.quote(&self.decl, self.lvl, x)))
-            });
+            .enumerate()
+            .filter_map(|(i, v)| {
+                let mut raw = v;
+                while let Val::VSub(inner, _) = raw {
+                    raw = inner;
+                }
+                match raw {
+                    Val::Rigid(l, sp) if sp.is_empty() && l.0 + (i as u32) + 1 == n => Some(*l),
+                    _ => None,
+                }
+            })
+            .collect()
     }
 }

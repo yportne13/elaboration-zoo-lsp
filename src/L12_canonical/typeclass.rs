@@ -1,18 +1,22 @@
+//! L12 trait 求解器（Val 级重写）：移除 L10/L11 的 Typ 桥接，断言/实例
+//! 直接匹配 `Val`（单向一阶匹配 `val_match` + 结构等价 `vals_eq_ground`）。
+//!
+//! 2026-11-17 重建：从旧 L12 原样承接算法，适配新链的值表示（Val 拥有制、
+//! `Val::Sum` 3 字段、`VSpan` 名字、Match 第 4 字段为 pending）。参考版
+//! 与孪生共用同一求解算法（孪生侧为打平版镜像）。
 
 use rustc_hash::FxHashMap;
-
-use smol_str::SmolStr;
 
 use crate::list::List;
 use crate::parser_lib::Span;
 
-use super::{Val, Rc};
+use super::Val;
 
 /// A type class applied to arguments.
 #[derive(Debug, Clone)]
 pub struct Assertion {
-    pub name: SmolStr,
-    pub arguments: Vec<Rc<Val>>,
+    pub name: String,
+    pub arguments: Vec<Val>,
 }
 
 /// A type class instance declaration.
@@ -20,7 +24,7 @@ pub struct Assertion {
 pub struct Instance {
     pub assertion: Assertion,
     pub dependencies: List<Assertion>,
-    pub lvl: Span<SmolStr>,
+    pub lvl: Span<String>,
 }
 
 /// A node in the "search tree" that stores information about
@@ -39,7 +43,7 @@ pub struct GeneratorNode {
 pub struct ConsumerNode {
     goal: Assertion,
     subgoals: List<Assertion>,
-    lvl: Span<SmolStr>,
+    lvl: Span<String>,
 }
 
 /// A "deferred" node in the "search tree" that represents a
@@ -69,7 +73,7 @@ pub enum Waiter {
 #[derive(Debug, Clone)]
 pub struct TableEntry {
     waiters: Vec<Waiter>,
-    answers: Vec<(Assertion, Span<SmolStr>)>,
+    answers: Vec<(Assertion, Span<String>)>,
 }
 
 /// The state of the algorithm.
@@ -84,11 +88,11 @@ pub struct Synth {
     /// A more in-depth explanation can be found in [`Synth::synth`].
     resume_stack: Vec<(ConsumerNode, Assertion)>,
     /// The instances available for a type class.
-    pub class_instances: FxHashMap<SmolStr, Vec<Instance>>,
+    pub class_instances: FxHashMap<String, Vec<Instance>>,
     /// Information about each `subgoal` being solved.
     assertion_table: Vec<(Assertion, TableEntry)>,
     /// The "final" answer for the algorithm.
-    root_answer: Option<Span<SmolStr>>,
+    root_answer: Option<Span<String>>,
 }
 
 fn uncons<T: Clone>(xs: &List<T>) -> Option<(T, List<T>)> {
@@ -100,11 +104,11 @@ impl Synth {
         Self::default()
     }
 
-    pub fn new_trait(&mut self, name: SmolStr) {
+    pub fn new_trait(&mut self, name: String) {
         self.class_instances.insert(name, vec![]);
     }
 
-    pub fn impl_trait_for(&mut self, trait_name: SmolStr, instance: Instance) {
+    pub fn impl_trait_for(&mut self, trait_name: String, instance: Instance) {
         self.class_instances
             .entry(trait_name)
             .or_default()
@@ -150,14 +154,14 @@ impl Synth {
             }
             // Decl (named types) - must be same name, match spines
             (Val::Decl(x1, sp1), Val::Decl(x2, sp2)) => {
-                x1.data == x2.data
+                x1 == x2
                     && sp1.iter().count() == sp2.iter().count()
                     && sp1.iter().zip(sp2.iter()).all(|((v1, i1), (v2, i2))| {
                         i1 == i2 && Self::val_match(v1, v2, subst)
                     })
             }
             // Sum types - same name, match parameters
-            (Val::Sum(n1, p1, _, _), Val::Sum(n2, p2, _, _)) => {
+            (Val::Sum(n1, p1, _), Val::Sum(n2, p2, _)) => {
                 n1.data == n2.data
                     && p1.len() == p2.len()
                     && p1.iter().zip(p2.iter()).all(|((_, v1, _, _), (_, v2, _, _))| {
@@ -207,13 +211,13 @@ impl Synth {
                 x1 == x2 && sp1.is_empty() && sp2.is_empty()
             }
             (Val::Decl(x1, sp1), Val::Decl(x2, sp2)) => {
-                x1.data == x2.data
+                x1 == x2
                     && sp1.iter().count() == sp2.iter().count()
                     && sp1.iter().zip(sp2.iter()).all(|((v1, i1), (v2, i2))| {
                         i1 == i2 && Self::vals_eq_ground_impl(v1, v2, visited)
                     })
             }
-            (Val::Sum(n1, p1, _, _), Val::Sum(n2, p2, _, _)) => {
+            (Val::Sum(n1, p1, _), Val::Sum(n2, p2, _)) => {
                 n1.data == n2.data
                     && p1.len() == p2.len()
                     && p1.iter().zip(p2.iter()).all(|((_, v1, _, _), (_, v2, _, _))| {
@@ -241,7 +245,7 @@ impl Synth {
                     && b1.len() == b2.len()
                     && c1.len() == c2.len()
                     && c1.iter().zip(c2.iter()).all(|((p1, t1), (p2, t2))| {
-                        p1 == p2 && Rc::ptr_eq(t1, t2)
+                        p1 == p2
                     })
             }
             _ => false,
@@ -262,7 +266,7 @@ impl Synth {
         &mut self,
         goal: &Assertion,
         instance: &Instance,
-    ) -> Option<(List<Assertion>, Span<SmolStr>)> {
+    ) -> Option<(List<Assertion>, Span<String>)> {
         // Name must match
         if goal.name != instance.assertion.name {
             return None;
@@ -303,7 +307,7 @@ impl Synth {
     }
 
     /// The entry point for the algorithm.
-    pub fn synth(&mut self, assertion: Assertion) -> Option<Span<SmolStr>> {
+    pub fn synth(&mut self, assertion: Assertion) -> Option<Span<String>> {
         // Insert the "root" goal to be solved.
         self.new_subgoal(&assertion, &Waiter::Root);
 

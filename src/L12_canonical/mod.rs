@@ -1,233 +1,144 @@
-use cxt::Cxt;
-use parser::{syntax::{Either, Icit, Raw}, IError};
-use pattern_match::Compiler;
-use smol_str::SmolStr;
-use syntax::{Pruning, close_ty};
+//! L12：canonical 层——trait 求解 Val 级重写 + Call 内联节点。
+//!
+//! **2026-11-17 重建**：按“上一章实现思路 + 本章增量”直接承接 L11——
+//! decl 表 + σ 显式替换 + 逐臂 match + P1–P11 + Type N 宇宙 + trait/typeclass
+//! + macro_rules + 可变全局/IO builtin + 层内 tests.rs + bump 孪生全部继承；
+//! 本层叠加：typeclass.rs 去 Typ 桥接改为 Val 级断言/单向一阶匹配（孪生经
+//! v_to_val 交同一 Synth）、Tm::Call/Val::Call 内联节点（值层透明外衣）。
+//! 旧 L12 的 canonical iddfs/search、SmolStr 化、算符中缀与 namespace 不在
+//! 本次继承面内（偏差见 README §3）。设计说明见本目录 README.md。
+use std::{
+    cell::RefCell,
+    ops::{Add, Sub},
+    rc::Rc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        LazyLock,
+    },
+};
+use rustc_hash::FxHashMap;
+
+/// `L12_LOOP` 调试开关（进程级，只读一次；热路径零 env 访问）。
+pub(crate) static LOOP_DEBUG: LazyLock<AtomicBool> =
+    LazyLock::new(|| AtomicBool::new(std::env::var("L12_LOOP").is_ok()));
+
+
+use cxt::{Cxt, Decls};
+pub use cxt::DeclEntry;
+
+use parser::syntax::Raw;
+use typeclass::{Assertion, Synth};
 use pretty::pretty_tm;
+use syntax::{Pruning, close_ty};
 
-use crate::list::List;
-use crate::parser_lib::Span;
+use crate::{list::List, parser_lib::Span};
+use smol_str::SmolStr;
 
-pub mod cxt;
+mod cxt;
+mod struct_eq;
 mod elaboration;
-pub mod parser;
+pub(crate) mod parser;
 mod pattern_match;
+pub(crate) mod pretty;
 mod syntax;
-mod unification;
 mod typeclass;
-pub mod pretty;
+mod unification;
 pub(crate) mod bump_spine_iter;
-mod canonical;
-
-type Rc<T> = std::sync::Arc<T>;
-
-type Decl = FxHashMap<SmolStr, (Span<()>, Rc<Tm>, Rc<Val>, Rc<Ty>, Rc<VTy>)>;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MetaVar(u32);
 
 #[derive(Debug, Clone)]
-enum MetaEntry {
-    Solved(Rc<Val>, Rc<VTy>),
-    Unsolved(Rc<VTy>, std::sync::Arc<Cxt>, Rc<VTy>),
+pub enum MetaEntry {
+    Solved(Val, VTy),
+    Unsolved(VTy),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Ix(u32);
 
 #[derive(Debug, Clone)]
-enum BD {
-    Bound,
-    Defined,
-}
-
-#[derive(Clone, Debug)]
 pub enum DeclTm {
-    Def {
-        name: Span<SmolStr>,
-        typ: Rc<Val>,
-        body: Rc<Val>,
-        typ_pretty: String,
-        body_pretty: String,
-    },
-    Println(Rc<Tm>, String, Span<()>),
-    Enum {
-        //TODO:
-    },
-    Trait {
-        //TODO:
-    },
-    TraitImpl {
-        //TODO:
-    },
-}
-
-/// 内建函数（args 版）：身份 = name（或同一 Rc 分配，见 PrimFunc::same），
-/// 实参按**自然序**（最先应用在前）由 force 收集后传入；None = 元数不足 /
-/// 实参不合 / 缺名 → 调用方保持卡住（不再读求值环境槽；卡住时也不再重建
-/// Prim 值——实参 spine 由调用点保留）。
-#[derive(Clone)]
-pub struct PrimFunc {
-    name: &'static str,
-    f: Rc<dyn Fn(&Infer, &Decl, &[Rc<Val>]) -> Option<Rc<Val>> + Send + Sync>,
-}
-
-impl PrimFunc {
-    pub(crate) fn new(
-        name: &'static str,
-        f: impl Fn(&Infer, &Decl, &[Rc<Val>]) -> Option<Rc<Val>> + Send + Sync + 'static,
-    ) -> Self {
-        PrimFunc { name, f: Rc::new(f) }
-    }
-
-    /// 同一个内建函数：同一 Rc 分配，或同名（跨 Cxt::new 重建的同层内建
-    /// 仍按函数身份判等）。
-    fn same(&self, other: &PrimFunc) -> bool {
-        self.name == other.name || Rc::ptr_eq(&self.f, &other.f)
-    }
-}
-
-impl std::fmt::Debug for PrimFunc {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "PrimFunc({})", self.name)
-    }
+    Def,
+    Println(Tm),
+    Enum,
+    /// trait 声明（脱糖为单构造子 enum 的登记结果）。
+    Trait,
+    /// impl 声明（实例登记结果）。
+    TraitImpl,
 }
 
 #[derive(Debug, Clone)]
 pub enum Tm {
     Var(Ix),
-    Decl(Span<SmolStr>),
-    Obj(Rc<Tm>, Span<SmolStr>),
-    Lam(Span<SmolStr>, Icit, Rc<Tm>),
-    App(Rc<Tm>, Rc<Tm>, Icit),
-    AppPruning(Rc<Tm>, Pruning),
+    /// 全局引用（def / enum / 构造子），求值时查 decl 表。
+    Decl(SmolStr),
+    /// `x.field` 投影。
+    Obj(Box<Tm>, Span<String>),
+    Lam(Span<String>, Icit, Rc<Tm>),
+    App(Box<Tm>, Box<Tm>, Icit),
+    AppPruning(Box<Tm>, Pruning),
     U(u32),
-    Pi(Span<SmolStr>, Icit, Rc<Ty>, Rc<Ty>),
-    Let(Span<SmolStr>, Rc<Ty>, Rc<Tm>, Rc<Tm>),
+    Pi(Span<String>, Icit, Rc<Ty>, Rc<Ty>),
+    Let(Span<String>, Box<Ty>, Box<Tm>, Box<Tm>),
     Meta(MetaVar),
     LiteralType,
     LiteralIntro(Span<String>),
-    Prim(Rc<Val>, PrimFunc),
-    Sum(Span<SmolStr>, Vec<(Span<SmolStr>, Rc<Tm>, Rc<Ty>, Icit)>, Vec<Span<SmolStr>>, bool),
+    /// 内建函数体标记（携带名字：求值时卡成 `Val::Prim(name, env_spine)`）。
+    Prim(SmolStr),
+    /// enum 类型本体（enum 声明 λ 链的体）。params = (参数名, 值项, 值的类型, icit)，
+    /// 声明处值项即参数自身；实例化（`Vec[Nat] 3`）后值槽携带当前实参。
+    Sum(Span<String>, Vec<(Span<String>, Tm, Ty, Icit)>, Vec<Span<String>>),
+    /// 构造子值：typ 求值后必须是其所属的（已实例化的）`Val::Sum`，
+    /// datas = 构造子自身绑定器的值（隐式在前，声明序）。
     SumCase {
-        typ: Rc<Tm>,
-        case_name: Span<SmolStr>,
-        datas: Vec<(Span<SmolStr>, Rc<Tm>, Icit)>,
-        is_trait: bool,
+        typ: Box<Tm>,
+        case_name: Span<String>,
+        datas: Vec<(Span<String>, Tm, Icit)>,
     },
-    Match(Rc<Tm>, Vec<(PatternDetail, Rc<Tm>)>),
-    /// Call(name, display_args, val_args, body) - body was inlined from function `name`
-    Call(SmolStr, Vec<Rc<Tm>>, Vec<Rc<Val>>, Rc<Tm>),
+    /// 已编译的 match：分支体是检查过的项，运行时按模式首匹配。
+    Match(Box<Tm>, Vec<(PatternDetail, Tm)>),
+    /// Call(名, 显示实参, 值实参, 体)：def 调用内联/卡住 match 的显示外衣
+    /// （值层透明穿透，名字与显示实参仅供 quote/pretty 还原调用形态）。
+    Call(String, Vec<Tm>, Vec<Val>, Box<Tm>),
 }
 
-impl Tm {
-    pub fn no_metas(&self, infer: &Infer, decl: &Decl, l: Lvl) -> Option<(Cxt, Rc<Val>)> {
-        match self {
-            Tm::Var(_) | Tm::Decl(_) | Tm::U(_) | Tm::LiteralType | Tm::LiteralIntro(_) | Tm::Prim(_, _) => None,
-            Tm::Obj(tm, _) => tm.no_metas(infer, decl, l),
-            Tm::Lam(_, _, t) => t.no_metas(infer, decl, l + 1),
-            Tm::App(t, u, _) => t.no_metas(infer, decl, l).or_else(|| u.no_metas(infer, decl, l)),
-            Tm::AppPruning(t, _) => {
-                t.no_metas(infer, decl, l)
-            },
-            Tm::Pi(_, _, t, u) => t.no_metas(infer, decl, l).or_else(|| u.no_metas(infer, decl, l + 1)),
-            Tm::Let(_, a, t, u) => a.no_metas(infer, decl, l).or_else(|| t.no_metas(infer, decl, l)).or_else(|| u.no_metas(infer, decl, l)),
-            Tm::Meta(m) => match infer.lookup_meta(*m) {
-                MetaEntry::Unsolved(_, cxt, oty) => Some((cxt.as_ref().clone(), oty.clone())),
-                MetaEntry::Solved(v, _) => {
-                    infer.quote(decl, l, v).no_metas(infer, decl, l)
-                }
-            },
-            Tm::Sum(_, items, _, _) => items.iter().flat_map(|(_, t, ty, _)| t.no_metas(infer, decl, l).or_else(|| ty.no_metas(infer, decl, l))).next(),
-            Tm::SumCase { typ, case_name: _, datas, is_trait: _ } => typ.no_metas(infer, decl, l)
-                .or_else(|| datas.iter().flat_map(|(_, t, _)| t.no_metas(infer, decl, l)).next()),
-            Tm::Match(tm, items) => tm.no_metas(infer, decl, l).or_else(|| items.iter().flat_map(|(_, t)| t.no_metas(infer, decl, l)).next()),
-            Tm::Call(_, args, _, body) => args.iter().flat_map(|a| a.no_metas(infer, decl, l)).next().or_else(|| body.no_metas(infer, decl, l)),
-        }
-    }
-}
-
+/// 编译后的模式。bind_count = 该模式在运行时消耗的 env 槽数：
+/// Any / Bind 各占 1 槽（整个 head 值），Con 占 1 槽（head 自身）加各子模式槽数。
 #[derive(Clone, Debug, PartialEq)]
 pub enum PatternDetail {
     Any(Span<()>),
-    Bind(Span<SmolStr>),
-    Con(Span<SmolStr>, Vec<PatternDetail>),
+    Bind(Span<String>),
+    Con(Span<String>, Vec<PatternDetail>),
 }
 
 impl PatternDetail {
-    fn bind_count(&self) -> u32 {
+    pub fn bind_count(&self) -> u32 {
         match self {
             PatternDetail::Any(_) => 1,
             PatternDetail::Bind(_) => 1,
-            PatternDetail::Con(_, pattern_details) => {
-                pattern_details.iter().map(|pattern_detail| pattern_detail.bind_count()).sum::<u32>()
-            },
-        }
-    }
-    fn bind_names(&self, ns: &List<SmolStr>) -> List<SmolStr> {
-        match self {
-            PatternDetail::Any(_) => ns.prepend(SmolStr::new("_")),
-            PatternDetail::Bind(name) => ns.prepend(name.data.clone()),
-            PatternDetail::Con(_, pattern_details) => {
-                pattern_details
-                    .iter()
-                    .fold(ns.clone(), |ns, pattern_detail| pattern_detail.bind_names(&ns))
-            },
-        }
-    }
-    fn bind_cxt(&self, cxt: &Cxt) -> Cxt {
-        match self {
-            PatternDetail::Any(_) => cxt.clone(),
-            PatternDetail::Bind(name) => cxt.bind(name.clone(), Tm::U(0).into(), Val::U(0).into()),
-            PatternDetail::Con(_, pattern_details) => {
-                pattern_details
-                    .iter()
-                    .fold(cxt.clone(), |cxt, pattern_detail| pattern_detail.bind_cxt(&cxt))
-            },
-        }
-    }
-}
-
-impl std::fmt::Display for PatternDetail {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PatternDetail::Any(_) => write!(f, "_"),
-            PatternDetail::Bind(name) => write!(f, "{}", name.data),
-            PatternDetail::Con(name, pattern_details) => {
-                let p = pattern_details
-                    .iter()
-                    .map(|pattern_detail| pattern_detail.to_string())
-                    .collect::<Vec<_>>();
-                if p.is_empty() {
-                    write!(f, "{}", name.data)
-                } else {
-                    write!(f, "{}({})", name.data, p.join(", "))
-                }
-            }
+            PatternDetail::Con(_, subs) => 1 + subs.iter().map(|s| s.bind_count()).sum::<u32>(),
         }
     }
 }
 
 /// 已走查臂在某嵌套位置的覆盖贡献（参考版与孪生版共用，保证嵌套覆盖
-/// 检查的判定与文案逐字节一致，L07 mod.rs 同款 2026-09-18 前向传播）：
-/// 全覆盖（var/Any，含路径中途变变量）、贡献某构造子（路径末端是 Con）、
-/// 不可达该位置（祖先选了别的构造子）。
+/// 检查的判定与文案逐字节一致）：全覆盖（var/Any，含路径中途变变量）、
+/// 贡献某构造子（路径末端是 Con）、不可达该位置（祖先选了别的构造子）。
 pub(crate) enum PosCover {
     All,
-    Ctor(SmolStr),
+    Ctor(String),
     None,
 }
 
 /// 沿 (构造子名, 字段下标) 路径下钻一棵已走查的 PatternDetail 树。
-/// 字段下标与 `walk_pat` 的 details 布局同源（望远镜中产槽绑定器的序数）。
+/// 字段下标与 `walk_con` 的 details 布局同源（望远镜中产槽绑定器的序数）。
 pub(crate) fn cover_at(detail: &PatternDetail, path: &[(String, usize)]) -> PosCover {
     let mut cur = detail;
     for (ctor, field) in path {
         match cur {
             PatternDetail::Any(_) | PatternDetail::Bind(_) => return PosCover::All,
-            PatternDetail::Con(n, subs) if n.data.as_str() == ctor.as_str() => {
-                cur = &subs[*field]
-            }
+            PatternDetail::Con(n, subs) if n.data == *ctor => cur = &subs[*field],
             PatternDetail::Con(..) => return PosCover::None,
         }
     }
@@ -248,7 +159,7 @@ pub(crate) fn fmt_path(path: &[(String, usize)]) -> String {
 type Ty = Tm;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd)]
-pub struct Lvl(u32);
+pub struct Lvl(pub u32);
 
 impl Add<u32> for Lvl {
     type Output = Lvl;
@@ -264,9 +175,12 @@ impl Sub<u32> for Lvl {
     }
 }
 
-type Env = List<Rc<Val>>;
-type Spine = List<(Rc<Val>, Icit)>;
+type Env = List<Val>;
+type Spine = List<(Val, Icit)>;
 
+/// 闭包体用 `Rc<Tm>` 共享（性能评审 P0-1 第 1 步）：`Val::Lam` / `Val::Pi`
+/// 的克隆（v_app_sp 实参、force 展开、frcs 收集等站点）从整棵 `Box<Tm>`
+/// 体的深拷贝降为引用计数自增 + env 的 O(1) `Rc` 共享。
 #[derive(Clone)]
 pub struct Closure(Env, Rc<Tm>);
 
@@ -276,37 +190,99 @@ impl std::fmt::Debug for Closure {
     }
 }
 
+/// Val 里的名字 span 用 `Rc<Span<String>>` 句柄（继承 L09 2026-11-13 实验 B）：
+/// Val 克隆热路径（Nat 大值递归 / match 抽取每步若干次）不再为构造子/绑定器名
+/// 做 String 堆分配，只加一次引用计数。Tm 侧仍用 `Span<String>`（项层克隆不在
+/// 热路径）；twin `bump_spine_iter` 的 CTm 保持原表示，Debug 委托内层保证
+/// parity 误差正文逐字节不变。
+#[derive(Clone)]
+pub struct VSpan(pub Rc<Span<String>>);
+
+impl std::ops::Deref for VSpan {
+    type Target = Span<String>;
+    fn deref(&self) -> &Span<String> {
+        &self.0
+    }
+}
+
+impl VSpan {
+    pub fn new(s: Span<String>) -> Self {
+        VSpan(Rc::new(s))
+    }
+}
+
+/// Debug 与内层 `Span<String>` 同形：错误正文/Debug 打印（含 parity 归一化口径）
+/// 依赖 `"name" @ off` 形态，不能出现包装层名。
+impl std::fmt::Debug for VSpan {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&self.0, f)
+    }
+}
+
+pub fn vspan(s: Span<String>) -> VSpan {
+    VSpan::new(s)
+}
+
+/// VSpan → Tm 侧 `Span<String>`（名字/显示/错误用；不在克隆热路径）。
+pub fn tmspan(s: &VSpan) -> Span<String> {
+    (*s.0).clone()
+}
+
+/// 跨表示名比较（Val 的 VSpan ↔ Tm/Raw 的 Span<String>）：只看名字，偏移无关。
+impl PartialEq for VSpan {
+    fn eq(&self, other: &VSpan) -> bool {
+        self.0.data == other.0.data
+    }
+}
+impl PartialEq<Span<String>> for VSpan {
+    fn eq(&self, other: &Span<String>) -> bool {
+        self.0.data == other.data
+    }
+}
+impl PartialEq<VSpan> for Span<String> {
+    fn eq(&self, other: &VSpan) -> bool {
+        self.data == other.0.data
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Val {
     Flex(MetaVar, Spine),
     Rigid(Lvl, Spine),
-    Decl(Span<SmolStr>, Spine),
-    Obj(Rc<Val>, Span<SmolStr>, Spine),
-    Lam(Span<SmolStr>, Icit, Closure),
-    Pi(Span<SmolStr>, Icit, Rc<VTy>, Closure),
+    /// 未展开的全局引用（递归定义的占位 / simplify 后的 decl 表）。
+    Decl(SmolStr, Spine),
+    /// 卡住的投影（被投影者还不是构造子值 / Sum 类型）。
+    Obj(Rc<Val>, VSpan, Spine),
+    Lam(VSpan, Icit, Closure),
+    Pi(VSpan, Icit, Rc<VTy>, Closure),
     U(u32),
     LiteralType,
-    LiteralIntro(Span<String>),
-    Prim(Rc<Val>, PrimFunc, Spine),
+    LiteralIntro(VSpan),
+    /// 卡住的内建应用：名字 + 已收实参 spine（头 = 最后应用的实参）。
+    /// 全部实参字面量时在 `force` 归约（目前仅 string_concat），否则保持
+    /// 中性参与 unify / quote / rename（名字 + 实参不可丢——丢实参的单元
+    /// `Prim` 会把 `x ++ y ≡ x ++ z` 判成相等）。
+    Prim(SmolStr, Spine),
     Sum(
-        Span<SmolStr>,
-        Vec<(Span<SmolStr>, Rc<Val>, Rc<VTy>, Icit)>,
-        Vec<Span<SmolStr>>,
-        bool,
+        VSpan,
+        Rc<Vec<(VSpan, Rc<Val>, Rc<VTy>, Icit)>>, // (参数名, 实参值, 实参的类型, icit)
+        Rc<Vec<VSpan>>,
     ),
     SumCase {
-        is_trait: bool,
         typ: Rc<Val>,
-        case_name: Span<SmolStr>,
-        datas: Vec<(Span<SmolStr>, Rc<Val>, Icit)>,
+        case_name: VSpan,
+        datas: Rc<Vec<(VSpan, Rc<Val>, Icit)>>,
     },
-    Match(Rc<Val>, Env, Vec<(PatternDetail, Rc<Tm>)>, Option<(SmolStr, Vec<Rc<Val>>)>),
-    /// Call(name, args, body) - value inlined from function `name`
-    Call(SmolStr, Vec<Rc<Tm>>, Rc<Val>),
+    /// 卡住的 match：scrutinee 不是构造子值，等待 scrutinee 归约后再选分支。
+    /// `pending` = 卡住期间累积的应用实参（值层保存，分支选中后在值层应用
+    /// ——项层 splice 把实参 quote 进分支体时，实参的自由变量会引用到
+    /// 错误的上下文，见 `v_app` 的 Match 臂）。
+    Match(Rc<Val>, Env, Rc<Vec<(PatternDetail, Tm)>>, Vec<(Val, Icit)>),
+    /// Call(名, 实参值, 体)：内联调用的值层外衣（force/v_app/quote 透明）。
+    Call(String, Vec<Val>, Rc<Val>),
     /// 显式替换下的值（模式精化，dpm-nbe `VSub`）：特化解不改写既有值，
     /// 只把解包在外面；`force` 在读点把 σ 推进值的结构（`frcs`，对齐
-    /// dpm-nbe 的 `frcS`）。不变式：`force` 的返回值顶层不会是 VSub
-    /// （fuel 耗尽时为有界降级的例外，各消费点有防御臂）。
+    /// dpm-nbe 的 `frcS`）。不变式：`force` 的返回值顶层不会是 VSub。
     VSub(Rc<Val>, Rc<Subst>),
 }
 
@@ -314,16 +290,16 @@ type VTy = Val;
 
 /// 模式特化的解：层级 → 值 的**持久化单链**（dpm-nbe 的 explicit
 /// substitution；链头 = 最新的解）。仅由模式编译器经 `Subst::extend` /
-/// 特化合一的 `SpecSolve::acc` 构建；`Rc`（本层 = `Arc`）共享让臂边界
-/// 回滚 = 指针赋值、`Val::VSub` 包裹 = O(1)。
+/// 特化合一的 `SpecSolve::acc` 构建；`Rc` 共享让臂边界回滚 = 指针赋值、
+/// `Val::VSub` 包裹 = O(1)。
 ///
-/// σ 表示为持久化单链（链头 = 最新）：`extend` O(1) cons、`lookup` 沿链
-/// 首个命中 + **条件包裹**（解值浅结构不引用任何已解层级时原样返回，零
-/// 分配零 fuel；引用才包 `VSub(·, σ)`，由 force 读点推开）。
-///
-/// 与旧 `update_cxt` 的对应：旧机制把解**改写进环境槽**并 `refresh` 全量
-/// 重引用（L07 README §6 淘汰的旧架构，值过期/槽位错位 bug 族的载体）；
-/// 新机制不动槽位，只把 σ 包在被消费的值外，force 在读点逐层推开。
+/// 表示选型（性能评审定稿）：**写入 O(1) cons、读取沿链扫描**，不做
+/// "写时整表重建 + 逐条包裹"——那会把 n 条解变成 O(n³/6) 次深拷贝分配
+/// （深嵌套模式实测 2.5×@depth40 回归，已废弃的 FxHashMap 写时包裹版）。
+/// 与旧 `pm_defs` 事实表的对应：`extend` ≙ `pm_solve` + push（链头即
+/// 最新，查询沿链首个命中 ≙ `rev().find` 取最新），`lookup` ≙ force 读点
+/// 的查表展开——区别在于解只对**被包裹过的值**可见（读点显式），不再是
+/// 全局查找表。
 #[derive(Debug, Clone, Default)]
 pub struct Subst {
     head: Option<Rc<SubEntry>>,
@@ -332,9 +308,9 @@ pub struct Subst {
 #[derive(Debug)]
 struct SubEntry {
     lvl: Lvl,
-    /// 解的原始值。不预先包裹"更新的解"——读取时 `lookup_hit` 把整条 σ
-    /// 包在外面（见其文档），由 force 在读点一次性推开。
-    val: Rc<Val>,
+    /// 解的原始值。不预先包裹"更新的解"——读取时 `lookup` 把整条 σ 包在
+    /// 外面（见其文档），由 force 在读点一次性推开。
+    val: Val,
     next: Option<Rc<SubEntry>>,
 }
 
@@ -345,15 +321,17 @@ impl Subst {
 
     /// 命中返回 Some(展开前形态)：解值**不引用**任何已解层级时原样返回
     /// （读点热路径，零分配零 fuel）；引用时把整条 σ 包在解值外（解值不含
-    /// x 自身——occurs 守卫），由 force 在读点推开。未命中 None。
-    pub(crate) fn lookup_hit(self: &Rc<Self>, x: Lvl) -> Option<Rc<Val>> {
+    /// x 自身——occurs 守卫，也不含更旧解的 bare 引用——solve 存值已
+    /// force、头部精化值已 wrap，旧条目对它是恒等；比该条目更新的解恰好
+    /// 借此对解值生效），由 force 在读点推开。未命中 None。
+    pub(crate) fn lookup_hit(self: &Rc<Self>, x: Lvl) -> Option<Val> {
         let mut cur = self.head.clone();
         while let Some(e) = cur {
             if e.lvl == x {
                 return Some(if !Self::mentions_level(&e.val, self) {
                     e.val.clone()
                 } else {
-                    Rc::new(Val::VSub(e.val.clone(), self.clone()))
+                    Val::VSub(Rc::new(e.val.clone()), self.clone())
                 });
             }
             cur = e.next.clone();
@@ -361,7 +339,128 @@ impl Subst {
         None
     }
 
-    /// x 是否已有解。
+    /// 未映射即 fresh rigid（dpm-nbe `lookupSub` 的恒等延拓）。
+    pub(crate) fn lookup(self: &Rc<Self>, x: Lvl) -> Val {
+        self.lookup_hit(x).unwrap_or_else(|| Val::vvar(x))
+    }
+
+    /// 解值的浅结构是否引用 σ 的某个已解层级。含闭包 **env 槽**（它们是
+    /// 值，读点会流出）与 Match 的 scrutinee/captured env/pending；不含
+    /// 闭包体 / Match 分支体（Tm，求值时才经 env 读到槽值）。VSub 保守记
+    /// 为引用（已包过 σ 的值再包一层无害）。误报只多一次包裹，漏报才会
+    /// 丢精化——扫描口径宁宽勿窄。
+    fn mentions_level(v: &Val, sub: &Subst) -> bool {
+        fn env_slots(env: &Env, sub: &Subst) -> bool {
+            env.iter().any(|v| mentions_level(v, sub))
+        }
+        fn mentions_level(v: &Val, sub: &Subst) -> bool {
+            match v {
+                Val::Rigid(y, sp) => sub.has(*y) || sp.iter().any(|(u, _)| mentions_level(u, sub)),
+                Val::Flex(_, sp) | Val::Decl(_, sp) | Val::Prim(_, sp) => {
+                    sp.iter().any(|(u, _)| mentions_level(u, sub))
+                }
+                Val::Obj(o, _, sp) => mentions_level(o, sub) || sp.iter().any(|(u, _)| mentions_level(u, sub)),
+                Val::Lam(_, _, cl) => env_slots(&cl.0, sub),
+                Val::Pi(_, _, a, cl) => mentions_level(a, sub) || env_slots(&cl.0, sub),
+                Val::Sum(_, params, _) => params.iter().any(|(_, v, t, _)| {
+                    mentions_level(v, sub) || mentions_level(t, sub)
+                }),
+                Val::SumCase { typ, datas, .. } => {
+                    mentions_level(typ, sub) || datas.iter().any(|(_, v, _)| mentions_level(v, sub))
+                }
+                Val::Match(s, env, _, pending) => {
+                    mentions_level(s, sub)
+                        || env_slots(env, sub)
+                        || pending.iter().any(|(u, _)| mentions_level(u, sub))
+                }
+                Val::Call(_, args, body) => {
+                    args.iter().any(|v| mentions_level(v, sub)) || mentions_level(body, sub)
+                }
+                // 已被包裹的值保守视为引用（内层结构不再探查）
+                Val::VSub(..) => true,
+                Val::U(_) | Val::LiteralType | Val::LiteralIntro(_) => false,
+            }
+        }
+        mentions_level(v, sub)
+    }
+
+    /// 解值是否（浅层）引用 σ 的**任一**已解层级。
+    ///
+    /// 传递 occurs 的前置筛选（见 unification.rs 的 rigid 解臂）：只有解值
+    /// 真的挂在既有解链上时，才值得跑一次传递扫描；干净解零开销直通。
+    pub(crate) fn mentions_any_solved(self: &Rc<Self>, v: &Val) -> bool {
+        Self::mentions_level(v, self)
+    }
+
+    /// 传递 occurs：`v` 在 σ 之下是否**经已解层级**提到 `target`。
+    ///
+    /// 与 [`Self::mentions_level`] 同口径（只看浅结构 + 闭包 env 槽，不进
+    /// 闭包体），区别是遇到 `Rigid y` 且 σ 解出 y 时**继续扫解值**——这正是
+    /// 两跳环（`x := a`、`a := succ x`）的检测点。
+    ///
+    /// 不能用 `force(σ, v)` 代替：槽位纪律是"只包裹不物化"（frcs 对 spine /
+    /// Sum / SumCase 槽只 `wrap_sub`），force 不会把槽里的 `Rigid x` 化成
+    /// 解值 `a`，因此 force + 浅扫描看不出链式环。预算耗尽按"未出现"处理
+    /// （宁漏不误杀：误杀会把合法分支判成不可达）。
+    pub(crate) fn occurs_transitive(self: &Rc<Self>, v: &Val, target: Lvl) -> bool {
+        const BUDGET: u32 = 2048;
+        fn go(v: &Val, sub: &Rc<Subst>, target: Lvl, budget: &mut u32) -> bool {
+            if *budget == 0 {
+                return false;
+            }
+            *budget -= 1;
+            match v {
+                Val::Rigid(y, sp) => {
+                    if *y == target {
+                        return true;
+                    }
+                    if let Some(hit) = sub.lookup_hit(*y) {
+                        if go(&hit, sub, target, budget) {
+                            return true;
+                        }
+                    }
+                    sp.iter().any(|(u, _)| go(u, sub, target, budget))
+                }
+                Val::Flex(_, sp) | Val::Decl(_, sp) | Val::Prim(_, sp) => {
+                    sp.iter().any(|(u, _)| go(u, sub, target, budget))
+                }
+                Val::Obj(o, _, sp) => {
+                    go(o, sub, target, budget)
+                        || sp.iter().any(|(u, _)| go(u, sub, target, budget))
+                }
+                Val::Lam(_, _, cl) => cl.0.iter().any(|v| go(v, sub, target, budget)),
+                Val::Pi(_, _, a, cl) => {
+                    go(a, sub, target, budget)
+                        || cl.0.iter().any(|v| go(v, sub, target, budget))
+                }
+                Val::Sum(_, params, _) => params
+                    .iter()
+                    .any(|(_, v, t, _)| go(v, sub, target, budget) || go(t, sub, target, budget)),
+                Val::SumCase { typ, datas, .. } => {
+                    go(typ, sub, target, budget)
+                        || datas.iter().any(|(_, v, _)| go(v, sub, target, budget))
+                }
+                Val::Match(s, env, _, pending) => {
+                    go(s, sub, target, budget)
+                        || env.iter().any(|v| go(v, sub, target, budget))
+                        || pending.iter().any(|(u, _)| go(u, sub, target, budget))
+                }
+                Val::Call(_, args, body) => {
+                    args.iter().any(|v| go(v, sub, target, budget))
+                        || go(body, sub, target, budget)
+                }
+                // 内层 σ 优先：本值在 s2 之下，target 若被 s2 解出也要跟随
+                // （已知限制：外层 σ 的后续解在此处不可见——见 review R2，
+                // 修复需要"不物化 compose 的多 σ 查找"，暂记文档化缺口）
+                Val::VSub(inner, s2) => go(inner, s2, target, budget),
+                Val::U(_) | Val::LiteralType | Val::LiteralIntro(_) => false,
+            }
+        }
+        let mut budget = BUDGET;
+        go(v, self, target, &mut budget)
+    }
+
+    /// x 是否已有解（旧 `pm_def(x).is_none()` 的否定形式）。
     pub(crate) fn has(&self, x: Lvl) -> bool {
         let mut cur = self.head.clone();
         while let Some(e) = cur {
@@ -373,56 +472,9 @@ impl Subst {
         false
     }
 
-    /// 解值的浅结构是否引用 σ 的某个已解层级。含闭包 **env 槽**（它们是
-    /// 值，读点会流出）与 Match 的 scrutinee/captured env/origin 实参；
-    /// 不含闭包体 / Match 分支体（Tm，求值时才经 env 读到槽值）。VSub
-    /// 保守记为引用。误报只多一次包裹，漏报才会丢精化——扫描口径宁宽勿窄。
-    fn mentions_level(v: &Val, sub: &Subst) -> bool {
-        fn env_slots(env: &Env, sub: &Subst) -> bool {
-            env.iter().any(|v| mentions_level(v, sub))
-        }
-        fn spine(sp: &Spine, sub: &Subst) -> bool {
-            sp.iter().any(|(v, _)| mentions_level(v, sub))
-        }
-        fn origin(
-            o: &Option<(SmolStr, Vec<Rc<Val>>)>,
-            sub: &Subst,
-        ) -> bool {
-            match o {
-                Some((_, args)) => args.iter().any(|v| mentions_level(v, sub)),
-                None => false,
-            }
-        }
-        fn mentions_level(v: &Val, sub: &Subst) -> bool {
-            match v {
-                Val::Rigid(y, sp) => sub.has(*y) || spine(sp, sub),
-                Val::Flex(_, sp) | Val::Decl(_, sp) => spine(sp, sub),
-                // 卡住内建的 spine 实参是值，可能引用 σ 的已解层级
-                Val::Prim(_, _, sp) => spine(sp, sub),
-                Val::Obj(o, _, sp) => mentions_level(o, sub) || spine(sp, sub),
-                Val::Lam(_, _, cl) => env_slots(&cl.0, sub),
-                Val::Pi(_, _, a, cl) => mentions_level(a, sub) || env_slots(&cl.0, sub),
-                Val::Sum(_, params, _, _) => params
-                    .iter()
-                    .any(|(_, v, t, _)| mentions_level(v, sub) || mentions_level(t, sub)),
-                Val::SumCase { typ, datas, .. } => {
-                    mentions_level(typ, sub) || datas.iter().any(|(_, v, _)| mentions_level(v, sub))
-                }
-                Val::Match(s, env, _, o) => {
-                    mentions_level(s, sub) || env_slots(env, sub) || origin(o, sub)
-                }
-                Val::Call(_, _, body) => mentions_level(body, sub),
-                // 已被包裹的值保守视为引用（内层结构不再探查）
-                Val::VSub(..) => true,
-                Val::U(_) | Val::LiteralType | Val::LiteralIntro(_) | Val::Prim(..) => false,
-            }
-        }
-        mentions_level(v, sub)
-    }
-
-    /// 叠加一条解 `x := v`：O(1) cons 到链头（链头 = 最新 ≙ 旧 `update_cxt`
-    /// 后写覆盖先写；同键旧条目留在链上但永不命中）。
-    pub(crate) fn extend(sub: &Rc<Subst>, x: Lvl, v: Rc<Val>) -> Rc<Subst> {
+    /// 叠加一条解 `x := v`：O(1) cons 到链头（链头 = 最新 ≙ 旧 `pm_def`
+    /// 的 `rev().find` 取最新；同键旧条目留在链上但永不命中）。
+    pub(crate) fn extend(sub: &Rc<Subst>, x: Lvl, v: Val) -> Rc<Subst> {
         Rc::new(Subst {
             head: Some(Rc::new(SubEntry {
                 lvl: x,
@@ -433,9 +485,13 @@ impl Subst {
     }
 
     /// 组合：内层 `inner` 先应用、外层 `outer` 后应用。外层条目接到链头
-    /// （先被查到 = 覆盖同键）——对齐旧 `update_cxt` 的"后写覆盖"语义。
+    /// （先被查到 = 覆盖同键）——对齐旧 `pm_def` 的"取最新"语义；dpm-nbe
+    /// 的左偏 union 在其无冲突场景下与此等价。
     pub(crate) fn compose(outer: &Rc<Subst>, inner: &Rc<Subst>) -> Rc<Subst> {
-        fn cons_all(entry: &Option<Rc<SubEntry>>, onto: Option<Rc<SubEntry>>) -> Option<Rc<SubEntry>> {
+        fn cons_all(
+            entry: &Option<Rc<SubEntry>>,
+            onto: Option<Rc<SubEntry>>,
+        ) -> Option<Rc<SubEntry>> {
             match entry {
                 None => onto,
                 Some(e) => Some(Rc::new(SubEntry {
@@ -451,11 +507,12 @@ impl Subst {
     }
 }
 
-/// η 展开与 frcs 读点共用的可应用性守卫（L07/L09/L10 同款）：只有 `v_app`
-/// 能吃的**中性形态**允许应用。L12 的 `v_app` 对 Match（卡住 match）/Prim
-/// （卡住内建）/字面量 / U / Π / Sum / SumCase 会 panic——不加守卫会命中
-/// `impossible apply`。Lam 亦可被 `v_app` β，但按蓝本口径排除（Lam 与实参
-/// 相遇由 η 臂/显式展开处理，frcs 读点保守保持卡住）。
+/// η 展开与 frcs 读点共用的可应用性守卫（L06 `unification::v_applicable`
+/// 同款）：只有 `v_app` 能吃的形态（中性头 / Decl / 卡住投影 / 卡住内建 /
+/// 卡住 match / VSub）允许应用。字面量/U/Π/Sum/SumCase 与实参相遇时无从
+/// 应用——不加守卫会命中 `v_app` 的 `impossible apply` panic（L06 曾由
+/// `string_to_global_type` 把 def 函数值当"动态类型"送进 unify 而踩中；
+/// L07 的 st2g 只返回登记**类型**，该触发路径关闭，本守卫为同型加固）。
 pub(crate) fn v_applicable(v: &Val) -> bool {
     matches!(
         v,
@@ -464,6 +521,7 @@ pub(crate) fn v_applicable(v: &Val) -> bool {
             | Val::Decl(..)
             | Val::Obj(..)
             | Val::Prim(..)
+            | Val::Match(..)
             | Val::Call(..)
             | Val::VSub(..)
     )
@@ -471,15 +529,16 @@ pub(crate) fn v_applicable(v: &Val) -> bool {
 
 /// "解前构建、解后消费"的值的读点纪律：用当前精化替换包裹（O(1) Rc，
 /// force 在消费点惰性推开）。σ 为空时零开销直通。
-pub(crate) fn wrap_sub(sub: &Rc<Subst>, v: Rc<Val>) -> Rc<Val> {
+pub(crate) fn wrap_sub(sub: &Rc<Subst>, v: Val) -> Val {
     if sub.is_empty() {
         v
     } else {
-        Rc::new(Val::VSub(v, sub.clone()))
+        Val::VSub(Rc::new(v), sub.clone())
     }
 }
 
-/// 展开燃料：每个展开步骤消耗 1，耗尽即停止（防环）。
+/// 展开燃料：每个展开步骤消耗 1，耗尽即停止（防环）。force 的各展开臂
+/// 与 frcs 的 lookup 命中点共用。
 fn burn(cell: &std::cell::Cell<u32>) -> bool {
     let f = cell.get();
     if f == 0 {
@@ -487,51 +546,6 @@ fn burn(cell: &std::cell::Cell<u32>) -> bool {
     }
     cell.set(f - 1);
     true
-}
-
-/// 值树里是否出现某层级（浅层结构扫描；闭包体 / Match 分支体跳过——那里
-/// 的环由 force 的 fuel 兜底）。特化解的环守卫（`unify_pm` 的 occurs）用。
-/// **不扫 Flex 的 spine**（L10 定制同款）：本层元变量以"全 scope 剪枝
-/// spine"登记（fresh_meta 的 AppPruning），spine 里合法地含当前方程正在
-/// 解的 rigid；扫 spine 会把这类合法解误判成环。元变量内的真环仍由 force
-/// 的 fuel 兜底（与旧机制一致）。
-fn val_mentions_lvl(v: &Val, x: Lvl) -> bool {
-    fn spine(sp: &Spine, x: Lvl) -> bool {
-        sp.iter().any(|(v, _)| val_mentions_lvl(v, x))
-    }
-    fn env_slots(env: &Env, x: Lvl) -> bool {
-        env.iter().any(|v| val_mentions_lvl(v, x))
-    }
-    fn origin(o: &Option<(SmolStr, Vec<Rc<Val>>)>, x: Lvl) -> bool {
-        match o {
-            Some((_, args)) => args.iter().any(|v| val_mentions_lvl(v, x)),
-            None => false,
-        }
-    }
-    match v {
-        Val::Rigid(y, sp) => *y == x || spine(sp, x),
-        Val::Flex(..) => false,
-        Val::Decl(_, sp) => spine(sp, x),
-        Val::Obj(o, _, sp) => val_mentions_lvl(o, x) || spine(sp, x),
-        Val::Lam(_, _, cl) => env_slots(&cl.0, x),
-        Val::Pi(_, _, a, cl) => val_mentions_lvl(a, x) || env_slots(&cl.0, x),
-        Val::Sum(_, params, _, _) => params
-            .iter()
-            .any(|(_, v, t, _)| val_mentions_lvl(v, x) || val_mentions_lvl(t, x)),
-        Val::SumCase { typ, datas, .. } => {
-            val_mentions_lvl(typ, x) || datas.iter().any(|(_, v, _)| val_mentions_lvl(v, x))
-        }
-        Val::Match(s, env, _, o) => val_mentions_lvl(s, x) || env_slots(env, x) || origin(o, x),
-        Val::Call(_, _, body) => val_mentions_lvl(body, x),
-        // 只扫解值自身的结构，**不扫 σ 的映射值**（σ 其它条目合法引用别的
-        // 模式变量）。σ 槽位若真引用 x，解包后的 v 结构里自会以 Rigid(x)
-        // 出现（对齐旧世界"occurs 只看解的裸值"的语义；更深间接环由 force
-        // 的 fuel 兜底）。
-        Val::VSub(v, _) => val_mentions_lvl(v, x),
-        // 卡住内建的 spine 实参可能引用解值层级（occurs 守卫同口径）
-        Val::Prim(_, _, sp) => spine(sp, x),
-        Val::U(_) | Val::LiteralType | Val::LiteralIntro(_) => false,
-    }
 }
 
 impl Val {
@@ -545,57 +559,47 @@ impl Val {
 }
 
 fn lvl2ix(l: Lvl, x: Lvl) -> Ix {
-    Ix(l.0 - x.0 - 1)
-}
-
-fn lookup_function_by_cases(decl: &Decl, cases: &[(PatternDetail, Rc<Tm>)]) -> Option<SmolStr> {
-    for (name, (_, body_tm, _, _, _)) in decl {
-        if match_has_same_patterns(cases, body_tm) {
-            return Some(name.clone());
-        }
-    }
-    None
-}
-
-fn match_has_same_patterns(cases: &[(PatternDetail, Rc<Tm>)], tm: &Tm) -> bool {
-    match tm {
-        Tm::Match(_, inner_cases) => {
-            cases.len() == inner_cases.len()
-                && cases.iter().zip(inner_cases.iter()).all(|((p1, _), (p2, _))| p1 == p2)
-        }
-        Tm::Lam(_, _, inner) => match_has_same_patterns(cases, inner),
-        _ => false,
+    if x.0 >= l.0 {
+        // 语义上不可达：值里出现了超出 quote 层级的 rigid。debug 构建下断言
+        // 捕捉，release 保守降级到 0（只出现在显示路径上时会可见）。
+        debug_assert!(false, "lvl2ix: {x:?} out of range at {l:?}");
+        Ix(0)
+    } else {
+        Ix(l.0 - x.0 - 1)
     }
 }
-
-fn extract_decl_name(tm: &Tm) -> Option<Span<SmolStr>> {
-    match tm {
-        Tm::Decl(name) => Some(name.clone()),
-        Tm::App(t, _, _) => extract_decl_name(t),
-        _ => None,
-    }
-}
-
-fn collect_app_args(tm: &Tm) -> Vec<Rc<Tm>> {
-    match tm {
-        Tm::App(t, u, _) => {
-            let mut args = collect_app_args(t);
-            args.push(u.clone());
-            args
-        }
-        _ => vec![],
-    }
-}
-
-use std::ops::{Add, Sub};
-
-use rustc_hash::FxHashMap;
 
 #[derive(Debug)]
-pub enum UnifyError {
-    Basic,
-    Stuck,
-    Trait(String),
+pub(crate) struct UnifyError;
+
+/// 合一失败的**原因分档**（对齐 dpm-nbe 的 `UnifyRes = USucc | UAbs | UIDK`）。
+///
+/// `UnifyError` 本身保持无字段：53 处构造点不动，分档挂在 [`Infer`] 上——
+/// 每个顶层合一入口先 [`Infer::reset_unify_kind`]，失败臂按语义 `note`，
+/// 调用方取 [`Infer::unify_kind`] 决定诊断与覆盖处理。这样既拿到三档信息，
+/// 又不改 `unify` 的签名与所有既有调用点。
+///
+/// 默认值 = `Absurd`：**未被显式分档的失败沿用旧行为**（分支不可达）。
+/// 这是有意的渐进策略——把"确定无解"与"判不出来"逐点分清需要逐个臂论证，
+/// 目前只给"卡住 match 相等性"与"fuel 耗尽"两类标注（P3 第一刀）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UnifyKind {
+    /// 结构性矛盾：确定无解（`zero ≐ succ _`、不同构造子、不同字面量）。
+    Absurd,
+    /// 无法判定：既不能证相等、也不是矛盾（卡住 match 的相等性、不可解中性值）。
+    Undecided,
+    /// 预算耗尽（fuel）：判定不可信，最保守。
+    Fuel,
+}
+
+impl UnifyKind {
+    fn rank(self) -> u8 {
+        match self {
+            UnifyKind::Absurd => 0,
+            UnifyKind::Undecided => 1,
+            UnifyKind::Fuel => 2,
+        }
+    }
 }
 
 fn empty_span<T>(data: T) -> Span<T> {
@@ -607,292 +611,596 @@ fn empty_span<T>(data: T) -> Span<T> {
     }
 }
 
-pub struct Error(
-    pub Span<String>,
-    pub Vec<Box<dyn Fn() -> Option<String>>>
-);
+/// Rc 槽位（Sum 参数 / SumCase typ+datas）的所有权取用：独占时零拷贝，
+/// 共享时深拷贝——与迁 Rc 前"按值持有、克隆即深拷贝"的语义一致。
+/// match 提取字段 / env 存槽走 Rc 引用计数（O(1)），消费型路径（quote /
+/// rename / project）经此取值。
+pub(crate) fn rc_take(v: Rc<Val>) -> Val {
+    Rc::try_unwrap(v).unwrap_or_else(|v| (*v).clone())
+}
+
+/// 错误：人类可读文案 + **可选源码位置**（P10）。
+///
+/// 保持元组形状：字段 0 仍是文案（`e.0` 的既有用法与 `Display` 文案零漂移），
+/// 字段 1 是错误对应的源码 span，供 LSP / 诊断渲染消费。构造用
+/// [`Error::new`]（无位置）或 [`Error::at`]（带位置），`to_string()` 永远
+/// 只打印文案。
+pub struct Error(pub String, pub Option<Span<()>>);
+
+impl Error {
+    /// 无位置的错误（沿用旧口径：文案不含行号/列号）。
+    pub fn new(msg: impl Into<String>) -> Self {
+        Error(msg.into(), None)
+    }
+
+    /// 带位置的错误：`span` 指向触发错误的源码片段（通常是模式/构造子的 span）。
+    pub fn at(msg: impl Into<String>, span: Span<()>) -> Self {
+        Error(msg.into(), Some(span))
+    }
+
+    /// 错误对应的源码位置（无则 `None`）。
+    pub fn span(&self) -> Option<Span<()>> {
+        self.1
+    }
+}
 
 impl std::fmt::Debug for Error {
+    /// 与旧版 `Error(String)` 的 Debug 输出**逐字节一致**（`Error("…")`）：
+    /// 多出来的 span 不进 Debug，避免既有 golden（黑盒套件用 `{:?}` 比较）
+    /// 与用户可见输出漂移。span 走 [`Error::span`]。
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // 只渲染第一个字段，输出效果如：Error(Span { ... })
-        f.debug_tuple("Error")
-            .field(&self.0)
-            .finish()
+        write!(f, "Error({:?})", self.0)
     }
 }
 
-impl IError {
-    pub fn to_err(self) -> Error {
-        Error(self.msg.map(|x| format!("{:?}", x)), vec![])
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
     }
 }
 
-/// unify/force 的共享递归 fuel 池容量（L08 护栏前向传播：L09 重写时
-/// 丢失；L12 的 `unify(.., fuel)` 参数只护 Decl 展开重试臂，本池补齐
-/// `force` meta 展开与 unify 结构递归的深度防护）。
-const UNIFY_FUEL: u32 = 4096;
+impl std::error::Error for Error {}
 
-#[derive(Clone)]
 pub struct Infer {
     meta: Vec<MetaEntry>,
-    meta_contrains: Vec<(Rc<Val>, Rc<Val>)>,
-    trait_solver: typeclass::Synth,
-    trait_definition: FxHashMap<SmolStr, (Vec<(Span<SmolStr>, Raw, Icit)>, Vec<bool>, Vec<(Span<SmolStr>, Vec<(Span<SmolStr>, Raw, Icit)>, Raw)>)>,
-    trait_out_param: FxHashMap<SmolStr, Vec<bool>>,
-    pub mutable_map: Rc<std::sync::RwLock<FxHashMap<String, Rc<Val>>>>,
-    pub hover_table: Vec<(Span<()>, Span<()>, Cxt, Rc<Val>)>,
-    pub completion_table: Vec<(Span<()>, SmolStr)>,
-    /// 是否收集 LSP 观察表（hover/completion）。L12 参考版没有 LSP 消费者
-    /// （全仓无 hover_table 读点；LSP 只接 L13）；bench/CLI 的 `run` 路径
-    /// 关掉收集——hover 条目 clone `Cxt` 从而**钉住 decl 表的 `Rc`**，使
-    /// `infer_owned` 的就地写退化为整表深拷贝（L07 无此表，故其 COW 移植
-    /// 无需处理；L11 的硬化 port 同样加了此闸，见 L11 mod.rs 同字段）。
-    collect_observations: bool,
-    /// unify/force 共享 fuel 池（L08 同款）：外层入口（`nf`/`unify_catch`/
-    /// canonical 探测点）充值；`unify` 递归与 `force` 的 meta 展开各烧 1，
-    /// 耗尽时 unify 按不可合一失败、force 停止展开按未解处理。
+    /// meta 覆写的撤销轨迹（性能评审 P0-2）：每次把既有槽从 Unsolved 覆写为
+    /// Solved 前，把旧条目 **move** 进这里（零拷贝）。快照 = 记录
+    /// `(meta_undo.len(), meta.len())` 两个水位（O(1)，不再全量深拷贝已解
+    /// meta 的解值树）；恢复 = 弹栈逆放 + 截断追加槽。只服务
+    /// [`Infer::meta_snapshot`] / [`Infer::meta_restore`] 的回滚语义。
+    meta_undo: Vec<(usize, MetaEntry)>,
+    /// 可变全局表（create_global / change_mutable / get_global 族读写；
+    /// L06 同款：单线程 RefCell。参考版随 `Infer` 每次调用新建）。
+    pub(crate) mutable_map: RefCell<FxHashMap<SmolStr, Val>>,
+    /// simplify decl 表的旁路缓存（性能评审 P1-2）：键 = 源表实例代数
+    /// （`Decls::ver`，同 ver ⟹ 同实例同内容；简化表继承源 ver 且 `simpl`
+    /// 幂等）。卡住 match 每次消费（quote / rename / unify 的 Match 臂）原
+    /// 是 O(#decls) 键克隆 + 逐条 `ty` 深拷贝重建；命中时 O(1) 取共享表。
+    /// 每 `Infer` 一份（随运行销毁，条目数 ≈ 处理过的 def 数）。
+    simpl_cache: RefCell<FxHashMap<u64, Rc<Decls>>>,
+    /// unify 递归深度防护（L13 同款做法）。每次外部配置（unify_catch /
+    /// pattern 编译入口）充值；递归中递减，归零即 Err——防索引槽互相嵌入
+    /// 的构造子值比较（SuccCase 的 typ 含索引、索引又是 SuccCase）无限递归。
     unify_fuel: std::cell::Cell<u32>,
+    /// 卡住 match 相等性比较的**总次数**预算（与 fuel 无关；每顶层合一入口
+    /// 重置）。`(Match, Match)` 臂在结构快路径失效后会逐分支在 fresh rigid 下
+    /// 重求值；递归 def 的分支体每层再产生新的卡住 match，层级递增、永不结构
+    /// 收敛（实测：4 个 def 的 `Eq (add x zero) (add y zero)` 要 256 s 才靠
+    /// fuel 停下）。次数预算把它变成"有界失败"，并与孪生版
+    /// `bump_spine_iter::MATCH_CMP_BUDGET = 64`（同一"每顶层调用 64 次"口径）
+    /// 逐点对齐（review R3/R8：快路径先试，只有慢路径比较才计数）。
+    match_cmp_budget: std::cell::Cell<u32>,
+    /// 最近一次合一失败的**原因分档**（见 [`UnifyKind`]）。顶层入口 reset、
+    /// 失败臂 note、调用方读取；`Cell` 让 `&self` 的 force/quote 路径也能标注。
+    unify_kind: std::cell::Cell<UnifyKind>,
+    /// 正在展开的 meta 链（跨 meta 环守卫，P5）：force 展开已解 meta 时压栈；
+    /// 同一 meta 在栈上再次出现即判定环，返回卡住的 Flex，不再递归烧 fuel。
+    /// RefCell 让 &self 的 force 路径可用；展开完成后显式弹栈。
+    meta_expanding: RefCell<Vec<MetaVar>>,
+    /// L10 trait 实例求解器（表驱动 Prolog；与孪生共用同一算法）。
+    pub(crate) trait_solver: Synth,
+    /// trait 名 → (参数表, out 掩码, 方法表)（TraitDecl 登记，trait_wrap 查询）。
+    pub(crate) trait_definition: FxHashMap<
+        String,
+        (
+            Vec<(Span<String>, Raw, Icit)>,
+            Vec<bool>,
+            Vec<(Span<String>, Vec<(Span<String>, Raw, Icit)>, Raw)>,
+        ),
+    >,
+    /// trait 名 → out 参数掩码（solve_trait 过滤 out 位；同时是“按名判 trait”的
+    /// 依据——trait 与 enum 共用 Sum 表示，不进 Val/Tm）。
+    pub(crate) trait_out_param: FxHashMap<String, Vec<bool>>,
+    /// 最近一次 trait 求解失败的原因（UnifyError 为无字段 unit，原因旁存；
+    /// Def 臂把它转成 Error 文案）。
+    pub(crate) trait_error: RefCell<Option<String>>,
+}
+
+const UNIFY_FUEL: u32 = 4096;
+
+/// 基准专用燃料覆盖：环境变量 `TYPORT_UNIFY_FUEL`（缺省 = [`UNIFY_FUEL`]）。
+/// smalltt 迁移基准（NatConv / TreeConv 等 1e6 级 β 步的转换检查）远超 4096；
+/// 显式设置该变量可放大单次合一池。未设置时行为与原来逐位一致。
+fn unify_fuel_budget() -> u32 {
+    static BUDGET: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *BUDGET.get_or_init(|| {
+        std::env::var("TYPORT_UNIFY_FUEL")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(UNIFY_FUEL)
+    })
+}
+
+/// 卡住 match 相等性比较的**总次数**上限（每个顶层合一入口一份）。
+///
+/// 口径（2026-11-08 review R3/R8 修正）：结构快路径**先试**，只有快路径失效、
+/// 真正逐分支重求值的比较才计入并消耗；一个顶层 `unify`（每个特化方程 / 每次
+/// 分支体检查）最多做 64 次这样的比较，超出按"无法判定为相等"保守失败
+/// （L07 P3 记为 `Undecided`）。
+///
+/// 与孪生 `bump_spine_iter::MATCH_CMP_BUDGET = 64` 完全同口径（此前参考版是
+/// "递归深度 40、快路径前检查"，与孪生的"总次数 64、快路径后计数"不同构，
+/// 会产生双向判定漂移——见 `docs/review-l07-hardening-2026-11-08/FINAL.md`
+/// 的 R3）。64 次足以覆盖 `Vec`/`add` 这类教学负载；已知取舍：合法但
+/// **>64 次比较**的深/宽嵌套会报"无法判定"（启发式上限，文档化）。
+pub(crate) const MATCH_CMP_BUDGET: u32 = 64;
+
+/// [`Infer::meta_snapshot`] 的回滚句柄：undo 轨迹与 meta 表的两个水位
+/// （undo-log 方案，见 [`Infer::meta_snapshot`] 文档）。
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct MetaSnapshot {
+    undo_len: usize,
+    meta_len: usize,
 }
 
 impl Infer {
     pub fn new() -> Self {
         Self {
             meta: vec![],
-            meta_contrains: vec![],
-            trait_solver: Default::default(),
-            trait_definition: Default::default(),
-            trait_out_param: Default::default(),
-            mutable_map: Default::default(),
-            hover_table: vec![],
-            completion_table: vec![],
-            collect_observations: true,
-            unify_fuel: std::cell::Cell::new(UNIFY_FUEL),
+            meta_undo: vec![],
+            mutable_map: RefCell::new(FxHashMap::default()),
+            simpl_cache: RefCell::new(FxHashMap::default()),
+            unify_fuel: std::cell::Cell::new(unify_fuel_budget()),
+            match_cmp_budget: std::cell::Cell::new(MATCH_CMP_BUDGET),
+            unify_kind: std::cell::Cell::new(UnifyKind::Absurd),
+            meta_expanding: RefCell::new(Vec::new()),
+            trait_solver: Synth::new(),
+            trait_definition: FxHashMap::default(),
+            trait_out_param: FxHashMap::default(),
+            trait_error: RefCell::new(None),
         }
     }
-    /// 关掉 LSP 观察表收集（见 `collect_observations` 字段注释）：bench/
-    /// 非 LSP 路径用，避免 hover 条目 clone `Cxt` 钉住 decl 表 `Rc`。
-    pub fn set_collect_observations(&mut self, on: bool) {
-        self.collect_observations = on;
+
+    fn new_meta(&mut self, a: VTy) -> MetaVar {
+        self.meta.push(MetaEntry::Unsolved(a));
+        MetaVar(self.meta.len() as u32 - 1)
     }
-    /// 烧 1 格 fuel；池空返回 `false`（调用方按各自失败语义降级）。
-    fn burn_fuel(&self) -> bool {
-        let f = self.unify_fuel.get();
-        if f == 0 {
-            return false;
+
+    /// 覆写既有 meta 槽为已解：旧条目 move 进撤销轨迹（零拷贝），快照回滚
+    /// 时按 LIFO 逆放。所有 `self.meta[i]` 的覆写必须走这里（`new_meta` 的
+    /// 追加槽由快照的 meta_len 水位覆盖，不入轨迹）。
+    fn overwrite_meta(&mut self, m: MetaVar, entry: MetaEntry) {
+        let old = std::mem::replace(&mut self.meta[m.0 as usize], entry);
+        self.meta_undo.push((m.0 as usize, old));
+    }
+
+    /// 生成一个元变量：类型按当前上下文封口，项形如 `?m <pruning>`（只取可见参数）。
+    ///
+    /// L10 增量：期望类型是 **trait Sum**（按名字在 `trait_out_param` 判形）
+    /// 时先尝试即时实例合成；无实例则挂未解 meta（**不走 pruning**），
+    /// 等 def 体检查完的 `solve_multi_trait` 统一求解/报错。期望类型可能被
+    /// 精化 σ 包裹，先 force 推开再判形。
+    fn fresh_meta(&mut self, decl: &Decls, cxt: &Cxt, a: VTy) -> Tm {
+        let a = self.force(decl, a);
+        if let Val::Sum(name, ..) = &a {
+            if self.trait_out_param.contains_key(name.data.as_str()) {
+                if let Ok(Some((tm, _))) = self.solve_trait(decl, cxt, a.clone()) {
+                    return tm;
+                }
+                let m = self.new_meta(a);
+                return Tm::Meta(m);
+            }
         }
-        self.unify_fuel.set(f - 1);
-        true
+        let closed = close_ty(cxt.locals.clone(), self.quote(decl, cxt.lvl, a));
+        let m = self.new_meta(self.eval(decl, &List::new(), &closed));
+        Tm::AppPruning(Box::new(Tm::Meta(m)), cxt.pruning.clone())
     }
-    /// 外层入口充值（L08 `meta_refuel` 同款纪律）。
-    fn refuel(&self) {
-        self.unify_fuel.set(UNIFY_FUEL);
-    }
-    /// fuel 是否已耗尽。消费点：覆盖探测（`probe_accessible`）失败时区分
-    /// "预算问题"与"结构冲突"——fuel 耗尽的失败按**可达**处理（保守要求
-    /// 覆盖）；反方向（判不可达 → 覆盖检查放过该构造子）会让深负载下的
-    /// 非穷尽 match 被静默接受（L07 评审 P1-2 前向传播）。
-    pub(crate) fn fuel_exhausted(&self) -> bool {
-        self.unify_fuel.get() == 0
-    }
-    fn new_meta(&mut self, a: Rc<VTy>, cxt: Cxt, origin_typ: Rc<VTy>) -> u32 {
-        self.meta.push(MetaEntry::Unsolved(a, std::sync::Arc::new(cxt), origin_typ));
-        self.meta.len() as u32 - 1
-    }
-    fn fresh_meta(&mut self, cxt: &Cxt, a: Rc<VTy>) -> Rc<Tm> {
-        // 期望类型可能被精化 σ 包裹：先推开，实例合成 / trait 判形才看得到
-        // 真实形态（对齐旧 refresh 后槽值已展开的世界）
-        let a = self.force(&cxt.decl, &a);
-        if let Ok(Some((a, _))) = self.solve_trait(cxt, &a) {
-            a
-        } else if let Val::Sum(_, _, _, true) = a.as_ref() {
-            let m = self.new_meta(a.clone(), cxt.clone(), a);
-            Tm::Meta(MetaVar(m)).into()
-        } else {
-            //let temp = &close_ty(&cxt.locals, self.quote(&cxt.decl, cxt.lvl, &a));
-            //println!("{:?}: {}", a, pretty_tm(0, cxt.names(), temp));
-            //println!("{:?}: {:?}", a, temp);
-            let closed = self.eval(
-                &cxt.decl,
-                &List::new(),
-                &close_ty(&cxt.locals, self.quote(&cxt.decl, cxt.lvl, &a)),
-            );
-            let m = self.new_meta(closed, cxt.clone(), a);
-            Tm::AppPruning(Tm::Meta(MetaVar(m)).into(), cxt.pruning.clone()).into()
+
+    /// 深 force：把 σ/VSub 推进 Sum/SumCase/Obj 的嵌套槽（trait 断言转
+    /// `Typ` 前的展开；新 L09 的 force 已在读点推开顶层，此函数只补结构槽）。
+    pub(crate) fn force_deep(&self, decl: &Decls, v: Val) -> Val {
+        match self.force(decl, v) {
+            Val::Sum(name, params, cases) => Val::Sum(
+                name,
+                Rc::new(
+                    params
+                        .iter()
+                        .map(|(n, v, t, i)| {
+                            (
+                                n.clone(),
+                                Rc::new(self.force_deep(decl, (**v).clone())),
+                                Rc::new(self.force_deep(decl, (**t).clone())),
+                                *i,
+                            )
+                        })
+                        .collect(),
+                ),
+                cases,
+            ),
+            Val::SumCase { typ, case_name, datas } => Val::SumCase {
+                typ: Rc::new(self.force_deep(decl, (*typ).clone())),
+                case_name,
+                datas: Rc::new(
+                    datas
+                        .iter()
+                        .map(|(n, v, i)| (n.clone(), Rc::new(self.force_deep(decl, (**v).clone())), *i))
+                        .collect(),
+                ),
+            },
+            Val::Obj(o, n, sp) => Val::Obj(Rc::new(self.force_deep(decl, (*o).clone())), n, sp),
+            other => other,
         }
     }
+
+    /// 取走最近一次 trait 求解失败的原因（Def 臂把 UnifyError 转 Error 文案）。
+    pub(crate) fn take_trait_error(&self) -> Option<String> {
+        self.trait_error.borrow_mut().take()
+    }
+
     fn lookup_meta(&self, m: MetaVar) -> &MetaEntry {
         &self.meta[m.0 as usize]
     }
-    fn force(&self, decl: &Decl, t: &Rc<Val>) -> Rc<Val> {
-        //println!("{} {:?}", "force".red(), t);
-        match t.as_ref() {
-            Val::Flex(m, sp) => match self.lookup_meta(*m) {
-                // 展开烧 fuel（L08 前向传播）：solve 无跨 meta occurs check，
-                // 解链成环时展开会无限递归；池空停止展开、按未解处理
-                MetaEntry::Solved(t_solved, _) if self.burn_fuel() => {
-                    self.force(decl, &self.v_app_sp(decl, t_solved.clone(), sp))
+
+    /// 元变量快照 / 回滚：模式编译的可达性探测在"临时状态"里做合一，
+    /// 探测期间解出的 meta 全部丢弃。
+    ///
+    /// 性能评审 P0-2：快照原是 `Vec<MetaEntry>` 全量深拷贝——`Solved(Val,
+    /// VTy)` 条目带解值，每次快照 = 全部已解 meta 的解值树克隆
+    /// （C 构造子 × O(M·size)，probe_accessible 逐构造子各来一次）。现为
+    /// undo-log 水位：覆写走 [`Infer::overwrite_meta`]（旧条目 move 入
+    /// `meta_undo`），追加槽由 `meta_len` 水位覆盖——快照 O(1)，恢复只逆放
+    /// 快照后发生的覆写。
+    pub(crate) fn meta_snapshot(&self) -> MetaSnapshot {
+        MetaSnapshot {
+            undo_len: self.meta_undo.len(),
+            meta_len: self.meta.len(),
+        }
+    }
+
+    pub(crate) fn meta_restore(&mut self, snap: MetaSnapshot) {
+        // 先逆放覆写（轨迹 LIFO；后入的条目对应后发生的覆写——同槽多次覆写
+        // 逐层还原），再截断快照后追加的槽。逆放可能触及 ≥ meta_len 的槽
+        // （快照后 push 又被覆写的），随后 truncate 一并丢弃——顺序不可换
+        // （先截断会越界写）。
+        while self.meta_undo.len() > snap.undo_len {
+            let (i, old) = self.meta_undo.pop().expect("meta_undo 水位不变式");
+            self.meta[i] = old;
+        }
+        self.meta.truncate(snap.meta_len);
+    }
+
+    /// 给 unify/force 的共享 fuel 池充值（外层合一入口调用）。
+    pub(crate) fn meta_refuel(&self) {
+        self.unify_fuel.set(unify_fuel_budget());
+    }
+
+    /// fuel 是否已耗尽（本编译单元的共享池）。错误诊断用：特化方程失败
+    /// 时区分"结构冲突（真 absurd）"与"预算耗尽（假 absurd）"。
+    pub(crate) fn fuel_exhausted(&self) -> bool {
+        self.unify_fuel.get() == 0
+    }
+
+    /// 顶层合一入口调用：每份"卡住 match 比较次数"预算重置（与孪生版
+    /// "每次 `unify_iter` 调用一份"同口径，review R3）。
+    pub(crate) fn reset_match_cmp_budget(&self) {
+        self.match_cmp_budget.set(MATCH_CMP_BUDGET);
+    }
+
+    /// 进入一次"真正的"卡住 match 逐分支比较（结构快路径失效之后）时消耗
+    /// 一次预算；返回 `false` 表示预算耗尽（调用方按"无法判定为相等"失败）。
+    pub(crate) fn burn_match_cmp_budget(&self) -> bool {
+        let b = self.match_cmp_budget.get();
+        if b == 0 {
+            false
+        } else {
+            self.match_cmp_budget.set(b - 1);
+            true
+        }
+    }
+
+    /// 顶层合一入口调用：把"失败原因"重置为中性值（`Absurd`，沿用旧口径）。
+    pub(crate) fn reset_unify_kind(&self) {        self.unify_kind.set(UnifyKind::Absurd);
+    }
+
+    /// 失败臂调用：按"最不结论化"的语义累积（`Absurd < Undecided < Fuel`）。
+    /// 一处判不出 ⇒ 整个方程判不出；一处预算耗尽 ⇒ 整个结果不可信。
+    pub(crate) fn note_unify_kind(&self, k: UnifyKind) {
+        let cur = self.unify_kind.get();
+        if k.rank() > cur.rank() {
+            self.unify_kind.set(k);
+        }
+    }
+
+    /// 读取当前失败原因（只在 `unify` 返回 `Err` 后有意义）。
+    pub(crate) fn unify_kind(&self) -> UnifyKind {
+        self.unify_kind.get()
+    }
+
+    /// 合一器**参数视角**的 WHNF：与 `force` 相同，但不做 Match 重选。
+    /// `invert` / `prune_vflex` 关心的是"元变量被应用在哪些**槽位**上"
+    /// ——槽位引用（`Rigid(x)`）本身就是作用域事实，分支内的精化等式
+    /// （x := zero）不改变槽位的存在；在它们身上展开反而会把可逆 spine
+    /// 变成含构造子值的不可逆 spine。
+    pub(crate) fn force_arg(&self, decl: &Decls, t: Val) -> Val {
+        // 精化包裹的槽位：逐层解包看裸形态（subst_cxt 可叠加——嵌套 match
+        // 的上下文被外层臂与内层臂各包一次）。解到底仍是 bare rigid ⇒ 槽位
+        // 保留（对齐旧"pm_defs 不参与 invert"的行为——旧版此处读到的正是
+        // 未展开的 Rigid(x)）；其余形态全量 force 推开。
+        let mut cur = &t;
+        while let Val::VSub(v, _) = cur {
+            cur = v;
+        }
+        match cur {
+            Val::Rigid(x, sp) if sp.is_empty() => Val::Rigid(*x, sp.clone()),
+            Val::Rigid(..) | Val::Match(..) => t,
+            _ => self.force(decl, t),
+        }
+    }
+
+    /// 把值更新到 metacontext / 模式特化的当前状态：元变量探测 + decl 表
+    /// 展开 + 卡住投影的再投影 + 模式精化展开。深度防护：meta 解链可能
+    /// 形成间接环（solve 无跨 meta occurs check），展开会无限递归——只在
+    /// **展开递归**时消耗 fuel（高频直通路径不消耗），fuel 耗尽时停止
+    /// 展开，把值当作未解处理。
+    pub fn force(&self, decl: &Decls, t: Val) -> Val {
+        match t {
+            Val::Flex(m, sp) => {
+                let solved = match self.lookup_meta(m) {
+                    MetaEntry::Solved(v, _) => Some(v.clone()),
+                    MetaEntry::Unsolved(_) => None,
+                };
+                match solved {
+                    Some(t_solved) => {
+                        // P5 跨 meta 环守卫：同一 meta 已在展开栈上 ⇒ 环。
+                        // 返回卡住的 Flex（与 fuel 耗尽的降级同形），把
+                        // "靠 fuel 兜底"变成确定性的有界终止。
+                        if self.meta_expanding.borrow().contains(&m) {
+                            if LOOP_DEBUG.load(Ordering::Relaxed) {
+                                eprintln!("  force meta cycle at {}", m.0);
+                            }
+                            return Val::Flex(m, sp);
+                        }
+                        if !burn(&self.unify_fuel) {
+                            return Val::Flex(m, sp);
+                        }
+                        if LOOP_DEBUG.load(Ordering::Relaxed) && self.unify_fuel.get() < 2200 {
+                            eprintln!("  force-expand meta {} (fuel {})", m.0, self.unify_fuel.get());
+                        }
+                        self.meta_expanding.borrow_mut().push(m);
+                        let out = self.force(decl, self.v_app_sp(decl, t_solved, sp));
+                        // 展开完成：弹出本次压栈的条目（rposition 容错嵌套）
+                        let mut st = self.meta_expanding.borrow_mut();
+                        if let Some(i) = st.iter().rposition(|x| *x == m) {
+                            st.remove(i);
+                        }
+                        drop(st);
+                        out
+                    }
+                    None => Val::Flex(m, sp),
                 }
-                _ => Val::Flex(*m, sp.clone()).into(),
-            },
+            }
             // 显式替换（dpm-nbe `frc`）：把模式精化的解推进值的结构。入口
             // 不烧 fuel——真正的精化传播只发生在被解变量的读点（frcs 的
-            // Rigid 臂 lookup 命中时烧 1），对齐旧 `update_cxt`+`refresh`
-            // 时代"读到被解槽才展开"的燃烧剖面；包裹/组合的机械开销免费。
-            Val::VSub(v, sub) => self.frcs(decl, sub, v.clone()),
-            Val::Obj(x, a, b) => {
-                Val::Obj(self.force(decl, x), a.clone(), b.clone()).into()
-            }
+            // Rigid 臂 lookup 命中时烧 1），对齐旧 pm_defs 时代
+            // "force(Rigid) 查表展开烧 1"的燃烧剖面；包裹/组合的机械开销
+            // 免费。fuel 耗尽的降级点也在 lookup 命中处（返回裸 rigid）。
+            Val::VSub(v, sub) => self.frcs(decl, &sub, (*v).clone()),
+            // Call 外衣：force 推进体后原样重包（显示信息保留）。
             Val::Call(name, args, body) => {
-                Val::Call(name.clone(), args.clone(), self.force(decl, body)).into()
+                Val::Call(name, args, Rc::new(self.force(decl, (*body).clone())))
             }
-            // 卡住的内建：实参按自然序（应用序）交给 PrimFunc（args 版）
-            // 归约；元数不足 / 实参不合 / 缺名 → None 保持卡住（不再读
-            // 求值环境槽，也不再重建 Prim 值——spine 原样保留）。
-            Val::Prim(typ, func, sp) => {
-                if sp.head().is_none() {
-                    return t.clone();
+            // 卡住的 match：scrutinee 是在 match 创建之后才被特化/解出时，
+            // 这里重新尝试选分支。没有这一步，精化无法传播进"卡住 match
+            // 里面"（期望类型 `Eq (add a zero) a` 的 `add a zero` 就是它）。
+            Val::Match(s, env, cases, pending) => {
+                let s2 = self.force(decl, (*s).clone());
+                if let Val::SumCase { .. } = &s2 {
+                    if burn(&self.unify_fuel) {
+                        if let Some((tm, env2)) =
+                            Compiler::eval_aux(self, decl, &s2, &env, &cases)
+                        {
+                            // 分支选中：先在值层应用卡住期累积的实参（值无需
+                            // quote，作用域天然正确；项层 splice 会把实参的
+                            // 自由变量引到错误上下文）。
+                            let mut v = self.eval(decl, &env2, tm);
+                            for (u, i) in pending.iter().cloned() {
+                                v = self.v_app(decl, v, u, i);
+                            }
+                            return self.force(decl, v);
+                        }
+                    }
                 }
-                let mut args: Vec<Rc<Val>> = sp.iter().map(|(v, _)| self.force(decl, v)).collect();
-                args.reverse(); // spine 头 = 最后应用 → 自然序
-                match (func.f)(self, decl, &args) {
-                    Some(v) => self.force(decl, &v),
-                    None => t.clone(),
+                Val::Match(s, env, cases, pending)
+            }
+            Val::Decl(name, sp) => match decl.get(&name) {
+                // L13 式 prim：归约函数挂在 decl 条目上；spine 是应用实参。
+                Some(e) if e.prim.is_some() => {
+                    if burn(&self.unify_fuel) {
+                        let mut args: Vec<Val> =
+                            sp.iter().map(|(v, _)| self.force(decl, v.clone())).collect();
+                        args.reverse();
+                        if let Some(v) = (e.prim.as_ref().unwrap().0)(self, decl, &args) {
+                            return self.force(decl, v);
+                        }
+                    }
+                    Val::Decl(name, sp)
+                }
+                // unfold 前先检查自引用占位（递归 def 的占位值与 simpl_decl
+                // 的中性条目都是 `Decl(自身名, [])`）：v_app_sp 后仍是原值，
+                // unfold 永无进展，只会自旋烧光 fuel 池。直接按中性返回。
+                Some(e)
+                    if !matches!(&e.val, Val::Decl(n2, s2) if *n2 == *name && s2.is_empty())
+                        && burn(&self.unify_fuel) =>
+                {
+                    self.force(decl, self.v_app_sp(decl, e.val.clone(), sp))
+                }
+                None => Val::Decl(name, sp),
+                _ => Val::Decl(name, sp),
+            },
+            // 卡住的内建：实参按自然序（应用序）交给对应 builtin 体归约
+            // （L06 builtin 注册表的全部函数体）；元数不足 / 实参不合 /
+            // 缺名时保持卡住。名字 + 实参 spine 由 eval(Tm::Prim) 构造。
+            // 实参先 force 再检查字面量：spine 槽可能存的是**未归约的嵌套
+            // prim**（如 change_mutable 存的 `f old`、源码里的嵌套应用），
+            // 不 force 则外层永远过不了字面量检查，prim 链失去可组合性
+            // （与 Val::Obj 分支先 force 头部的纪律对齐）。
+            Val::Prim(name, sp) => {
+                if burn(&self.unify_fuel) {
+                    let mut args: Vec<Val> =
+                        sp.iter().map(|(v, _)| self.force(decl, v.clone())).collect();
+                    args.reverse(); // spine 头 = 最后应用 → 自然序
+                    if let Some(v) = self.prim_reduce(decl, &name, &args) {
+                        return self.force(decl, v);
+                    }
+                }
+                Val::Prim(name, sp)
+            }
+            Val::Obj(v, name, sp) => {
+                let v = self.force(decl, (*v).clone());
+                match project(&v, &name) {
+                    Some(p) if burn(&self.unify_fuel) => {
+                        self.force(decl, self.v_app_sp(decl, p, sp))
+                    }
+                    _ => Val::Obj(Rc::new(v), name, sp),
                 }
             }
-            _ => t.clone(),
+            t => t,
         }
     }
 
     /// 把替换 `σ` 推进值 `v` 的结构（dpm-nbe `frcS`）。与 `force` 的分工：
-    /// σ 是本次精化的局部解，只作用于**被包裹过**的值；推进到中性头为止
-    /// ——spine 逐槽推进，闭包 env 逐槽包裹（惰性，不进入闭包体重求值）；
-    /// Scrutinee 推进后可重选分支。对应 dpm-nbe `napp (lookupSub sb v)
-    /// (frcS sb sp)`。
-    fn frcs(&self, decl: &Decl, sub: &Rc<Subst>, v: Rc<Val>) -> Rc<Val> {
+    /// σ 是本次精化的局部解，只作用于**被包裹过**的值；头部与 scrutinee
+    /// 推进、闭包 env 逐槽包裹（惰性，不进入闭包体重求值）；spine 槽与
+    /// Sum/SumCase 槽**只包裹不物化**（见下各行内注释——槽位引用是作用域
+    /// 事实，物化会破坏后续 solve 的 invert）。
+    fn frcs(&self, decl: &Decls, sub: &Rc<Subst>, v: Val) -> Val {
         if sub.is_empty() {
-            return self.force(decl, &v);
+            return self.force(decl, v);
         }
-        match v.as_ref() {
+        match v {
+            // Call 外衣：σ 只推进体（显示实参是来源项，不含 σ 语义）。
+            Val::Call(name, args, body) => {
+                Val::Call(name, args, Rc::new(self.frcs(decl, sub, (*body).clone())))
+            }
             // 内层先应用、外层后应用：组合后一次推进（frcS (subst sb sb') v）
             Val::VSub(v2, sub2) => {
-                let composed = Subst::compose(sub, sub2);
-                self.frcs(decl, &composed, v2.clone())
+                let composed = Subst::compose(sub, &sub2);
+                self.frcs(decl, &composed, (*v2).clone())
             }
             // 被解变量的读点：lookup 命中（真正的精化传播）烧 1 fuel——
-            // 对齐旧 refresh 重求值被解槽的燃烧剖面；fuel 耗尽按未解处理
-            // （返回裸 rigid，有界降级，防闭环无限推进）。解值带实参但头
-            // 不可应用（对非函数解变量做应用的 ill-typed 形态）时保持卡住。
+            // 对齐旧 pm_defs 的 force(Rigid) 查表展开烧 1 剖面；fuel 耗尽
+            // 按未解处理（返回裸 rigid，有界降级，防闭环无限推进，也断了
+            // v_app ↔ force 在 fuel=0 角落的互递归）。未命中零成本直通。
+            // 解出值按应用序（spine 尾到头）经 v_app 拼接（λ ⇒ β；Match ⇒
+            // pending；中性头 ⇒ spine）——对应 dpm-nbe
+            // `napp (lookupSub sb v) (frcS sb sp)`。解值带实参但头不可应用
+            // （对非函数解变量做应用的 ill-typed 形态）时保持卡住，不进
+            // v_app（η 臂的 v_applicable 守卫同款加固）。
             Val::Rigid(x, sp) => {
-                let mut head = match sub.lookup_hit(*x) {
+                let mut head = match sub.lookup_hit(x) {
                     Some(hit) => {
                         if !burn(&self.unify_fuel) {
-                            return Rc::new(Val::Rigid(*x, sp.clone()));
+                            return Val::Rigid(x, sp);
                         }
-                        self.force(decl, &hit)
+                        self.force(decl, hit)
                     }
-                    None => Rc::new(Val::vvar(*x)),
+                    None => Val::vvar(x),
                 };
-                if !sp.is_empty() && !v_applicable(&head) {
-                    return Rc::new(Val::Rigid(*x, sp.clone()));
+                // 头不可应用守卫：比 η 臂共用的 `v_applicable` **多放行 Lam**
+                // ——解值是 λ 且读点带实参是良型形态（β 应用），卡住反而与
+                // 孪生 `vapp_ok`（Clo tag 放行）分裂（D4-F1 对齐：只改 frcs
+                // 读点，η 臂的 v_applicable 语义不变——λ 与不可应用值相遇
+                // 在那里仍不展开）。
+                if !sp.is_empty() && !matches!(head, Val::Lam(..)) && !v_applicable(&head) {
+                    return Val::Rigid(x, sp);
                 }
-                let args: Vec<(Rc<Val>, Icit)> = sp.iter().cloned().collect();
+                let args: Vec<(Val, Icit)> = sp.iter().cloned().collect();
                 for (u, i) in args.into_iter().rev() {
-                    head = self.v_app(decl, &head, wrap_sub(sub, u), i);
+                    head = self.v_app(decl, head, wrap_sub(sub, u), i);
                 }
                 head
             }
             // 中性头的 spine 槽只**包裹**不推进——槽位引用是作用域事实，
             // 物化会破坏后续 solve 的 invert（与 force_arg 的分工同一理由；
             // 旧 force 也从不触碰 spine 槽）。包裹后交回 force 重走既有臂
-            // （meta 解 / 投影 / Call 内联）。
-            Val::Flex(m, sp) => {
-                self.force(decl, &Rc::new(Val::Flex(*m, self.wrap_sp(sub, sp.clone()))))
-            }
-            Val::Decl(name, sp) => {
-                self.force(decl, &Rc::new(Val::Decl(name.clone(), self.wrap_sp(sub, sp.clone()))))
-            }
-            Val::Obj(o, name, sp) => self.force(decl, &Rc::new(Val::Obj(
-                self.frcs(decl, sub, o.clone()),
-                name.clone(),
-                self.wrap_sp(sub, sp.clone()),
-            ))),
-            Val::Call(name, args, body) => self.force(decl, &Rc::new(Val::Call(
-                name.clone(),
-                args.clone(),
-                self.frcs(decl, sub, body.clone()),
-            ))),
+            // （meta 解 / decl 展开 / prim 归约 / 投影），保持"σ 之下的值
+            // force 到同一 WHNF 形态"的旧语义。
+            Val::Flex(m, sp) => self.force(decl, Val::Flex(m, self.wrap_sp(sub, sp))),
+            Val::Decl(name, sp) => self.force(decl, Val::Decl(name, self.wrap_sp(sub, sp))),
+            Val::Prim(name, sp) => self.force(decl, Val::Prim(name, self.wrap_sp(sub, sp))),
+            Val::Obj(o, name, sp) => self.force(decl, Val::Obj(
+                Rc::new(self.frcs(decl, sub, (*o).clone())),
+                name,
+                self.wrap_sp(sub, sp),
+            )),
             // 闭包 env 逐槽包裹（dpm-nbe `subst sb cl` 的惰性形态）
-            Val::Lam(x, i, cl) => Rc::new(Val::Lam(
-                x.clone(),
-                *i,
-                Closure(self.frcs_env(sub, &cl.0), cl.1.clone()),
-            )),
-            Val::Pi(x, i, a, cl) => Rc::new(Val::Pi(
-                x.clone(),
-                *i,
-                self.frcs(decl, sub, a.clone()),
-                Closure(self.frcs_env(sub, &cl.0), cl.1.clone()),
-            )),
+            Val::Lam(x, i, cl) => Val::Lam(x, i, Closure(self.frcs_env(sub, &cl.0), cl.1)),
+            Val::Pi(x, i, a, cl) => Val::Pi(
+                x,
+                i,
+                Rc::new(self.frcs(decl, sub, (*a).clone())),
+                Closure(self.frcs_env(sub, &cl.0), cl.1),
+            ),
             // Sum/SumCase 的槽位同样只包裹（旧 force 不进入这些结构）
-            Val::Sum(name, params, cases, is_trait) => Rc::new(Val::Sum(
-                name.clone(),
-                params
-                    .iter()
-                    .map(|(n, v, t, i)| {
-                        (
-                            n.clone(),
-                            wrap_sub(sub, v.clone()),
-                            wrap_sub(sub, t.clone()),
-                            *i,
-                        )
-                    })
-                    .collect(),
-                cases.clone(),
-                *is_trait,
-            )),
+            Val::Sum(name, params, cases) => Val::Sum(
+                name,
+                Rc::new(
+                    params
+                        .iter()
+                        .map(|(n, v, t, i)| {
+                            (
+                                n.clone(),
+                                Rc::new(wrap_sub(sub, rc_take(v.clone()))),
+                                Rc::new(wrap_sub(sub, rc_take(t.clone()))),
+                                *i,
+                            )
+                        })
+                        .collect::<Vec<_>>(),
+                ),
+                Rc::new((*cases).clone()),
+            ),
             Val::SumCase {
-                is_trait,
                 typ,
                 case_name,
                 datas,
-            } => Rc::new(Val::SumCase {
-                is_trait: *is_trait,
-                typ: wrap_sub(sub, typ.clone()),
-                case_name: case_name.clone(),
-                datas: datas
-                    .iter()
-                    .map(|(n, v, i)| (n.clone(), wrap_sub(sub, v.clone()), *i))
-                    .collect(),
-            }),
-            // scrutinee **推进**：旧 `refresh` 在槽值重求值时，若被解变量
-            // 是卡住 match 的 scrutinee，会连带重选分支——这里等价地在
-            // 推进后若已是构造子值就按首匹配重选。捕获 env 与 Call origin
-            // 实参只包裹。
-            Val::Match(s, env, cases, origin) => {
-                let s2 = self.frcs(decl, sub, s.clone());
-                let env2 = self.frcs_env(sub, env);
-                if matches!(s2.as_ref(), Val::SumCase { .. }) && burn(&self.unify_fuel) {
-                    if let Some((tm, env3)) = Compiler::eval_aux(self, &s2, decl, &env2, cases) {
-                        return self.force(decl, &self.eval(decl, &env3, &tm));
-                    }
-                }
-                Rc::new(Val::Match(
-                    s2,
-                    env2,
-                    cases.clone(),
-                    origin
-                        .clone()
-                        .map(|(n, args)| (n, args.into_iter().map(|a| wrap_sub(sub, a)).collect())),
-                ))
-            }
-            // 卡住内建：typ / func 与 σ 无关，spine 槽只包裹（交回 force
-            // 重走 Prim 归约臂，保持“σ 之下的值 force 到同一 WHNF 形态”）
-            Val::Prim(typ, func, sp) => self.force(
+            } => Val::SumCase {
+                typ: Rc::new(wrap_sub(sub, rc_take(typ))),
+                case_name,
+                datas: Rc::new(
+                    datas
+                        .iter()
+                        .map(|(n, v, i)| {
+                            (n.clone(), Rc::new(wrap_sub(sub, rc_take(v.clone()))), *i)
+                        })
+                        .collect::<Vec<_>>(),
+                ),
+            },
+            // scrutinee **推进**（重选分支需要解出的构造子值）；捕获 env 与
+            // pending 只包裹。交回 force：scrutinee 若已是构造子值，force 的
+            // Match 臂按同一纪律重选分支
+            Val::Match(s, env, cases, pending) => self.force(
                 decl,
-                &Rc::new(Val::Prim(typ.clone(), func.clone(), self.wrap_sp(sub, sp.clone()))),
+                Val::Match(
+                    Rc::new(self.frcs(decl, sub, (*s).clone())),
+                    self.frcs_env(sub, &env),
+                    cases,
+                    pending
+                        .into_iter()
+                        .map(|(u, i)| (wrap_sub(sub, u), i))
+                        .collect(),
+                ),
             ),
-            // U / 字面量：σ 无从推进
-            Val::U(_) | Val::LiteralType | Val::LiteralIntro(_) => v,
+            t => t,
         }
     }
 
@@ -907,126 +1215,291 @@ impl Infer {
         if sub.is_empty() {
             return env.clone();
         }
-        env.map(|v| Rc::new(Val::VSub(v.clone(), sub.clone())))
+        env.map(|v| Val::VSub(Rc::new(v.clone()), sub.clone()))
     }
 
-    /// `to_typ` / trait 求解等"结构消费者"的深读点：force 到 WHNF 后，若
-    /// 顶层是 Sum/SumCase，把**槽位值也 force 推开**（旧机制下这些槽位已被
-    /// update_cxt/refresh 物化；新机制只包裹，故此处按需展开）。只服务
-    /// trait 求解边界（非热路径），不进入 spine/闭包体。
-    pub(crate) fn force_deep(&self, decl: &Decl, v: &Rc<Val>) -> Rc<Val> {
-        let v = self.force(decl, v);
-        match v.as_ref() {
-            Val::Sum(name, params, cases, is_trait) => Rc::new(Val::Sum(
-                name.clone(),
-                params
-                    .iter()
-                    .map(|(n, x, t, i)| {
-                        (n.clone(), self.force_deep(decl, x), self.force_deep(decl, t), *i)
-                    })
-                    .collect(),
-                cases.clone(),
-                *is_trait,
-            )),
-            Val::SumCase {
-                is_trait,
-                typ,
-                case_name,
-                datas,
-            } => Rc::new(Val::SumCase {
-                is_trait: *is_trait,
-                typ: self.force_deep(decl, typ),
-                case_name: case_name.clone(),
-                datas: datas
-                    .iter()
-                    .map(|(n, x, i)| (n.clone(), self.force_deep(decl, x), *i))
-                    .collect(),
-            }),
-            _ => v,
-        }
-    }
-
-    /// 合一器**参数视角**的 WHNF：与 `force` 相同，但不展开精化、不做
-    /// Match 重选。`invert` / `prune_vflex` 关心的是"元变量被应用在哪些
-    /// **槽位**上"——槽位引用（`Rigid(x)`）本身就是作用域事实，分支内的
-    /// 精化等式（x := zero）不改变槽位的存在；在它们身上展开反而会把可逆
-    /// spine 变成含构造子值的不可逆 spine。逐层解包 VSub（subst_cxt 可
-    /// 叠加——嵌套 match 的上下文被外层臂与内层臂各包一次）。
-    pub(crate) fn force_arg(&self, decl: &Decl, t: &Rc<Val>) -> Rc<Val> {
-        {
-            let mut cur: &Val = t.as_ref();
-            while let Val::VSub(v, _) = cur {
-                cur = v.as_ref();
-            }
-            match cur {
-                Val::Rigid(x, sp) if sp.is_empty() => {
-                    return Rc::new(Val::Rigid(*x, List::new()));
+    /// 卡住内建的归约体（L06 builtin 注册表的逐句移植，force 时触发）。
+    /// `args` 自然序（最先应用在前）；元数 / 字面量检查与 L06 的
+    /// `PrimFunc` 逐条对应，不满足即 None 保持卡住。文件族 IO 失败同样
+    /// 保持卡住（None，与实参非字面量同口径）——源码可达路径不 panic。
+    pub(crate) fn prim_reduce(&self, decl: &Decls, name: &str, args: &[Val]) -> Option<Val> {
+        let lit = |v: &Val| match v {
+            Val::LiteralIntro(s) => Some(s.data.clone()),
+            _ => None,
+        };
+        match name {
+            "string_concat" => {
+                if args.len() < 2 {
+                    return None;
                 }
-                Val::Rigid(..) | Val::Match(..) => return t.clone(),
-                _ => {}
+                match (&args[0], &args[1]) {
+                    (Val::LiteralIntro(a), Val::LiteralIntro(b)) => Some(Val::LiteralIntro(vspan(
+                        tmspan(&a).map(|x| format!("{x}{}", b.data)),
+                    ))),
+                    _ => None,
+                }
             }
+            "str_eq" => {
+                if args.len() < 2 {
+                    return None;
+                }
+                match (lit(&args[0]), lit(&args[1])) {
+                    (Some(a), Some(b)) => {
+                        let s = if a == b { "true" } else { "false" };
+                        Some(Val::LiteralIntro(vspan(empty_span(s.to_string()))))
+                    }
+                    _ => None,
+                }
+            }
+            "str_indent2" => {
+                if args.is_empty() {
+                    return None;
+                }
+                match lit(&args[0]) {
+                    Some(s) => Some(Val::LiteralIntro(vspan(empty_span(s.replace('\n', "\n  "))))),
+                    None => None,
+                }
+            }
+            "report_check_issue" => {
+                if args.len() < 4 {
+                    return None;
+                }
+                let get = |i: usize| lit(&args[i]).unwrap_or_default();
+                let (code, module, signal, message) = (get(0), get(1), get(2), get(3));
+                if code.is_empty() || module.is_empty() {
+                    return Some(Val::U(0));
+                }
+                let line = format!("{}|{}|{}|{}", code, module, signal, message);
+                let mut map = self.mutable_map.borrow_mut();
+                let existing = match map.get("CheckIssues") {
+                    Some(v) => lit(v).unwrap_or_default(),
+                    None => String::new(),
+                };
+                if !existing.split('\n').any(|l| l == line) {
+                    let next = if existing.is_empty() {
+                        line
+                    } else {
+                        format!("{}\n{}", existing, line)
+                    };
+                    map.insert("CheckIssues".into(), Val::LiteralIntro(vspan(empty_span(next))));
+                }
+                Some(Val::U(0))
+            }
+            "string_to_global_type" => {
+                if args.is_empty() {
+                    return None;
+                }
+                match lit(&args[0]) {
+                    // 登记名给登记**类型**（类型即值）；未登记名返回以其自身
+                    // 名字的卡住 Decl——动态类型的逃逸舱口（L06 同款），后续
+                    // unify 里按宽松臂处理
+                    Some(a) => Some(match decl.get(a.as_str()) {
+                        Some(e) => e.ty.clone(),
+                        None => Val::Decl(SmolStr::new(a), List::new()),
+                    }),
+                    None => None,
+                }
+            }
+            "create_global" => {
+                if args.len() < 2 {
+                    return None;
+                }
+                match lit(&args[0]) {
+                    Some(a) => {
+                        self.mutable_map.borrow_mut().insert(SmolStr::new(a), args[1].clone());
+                        Some(Val::U(0))
+                    }
+                    None => None,
+                }
+            }
+            "change_mutable" => {
+                if args.len() < 2 {
+                    return None;
+                }
+                match lit(&args[0]) {
+                    Some(a) => {
+                        // 先取旧值并结束借用，再求值 f——f 的求值可能再触发
+                        // 任何 prim（get_global 等），持有借用会 BorrowError
+                        let old = self.mutable_map.borrow().get(a.as_str()).cloned();
+                        if let Some(old) = old {
+                            let new = self.v_app(decl, args[1].clone(), old, Icit::Expl);
+                            self.mutable_map.borrow_mut().insert(SmolStr::new(a), new);
+                        }
+                        Some(Val::U(0))
+                    }
+                    None => None,
+                }
+            }
+            "get_global" => {
+                if args.is_empty() {
+                    return None;
+                }
+                // 缺名保持卡住（None），不 panic
+                match lit(&args[0]) {
+                    Some(a) => self.mutable_map.borrow().get(SmolStr::new(a).as_str()).cloned(),
+                    None => None,
+                }
+            }
+            "get_global_default" => {
+                if args.len() < 2 {
+                    return None;
+                }
+                match lit(&args[0]) {
+                    Some(a) => Some(
+                        self.mutable_map
+                            .borrow()
+                            .get(SmolStr::new(a).as_str())
+                            .cloned()
+                            .unwrap_or_else(|| args[1].clone()),
+                    ),
+                    None => None,
+                }
+            }
+            "change_mutable_default" => {
+                if args.len() < 3 {
+                    return None;
+                }
+                match lit(&args[0]) {
+                    Some(a) => {
+                        let existing = self.mutable_map.borrow().get(a.as_str()).cloned();
+                        match existing {
+                            Some(old) => {
+                                let new = self.v_app(decl, args[1].clone(), old, Icit::Expl);
+                                self.mutable_map.borrow_mut().insert(SmolStr::new(a), new);
+                            }
+                            None => {
+                                self.mutable_map.borrow_mut().insert(SmolStr::new(a), args[2].clone());
+                            }
+                        }
+                        Some(Val::U(0))
+                    }
+                    None => None,
+                }
+            }
+            "file_read_all_text" => {
+                if args.is_empty() {
+                    return None;
+                }
+                match lit(&args[0]) {
+                    Some(path) => std::fs::read_to_string(&path)
+                        .ok()
+                        .map(|content| Val::LiteralIntro(vspan(empty_span(content)))),
+                    None => None,
+                }
+            }
+            "file_write_all_text" => {
+                if args.len() < 2 {
+                    return None;
+                }
+                match (lit(&args[0]), lit(&args[1])) {
+                    (Some(path), Some(content)) => {
+                        std::fs::write(&path, &content).ok().map(|()| Val::U(0))
+                    }
+                    _ => None,
+                }
+            }
+            "file_append_all_text" => {
+                if args.len() < 2 {
+                    return None;
+                }
+                match (lit(&args[0]), lit(&args[1])) {
+                    (Some(path), Some(content)) => {
+                        use std::io::Write;
+                        std::fs::OpenOptions::new()
+                            .append(true)
+                            .create(true)
+                            .open(&path)
+                            .and_then(|mut file| write!(file, "{}", content))
+                            .ok()
+                            .map(|()| Val::U(0))
+                    }
+                    _ => None,
+                }
+            }
+            "file_exists" => {
+                if args.is_empty() {
+                    return None;
+                }
+                match lit(&args[0]) {
+                    Some(path) => {
+                        let exists = std::path::Path::new(&path).exists();
+                        Some(Val::LiteralIntro(vspan(empty_span(if exists {
+                            "true".to_string()
+                        } else {
+                            "false".to_string()
+                        }))))
+                    }
+                    None => None,
+                }
+            }
+            "file_delete" => {
+                if args.is_empty() {
+                    return None;
+                }
+                match lit(&args[0]) {
+                    Some(path) => std::fs::remove_file(&path).ok().map(|()| Val::U(0)),
+                    None => None,
+                }
+            }
+            _ => None,
         }
-        self.force(decl, t)
     }
-    fn v_meta(&self, m: MetaVar) -> Rc<Val> {
+
+    fn v_meta(&self, m: MetaVar) -> Val {
         match self.lookup_meta(m) {
             MetaEntry::Solved(v, _) => v.clone(),
-            MetaEntry::Unsolved(_, _, _) => Val::vmeta(m).into(),
+            MetaEntry::Unsolved(_) => Val::vmeta(m),
         }
     }
 
-    fn closure_apply(&self, decl: &Decl, closure: &Closure, u: Rc<Val>) -> Rc<Val> {
-        //println!("{} {:?} {:?}", "closure apply".yellow(), closure, u);
+    fn closure_apply(&self, decl: &Decls, closure: &Closure, u: Val) -> Val {
+        // eval 借用化（P0-1 第 2 步）：直接走读 Rc 闭包体，β 不再深拷贝体
         self.eval(decl, &closure.0.prepend(u), &closure.1)
     }
 
-    fn v_app(&self, decl: &Decl, t: &Rc<Val>, u: Rc<Val>, i: Icit) -> Rc<Val> {
-        //println!("v_app {t:?} {u:?}");
-        match t.as_ref() {
-            // 精化包裹的值先推开再分发（eval(App) 等不经 force 的调用点会把
-            // VSub 头送进来——如臂上下文里 Var 引用了被解槽；force 顶层不再
-            // 产出 VSub，递归必终止）
+    /// 把 `u` 应用到 `t`。卡住的 match 把实参收进 `pending`（值层保存）——
+    /// scrutinee 归约选中分支后，由 `force` / `eval` 在**值层**逐个应用：
+    /// 项层 splice 需要把实参 quote 成项，而实参的自由变量层级可能超出
+    /// 捕获 env，无法引到正确上下文。
+    fn v_app(&self, decl: &Decls, t: Val, u: Val, i: Icit) -> Val {
+        match t {
+            // 精化包裹的值先推开再分发（eval(App) 等不经 force 的调用点
+            // 会把 VSub 头送进来——如臂上下文里 Var 引用了被解槽）
             Val::VSub(..) => {
                 let t = self.force(decl, t);
-                self.v_app(decl, &t, u, i)
+                self.v_app(decl, t, u, i)
             }
-            Val::Lam(_, _, closure) => self.closure_apply(decl, closure, u),
-            Val::Flex(m, sp) => Val::Flex(*m, sp.prepend((u, i))).into(),
-            Val::Rigid(x, sp) => Val::Rigid(*x, sp.prepend((u, i))).into(),
-            Val::Decl(x, sp) => Val::Decl(x.clone(), sp.prepend((u, i))).into(),
-            Val::Obj(x, name, sp) => Val::Obj(x.clone(), name.clone(), sp.prepend((u, i))).into(),
-            // 卡住内建头：实参压 spine 后**立刻尝试归约**（对齐旧 λ 链模型
-            // “eval(App) 到达元数即执行 builtin 体”的求值期副作用时序：
-            // create_global 等即使绑定值被丢弃/只在后续 get_global 读取，
-            // 副作用也必须在应用求值时发生）。不满足元数/实参合 → 保持卡住。
-            Val::Prim(typ, func, sp) => {
-                let applied: Rc<Val> =
-                    Val::Prim(typ.clone(), func.clone(), sp.prepend((u, i))).into();
-                self.force(decl, &applied)
+            Val::Lam(_, _, closure) => self.closure_apply(decl, &closure, u),
+            Val::Flex(m, sp) => Val::Flex(m, sp.prepend((u, i))),
+            Val::Rigid(x, sp) => Val::Rigid(x, sp.prepend((u, i))),
+            Val::Decl(name, sp) => Val::Decl(name, sp.prepend((u, i))),
+            Val::Obj(v, name, sp) => Val::Obj(v, name, sp.prepend((u, i))),
+            Val::Prim(name, sp) => Val::Prim(name, sp.prepend((u, i))),
+            Val::Match(val, env, cases, mut pending) => {
+                pending.push((u, i));
+                Val::Match(val, env, cases, pending)
             }
-            Val::Call(_, _, body) => self.v_app(decl, body, u, i),
-            x => panic!("impossible apply\n  {:?}\nto\n  {:?}", x, u),
+            Val::Call(_, _, body) => self.v_app(decl, (*body).clone(), u, i),
+            x => panic!("impossible apply\n  {x:?}\nto\n  {u:?}"),
         }
     }
 
-    fn v_app_sp(&self, decl: &Decl, t: Rc<Val>, spine: &Spine) -> Rc<Val> {
-        //spine.iter().rev().fold(t, |acc, (u, i)| self.v_app(acc, u.clone(), *i))
+    fn v_app_sp(&self, decl: &Decls, t: Val, spine: Spine) -> Val {
         match spine {
             List { head: None, .. } => t,
             a => {
                 let (u, i) = a.head().unwrap();
-                self.v_app(decl, &self.v_app_sp(decl, t, &a.tail()), u.clone(), *i)
+                self.v_app(decl, self.v_app_sp(decl, t, a.tail()), u.clone(), *i)
             }
         }
     }
 
-    fn v_app_pruning(&self, decl: &Decl, env: &Env, v: Rc<Val>, pr: &Pruning) -> Rc<Val> {
-        //println!("{} {:?} {:?}", "v_app_bds".green(), v, bds);
+    fn v_app_pruning(&self, decl: &Decls, env: &Env, v: Val, pr: &Pruning) -> Val {
         match (env, pr) {
             (List { head: None, .. }, List { head: None, .. }) => v,
             (a, b) if a.head().is_some() && matches!(b.head(), Some(Some(_))) => self.v_app(
                 decl,
-                &self.v_app_pruning(decl, &a.tail(), v, &b.tail()),
+                self.v_app_pruning(decl, &a.tail(), v, &b.tail()),
                 a.head().unwrap().clone(),
                 b.head().unwrap().unwrap(),
             ),
@@ -1037,1819 +1510,1028 @@ impl Infer {
         }
     }
 
-    fn eval(&self, decl: &Decl, env: &Env, tm: &Rc<Tm>) -> Rc<Val> {
-        //println!("{} {:?}", "eval".yellow(), tm);
-        match tm.as_ref() {
+    /// eval 借用化（性能评审 P0-1 第 2 步）：按 `&Tm` 求值——β 归约
+    /// （`closure_apply`）直接走读 `Rc` 闭包体，**每次 β 的体深拷贝消失**。
+    /// 两处代价（均远小于旧"每 β 深拷贝整个函数体"的常量）：
+    /// - Lam/Pi 臂从"move Box 进闭包"变为 `Rc::new(体.clone())`——每次该
+    ///   λ 项被求值时拷贝一次**体里的 λ 子树**（非 λ 结构零拷贝；无嵌套
+    ///   λ 的分支体如 `succ (add n y)` 完全免拷贝）；
+    /// - Match 臂把 cases move 进值变为卡住时 `cases.clone()`（选中分支
+    ///   的 Some 路径不克隆）。
+    fn eval(&self, decl: &Decls, env: &Env, tm: &Tm) -> Val {
+        match tm {
             Tm::Var(x) => match env.iter().nth(x.0 as usize) {
                 Some(v) => v.clone(),
-                None => panic!("var {:?} not found", x.0),
+                None => panic!("unbound de Bruijn index {x:?}"),
             },
-            Tm::Decl(x) => decl.get(&x.data).map(|x| x.2.clone()).unwrap_or(Val::Decl(x.clone(), List::new()).into()),//TODO:directly unwrap?
+            Tm::Decl(name) => match decl.get(name) {
+                Some(e) if e.prim.is_some() => Val::Decl(name.clone(), List::new()),
+                Some(e) => e.val.clone(),
+                None => panic!("unbound global {name}"),
+            },
             Tm::Obj(tm, name) => {
-                let a = self.eval(decl, env, tm);
-                let a = self.force(decl, &a);
-                match a.as_ref() {
-                    Val::Sum(_, params, _, _) => {
-                        params.iter()
-                            .find(|(f_name, _, _, _)| f_name == name)
-                            .unwrap().1.clone()
-                    },
-                    Val::SumCase { datas, typ, .. } => {
-                        (match typ.as_ref() {
-                            Val::Sum(_, params, _, _) => params,
-                            _ => panic!("impossible {typ:?}"),
-                        }).iter()
-                            .map(|x| (x.0.clone(), x.1.clone(), x.3))
-                            .chain(datas.iter().cloned())
-                        //datas.into_iter()
-                            .find(|(f_name, _, _)| f_name == name)
-                            .unwrap().1.clone()
-                    },
-                    _ => {
-                        Val::Obj(a, name.clone(), List::new()).into()
-                    },
+                let v = self.eval(decl, env, tm);
+                match project(&v, name) {
+                    Some(p) => p,
+                    None => Val::Obj(Rc::new(v), vspan(name.clone()), List::new()),
                 }
             }
-            Tm::App(t, u, i) => self.v_app(decl, &self.eval(decl, env, t), self.eval(decl, env, u), *i),
-            Tm::Lam(x, i, t) => Val::Lam(x.clone(), *i, Closure(env.clone(), t.clone())).into(),
-            Tm::Pi(x, i, a, b) => {
-                Val::Pi(x.clone(), *i, self.eval(decl, env, a), Closure(env.clone(), b.clone())).into()
+            Tm::App(t, u, i) => {
+                let u_val = self.eval(decl, env, u);
+                self.v_app(decl, self.eval(decl, env, t), u_val, *i)
             }
+            Tm::Lam(x, i, t) => {
+                // body 已是 Rc：closure 直接共享，不再深拷剩余 λ 链（O(n²)）。
+                Val::Lam(vspan(x.clone()), *i, Closure(env.clone(), t.clone()))
+            }
+            Tm::Pi(x, i, a, b) => Val::Pi(
+                vspan(x.clone()),
+                *i,
+                Rc::new(self.eval(decl, env, a)),
+                Closure(env.clone(), b.clone()),
+            ),
             Tm::Let(_, _, t, u) => {
                 let t_val = self.eval(decl, env, t);
                 self.eval(decl, &env.prepend(t_val), u)
             }
-            Tm::U(x) => Val::U(*x).into(),
+            Tm::U(x) => Val::U(*x),
             Tm::Meta(m) => self.v_meta(*m),
             Tm::AppPruning(t, pr) => self.v_app_pruning(decl, env, self.eval(decl, env, t), pr),
-            Tm::LiteralIntro(x) => Val::LiteralIntro(x.clone()).into(),
-            Tm::LiteralType => Val::LiteralType.into(),
-            // 零元卡住头：实参一律经 App 到达（spine 由 v_app 压栈），
-            // 归约统一在 force；不读现场 env，也不再在求值时调用函数
-            Tm::Prim(typ, func) => Val::Prim(typ.clone(), func.clone(), List::new()).into(),
-            Tm::Sum(name, params, cases, is_trait) => {
+            Tm::LiteralIntro(x) => Val::LiteralIntro(vspan(x.clone())),
+            Tm::LiteralType => Val::LiteralType,
+            Tm::Prim(name) => {
+                // 零元卡住头：实参一律经 App 到达（builtin 值的 λ 链体是
+                // App 链，quote 产物也是 `Prim 实参` 应用形态）。**不读现场
+                // env**——旧实现把 env 全槽收集进 spine，只在"builtin λ 链
+                // 体"的正典路径下正确；quoted Prim 在其它 env 下重求值
+                // （fresh_meta 的 close_ty 闭包体、solve 的 lams、prune 的
+                // 类型重求值）会捕获无关 env 槽、spine 长度失真，unify_sp
+                // 长度失配即误报。归约统一在 force（prim_reduce）。
+                Val::Prim(name.clone(), List::new())
+            }
+            Tm::Sum(name, params, cases) => {
                 let new_params = params
                     .iter()
-                    .map(|x| (x.0.clone(), self.eval(decl, env, &x.1), self.eval(decl, env, &x.2), x.3))
+                    .map(|(n, v, t, i)| {
+                        (
+                            vspan(n.clone()),
+                            Rc::new(self.eval(decl, env, v)),
+                            Rc::new(self.eval(decl, env, t)),
+                            *i,
+                        )
+                    })
                     .collect();
-                Val::Sum(name.clone(), new_params, cases.clone(), *is_trait).into()
+                Val::Sum(
+                    vspan(name.clone()),
+                    Rc::new(new_params),
+                    Rc::new(cases.iter().map(|c| vspan(c.clone())).collect()),
+                )
             }
             Tm::SumCase {
-                is_trait,
                 typ,
                 case_name,
                 datas,
             } => {
+                let typ = self.eval(decl, env, typ);
                 let datas = datas
                     .iter()
-                    .map(|p| (p.0.clone(), self.eval(decl, env, &p.1), p.2))
+                    .map(|(n, v, i)| (vspan(n.clone()), Rc::new(self.eval(decl, env, v)), *i))
                     .collect();
-                let typ = self.eval(decl, env, typ);
                 Val::SumCase {
-                    is_trait: *is_trait,
-                    typ,
-                    case_name: case_name.clone(),
-                    datas,
-                }.into()
+                    typ: Rc::new(typ),
+                    case_name: vspan(case_name.clone()),
+                    datas: Rc::new(datas),
+                }
             }
             Tm::Call(name, _, val_args, body) => {
-                let result = self.eval(decl, env, body);
-                if let Val::Match(scrut, env, cases, _) = result.as_ref() {
-                    Val::Match(scrut.clone(), env.clone(), cases.clone(), Some((name.clone(), val_args.clone()))).into()
-                } else {
-                    result
-                }
-            },
+                let body_v = self.eval(decl, env, body);
+                Val::Call(name.clone(), val_args.clone(), Rc::new(body_v))
+            }
             Tm::Match(tm, cases) => {
-                let val = self.eval(decl, env, tm);
-                let val = self.force(decl, &val);
-                match val.as_ref() {
+                let val = self.force(decl, self.eval(decl, env, tm));
+                match val {
                     Val::SumCase { .. } => {
-                        match Compiler::eval_aux(self, &val, decl, env, cases) {
-                            Some((tm, env)) => self.eval(decl, &env, &tm),
-                            None => Val::Match(val, env.clone(), cases.clone(), None).into(),
+                        match Compiler::eval_aux(self, decl, &val, env, cases) {
+                            Some((body, env)) => self.eval(decl, &env, body),
+                            None => Val::Match(
+                                Rc::new(val),
+                                env.clone(),
+                                Rc::new(cases.clone()),
+                                Vec::new(),
+                            ),
                         }
                     }
-                    _ => {
-                        Val::Match(val, env.clone(), cases.clone(), None).into()
-                    }
+                    neutral => Val::Match(
+                        Rc::new(neutral),
+                        env.clone(),
+                        Rc::new(cases.clone()),
+                        Vec::new(),
+                    ),
                 }
             }
         }
     }
 
-    fn quote_sp(&self, decl: &Decl, l: Lvl, t: Rc<Tm>, spine: &Spine) -> Rc<Tm> {
-        /*spine.iter().fold(t, |acc, u| {
-            Tm::App(Box::new(acc), Box::new(self.quote(l, u.0.clone())), u.1)
-        })*/
+    fn quote_sp(&self, decl: &Decls, l: Lvl, t: Tm, spine: Spine) -> Tm {
         match spine {
             List { head: None, .. } => t,
-            _ => {
-                let head = spine.head().unwrap();
-                Tm::App(self.quote_sp(decl, l, t, &spine.tail()), self.quote(decl, l, &head.0), head.1).into()
+            a => {
+                let (u, i) = a.head().unwrap();
+                Tm::App(
+                    Box::new(self.quote_sp(decl, l, t, a.tail())),
+                    Box::new(self.quote(decl, l, u.clone())),
+                    *i,
+                )
             }
         }
     }
 
-    pub fn quote(&self, decl: &Decl, l: Lvl, t: &Rc<Val>) -> Rc<Tm> {
-        //println!("{} {:?}", "quote".green(), t);
+    fn quote(&self, decl: &Decls, l: Lvl, t: Val) -> Tm {
         let t = self.force(decl, t);
-        match t.as_ref() {
-            Val::Flex(m, sp) => self.quote_sp(decl, l, Tm::Meta(*m).into(), sp),
-            Val::Rigid(x, sp) => self.quote_sp(decl, l, Tm::Var(lvl2ix(l, *x)).into(), sp),
-            Val::Decl(x, sp) => self.quote_sp(decl, l, Tm::Decl(x.clone()).into(), sp),
-            Val::Obj(x, name, sp) => self.quote_sp(decl, l, Tm::Obj(self.quote(decl, l, x), name.clone()).into(), sp),
-            Val::Lam(x, i, closure) => Tm::Lam(
-                x.clone(),
-                *i,
-                self.quote(decl, l + 1, &self.closure_apply(decl, closure, Val::vvar(l).into())),
-            ).into(),
-            Val::Pi(x, i, a, closure) => Tm::Pi(
-                x.clone(),
-                *i,
-                self.quote(decl, l, a),
-                self.quote(decl, l + 1, &self.closure_apply(decl, closure, Val::vvar(l).into())),
-            ).into(),
-            Val::U(x) => Tm::U(*x).into(),
-            Val::LiteralIntro(x) => Tm::LiteralIntro(x.clone()).into(),
-            Val::LiteralType => Tm::LiteralType.into(),
-            Val::Prim(typ, func, sp) => {
-                self.quote_sp(decl, l, Tm::Prim(typ.clone(), func.clone()).into(), sp)
-            },
-            Val::Sum(name, params, cases, is_trait) => {
-                let new_params = params.iter()
-                    .map(|x| {
-                        (x.0.clone(), self.quote(decl, l, &x.1), self.quote(decl, l, &x.2), x.3)
-                    })
-                    .collect();
-                Tm::Sum(name.clone(), new_params, cases.clone(), *is_trait).into()
+        match t {
+            // 深链形态（Sum/SumCase/Obj 可按值深度自嵌，如 `succ^N zero`）
+            // 交给帧式收集器；其余形态（Lam/Pi/Match/spine 头，结构嵌套浅）
+            // 回落 `quote_arm`（README §7.6，2026-11-01 与 rename_deep 同构）。
+            Val::Sum(..) | Val::SumCase { .. } | Val::Obj(..) => self.quote_deep(decl, l, t),
+            Val::VSub(v, _) => {
+                // force 后顶层不应是 VSub；fuel 耗尽时会。解包继续（同旧版）。
+                // 必须 **move**（不能 clone）：深 Box 链的 clone 是递归深拷贝，
+                // 与 quote_deep 的 move 纪律一致（review R11）。
+                self.quote(decl, l, (*v).clone())
             }
+            _ => self.quote_arm(decl, l, t),
+        }
+    }
+
+    /// quote 的深链收集器：**Sum / SumCase / Obj** 帧式下降/组装（与
+    /// [`Self::rename_deep`] 同构）。深值按值深递归会爆栈（参考版 README
+    /// §7.6：`quote` 曾是仅剩的递归路径之一）；子件回落 [`Self::quote_arm`]。
+    fn quote_deep(&self, decl: &Decls, l: Lvl, root: Val) -> Tm {
+        enum FrameKind {
+            Sum {
+                name: VSpan,
+                cases: Vec<VSpan>,
+                metas: Vec<(VSpan, Icit)>,
+            },
+            SumCase {
+                case_name: VSpan,
+                datas_metas: Vec<(VSpan, Icit)>,
+            },
+            Obj {
+                name: VSpan,
+            },
+        }
+        struct Frame {
+            pending: Vec<Val>,
+            icits: Vec<Icit>,
+            kind: FrameKind,
+            done: Vec<Tm>,
+            idx: usize,
+        }
+        fn frame_new(v: Val) -> Frame {
+            match v {
+                Val::Sum(name, params, cases) => {
+                    let mut pending = Vec::with_capacity(params.len() * 2);
+                    let mut metas = Vec::with_capacity(params.len());
+                    for (n, v, t, i) in params.iter() {
+                        pending.push(rc_take(v.clone()));
+                        pending.push(rc_take(t.clone()));
+                        metas.push((n.clone(), *i));
+                    }
+                    let n_all = pending.len();
+                    Frame {
+                        pending,
+                        icits: Vec::new(),
+                        kind: FrameKind::Sum { name, cases: (*cases).clone(), metas },
+                        done: Vec::with_capacity(n_all),
+                        idx: 0,
+                    }
+                }
+                Val::SumCase {
+                    typ,
+                    case_name,
+                    datas,
+                } => {
+                    let mut pending = Vec::with_capacity(datas.len() + 1);
+                    pending.push(rc_take(typ));
+                    let mut datas_metas = Vec::with_capacity(datas.len());
+                    for (n, v, i) in datas.iter() {
+                        pending.push(rc_take(v.clone()));
+                        datas_metas.push((n.clone(), *i));
+                    }
+                    let n_all = pending.len();
+                    Frame {
+                        pending,
+                        icits: Vec::new(),
+                        kind: FrameKind::SumCase {
+                            case_name,
+                            datas_metas,
+                        },
+                        done: Vec::with_capacity(n_all),
+                        idx: 0,
+                    }
+                }
+                Val::Obj(x, name, sp) => {
+                    // pending = [被投影者, spine 实参…]；实参按 List 头→尾序入列
+                    let mut pending = vec![(*x).clone()];
+                    let mut icits = Vec::new();
+                    for (u, i) in sp.iter() {
+                        pending.push(u.clone());
+                        icits.push(*i);
+                    }
+                    let n_all = pending.len();
+                    Frame {
+                        pending,
+                        icits,
+                        kind: FrameKind::Obj { name },
+                        done: Vec::with_capacity(n_all),
+                        idx: 0,
+                    }
+                }
+                _ => unreachable!("quote_deep 只接受 Sum/SumCase/Obj"),
+            }
+        }
+        fn frame_assemble(frame: Frame) -> Tm {
+            match frame.kind {
+                FrameKind::Sum { name, cases, metas } => {
+                    let mut it = frame.done.into_iter();
+                    let params = metas
+                        .into_iter()
+                        .map(|(n, i)| {
+                            let v = it.next().unwrap();
+                            let t = it.next().unwrap();
+                            (tmspan(&n), v, t, i)
+                        })
+                        .collect();
+                    Tm::Sum(tmspan(&name), params, cases.iter().map(tmspan).collect())
+                }
+                FrameKind::SumCase {
+                    case_name,
+                    datas_metas,
+                } => {
+                    let mut it = frame.done.into_iter();
+                    let typ = it.next().unwrap();
+                    let datas = datas_metas
+                        .into_iter()
+                        .map(|(n, i)| (tmspan(&n), it.next().unwrap(), i))
+                        .collect();
+                    Tm::SumCase {
+                        typ: Box::new(typ),
+                        case_name: tmspan(&case_name),
+                        datas,
+                    }
+                }
+                FrameKind::Obj { name } => {
+                    let mut it = frame.done.into_iter();
+                    let head = Tm::Obj(Box::new(it.next().unwrap()), tmspan(&name));
+                    let args: Vec<Tm> = it.collect();
+                    let mut acc = head;
+                    // spine 头 = 最后应用 ⇒ 逆序折叠（与 quote_sp 应用序一致）
+                    for (u, i) in args.into_iter().zip(frame.icits).rev() {
+                        acc = Tm::App(Box::new(acc), Box::new(u), i);
+                    }
+                    acc
+                }
+            }
+        }
+        let mut frames: Vec<Frame> = vec![frame_new(root)];
+        let mut result: Option<Tm> = None;
+        while let Some(frame) = frames.last_mut() {
+            if frame.idx == frame.pending.len() {
+                let frame = frames.pop().unwrap();
+                let tm = frame_assemble(frame);
+                match frames.last_mut() {
+                    Some(parent) => {
+                        parent.done.push(tm);
+                        parent.idx += 1;
+                    }
+                    None => result = Some(tm),
+                }
+                continue;
+            }
+            // **move 出**待处理槽（不能 clone）：深链的原始值若留在 frame 里，
+            // 帧弹栈时的 Drop 会沿 Rc 链递归 → 10 万层直接爆栈（实测
+            // 0xC00000FD）。replace 成廉价占位后，值被逐层搬走、无深递归 Drop。
+            let w = std::mem::replace(&mut frame.pending[frame.idx], Val::U(0));
+            let w = self.force(decl, w);
+            match w {
+                // fuel 耗尽窗口：force 原样返回 VSub——解包后原地重试
+                Val::VSub(v, _) => {
+                    let frame = frames.last_mut().unwrap();
+                    frame.pending[frame.idx] = (*v).clone();
+                }
+                Val::Sum(..) | Val::SumCase { .. } | Val::Obj(..) => {
+                    frames.push(frame_new(w));
+                }
+                _ => {
+                    let tm = self.quote_arm(decl, l, w);
+                    let frame = frames.last_mut().unwrap();
+                    frame.done.push(tm);
+                    frame.idx += 1;
+                }
+            }
+        }
+        result.expect("quote_deep 至少产出一个 Tm")
+    }
+
+    /// quote 的浅结构臂（入口已 force、已分派掉深链形态）。
+    fn quote_arm(&self, decl: &Decls, l: Lvl, t: Val) -> Tm {
+        match t {
+            // 正常路径 force 后顶层不会是 VSub；fuel 耗尽时 force 原样返回
+            // VSub——解包打印内层（σ 未推开，保真度同旧版"打印未展开 rigid"），
+            // 链式 VSub 由递归消化，不会产生 Tm::U 垃圾
+            Val::VSub(v, _) => self.quote(decl, l, (*v).clone()),
+            Val::Flex(m, sp) => self.quote_sp(decl, l, Tm::Meta(m), sp),
+            Val::Rigid(x, sp) => self.quote_sp(decl, l, Tm::Var(lvl2ix(l, x)), sp),
+            Val::Decl(name, sp) => {
+                if let Some(e) = decl.get(&name) {
+                    if let Some(names) = &e.prim_names {
+                        let have = sp.len();
+                        let arity = names.len();
+                        if have < arity {
+                            let base = self.quote_sp(decl, l, Tm::Decl(name), sp);
+                            let rem = (arity - have) as u32;
+                            let mut tm = shift_tm(base, rem, 0);
+                            for i in 0..rem {
+                                tm = Tm::App(
+                                    Box::new(tm),
+                                    Box::new(Tm::Var(Ix(rem - 1 - i))),
+                                    Icit::Expl,
+                                );
+                            }
+                            for n in names[have..].iter().rev() {
+                                tm = Tm::Lam(n.clone(), Icit::Expl, Rc::new(tm));
+                            }
+                            return tm;
+                        }
+                    }
+                }
+                self.quote_sp(decl, l, Tm::Decl(name), sp)
+            }
+            Val::Obj(v, name, sp) => {
+                self.quote_sp(decl, l, Tm::Obj(Box::new(self.quote(decl, l, (*v).clone())), tmspan(&name)), sp)
+            }
+            Val::Lam(x, i, closure) => Tm::Lam(
+                tmspan(&x),
+                i,
+                Rc::new(self.quote(decl, l + 1, self.closure_apply(decl, &closure, Val::vvar(l)))),
+            ),
+            Val::Pi(x, i, a, closure) => Tm::Pi(
+                tmspan(&x),
+                i,
+                Rc::new(self.quote(decl, l, (*a).clone())),
+                Rc::new(self.quote(decl, l + 1, self.closure_apply(decl, &closure, Val::vvar(l)))),
+            ),
+            Val::U(x) => Tm::U(x),
+            Val::LiteralIntro(x) => Tm::LiteralIntro(tmspan(&x)),
+            Val::LiteralType => Tm::LiteralType,
+            Val::Prim(name, sp) => self.quote_sp(decl, l, Tm::Prim(name), sp),
+            Val::Sum(name, params, cases) => Tm::Sum(
+                tmspan(&name),
+                params
+                    .iter()
+                    .map(|(n, v, t, i)| {
+                        (
+                            tmspan(&n),
+                            self.quote(decl, l, rc_take(v.clone())),
+                            self.quote(decl, l, rc_take(t.clone())),
+                            *i,
+                        )
+                    })
+                    .collect(),
+                cases.iter().map(tmspan).collect(),
+            ),
             Val::SumCase {
-                is_trait,
                 typ,
                 case_name,
                 datas,
-            } => {
-                let datas = datas
+            } => Tm::SumCase {
+                typ: Box::new(self.quote(decl, l, rc_take(typ))),
+                case_name: tmspan(&case_name),
+                datas: datas
                     .iter()
-                    .map(|p| {
-                        (p.0.clone(), self.quote(decl, l, &p.1), p.2)
+                    .map(|(n, v, i)| {
+                        (tmspan(&n), self.quote(decl, l, rc_take(v.clone())), *i)
                     })
-                    .collect();
-                Tm::SumCase {
-                    is_trait: *is_trait,
-                    typ: self.quote(decl, l, typ),
-                    case_name: case_name.clone(),
-                    datas,
-                }.into()
-            }
-            Val::Call(name, args, body) => {
-                let quoted_body = self.quote(decl, l, body);
-                Tm::Call(name.clone(), args.clone(), vec![], quoted_body).into()
+                    .collect(),
             },
-            Val::Match(val, env, cases, origin) => {
-                /*TODO:let tm_cases = cases
-                    .into_iter()
-                    .map(|(p, clos)| {
-                        let binders_count = p.count_binders();
-                        let body_tm = self.quote(l + binders_count, self.closure_apply_pats(&clos, l, &p));
-                        (p, body_tm)
-                    })
-                    .collect();*/
-                // 中性 decl 表只依赖 decl，与分支无关——提到分支循环外
-                // （对齐 L07/L08 `simpl_decl` 的位置），避免 #分支 × |decls|
-                // 次全表重建。
-                let declb = decl.iter()
-                    .map(|x| (x.0.clone(), (
-                        x.1.0,
-                        Tm::Decl(x.1.0.map(|_| x.0.clone())).into(),
-                        Val::Decl(x.1.0.map(|_| x.0.clone()), List::new()).into(),
-                        x.1.3.clone(),
-                        x.1.4.clone(),
-                    )))
-                    .collect();
-                let tm_cases = cases
-                    .iter()
-                    .map(|x| (
-                        x.0.clone(),
-                        {
-                            let env = (0..x.0.bind_count())
-                                .fold(env.clone(), |env, x| env.prepend(Val::vvar(l + x).into()));
-                            let tm = self.eval(&declb, &env, &x.1);
-                            self.quote(decl, l+x.0.bind_count(), &tm)
-                        }
-                    ))
-                    .collect();
-                let quoted_match = Tm::Match(self.quote(decl, l, val), tm_cases).into();
-                let effective_origin = match origin {
-                    Some((n, a)) => Some((n.clone(), a.clone())),
-                    None => lookup_function_by_cases(decl, cases).map(|name| (name, vec![val.clone()])),
-                };
-                if let Some((name, arg_vals)) = effective_origin {
-                    let display_args: Vec<Rc<Tm>> = arg_vals.iter()
-                        .map(|v| self.quote(decl, l, v))
-                        .collect();
-                    Tm::Call(name.clone(), display_args, arg_vals.clone(), quoted_match).into()
-                } else {
-                    quoted_match
-                }
+            Val::Call(name, args, body) => {
+                let display: Vec<Tm> = args.iter().map(|a| self.quote(decl, l, a.clone())).collect();
+                Tm::Call(
+                    name.clone(),
+                    display,
+                    args.clone(),
+                    Box::new(self.quote(decl, l, (*body).clone())),
+                )
             }
-            // 不变式：force 的返回值顶层不会是 VSub；fuel 耗尽的降级返回
-            // 裸 rigid 而非 VSub，故此臂仅在极端角落可达（解包内层继续
-            // quote，链式 VSub 由递归消化）。
-            Val::VSub(v, _) => self.quote(decl, l, v),
+            Val::Match(val, env, cases, pending) => {
+                // 分支体在"捕获 env + fresh rigid 槽"下重新求值再 quote：
+                // 这样 quote → eval 往返是恒等的（旧实现未做往返一致，此处
+                // 是现架构补齐的关键点）。求值用简化 decl 表（全局值换成
+                // 中性 Decl 引用），避免分支体里的递归调用被重展开（正确性
+                // + 性能；P1-2：旁表缓存，同实例只构建一次）。
+                let declb = self.simpl_decl_cached(decl);
+                let tm_cases: Vec<(PatternDetail, Tm)> = cases
+                    .iter()
+                    .map(|(p, b)| {
+                        let count = p.bind_count();
+                        let env = (0..count).fold(env.clone(), |env, i| env.prepend(Val::vvar(l + i)));
+                        let tm = self.eval(&declb, &env, b);
+                        // 分支体的 quote 也要用简化表：eval 产生的中性
+                        // Decl(f, spine)（递归调用占位）若用真实表 quote，
+                        // 入口 force 会再展开一层——每层 quote 多展开一层，
+                        // 递归函数的卡住 match 直接发散。
+                        (p.clone(), self.quote(&declb, l + count, tm))
+                    })
+                    .collect();
+                // 卡住期累积的实参按应用序包在 Match 外（值层应用在
+                // force/eval 的分支选中后做；quote → eval 往返由此保持）。
+                // 实参的自由层级属当前上下文，quote 在调用方的 l 下正确。
+                // 注：旧 L12 会按模式形状反查同名 def，把卡住 match 包成
+                // Tm::Call 显示外衣；本链孪生侧无 Call（旧 L12 同），自动包
+                // 会造成 ref/twin 显示分叉，故 Call 仅保留节点与透明语义
+                // （供 L13 产品层使用），quote 不自动创建。
+                let m = Tm::Match(Box::new(self.quote(decl, l, (*val).clone())), tm_cases);
+                pending.into_iter().fold(m, |acc, (u, i)| {
+                    Tm::App(Box::new(acc), Box::new(self.quote(decl, l, u)), i)
+                })
+            }
         }
     }
 
-    pub fn nf(&self, decl: &Decl, env: &Env, t: &Rc<Tm>) -> Rc<Tm> {
-        // quote → eval 会 force；一次 nf 充值 fuel 防循环解（L08 同款）
-        self.refuel();
-        let l = Lvl(env.iter().count() as u32);
-        self.quote(decl, l, &self.eval(decl, env, t))
+    pub fn nf(&self, decl: &Decls, env: &Env, t: Tm) -> Tm {
+        // quote → eval 会 force；一次 nf 充值 fuel 防循环解
+        self.unify_fuel.set(unify_fuel_budget());
+        let l = Lvl(env.len() as u32);
+        self.quote(decl, l, self.eval(decl, env, &t))
     }
 
-    fn close_val(&self, cxt: &Cxt, t: &Rc<Val>) -> Closure {
-        Closure(cxt.env.clone(), self.quote(&cxt.decl, cxt.lvl + 1, t))
+    fn close_val(&self, decl: &Decls, cxt: &Cxt, t: Val) -> Closure {
+        Closure(cxt.env.clone(), Rc::new(self.quote(decl, cxt.lvl + 1, t)))
     }
 
-    fn unify_catch(&mut self, cxt: &Cxt, t: &Rc<Val>, t_prime: &Rc<Val>, span: Span<()>) -> Result<(), Error> {
-        self.meta_contrains.clear();
-        self.refuel();
-        let ret = self.unify(cxt.lvl, cxt, t, t_prime, 100)
-            .map_err(|e| {
-                /*Error::CantUnify(
-                    cxt.clone(),
-                    self.quote(cxt.lvl, t),
-                    self.quote(cxt.lvl, t_prime),
-                )*/
-                //println!("{:?} == {:?}", t, t_prime);
-                //println!("{:?}", self.eval(&cxt.env, self.quote(cxt.lvl, t_prime.clone())));
-                /*panic!(
-                    //"can't unify {:?} == {:?}",
-                    "can't unify\n      find: {}\n  expected: {}",
-                    pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, t)),
-                    pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, t_prime)),
-                );*/
-                let err = match e {
-                    UnifyError::Basic | UnifyError::Stuck => format!(
-                        //"can't unify {:?} == {:?}",
-                        "can't unify\n  expected: {}\n      find: {}",
-                        pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, t)),
-                        pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, t_prime)),
-                    ),
-                    UnifyError::Trait(e) => e,
+    fn unify_catch(&mut self, decl: &Decls, cxt: &Cxt, t: Val, t_prime: Val) -> Result<(), Error> {
+        self.unify_fuel.set(unify_fuel_budget());
+        self.reset_match_cmp_budget();
+        self.reset_unify_kind();
+        self.unify(decl, cxt.lvl, cxt, t.clone(), t_prime.clone(), None)
+            .map_err(|_| {
+                // 分支体检查（常规转换）只需"成不成立"：Undecided 与 Absurd 都
+                // 是失败，文案保持旧口径（`can't unify …` + fuel 尾注），避免
+                // 把内部三档泄漏到普通转换错误里。分档的消费方是模式编译
+                // （可达性 / 覆盖 / "无法判定"文案），见 pattern_match.rs。
+                let fuel_note = if self.unify_fuel.get() == 0 {
+                    " (fuel exhausted)"
+                } else {
+                    ""
                 };
-                Error(span.map(|_| err.clone()), vec![])
-                //Error(format!("can't unify {:?} == {:?}", t, t_prime))
-            });
-        if !self.meta_contrains.is_empty() {
-            let err = format!(
-                    //"can't unify {:?} == {:?}",
-                    "can't unify for unsolved meta\n  expected: {}\n      find: {}",
-                    pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, t)),
-                    pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, t_prime)),
-                );
-            self.meta_contrains.clear();
-            Err(Error(span.map(|_| err.clone()), vec![]))?
-        }
-        self.meta_contrains.clear();
-        ret
+                Error::new(format!(
+                    "can't unify{} {} == {}",
+                    fuel_note,
+                    pretty_tm(0, cxt.names(), &self.quote(decl, cxt.lvl, t)),
+                    pretty_tm(0, cxt.names(), &self.quote(decl, cxt.lvl, t_prime)),
+                ))
+            })
     }
 }
 
-#[allow(unused)]
+/// 内联容量 N 的小栈（热路径零分配；溢出转 Vec）。`T: Copy` 让内联数组
+/// 可用 seed 初始化——深值遍历与结构比较的任务栈在浅结构（绝大多数调用）
+/// 下完全不碰堆：旧递归"零分配"的剖面在新实现里保持；溢出（宽 spine /
+/// 深链）只多一次 Vec 分配，与无内联版同阶。
+pub(crate) struct InlineStack<T: Copy, const N: usize> {
+    buf: [T; N],
+    len: usize,
+    spill: Vec<T>,
+}
+
+impl<T: Copy, const N: usize> InlineStack<T, N> {
+    fn with_first(seed: T) -> Self {
+        let mut s = InlineStack {
+            buf: [seed; N],
+            len: 0,
+            spill: Vec::new(),
+        };
+        s.push(seed);
+        s
+    }
+    #[inline]
+    fn push(&mut self, v: T) {
+        if self.len < N {
+            self.buf[self.len] = v;
+            self.len += 1;
+        } else {
+            self.spill.push(v);
+        }
+    }
+    #[inline]
+    fn pop(&mut self) -> Option<T> {
+        if let Some(v) = self.spill.pop() {
+            return Some(v);
+        }
+        if self.len == 0 {
+            return None;
+        }
+        self.len -= 1;
+        Some(self.buf[self.len])
+    }
+    #[inline]
+    fn extend<I: IntoIterator<Item = T>>(&mut self, it: I) {
+        for v in it {
+            self.push(v);
+        }
+    }
+}
+
+/// 值树里是否出现某层级（浅层结构扫描；闭包跳过——那里的环由 force 的
+/// fuel 兜底）。特化解的环守卫（`Subst::extend` 的调用方）用。
+///
+/// 迭代实现（2026-09-18，README §7.6）：`succ^N zero` 型深值可由 eval 不烧
+/// fuel 地构造（def 倍增链），occurs 守卫若按值深度递归会在万级深度爆栈
+/// （常规栈 1–8 MB）。显式工作栈按与旧递归完全相同的遍历面展开——存在性
+/// 判定对访问顺序不敏感，语义不变。栈内联化（2026-09-18 性能轮）：本函数
+/// 在 match 编译热路径（每次头部精化）逐次调用，堆分配从每次一 malloc
+/// 降为零（浅值不溢出）。
+fn val_mentions_lvl(v: &Val, x: Lvl) -> bool {
+    let mut stack = InlineStack::<&Val, 16>::with_first(v);
+    while let Some(v) = stack.pop() {
+        match v {
+            Val::Rigid(y, sp) => {
+                if *y == x {
+                    return true;
+                }
+                stack.extend(sp.iter().map(|(v, _)| v));
+            }
+            Val::Flex(_, sp) | Val::Decl(_, sp) | Val::Prim(_, sp) => {
+                stack.extend(sp.iter().map(|(v, _)| v));
+            }
+            Val::Call(_, args, body) => {
+                stack.push(body);
+                stack.extend(args.iter());
+            }
+            Val::Obj(o, _, sp) => {
+                stack.push(o);
+                stack.extend(sp.iter().map(|(v, _)| v));
+            }
+            Val::VSub(v, _) => {
+                // 只扫解值自身的结构，**不扫 σ 的映射值**：σ 的其它条目（如头部
+                // 精化的构造子值）合法引用别的模式变量，扫进来会把无害的解误判
+                // 成环。σ 槽位若真引用 x，解包后的 v 结构里自会以 Rigid(x) 出现
+                // （对齐旧世界"occurs 只看解的裸值"的语义；更深的间接环仍由
+                // force 的 fuel 兜底）。
+                stack.push(v);
+            }
+            Val::Sum(_, params, _) => {
+                stack.extend(params.iter().flat_map(|(_, v, t, _)| [v.as_ref(), t.as_ref()]));
+            }
+            Val::SumCase { typ, datas, .. } => {
+                stack.push(typ);
+                stack.extend(datas.iter().map(|(_, v, _)| v.as_ref()));
+            }
+            Val::Match(s, env, _, pending) => {
+                stack.push(s);
+                stack.extend(env.iter());
+                stack.extend(pending.iter().map(|(v, _)| v));
+            }
+            Val::Lam(..) | Val::Pi(..) | Val::U(_) | Val::LiteralType | Val::LiteralIntro(_) => {}
+        }
+    }
+    false
+}
+
+/// `v.field` 的值级投影：Sum 取索引参数的值；SumCase 先查 typ 的参数（索引）再查构造子字段。
+/// 其余（Rigid / Flex / Decl / 卡住的 Obj / 函数……）返回 None → 卡住成 `Val::Obj`。
+fn project(v: &Val, name: &Span<String>) -> Option<Val> {
+    match v {
+        Val::Sum(_, params, _) => params
+            .iter()
+            .find(|(n, ..)| n == name)
+            .map(|(_, v, _, _)| (**v).clone()),
+        Val::SumCase { typ, datas, .. } => {
+            let params = match typ.as_ref() {
+                Val::Sum(_, params, _) => params,
+                _ => return None,
+            };
+            params
+                .iter()
+                .find(|(n, ..)| n == name)
+                .map(|(_, v, _, _)| (**v).clone())
+                .or_else(|| {
+                    datas
+                        .iter()
+                        .find(|(n, _, _)| n == name)
+                        .map(|(_, v, _)| (**v).clone())
+                })
+        }
+        _ => None,
+    }
+}
+
+/// quote/rename 卡住 match 的分支体时用的 decl 表：所有全局值换成指向自身的
+/// 中性 `Val::Decl`，防止递归定义在求值分支体时被重展开。enum 类型本体的值
+/// （`Val::Sum`）保持原样——构造子值的 `typ` 槽需要真实的 Sum 值。
+///
+/// 生产入口走 [`Infer::simpl_decl_cached`]（按 `Decls::ver` 旁表缓存）；本
+/// 函数保持纯构建语义（供缓存 miss 与直接调用）。
+fn simpl_decl(decl: &Decls) -> Decls {
+    let map = decl
+        .iter()
+        .map(|(k, e)| {
+            let val = match &e.val {
+                Val::Sum(..) => e.val.clone(),
+                _ => Val::Decl(k.clone(), List::new()),
+            };
+            (k.clone(), Rc::new(DeclEntry { prim: None, eta: None, prim_names: None, ty: e.ty.clone(), val }))
+        })
+        .collect();
+    Decls {
+        map,
+        // 简化表继承源表代数：simpl 幂等（非 Sum 条目已归一为
+        // Decl(自身名, [])），对简化表再简化内容不变——缓存命中安全
+        ver: decl.ver,
+    }
+}
+
+impl Infer {
+    /// [`simpl_decl`] 的缓存版：同代数（同实例）的表只构建一次。简化结果
+    /// 以 `Rc<Decls>` 共享——调用方（quote / rename / unify 的 Match 臂）拿
+    /// 到同一张表，后续递归（分支体内的嵌套卡住 match）直接命中。
+    fn simpl_decl_cached(&self, decl: &Decls) -> Rc<Decls> {
+        if let Some(cached) = self.simpl_cache.borrow().get(&decl.ver) {
+            return Rc::clone(cached);
+        }
+        let built = Rc::new(simpl_decl(decl));
+        self.simpl_cache
+            .borrow_mut()
+            .insert(decl.ver, Rc::clone(&built));
+        built
+    }
+}
+
+/// 文件 IO builtin 的固定文件名串行锁（L06 同款：Windows 并行测试线程
+/// 的句柄竞争会让删除报 os error 5）。
+pub static FILE_IO_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// 逐 decl 调试打印开关（`L12_DEBUG=1`）：**一次读取**——逐次 `env::var_os`
+/// 会锁进程环境（Windows 上 ~µs/次），而这里每条声明都要判一次。
+static L12_DEBUG_ON: std::sync::LazyLock<bool> =
+    std::sync::LazyLock::new(|| std::env::var_os("L12_DEBUG").is_some());
+
 pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
     let mut infer = Infer::new();
-    // bench/非 LSP 全流程路径：不收集观察表（hover 条目 clone Cxt 会钉住
-    // decl 表 Rc，使 infer_owned 的就地写退化整表深拷贝；语义见
-    // Infer.collect_observations）。
-    infer.set_collect_observations(false);
-    let ast = parser::parser(&preprocess(input), path_id).unwrap();
+    // P10 第二步：解析错误也带位置（文案契约不变：`parse error` / 残余 token）
+    let ast = parser::parser_with_span(&preprocess(input), path_id).map_err(|(msg, span)| {
+        match span {
+            Some(s) => Error::at(msg, s),
+            None => Error::new(msg),
+        }
+    })?;
     let mut cxt = Cxt::new(&infer);
     let mut ret = String::new();
-    //TODO: do not print err. return error
-    for e in ast.1 {
-        println!("{:?}", e)
-    }
-    for tm in ast.0 {
-        match &tm {
-            parser::syntax::Decl::Def { name, .. }
-            | parser::syntax::Decl::Enum { name, .. }
-            | parser::syntax::Decl::TraitDecl { name, .. } => {
-                println!("> {}", name.data);
-                //cxt.print_env(&infer);
-            },
-            parser::syntax::Decl::Println(raw) => {},
-            parser::syntax::Decl::ImplDecl { .. } => {
-                println!("> impl");
-            }
+    for tm in ast {
+        if *L12_DEBUG_ON {
+            eprintln!("> {}", parser::syntax::Decl::name(&tm));
         }
-        let (x, _, new_cxt) = infer.infer_owned(cxt, tm.clone())?;
+        let (x, _, new_cxt) = infer.infer_owned(cxt, tm)?;
         cxt = new_cxt;
-        if let DeclTm::Println(_, s, _) = x {
-            //ret += &format!("{:?}", infer.nf(&cxt.env, x));
-            ret += &s;
+        if let DeclTm::Println(x) = x {
+            ret += &pretty_tm(0, cxt.names(), &infer.nf(cxt.decl(), &cxt.env, x));
             ret += "\n";
         }
     }
-    /*cxt.env
-        .iter()
-        .zip(cxt.names().iter())
-        .for_each(|(ty, name)| {
-            println!("{}: {}", name, pretty::pretty_tm(0, cxt.names(), &infer.quote(cxt.lvl, ty.clone())));
-            //println!("{:?}\n", ty);
-        });*/
     Ok(ret)
 }
 
-#[allow(unused)]
-pub fn run_with_prelude(input: &str) -> Result<String, Error> {
+/// 内嵌 `test` 与性能版互检共用的演示源：enum + 依赖 match + String
+/// 字面量 + builtin 注册表（str_eq / str_indent2 / 文件 IO）+ decl 表
+/// 按名取值 + 可变全局（L06 DEMO 的 L07 版：补 enum/match 段）。
+pub(crate) const DEMO_SRC: &str = r#"
+def Eq[A : Type 0](x: A, y: A): Type 1 = (P : A -> Type 0) -> P x -> P y
+def refl[A : Type 0, x: A]: Eq[A] x x = _ => px => px
+def the(A : Type 0)(x: A): A = x
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def two : Nat = succ (succ zero)
+def four : Nat = succ (succ two)
+
+def add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def six : Nat = add four two
+println six
+
+def pr1 = f => x => f x
+println pr1
+
+def mystr = "hello world"
+println mystr
+
+def add_tail(x: String): String = string_concat x "!"
+
+def mystr2 = add_tail mystr
+println mystr2
+
+def eq1 = str_eq "foo" "foo"
+println eq1
+
+def eq2 = str_eq "foo" "bar"
+println eq2
+
+def ind = str_indent2 "line1\nline2"
+println ind
+
+def demo_path = "l12_builtin_demo.txt"
+def demo_write : Type 0 = file_write_all_text demo_path "hello file"
+def demo_append : Type 0 = file_append_all_text demo_path "!"
+def read_back : String = file_read_all_text demo_path
+println read_back
+
+def exists1 : String = file_exists demo_path
+println exists1
+
+def demo_delete : Type 0 = file_delete demo_path
+def exists2 : String = file_exists demo_path
+println exists2
+
+def st : Type 0 = string_to_global_type "String"
+println st
+
+def st_nat : Type 0 = string_to_global_type "Nat"
+println st_nat
+
+def store1 : Type 0 = create_global "greeting" "hi"
+def upd1 : Type 0 = change_mutable "greeting" (s => string_concat s "!")
+def g1 : String = get_global "greeting"
+println g1
+
+def g2 : String = get_global_default "greeting" "fallback"
+println g2
+
+def g3 : String = get_global_default "missing_name" "fallback"
+println g3
+
+def upd2 : Type 0 = change_mutable_default "greeting" (s => string_concat s "?") "x"
+def g4 : String = get_global "greeting"
+println g4
+
+def rep1 : Type 0 = report_check_issue "E1" "demo_mod" "sig" "message"
+def issues : String = get_global "CheckIssues"
+println issues
+
+"#;
+
+/// 参考版基准口径：全量 elaborate（def/enum 注册），返回是否通过。
+pub(crate) fn bench_check(decls: &[parser::syntax::Decl]) -> bool {
     let mut infer = Infer::new();
-    // 同 run：非 LSP 全流程入口不收集观察表（避免 hover 钉住 decl 表 Rc）。
-    infer.set_collect_observations(false);
-    let prelude = &[
-        include_str!("../prelude/core/op.typort"),
-        include_str!("../prelude/core/eq.typort"),
-        include_str!("../prelude/core/nat.typort"),
-        include_str!("../prelude/core/bool.typort"),
-        include_str!("../prelude/data/option.typort"),
-        include_str!("../prelude/data/result.typort"),
-        include_str!("../prelude/data/order.typort"),
-        include_str!("../prelude/core/void.typort"),
-        include_str!("../prelude/data/decidable.typort"),
-        include_str!("../prelude/data/vec.typort"),
-        include_str!("../prelude/data/either.typort"),
-        include_str!("../prelude/data/list.typort"),
-        include_str!("../prelude/data/string.typort"),
-        include_str!("../prelude/data/nonempty.typort"),
-        include_str!("../prelude/hdl/hdl-core.typort"),
-        include_str!("../prelude/hdl/hdl-types.typort"),
-        include_str!("../prelude/hdl/hdl-ops.typort"),
-        include_str!("../prelude/hdl/hdl-clock.typort"),
-        include_str!("../prelude/hdl/hdl-bus.typort"),
-        include_str!("../prelude/hdl/hdl-signals.typort"),
-        include_str!("../prelude/hdl/hdl-macros.typort"),
-        include_str!("../prelude/hdl/hdl-verilog.typort"),
-        include_str!("../prelude/show.typort"),
-    ];
     let mut cxt = Cxt::new(&infer);
-    let mut ret = String::new();
-
-    // Accumulate exported macros from prelude files
-    let mut global_macros: FxHashMap<String, Vec<parser::macros::MacroRule>> = Default::default();
-    let mut id = 0;
-    for p in prelude {
-        if let Some((decls, parse_errs, new_exports, _)) = parser::parser_with_macros(&preprocess(p), id, &global_macros) {
-            for ast_err in parse_errs {
-                println!("{:?}", ast_err)
-            }
-            for (name, rules) in new_exports {
-                global_macros.insert(name, rules);
-            }
-            for tm in decls {
-                let (x, _, new_cxt) = infer.infer_owned(cxt, tm.clone())?;
-                cxt = new_cxt;
-            }
-        }
-        id += 1;
-    }
-    // Parse main file with accumulated macros from prelude
-    let ast = parser::parser_with_macros(&preprocess(input), prelude.len() as u32, &global_macros)
-        .map(|(d, e, _, _)| (d, e))
-        .unwrap();
-    println!("-----------------");
-    //TODO: do not print err. return error
-    for e in ast.1 {
-        println!("{:?}", e)
-    }
-    for tm in ast.0 {
-        match &tm {
-            parser::syntax::Decl::Def { name, .. }
-            | parser::syntax::Decl::Enum { name, .. }
-            | parser::syntax::Decl::TraitDecl { name, .. } => {
-                println!("> {}", name.data);
-                //cxt.print_env(&infer);
-            },
-            parser::syntax::Decl::Println(raw) => {},
-            parser::syntax::Decl::ImplDecl { .. } => {
-                println!("> impl");
-            }
-        }
-        let (x, _, new_cxt) = infer.infer_owned(cxt, tm.clone())?;
-        cxt = new_cxt;
-        if let DeclTm::Println(_, s, _) = x {
-            //ret += &format!("{:?}", infer.nf(&cxt.env, x));
-            ret += &s;
-            ret += "\n";
+    for d in decls {
+        match infer.infer_owned(cxt, d.clone()) {
+            Ok((_, _, nc)) => cxt = nc,
+            Err(_) => return false,
         }
     }
-    /*cxt.env
-        .iter()
-        .zip(cxt.names().iter())
-        .for_each(|(ty, name)| {
-            println!("{}: {}", name, pretty::pretty_tm(0, cxt.names(), &infer.quote(cxt.lvl, ty.clone())));
-            //println!("{:?}\n", ty);
-        });*/
-    Ok(ret)
+    true
 }
 
-// 单遍扫描 + 单输出缓冲（与 L13_namespace::preprocess 同实现，彼处有
-// 黄金校验记录：全仓 .typort 逐文件 diff + 差分模糊测试——等字节长不变
-// 量保持 parser span 偏移；原两遍 reduce 折叠第 i 步重拷前 i 段全部字节）。
+/// 参考版项的节点数（与性能版 `tm_size` 同口径）。
+fn tm_size_ref(t: &Tm) -> u64 {
+    let mut stack: Vec<&Tm> = vec![t];
+    let mut n = 0u64;
+    while let Some(x) = stack.pop() {
+        n += 1;
+        match x {
+            Tm::Var(_) | Tm::U(_) | Tm::Meta(_) | Tm::LiteralType | Tm::LiteralIntro(_)
+            | Tm::Decl(_) | Tm::Prim(_) => {}
+            Tm::Call(_, args, _, body) => {
+                stack.push(body);
+                stack.extend(args.iter());
+            }
+            Tm::Obj(h, _) => stack.push(h),
+            Tm::Lam(_, _, b) => stack.push(b),
+            Tm::App(f, a, _) => {
+                stack.push(f);
+                stack.push(a);
+            }
+            Tm::AppPruning(h, pr) => {
+                stack.push(h);
+                n += pr.len() as u64;
+            }
+            Tm::Pi(_, _, a, b) => {
+                stack.push(a);
+                stack.push(b);
+            }
+            Tm::Let(_, a, t, u) => {
+                stack.push(a);
+                stack.push(t);
+                stack.push(u);
+            }
+            Tm::Sum(_, params, _) => {
+                for (_, v, ty, _) in params {
+                    stack.push(v);
+                    stack.push(ty);
+                }
+            }
+            Tm::SumCase { typ, datas, .. } => {
+                stack.push(typ);
+                for (_, v, _) in datas {
+                    stack.push(v);
+                }
+            }
+            Tm::Match(s, cases) => {
+                stack.push(s);
+                for (p, b) in cases {
+                    n += p.bind_count() as u64;
+                    stack.push(b);
+                }
+            }
+        }
+    }
+    n
+}
+
+/// 参考版基准口径：elaborate 全部 decl 后，取**最后一个 def** 在 decl 表里
+/// 登记的值，空层级引读并数节点（深 Box 树的递归析构会爆栈，基准里
+/// `mem::forget`——L03/L04/L05/L06 同款处理）。
+pub(crate) fn bench_check_nf(decls: &[parser::syntax::Decl]) -> u64 {
+    let mut infer = Infer::new();
+    let mut cxt = Cxt::new(&infer);
+    let mut last: Option<String> = None;
+    for d in decls {
+        if let parser::syntax::Decl::Def { name, .. } = d {
+            last = Some(name.data.clone());
+        }
+        match infer.infer_owned(cxt, d.clone()) {
+            Ok((_, _, nc)) => cxt = nc,
+            Err(_) => return 0,
+        }
+    }
+    let Some(name) = last else { return 0 };
+    let Some(entry) = cxt.decl_get(&name) else { return 0 };
+    let q = infer.quote(cxt.decl(), Lvl(0), entry.val.clone());
+    let n = tm_size_ref(&q);
+    std::mem::forget(q);
+    n
+}
+
+/// 注释剥离(行 `//` 与块 `/* */`),**字符串字面量内不生效**——旧版对
+/// `//` / `/*` 做纯文本剥离,会把 `"http://…"` 之类的字面量截成未闭合
+/// 字符串导致解析失败。现按词法规则跳过字符串区间(含 `\` 转义);注释
+/// 内容只替换为空白,且**保持字节长度**:非 ASCII 注释字符按 `len_utf8`
+/// 个空格替换,使后续 token 的 span 偏移相对原文本保持稳定（LSP range
+/// 消费,review R7）。块注释不嵌套;未闭合的块注释剥到 EOF(历史行为)。
 pub fn preprocess(s: &str) -> String {
-    // 单遍扫描 + 单输出缓冲：一次左到右扫描同时完成原「块注释 → 行注释」
-    // 两遍变换，任何字节只写一次。旧实现逐行/逐块 `reduce(|a, b| a + sep + &b)`
-    // 折叠——第 i 步重拷前 i 段全部字节，O(字节数 × 行数)（LSP 每按键跑 2 遍，
-    // perf-debt 共享层发现 1）。
-    //
-    // 与旧实现的逐字节一致性（含全部边界怪癖）：
-    // - 旧第一遍按 `/*` 切块：每块内首个 `*/` 之前的文本换等字节空白、`*/`
-    //   换两空格，其后原样；无 `*/` 的块整体原样（含 `*/` 先于任何 `/*` 的
-    //   块、嵌套 `/*` 重新切块后未闭合的前段）。这里用区间扫描完全复刻：
-    //   chunk = 相邻 `/*` 之间的文本，块内首个 `*/`（不得越过块边界——与
-    //   `/*` 跨界重叠的匹配不算，如 `a*/*b`）之前空白化。
-    // - 旧第二遍按行处理第一遍的输出：行内首个「存活」的 `//` 换两空格、
-    //   到行尾换等字节空白。这里以 line_blank 状态融合进同一遍：仅原样区
-    //   间里的 `//` 会存活（空白化区间里的 `//` 已被第一遍吃掉），触发后到
-    //   `\n` 为止全部空白化，`\n` 复位。
-    // - 空白化按 char 语义（is_whitespace 的原 char 保留、其余按 len_utf8
-    //   换空格），与旧 replace_non_ws_preserve_bytes 完全一致，保持 parser
-    //   span 字节偏移不变量；输出与旧实现逐字节一致（黄金校验：全仓
-    //   .typort 逐文件 diff + 差分模糊测试 + lib 测试）。
-    // - 不变量：输出与输入等字节长。
     let mut out = String::with_capacity(s.len());
-    // 行注释状态：触发后到 `\n` 为止输出全部空白化
-    let mut line_blank = false;
-
-    // 块注释内部区间发射：等字节空白，保留换行（并复位行注释状态）
-    fn emit_blanked(region: &str, out: &mut String, line_blank: &mut bool) {
-        for c in region.chars() {
-            if c == '\n' {
-                out.push('\n');
-                *line_blank = false;
-            } else if c.is_whitespace() {
+    let mut chars = s.chars().peekable();
+    let mut in_string = false;
+    let mut escaped = false;
+    // 把注释字符替换为**等字节数**的空白，保持后续偏移不变。
+    fn push_blank(out: &mut String, c: char) {
+        for _ in 0..c.len_utf8() {
+            out.push(' ');
+        }
+    }
+    while let Some(c) = chars.next() {
+        if in_string {
+            out.push(c);
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match c {
+            '"' => {
+                in_string = true;
                 out.push(c);
-            } else {
-                for _ in 0..c.len_utf8() {
-                    out.push(' ');
+            }
+            '/' if chars.peek() == Some(&'/') => {
+                chars.next();
+                out.push_str("  ");
+                // 行注释:换行前的内容替换为等字节空白(保留换行符)
+                for rc in chars.by_ref() {
+                    if rc == '\n' {
+                        out.push('\n');
+                        break;
+                    }
+                    push_blank(&mut out, rc);
                 }
             }
-        }
-    }
-
-    // 原样区间发射 + 行注释融合：首个存活的 `//` 触发行空白化
-    fn emit_raw(region: &str, out: &mut String, line_blank: &mut bool) {
-        let bytes = region.as_bytes();
-        let mut j = 0usize;
-        while j < region.len() {
-            if *line_blank {
-                let c = region[j..].chars().next().unwrap();
-                if c == '\n' {
-                    out.push('\n');
-                    *line_blank = false;
-                } else if c.is_whitespace() {
-                    out.push(c);
-                } else {
-                    for _ in 0..c.len_utf8() {
-                        out.push(' ');
-                    }
-                }
-                j += c.len_utf8();
-            } else if bytes[j] == b'/' && j + 1 < bytes.len() && bytes[j + 1] == b'/' {
-                // 行注释头：`//` 换两空格，行尾前全部空白化
+            '/' if chars.peek() == Some(&'*') => {
+                chars.next();
                 out.push_str("  ");
-                *line_blank = true;
-                j += 2;
-            } else {
-                // 批量拷贝到下一个 '/'（ASCII，必在 char 边界）；孤 '/' 原样推入
-                match bytes[j..].iter().position(|&b| b == b'/') {
-                    Some(k) if k > 0 => {
-                        out.push_str(&region[j..j + k]);
-                        j += k;
+                // 块注释:到 `*/` 为止的内容替换为等字节空白
+                while let Some(rc) = chars.next() {
+                    if rc == '*' && chars.peek() == Some(&'/') {
+                        chars.next();
+                        out.push_str("  ");
+                        break;
                     }
-                    Some(_) => {
-                        out.push('/');
-                        j += 1;
-                    }
-                    None => {
-                        out.push_str(&region[j..]);
-                        j = region.len();
-                    }
+                    push_blank(&mut out, rc);
                 }
             }
+            _ => out.push(c),
         }
     }
-
-    // 块注释主扫描：chunk = 相邻 `/*` 之间的文本
-    let mut i = 0usize;
-    loop {
-        let next_open = s[i..].find("/*").map(|p| i + p);
-        let chunk_end = next_open.unwrap_or(s.len());
-        match s[i..chunk_end].find("*/") {
-            Some(qrel) => {
-                let q = i + qrel;
-                emit_blanked(&s[i..q], &mut out, &mut line_blank);
-                // `*/` → 两空格
-                out.push_str("  ");
-                emit_raw(&s[q + 2..chunk_end], &mut out, &mut line_blank);
-            }
-            None => emit_raw(&s[i..chunk_end], &mut out, &mut line_blank),
-        }
-        match next_open {
-            Some(p) => {
-                // `/*` → 两空格，下一块从标记之后开始
-                out.push_str("  ");
-                i = p + 2;
-            }
-            None => break,
-        }
-    }
-    debug_assert_eq!(out.len(), s.len(), "preprocess 必须保持等字节长");
     out
 }
 
-
-#[test]
-fn test_trait() {
-    let input = r#"
-def outParam[A](a: A): A = a
-
-enum Bool {
-    true
-    false
-}
-
-enum Nat {
-    zero
-    succ(x: Nat)
-}
-
-enum List[A] {
-    nil
-    cons(head: A, tail: List[A])
-}
-
-def two = succ (succ zero)
-
-trait Say {
-    def say(x: Nat): String
-}
-
-impl[T] Say for T {
-    def say(x: Nat): String = "hello"
-}
-
-println (zero.say zero)
-
-def not(x: Bool): Bool =
-    match x {
-        case true => false
-        case false => true
-    }
-
-println (not true)
-
-trait ToString {
-    def to_string: String
-}
-
-impl ToString for Bool {
-    def to_string: String =
-        match this {
-            case true => "true"
-            case false => "false"
-        }
-}
-
-def t[T][s: ToString[T]](x: T): String =
-    s.to_string x
-
-println (t true)
-
-trait Add[T, O: outParam(Type 0)] {
-    def +(that: T): O
-}
-
-def nat_add_helper(x: Nat, y: Nat): Nat =
-    match y {
-        case zero => x
-        case succ(n) => succ (nat_add_helper x n)
-    }
-
-impl Add[Nat, Nat] for Nat {
-    def +(that: Nat): Nat =
-        nat_add_helper this that
-}
-
-def mul(x: Nat, y: Nat) = match x {
-    case zero => zero
-    case succ(n) => y + (mul n y)
-}
-
-def four = two + two
-
-println four
-
-struct Point[T] {
-    x: T
-    y: T
-}
-
-def get_x[T](p: Point[T]): T = p.x
-
-impl Add[Point[Nat], Point[Nat]] for Point[Nat] {
-    def +(that: Point[Nat]): Point[Nat] =
-        new Point(this.x + that.x, this.y + that.y)
-}
-
-impl Add[Nat, Point[Nat]] for Point[Nat] {
-    def +(that: Nat): Point[Nat] =
-        new Point(this.x + that, this.y + that)
-}
-
-def start_point = new Point(zero, four)
-
-def end_point = new Point(four, two)
-
-println (get_x start_point)
-
-println (start_point + end_point)
-
-def test0: Type 1 = Type 0
-
-def test1: Type 2 = Type 1 -> Type 0
-
-enum HighLvl[A] {
-    case1(a: A)
-    case2(a: test1)
-}
-
-def test2: HighLvl[Nat] = case1 zero
-
-def test3: Type 2 = HighLvl[Nat]
-
-enum HighLvl2[A: Type 2] {
-    case2_1(x: A)
-    case2_2(x: Nat)
-}
-
-def test1_2: HighLvl2[HighLvl[Nat]] = case2_1 test2
-
-def test1_3: Type 2 = HighLvl2[HighLvl[Nat]]
-
-enum HighLvl3[A: Type 2] {
-    case3_1
-    case3_2(x: Nat)
-}
-
-def test2_2: HighLvl3[HighLvl[Nat]] = case3_1
-
-def test2_3: Type 2 = HighLvl3[HighLvl[Nat]]
-
-def Eq[A](x: A, y: A) = (P : A -> Type 0) -> P x -> P y
-
-def refl[A, x: A]: Eq[A] x x = _ => px => px
-
-struct Bits {
-    name: String
-    size: Nat
-}
-
-def get_name(x: Bits) = x.name
-
-def assign(a: Bits, b: Bits)(eq: Eq[Nat] a.size b.size): String = a.name
-
-def sigA = new Bits("A", four)
-
-def sigB = new Bits("B", four)
-
-def sigC = new Bits("C", two)
-
-def sigD = new Bits("D", two)
-
-def ab = assign sigA sigB refl
-
-def cd = assign sigC sigD refl
-
-"#;
-    let result = run(input, 0).unwrap();
-    println!("{}", result);
-    assert!(result.contains("hello"));
-    assert!(result.contains("Bool::false"));
-    assert!(result.contains("true"));
-    assert!(result.contains("4"));
-    assert!(result.contains("0"));
-    assert!(result.contains("Point[Nat]::Point.mk(4, 6)"));
-}
-
-#[test]
-fn test5() {
-    let input = r#"
-enum Nat {
-    zero
-    succ(x: Nat)
-}
-
-enum Vec[A](len: Nat) {
-    nil -> Vec[A] zero
-    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
-}
-
-def t[len: Nat](x: Vec[Nat] len, y: Vec[Nat] len): Vec[Nat] (succ len) =
-    match x {
-        case nil => cons zero nil
-        case cons(x, xs) => match y {
-            case cons(y, ys) => cons(x, t xs ys)
-        }
-    }
-
-impl[T, len: Nat] Vec[T](len) {
-    def map[U](f: T -> U): Vec[U] len =
-        match this {
-            case nil => nil
-            case cons(x, xs) => cons(f x, xs.map f)
-        }
-}
-
-def tt = cons(zero, cons(zero, nil)).map[U=Nat](x => match x {
-    case succ(z) => succ(zero)
-    case zero => zero
-})
-
-def z[len: Nat](x: Vec[Nat]len) = match x {
-    case nil => 1
-    case cons[l=lll](x, xs) => lll
-}
-
-"#;
-    println!("{}", run(input, 0).unwrap());
-}
-
-#[test]
-fn test6() {
-    let input = r#"
-enum Nat {
-    zero
-    succ(x: Nat)
-}
-
-enum Vec[A](len: Nat) {
-    nil -> Vec[A] zero
-    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
-}
-
-def t[len: Nat](x: Vec[Nat] len, y: Vec[Nat] len): Vec[Nat] (succ len) =
-    match x {
-        case nil => cons zero nil
-        case cons(x, xs) => match y {
-            case cons(y, ys) => match t xs ys {
-                case cons(z, zs) => cons(zero, cons zero zs)
-            }
-        }
-    }
-
-def ttt =
-    let useless1 = create_global "Nat" 2;
-    let useless2 = change_mutable("Nat", z => succ(z));
-    get_global "Nat"
-
-println ttt
-
-println stringify t123
-
-macro_rules module {
-    ($name: ident $body: raw) => {def $name = string_concat(string_concat("module ", stringify $name), $body)};
-    ($name: ident) => {def $name = string_concat("module ", stringify $name)};
-}
-
-module test1 " {}"
-
-println test1
-
-module test2
-
-println test2
-
-"#;
-    println!("{}", run(input, 0).unwrap());
-}
-
-#[test]
-fn test4() {
-    let input = r#"
-enum Nat {
-    zero
-    succ(x: Nat)
-}
-
-def add(x: Nat, y: Nat) =
-    match x {
-        case zero => y
-        case succ(n) => succ (add n y)
-    }
-
-def mul(x: Nat, y: Nat) =
-    match x {
-        case zero => zero
-        case succ(n) => add(y, mul n y)
-    }
-
-enum Eq[A](x: A, y: A) {
-    refl(a: A) -> Eq a a
-}
-
-def rfl[A][a: A]: Eq a a =
-    refl a
-
-def cong[A, B, f: A -> B, x: A, y: A](e: Eq x y): Eq (f x) (f y) =
-    match e {
-        case refl(a) => refl (f a)
-    }
-
-def cong_succ[x: Nat, y: Nat](e: Eq x y): Eq (succ x) (succ y) =
-    cong[Nat][Nat][succ][x][y] e
-
-def add_zero_right(a: Nat): Eq (add a zero) a =
-    match a {
-        case zero => refl zero
-        case succ(t) => cong_succ (add_zero_right t)
-    }
-
-def symm[A, x, y: A](e: Eq[A] x y): Eq[A] y x =
-    match e {
-        case refl(a) => refl[A] a
-    }
-
-def trans[A, x, y, z: A](e1: Eq[A] x y, e2: Eq[A] y z): Eq[A] x z =
-    match e1 {
-        case refl(a) => e2
-    }
-
-def add_succ_right (n: Nat, m: Nat): Eq (add (n, succ m)) (succ (add n m)) =
-    match n {
-        case zero => refl[Nat] (succ m)
-        case succ(k) => cong_succ (add_succ_right k m)
-    }
-
-def add_comm (n: Nat, m: Nat): Eq (add n m) (add m n) =
-    match n {
-        case zero => symm (add_zero_right m)
-        case succ(k) => trans (cong_succ (add_comm k m)) (symm (add_succ_right m k))
-    }
-
-def add_assoc (n: Nat, m: Nat, k: Nat): Eq (add (add n m) k) (add(n, add m k)) =
-    match n {
-        case zero => rfl
-        case succ(l) => cong_succ (add_assoc l m k)
-    }
-
-def double(n: Nat): Nat = add n n
-
-def double_pow(k: Nat, n: Nat): Nat =
-    match k {
-        case zero => n
-        case succ(k) => double(double_pow k n)
-    }
-
-def double_add(a: Nat, b: Nat): Eq(double(add a b), add(double a, double b)) =
-    let e1 = add_assoc(a, b, add a b);
-    let e2 = cong[f=add a](add_comm (b, add a b));
-    let e3 = symm (add_assoc (a, add a b, b));
-    let e4 = symm (cong[f=x => add x b] (add_assoc a a b));
-    let e5 = add_assoc (add a a) b b;
-    trans(e1, trans(e2, trans(e3, trans e4 e5)))
-
-def prove(k: Nat, a: Nat, b: Nat): Eq(double_pow(k, add a b), add (double_pow k a) (double_pow k b)) =
-    match k {
-        case zero => rfl
-        case succ(kk) => let ih = prove kk a b;
-            let ih1 = cong[f=double] ih;
-            let ih2 = double_add(double_pow(kk, a), double_pow(kk, b));
-            trans ih1 ih2
-    }
-"#;
-    let result = run(input, 0).unwrap();
-    println!("{}", result);
-    println!("success");
-}
-
-#[test]
-fn test2() {
-    let input = r#"
-enum Bool {
-    true
-    false
-}
-
-enum Nat {
-    zero
-    succ(x: Nat)
-}
-
-enum List[A] {
-    nil
-    cons(head: A, tail: List[A])
-}
-
-def listid(x: List[Bool]): List[Bool] = x
-
-def create0: List[Bool] = nil
-
-def create1: List[Bool] = cons true nil
-
-def create2: List[Bool] = cons (true, cons false nil)
-
-def two = succ (succ zero)
-
-def not(x: Bool): Bool =
-    match x {
-        case true => false
-        case false => true
-    }
-
-println (not true)
-
-def add(x: Nat, y: Nat) =
-    match x {
-        case zero => y
-        case succ(n) => succ (add n y)
-    }
-
-def mul(x: Nat, y: Nat) = match x {
-    case zero => zero
-    case succ(n) => add (y, mul n y)
-}
-
-def four = add two two
-
-println four
-
-struct Point[T] {
-    x: T
-    y: T
-}
-
-def get_x[T](p: Point[T]): T = p.x
-
-def point_add(p1: Point[Nat], p2: Point[Nat]): Point[Nat] =
-    new Point((add p1.x p2.x), (add p1.y p2.y))
-
-def start_point = new Point(zero, four)
-
-def end_point = new Point(four, two)
-
-println (get_x start_point)
-
-println (point_add start_point end_point)
-
-def test0: Type 1 = Type 0
-
-def test1: Type 2 = Type 1 -> Type 0
-
-enum HighLvl[A] {
-    case1(a: A)
-    case2(a: test1)
-}
-
-def test2: HighLvl[Nat] = case1 zero
-
-def test3: Type 2 = HighLvl[Nat]
-
-enum HighLvl2[A: Type 2] {
-    case2_1(x: A)
-    case2_2(x: Nat)
-}
-
-def test1_2: HighLvl2[HighLvl[Nat]] = case2_1 test2
-
-def test1_3: Type 2 = HighLvl2[HighLvl[Nat]]
-
-enum HighLvl3[A: Type 2] {
-    case3_1
-    case3_2(x: Nat)
-}
-
-def test2_2: HighLvl3[HighLvl[Nat]] = case3_1
-
-def test2_3: Type 2 = HighLvl3[HighLvl[Nat]]
-
-def Eq[A](x: A, y: A) = (P : A -> Type 0) -> P x -> P y
-
-def refl[A, x: A]: Eq[A] x x = _ => px => px
-
-struct Bits {
-    name: String
-    size: Nat
-}
-
-def get_name(x: Bits) = x.name
-
-def assign(a: Bits, b: Bits)(eq: Eq[Nat] a.size b.size): String = a.name
-
-def sigA = new Bits("A", four)
-
-def sigB = new Bits("B", four)
-
-def sigC = new Bits("C", two)
-
-def sigD = new Bits("D", two)
-
-def ab = assign sigA sigB refl
-
-def cd = assign sigC sigD refl
-
-"#;
-    let result = run(input, 0).unwrap();
-    println!("{}", result);
-    assert!(result.contains("Bool::false"));
-    assert!(result.contains("4"));
-    assert!(result.contains("0"));
-    assert!(result.contains("Point[Nat]::Point.mk(4, 6)"));
-    let input = r#"
-enum Nat {
-    zero
-    succ(x: Nat)
-}
-
-def test1: Type 2 = Type 1 -> Type 0
-
-struct HighLvl[A] {
-    case1: A
-    case2: test1
-}
-
-def test2_t: Type 1 -> Type 0 = t => Nat
-
-def test2: HighLvl[Nat] = new HighLvl(zero, test2_t)
-
-def test3: Type 2 = HighLvl[Nat]
-
-struct HighLvl2[A: Type 2] {
-    case2_1: A
-    case2_2: Nat
-}
-
-def test1_2: HighLvl2[HighLvl[Nat]] = new HighLvl2(test2, zero)
-
-def test1_3: Type 2 = HighLvl2[HighLvl[Nat]]
-
-struct HighLvl3[A: Type 2] {
-    case3_1: Nat
-    case3_2: Nat
-}
-
-def test2_2: HighLvl3[HighLvl[Nat]] = new HighLvl3(zero, zero)
-
-def test2_3: Type 2 = HighLvl3[HighLvl[Nat]]
-"#;
-    let result = run(input, 0).unwrap();
-    println!("{}", result);
-    println!("success");
-}
-
-#[test]
-fn test0() {
-    let input = r#"
-enum Eq[A](x: A, y: A) {
-    refl[a: A] -> Eq[A] a a
-}
-
-enum Bool {
-    true
-    false
-}
-
-enum Nat {
-    zero
-    succ(x: Nat)
-}
-
-enum Vec[A](len: Nat) {
-    nil -> Vec[A] zero
-    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
-}
-
-enum Product[A, B] {
-    product(a: A, b: B)
-}
-
-def half_adder(lhs: Bool, rhs: Bool): Product[Bool][Bool] =
-    match lhs {
-        case false => product false rhs
-        case true => match rhs {
-            case false => product false true
-            case true => product true false
-        }
-    }
-
-def full_adder(lhs: Bool, rhs: Bool, carrier: Bool): Product[Bool][Bool] =
-    match lhs {
-        case false => half_adder rhs carrier
-        case true => match rhs {
-            case false => half_adder true carrier
-            case true => product true carrier
-        }
-    }
-
-def bits_adder_carrier[len: Nat](lhs: Vec[Bool] len, rhs: Vec[Bool] len, carrier: Bool): Vec[Bool] (succ len) =
-    match lhs {
-        case nil => cons carrier nil
-        case cons(n, taill) => match rhs {
-            case cons(m, tailr) => match bits_adder_carrier taill tailr carrier {
-                case cons(c, tail) => match full_adder n m c {
-                    case product(a, b) => cons (a, cons b tail)
-                }
-            }
-        }
-    }
-
-def bits_adder[len: Nat](lhs: Vec[Bool] len, rhs: Vec[Bool] len): Vec[Bool] (succ len) =
-    bits_adder_carrier lhs rhs false
-
-println bits_adder (cons true nil) (cons false nil)
-"#;
-    let result = run(input, 0).unwrap();
-    println!("{}", result);
-    assert!(result.contains("Vec[Bool]::cons(1, Bool::false, Vec[Bool]::cons(0, Bool::true, Vec[Bool]::nil)"));
-}
-
-#[test]
-pub fn test_index() {
-    let input = r#"
-enum Eq[A](x: A, y: A) {
-    refl[a: A] -> Eq[A] a a
-}
-
-enum Nat {
-    zero
-    succ(x: Nat)
-}
-
-def two = succ (succ zero)
-
-def three = succ (succ (succ zero))
-
-def test: Eq two two = refl
-
-enum Vec[A](len: Nat) {
-    nil -> Vec[A] zero
-    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
-}
-
-def t = cons (zero, cons(two, cons(three, cons two nil)))
-
-println t.len
-
-def head[T, L: Nat](x: Vec[T] (succ L)): T =
-    match x {
-        case cons(x, _) => x
-    }
-
-println (head (cons zero nil))
-
-def length[T, l: Nat](x: (Vec[T] l)): Nat =
-    match x {
-        case nil => zero
-        case cons(_, xs) => succ (xs.len)
-    }
-
-    "#;
-    let result = run(input, 0).unwrap();
-    println!("{}", result);
-    assert!(result.contains("4"));
-    assert!(result.contains("0"));
-}
-
-#[test]
-fn test7() {
-    let input = r#"
-enum Eq[A](x: A, y: A) {
-    refl[a: A] -> Eq[A] a a
-}
-
-enum Bool {
-    true
-    false
-}
-
-enum Nat {
-    zero
-    succ(x: Nat)
-}
-
-enum Vec[A](len: Nat) {
-    nil -> Vec[A] zero
-    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
-}
-
-enum Product[A, B] {
-    product(a: A, b: B)
-}
-
-def half_adder(lhs: Bool, rhs: Bool): Product[Bool][Bool] =
-    match lhs {
-        case false => product false rhs
-        case true => match rhs {
-            case false => product false true
-            case true => product true false
-        }
-    }
-
-def full_adder(lhs: Bool, rhs: Bool, carrier: Bool): Product[Bool][Bool] =
-    match lhs {
-        case false => half_adder rhs carrier
-        case true => match rhs {
-            case false => half_adder true carrier
-            case true => product true carrier
-        }
-    }
-
-def bits_adder_carrier[len: Nat](lhs: Vec[Bool] len, rhs: Vec[Bool] len, carrier: Bool): Vec[Bool] (succ len) =
-    match lhs {
-        case nil => cons carrier nil
-        case cons[_](n, taill) => match rhs {
-            case cons[_](m, tailr) => match bits_adder_carrier taill tailr carrier {
-                case cons[_](c, tail) => match full_adder n m c {
-                    case product(a, b) => cons(a, cons b tail)
-                }
-            }
-        }
-    }
-
-def bits_adder[len: Nat](lhs: Vec[Bool] len, rhs: Vec[Bool] len): Vec[Bool] (succ len) =
-    bits_adder_carrier lhs rhs false
-
-println bits_adder (cons true nil) (cons false nil)"#;
-    let result = run(input, 0).unwrap();
-    println!("{}", result);
-    assert!(result.contains("Vec[Bool]::cons(1, Bool::false, Vec[Bool]::cons(0, Bool::true, Vec[Bool]::nil)"));
-}
-
-#[test]
-fn test8() {
-    let input = r#"
-enum Bool {
-    true
-    false
-}
-
-enum Nat {
-    zero
-    succ(x: Nat)
-}
-
-enum List[A] {
-    nil
-    cons(head: A, tail: List[A])
-}
-
-enum Eq[T](x: T, y: T) {
-    refl(a: T) -> Eq a a
-}
-
-def rfl[A][a: A]: Eq a a =
-    refl a
-
-def listid(x: List[Bool]): List[Bool] = x
-
-def create0: List[Bool] = nil
-
-def create1: List[Bool] = cons true nil
-
-def create2: List[Bool] = cons(true, cons false nil)
-
-def two = succ (succ zero)
-
-def not(x: Bool): Bool =
-    match x {
-        case true => false
-        case false => true
-    }
-
-println (not true)
-
-def add(x: Nat, y: Nat) =
-    match x {
-        case zero => y
-        case succ(n) => succ (add n y)
-    }
-
-def mul(x: Nat, y: Nat) = match x {
-    case zero => zero
-    case succ(n) => add(y, mul n y)
-}
-
-def four = add two two
-
-println four
-
-def cong[A, B, f: A -> B, x: A, y: A](e: Eq x y): Eq (f x) (f y) =
-    match e {
-        case refl(a) => refl (f a)
-    }
-
-def cong_succ[x: Nat, y: Nat](e: Eq x y): Eq (succ x) (succ y) =
-    cong[Nat][Nat][succ][x][y] e
-
-def add_zero_right(a: Nat): Eq (add a zero) a =
-    match a {
-        case zero => refl zero
-        case succ(t) => cong_succ (add_zero_right t)
-    }
-
-def symm[A, x, y: A](e: Eq[A] x y): Eq[A] y x =
-    match e {
-        case refl(a) => refl[A] a
-    }
-
-def trans[A, x, y, z: A](e1: Eq[A] x y, e2: Eq[A] y z): Eq[A] x z =
-    match e1 {
-        case refl(a) => e2
-    }
-
-def add_succ_right (n: Nat, m: Nat): Eq[Nat] (add(n, succ m)) (succ (add n m)) =
-    match n {
-        case zero => refl[Nat] (succ m)
-        case succ(k) => cong_succ (add_succ_right k m)
-    }
-
-def add_comm (n: Nat, m: Nat): Eq[Nat] (add n m) (add m n) =
-    match n {
-        case zero => symm (add_zero_right m)
-        case succ(k) => trans (cong_succ (add_comm k m)) (symm (add_succ_right m k))
-    }
-
-def add_assoc (n: Nat, m: Nat, k: Nat): Eq[Nat] (add (add n m) k) (add(n, add m k)) =
-    match n {
-        case zero => rfl
-        case succ(l) => cong_succ (add_assoc l m k)
-    }
-
-def add_zero_left(m: Nat): Eq[Nat] (add zero m) m =
-    rfl
-
-def mul_zero_right(n: Nat): Eq[Nat] (mul n zero) zero =
-    match n {
-        case zero => rfl
-        case succ(k) => trans (refl (add(zero, mul k zero))) (mul_zero_right k)
-    }
-
-def add_succ_zero_left(k: Nat): Eq[Nat] (add (succ zero) k) (succ k) =
-    cong_succ (add_zero_left k)
-
-def mul_one_right(n: Nat): Eq[Nat] (mul (n, succ zero)) n =
-    match n {
-        case zero => rfl[Nat][zero]
-        case succ(k) =>
-            let ih = mul_one_right k;
-            let lemma: Eq[Nat] (add (succ zero) k) (succ k) = cong_succ (add_zero_left k);
-            trans (cong[Nat][Nat][add (succ zero)][mul (k, succ zero)][k] ih) lemma
-    }
-
-struct Exists[A: Type 0, P: A -> Type 0] {
-    witness: A
-    proof: P witness
-}
-
-def exists_two: Exists[Nat][x => Eq x two] = Exists.mk[Nat][x => Eq x two] two rfl
-
-struct Point[T] {
-    x: T
-    y: T
-}
-
-def get_x[T](p: Point[T]): T = p.x
-
-def point_add(p1: Point[Nat], p2: Point[Nat]): Point[Nat] =
-    new Point((add p1.x p2.x), (add p1.y p2.y))
-
-def start_point = new Point(zero, four)
-
-def end_point = new Point(four, two)
-
-println (get_x start_point)
-
-println (point_add start_point end_point)
-
-def test0: Type 1 = Type 0
-
-def test1: Type 2 = Type 1 -> Type 0
-
-enum HighLvl[A] {
-    case1(x: A)
-    case2(x: test1)
-}
-
-def test2: HighLvl[Nat] = case1 zero
-
-def test3: Type 2 = HighLvl[Nat]
-
-enum HighLvl2[A: Type 2] {
-    case2_1(x: A)
-    case2_2(x: Nat)
-}
-
-def test1_2: HighLvl2[HighLvl[Nat]] = case2_1 test2
-
-def test1_3: Type 2 = HighLvl2[HighLvl[Nat]]
-
-enum HighLvl3[A: Type 2] {
-    case3_1
-    case3_2(x: Nat)
-}
-
-def test2_2: HighLvl3[HighLvl[Nat]] = case3_1
-
-def test2_3: Type 2 = HighLvl3[HighLvl[Nat]]
-
-struct Bits {
-    name: String
-    size: Nat
-}
-
-def assign(a: Bits, b: Bits)(eq: Eq[Nat] a.size b.size): String = string_concat a.name b.name
-
-def sigA = new Bits("A", four)
-
-def sigB = new Bits("B", four)
-
-def sigC = new Bits("C", two)
-
-def sigD = new Bits("D", two)
-
-def ab = assign sigA sigB rfl
-
-def cd = assign sigC sigD rfl
-
-def three = add(two, succ zero)
-
-println 5
-"#;
-    let result = run(input, 0).unwrap();
-    println!("{}", result);
-    assert!(result.contains("Bool::false"));
-    assert!(result.contains("4"));
-    assert!(result.contains("0"));
-    assert!(result.contains("Point[Nat]::Point.mk(4, 6)"));
-    assert!(result.contains("5"));
-}
-
-// --------------------------------------------------------------------------------
-// 2026-09-18 评审修复轮回归钉（L07_sum_type 修复轮同款场景向本层移植，
-// docs/review-l07l12/REVIEW-4ANGLE-2026-09-18.md §六）：嵌套模式覆盖检查 /
-// 构造子良构性 / 覆盖探测的两段式结算。
-
-/// P0（嵌套覆盖缺失）：nil 臂 + cons(h, nil) 臂缺 cons(h, cons(..))——
-/// 修复前静默接受、运行期在尾部为 cons 的值上卡死；修复后报模式位置缺失。
-#[test]
-fn test_nested_coverage_gap() {
-    let src = r#"
-enum Nat {
-    zero
-    succ(x: Nat)
-}
-
-enum List[A] {
-    nil
-    cons(head: A, tail: List[A])
-}
-
-def f(x: List[Nat]): Nat =
-    match x {
-        case nil => zero
-        case cons(h, nil) => h
-    }
-"#;
-    match run(src, 0) {
-        Err(e) => assert!(e.0.data.contains("缺少构造子 cons"), "{}", e.0.data),
-        Ok(out) => panic!("非穷尽 match 被静默接受：\n{out}"),
-    }
-}
-
-/// P0（嵌套覆盖缺失，三层）：深度 2 的嵌套位置缺 cons。
-#[test]
-fn test_nested_coverage_gap3() {
-    let src = r#"
-enum Nat {
-    zero
-    succ(x: Nat)
-}
-
-enum List[A] {
-    nil
-    cons(head: A, tail: List[A])
-}
-
-def f(x: List[Nat]): Nat =
-    match x {
-        case nil => zero
-        case cons(h, nil) => h
-        case cons(h, cons(h2, nil)) => h2
-    }
-"#;
-    match run(src, 0) {
-        Err(e) => assert!(e.0.data.contains("缺少构造子 cons"), "{}", e.0.data),
-        Ok(out) => panic!("非穷尽 match 被静默接受：\n{out}"),
-    }
-}
-
-/// 嵌套覆盖的正向对照：同一位置被 cons(h, cons(h2, t)) 完整覆盖 → Ok 且
-/// 求值正确（防误报）。运行期验证避开本层既有的
-/// 「双重嵌套构造子应用作实参」推导缺口（与本修复无关，见 parity 套件
-/// 头注的已知偏差登记）。
-#[test]
-fn test_nested_coverage_complete_ok() {
-    let src = r#"
-enum Nat {
-    zero
-    succ(x: Nat)
-}
-
-enum List[A] {
-    nil
-    cons(head: A, tail: List[A])
-}
-
-def f(x: List[Nat]): Nat =
-    match x {
-        case nil => zero
-        case cons(h, nil) => h
-        case cons(h, cons(h2, t)) => h2
-    }
-
-println (f nil)
-println (f (cons (succ zero) nil))
-"#;
-    let out = run(src, 0).unwrap();
-    assert!(out.contains("0"), "{out}");
-}
-
-/// 索引族的嵌套位置（本层口径，与 L07 精度的刻意差异）：Vec 长度恰 2 上
-/// cons(h, nil) 臂是荒谬臂（尾部 nil 要求长度 1 与头部索引冲突）——raw
-/// 推断期 `?l := zero` 与特化方程冲突，check_pm_final 失败，臂按 L11 口径
-/// **静默跳过**；其嵌套记账随之丢弃（失败臂不产生覆盖义务）。存活的
-/// cons(h, cons(h2, t)) 臂的嵌套位置上，尾部索引槽未被 σ 精化（本层的
-/// 特化解只落 scrutinee 与内层槽，不落外层隐式索引槽），nil 与 cons 都
-/// 按"可达"处理——nil 无臂覆盖 → 报"模式位置缺少构造子 nil"。保守方向
-/// （拒绝运行期完备的程序），与 L07 的"分支不可达"拒绝同判。
-#[test]
-fn test_nested_coverage_gadt_tail_position() {
-    let src = r#"
-enum Nat {
-    zero
-    succ(x: Nat)
-}
-
-enum Vec[A](len: Nat) {
-    nil -> Vec[A] zero
-    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
-}
-
-def f(v: Vec[Nat] (succ (succ zero))): Nat =
-    match v {
-        case cons(h, nil) => h
-        case cons(h, cons(h2, t)) => h2
-    }
-"#;
-    match run(src, 0) {
-        Err(e) => {
-            assert!(
-                e.0.data.contains("缺少构造子 nil"),
-                "{}",
-                e.0.data
-            );
-        }
-        Ok(out) => panic!("索引族嵌套位置漏报：\n{out}"),
-    }
-}
-
-/// P1（构造子良构性）：ret 不是本 enum——c -> Nat 向构造子名字空间注入
-/// phantom 值（对 Nat 的覆盖完备 match 在该值上卡死），修复后注册期拒绝。
-#[test]
-fn test_ctor_wf_external_ret() {
-    let src = r#"
-enum Nat {
-    zero
-    succ(x: Nat)
-}
-
-enum Foo {
-    c -> Nat
-}
-"#;
-    match run(src, 0) {
-        Err(e) => assert!(e.0.data.contains("不是 Foo"), "{}", e.0.data),
-        Ok(out) => panic!("phantom 构造子被静默接受：\n{out}"),
-    }
-}
-
-/// P1（构造子良构性）：参数位特化——隐式参数位是 Bool 而非参数变量，
-/// 修复后拒绝（特化请走显式索引）。
-#[test]
-fn test_ctor_wf_param_specialized() {
-    let src = r#"
-enum Nat {
-    zero
-    succ(x: Nat)
-}
-
-enum Bool {
-    true
-    false
-}
-
-enum Foo[A] {
-    c -> Foo[Bool]
-}
-"#;
-    match run(src, 0) {
-        Err(e) => assert!(e.0.data.contains("参数变量"), "{}", e.0.data),
-        Ok(out) => panic!("参数特化被静默接受：\n{out}"),
-    }
-}
-
-/// 构造子良构性的正向对照：构造子重绑定参数惯用法（p[A,B](a,b) ->
-/// Pack[A][B] a b，使用点经特化方程解回枚举参数）必须保持 Ok——
-/// WF 检查只封 phantom/特化两个洞，不误伤该惯用法。
-#[test]
-fn test_ctor_rebind_params_ok() {
-    let src = r#"
-enum Nat {
-    zero
-    succ(x: Nat)
-}
-
-enum Bool {
-    true
-    false
-}
-
-enum Pack[A, B](x: A, y: B) {
-    p[A, B](a: A, b: B) -> Pack[A][B] a b
-}
-
-def sw: Pack[Nat][Bool] zero true = p[Nat][Bool] zero true
-
-println sw.y
-"#;
-    let out = run(src, 0).unwrap();
-    assert!(out.contains("Bool::true"), "{out}");
-}
-
-/// P1（stale-solvable 臂序污染，评审 2026-09-18）：L12 无 solvable 白名单
-/// 且臂 σ 逐臂重建（见 pattern_match.rs 头注），臂序不应影响可达性判定。
-/// 注意 L12 的收窄语义是"特化失败 = 臂静默跳过"（同 L10，非 L07 的报
-/// "分支不可达"），故本钉断言**两种臂序判定一致**（同为 Ok）；若失败说明
-/// 臂间出现了状态泄漏。
-#[test]
-fn test_stale_solvable_order_independent() {
-    let src = |arms: &str| {
-        format!(
-            r#"
-enum Nat {{
-    zero
-    succ(x: Nat)
-}}
-
-enum W(f: Nat -> Nat) {{
-    big(a: Nat, b: Nat, c: Nat, d: Nat) -> W (n => succ zero)
-    mk -> W (n => succ zero)
-    ident -> W (n => n)
-}}
-
-def t(w: W (n => succ zero)): Nat =
-    match w {{
-        {arms}
-    }}
-"#
-        )
-    };
-    let r_big_first = run(&src("case big(a, b, c, d) => a\n        case ident => zero\n        case mk => succ zero"), 0);
-    let r_ident_first = run(&src("case ident => zero\n        case big(a, b, c, d) => a\n        case mk => succ zero"), 0);
-    match (&r_big_first, &r_ident_first) {
-        (Ok(a), Ok(b)) => assert_eq!(a, b, "臂序影响输出"),
-        (Err(a), Err(b)) => assert_eq!(a.0.data, b.0.data, "臂序影响错误判定"),
-        _ => panic!("臂序影响判定：big-first={r_big_first:?} ident-first={r_ident_first:?}"),
-    }
-}
-
-// --------------------------------------------------------------------------------
-// 2026-09-20 负例补齐（模式匹配「应当失败」）。
-//
-// 本层此前的负例只覆盖嵌套位置（test_nested_coverage_gap*），顶层缺分支与
-// 臂不可达两处覆盖义务没有钉子。两者各钉一条，末条是防误报的正向对照。
-// 警告经 `elaboration.rs:327` 的 `format!("{error:?}")` 落到 `Error.0.data`，
-// 故断言按 Debug 变体名（与 L09/L10/L11 同形）。
-
-/// 负例：顶层缺构造子（Bool 少了 false 臂）必须报错，不得静默接受。
-#[test]
-fn test_pm_missing_branch_rejected() {
-    let src = r#"
-enum Bool {
-    true
-    false
-}
-
-def bad(x: Bool): Bool =
-    match x {
-        case true => false
-    }
-"#;
-    match run(src, 0) {
-        Err(e) => assert!(
-            e.0.data.contains("Unmatched") || e.0.data.contains("not covered")
-                || e.0.data.contains("缺少构造子"),
-            "错误文案不含缺分支信息：{}", e.0.data
+use pattern_match::Compiler;
+
+use parser::syntax::Icit;
+#[cfg(test)]
+mod tests;
+
+
+fn shift_tm(t: Tm, amount: u32, depth: u32) -> Tm {
+    match t {
+        Tm::Var(Ix(i)) => Tm::Var(Ix(if i >= depth { i + amount } else { i })),
+        Tm::Decl(n) => Tm::Decl(n),
+        Tm::U(x) => Tm::U(x),
+        Tm::Meta(m) => Tm::Meta(m),
+        Tm::LiteralType => Tm::LiteralType,
+        Tm::LiteralIntro(x) => Tm::LiteralIntro(x),
+        Tm::Prim(name) => Tm::Prim(name),
+        Tm::Obj(h, n) => Tm::Obj(Box::new(shift_tm(*h, amount, depth)), n),
+        Tm::App(f, a, i) => Tm::App(
+            Box::new(shift_tm(*f, amount, depth)),
+            Box::new(shift_tm(*a, amount, depth)),
+            i,
         ),
-        Ok(out) => panic!("非穷尽 match 被静默接受：\n{out}"),
-    }
-}
-
-/// 负例：臂不可达（`Vec[Nat] zero` 上 cons 臂的索引方程无解）。
-/// 本层是"特化失败 = 臂静默跳过"（同 L10/L11，非 L07 的报"分支不可达"），
-/// 故钉的是"整个 match 必须被拒"。
-#[test]
-fn test_pm_unreachable_arm_rejected() {
-    let src = r#"
-enum Nat {
-    zero
-    succ(x: Nat)
-}
-
-enum Vec[A](len: Nat) {
-    nil -> Vec[A] zero
-    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
-}
-
-def bad(v: Vec[Nat] zero): Nat =
-    match v {
-        case cons(x, xs) => x
-    }
-"#;
-    match run(src, 0) {
-        Err(e) => assert!(
-            e.0.data.contains("Unmatched") || e.0.data.contains("Unreachable")
-                || e.0.data.contains("缺少构造子") || e.0.data.contains("不可达"),
-            "错误文案不含拒因信息：{}", e.0.data
+        Tm::AppPruning(h, pr) => Tm::AppPruning(Box::new(shift_tm(*h, amount, depth)), pr),
+        Tm::Lam(x, i, b) => Tm::Lam(x, i, Rc::new(shift_tm((*b).clone(), amount, depth + 1))),
+        Tm::Pi(x, i, a, b) => Tm::Pi(
+            x,
+            i,
+            Rc::new(shift_tm((*a).clone(), amount, depth)),
+            Rc::new(shift_tm((*b).clone(), amount, depth + 1)),
         ),
-        Ok(out) => panic!("只有不可达臂的 match 被静默接受：\n{out}"),
+        Tm::Let(x, a, t, u) => Tm::Let(
+            x,
+            Box::new(shift_tm(*a, amount, depth)),
+            Box::new(shift_tm(*t, amount, depth)),
+            Box::new(shift_tm(*u, amount, depth + 1)),
+        ),
+        Tm::Sum(name, params, cases) => Tm::Sum(
+            name,
+            params
+                .into_iter()
+                .map(|(n, v, ty, i)| (n, shift_tm(v, amount, depth), shift_tm(ty, amount, depth), i))
+                .collect(),
+            cases,
+        ),
+        Tm::SumCase { typ, case_name, datas } => Tm::SumCase {
+            typ: Box::new(shift_tm(*typ, amount, depth)),
+            case_name,
+            datas: datas.into_iter().map(|(n, v, i)| (n, shift_tm(v, amount, depth), i)).collect(),
+        },
+        Tm::Match(s, cases) => Tm::Match(
+            Box::new(shift_tm(*s, amount, depth)),
+            cases
+                .into_iter()
+                .map(|(p, b)| {
+                    let d = depth + p.bind_count();
+                    (p, shift_tm(b, amount, d))
+                })
+                .collect(),
+        ),
+        Tm::Call(name, args, vals, body) => Tm::Call(
+            name,
+            args.into_iter().map(|a| shift_tm(a, amount, depth)).collect(),
+            vals,
+            Box::new(shift_tm(*body, amount, depth)),
+        ),
     }
 }
 
-/// 正向对照（防误报）：通配臂覆盖全部 → 不得报覆盖类错误。
-#[test]
-fn test_pm_wildcard_covers_ok() {
-    let src = r#"
-enum Bool {
-    true
-    false
-}
 
-def ok(x: Bool): Bool =
-    match x {
-        case true => false
-        case _ => true
-    }
-"#;
-    run(src, 0).unwrap_or_else(|e| panic!("通配臂被误报：{}", e.0.data));
-}
-
-// --------------------------------------------------------------------------------
-// 2026-09-20 跨层一致性钉子：通配臂之后的臂。
-//
-// L07 的 README §4（`src/L07_sum_type/README.md:264`）是这条语义的规格：
-// 「通配臂之后的臂跳过（运行时永不可达，保持首匹配语义**不报错**）」，
-// 且 L07/L08 各有回归钉 `test_catch_all_mixed` 断言这种程序**通过**。
-//
-// 本层（及 L09–L11）在 `pattern_match.rs` 的臂循环里对被遮蔽的臂推
-// `Warning::Unreachable`，而本层把非空 warnings 直接变成 `Err`
-// （`elaboration.rs:327`）——于是同一份源在 L07/L08 通过、在本层被拒。
-// 该 `Warning::Unreachable` 是决策树时代的残留（老算法里"树从未到达的臂"
-// 是另一回事，见 docs/l09l13-match-compiler-analysis-2026-09-17.md §2；
-// 改成逐臂下钻后只剩"被 catch-all 遮蔽"这一种情形，而它恰是规格要求不报的）。
-/// 2026-09-20 owner 口径更正：**不可达的臂应当报错**（上一轮曾按 L07
-/// README:264 对齐成沉默跳过，本轮已还原为报错）。
-#[test]
-fn test_pm_shadowed_arm_after_catch_all_rejected() {
-    let src = r#"
-enum Nat {
-    zero
-    succ(x: Nat)
-}
-
-def const_zero(x: Nat): Nat =
-    match x {
-        case n => zero
-        case zero => zero
-        case succ(k) => succ k
-    }
-"#;
-        match run(src, 0) {
-            Err(e) => assert!(
-                e.0.data.contains("Unreachable") || e.0.data.contains("不可达"),
-                "错误文案不含臂不可达信息：{}", e.0.data
-            ),
-            Ok(out) => panic!("通配臂之后的臂（运行时永不可达）被静默接受：\n{out}"),
+/// 按模式形状反查同名 def（旧 L12 的 Call 显示外衣辅助；当前仅保留 API）。
+#[allow(dead_code)]
+fn lookup_function_by_cases(decl: &Decls, cases: &[(PatternDetail, Tm)]) -> Option<String> {
+    for (name, e) in decl.iter() {
+        let body = match &e.val {
+            Val::Lam(_, _, cl) => cl.1.clone(),
+            _ => continue,
+        };
+        if let Tm::Match(_, inner) = &*body {
+            if inner.len() == cases.len()
+                && inner
+                    .iter()
+                    .zip(cases.iter())
+                    .all(|((p1, _), (p2, _))| p1 == p2)
+            {
+                return Some(name.to_string());
+            }
         }
     }
-
+    None
+}
