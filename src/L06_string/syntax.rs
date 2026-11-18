@@ -25,7 +25,7 @@ pub fn close_ty(mcl: &Locals, b: Ty) -> Ty {
         Locals::Here => b,
         Locals::Bind(mcl, x, a) => close_ty(
             mcl,
-            Tm::Pi(x.clone(), Icit::Expl, Box::new((**a).clone()), Box::new(b)),
+            Tm::Pi(x.clone(), Icit::Expl, Rc::new((**a).clone()), Rc::new(b)),
         ),
         Locals::Define(mcl, x, a, t) => close_ty(
             mcl,

@@ -26,24 +26,40 @@ struct PartialRenaming {
     ren: FxHashMap<u32, Lvl>, // mapping from Δ vars to Γ vars
 }
 
-fn lift(pr: &PartialRenaming) -> PartialRenaming {
-    let mut new_ren = pr.ren.clone();
-    new_ren.insert(pr.cod.0, pr.dom);
-
-    PartialRenaming {
-        occ: pr.occ,
-        dom: pr.dom + 1, // increment dom
-        cod: pr.cod + 1, // increment cod
-        ren: new_ren,    // update ren with the new mapping
-    }
+/// lift / skip 的性能口径（L07 性能评审 P1-1）：旧版每 binder 克隆整张
+/// `ren` HashMap（O(n·k) 哈希 + n 次分配，rename 单分支 O(bind²)）。现为
+/// **原位插入 + 按值转移**：
+/// - [`lift_in_place`] 在独占表上追加一个绑定器槽，O(1)；
+/// - [`lift`] / [`skip`] 按值消费——调用方持有独占表（线性递归）时零克隆；
+/// - `rename` 的 Lam/Pi 臂只有**借用**（兄弟子树复用同一 renaming），用
+///   "原位插入 + 递归后回滚"（[`unlift`]）达成同款零克隆——回滚保证兄弟
+///   子树看到的表与克隆版 lift 的临时副本逐位一致。
+fn lift_in_place(pr: &mut PartialRenaming) {
+    pr.ren.insert(pr.cod.0, pr.dom);
+    pr.dom = pr.dom + 1;
+    pr.cod = pr.cod + 1;
 }
 
-fn skip(pr: &PartialRenaming) -> PartialRenaming {
-    PartialRenaming {
-        occ: pr.occ,
-        dom: pr.dom,         // decrement dom
-        cod: pr.cod + 1,     // decrement cod
-        ren: pr.ren.clone(), // no change in ren
+fn lift(mut pr: PartialRenaming) -> PartialRenaming {
+    lift_in_place(&mut pr);
+    pr
+}
+
+fn skip(mut pr: PartialRenaming) -> PartialRenaming {
+    pr.cod = pr.cod + 1; // increment cod, dom unchanged
+    pr
+}
+
+/// lift 原位插入的回滚：恢复槽位旧值（无旧值则移除）——调用点保证插入/
+/// 回滚配对，兄弟子树看到的表与克隆版 lift 语义逐位一致。
+fn unlift(pr: &mut PartialRenaming, key: u32, prev: Option<Lvl>) {
+    match prev {
+        Some(v) => {
+            pr.ren.insert(key, v);
+        }
+        None => {
+            pr.ren.remove(&key);
+        }
     }
 }
 
@@ -110,21 +126,23 @@ impl Infer {
     fn prune_ty_go(
         &mut self,
         rev: &[Option<Icit>],
-        pren: &PartialRenaming,
+        // 按值持有：本递归是线性的（每层 lift/skip 后旧表不再使用），
+        // lift/skip 原位插入零克隆（L07 性能评审 P1-1）。
+        mut pren: PartialRenaming,
         a: &Rc<Val>,
     ) -> Result<Tm, UnifyError> {
         let a = self.force(a);
         match (rev.split_first(), a.as_ref()) {
-            (None, _) => self.rename(pren, &a),
+            (None, _) => self.rename(&mut pren, &a),
             (Some((Some(_), rest)), Val::Pi(x, i, a, b)) => {
-                let a = self.rename(pren, a)?;
+                let a = self.rename(&mut pren, a)?;
                 let b = self.closure_apply(&b, Val::vvar(pren.cod).into());
-                let b = self.prune_ty_go(rest, &lift(pren), &b)?;
-                Ok(Tm::Pi(x.clone(), *i, Box::new(a), Box::new(b)))
+                let b = self.prune_ty_go(rest, lift(pren), &b)?;
+                Ok(Tm::Pi(x.clone(), *i, Rc::new(a), Rc::new(b)))
             }
             (Some((None, rest)), Val::Pi(_, _, _, b)) => {
                 let b = self.closure_apply(&b, Val::vvar(pren.cod).into());
-                self.prune_ty_go(rest, &skip(pren), &b)
+                self.prune_ty_go(rest, skip(pren), &b)
             }
             _ => Err(UnifyError), // impossible case
         }
@@ -137,7 +155,7 @@ impl Infer {
         rev.reverse();
         self.prune_ty_go(
             &rev,
-            &PartialRenaming {
+            PartialRenaming {
                 occ: None,
                 dom: Lvl(0),
                 cod: Lvl(0),
@@ -170,7 +188,7 @@ impl Infer {
     }
     fn prune_vflex_go(
         &mut self,
-        pren: &PartialRenaming,
+        pren: &mut PartialRenaming,
         sp: Spine,
     ) -> Result<(List<(Option<Tm>, Icit)>, SpinePruneStatus), UnifyError> {
         if sp.head().is_none() {
@@ -206,7 +224,7 @@ impl Infer {
     }
     fn prune_vflex(
         &mut self,
-        pren: &PartialRenaming,
+        pren: &mut PartialRenaming,
         m: MetaVar,
         sp: Spine,
     ) -> Result<Tm, UnifyError> {
@@ -246,7 +264,7 @@ impl Infer {
 
         Ok(t)
     }
-    fn rename_sp(&mut self, pren: &PartialRenaming, t: Tm, sp: &Spine) -> Result<Tm, UnifyError> {
+    fn rename_sp(&mut self, pren: &mut PartialRenaming, t: Tm, sp: &Spine) -> Result<Tm, UnifyError> {
         match sp {
             List { head: None, .. } => Ok(t),
             a => {
@@ -256,7 +274,7 @@ impl Infer {
             }
         }
     }
-    fn rename(&mut self, pren: &PartialRenaming, t: &Rc<Val>) -> Result<Tm, UnifyError> {
+    fn rename(&mut self, pren: &mut PartialRenaming, t: &Rc<Val>) -> Result<Tm, UnifyError> {
         match self.force(t).as_ref() {
             Val::Flex(m_prime, sp) => match pren.occ.as_ref() {
                 Some(m) if m == m_prime => Err(UnifyError),
@@ -270,19 +288,47 @@ impl Infer {
                 }
             },
             Val::Lam(x, i, closure) => {
-                let t = self.rename(
-                    &lift(pren),
-                    &self.closure_apply(&closure, Val::vvar(pren.cod).into()),
-                )?;
-                Ok(Tm::Lam(x.clone(), *i, Box::new(t)))
+                // lift 原位 + 递归后回滚（P1-1）：兄弟子树复用同一张表，回滚
+                // 后与"克隆版 lift 的临时副本"逐位一致；Err 路径同样回滚。
+                let body_v = self.closure_apply(&closure, Val::vvar(pren.cod).into());
+                let key = pren.cod.0;
+                let prev = pren.ren.insert(key, pren.dom);
+                pren.dom = pren.dom + 1;
+                pren.cod = pren.cod + 1;
+                let t = match self.rename(pren, &body_v) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        unlift(pren, key, prev);
+                        pren.dom = pren.dom - 1;
+                        pren.cod = pren.cod - 1;
+                        return Err(e);
+                    }
+                };
+                unlift(pren, key, prev);
+                pren.dom = pren.dom - 1;
+                pren.cod = pren.cod - 1;
+                Ok(Tm::Lam(x.clone(), *i, Rc::new(t)))
             }
             Val::Pi(x, i, a, closure) => {
                 let a = self.rename(pren, a)?;
-                let b = self.rename(
-                    &lift(pren),
-                    &self.closure_apply(&closure, Val::vvar(pren.cod).into()),
-                )?;
-                Ok(Tm::Pi(x.clone(), *i, Box::new(a), Box::new(b)))
+                let body_v = self.closure_apply(&closure, Val::vvar(pren.cod).into());
+                let key = pren.cod.0;
+                let prev = pren.ren.insert(key, pren.dom);
+                pren.dom = pren.dom + 1;
+                pren.cod = pren.cod + 1;
+                let b = match self.rename(pren, &body_v) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        unlift(pren, key, prev);
+                        pren.dom = pren.dom - 1;
+                        pren.cod = pren.cod - 1;
+                        return Err(e);
+                    }
+                };
+                unlift(pren, key, prev);
+                pren.dom = pren.dom - 1;
+                pren.cod = pren.cod - 1;
+                Ok(Tm::Pi(x.clone(), *i, Rc::new(a), Rc::new(b)))
             }
             Val::U => Ok(Tm::U),
             Val::LiteralType => Ok(Tm::LiteralType),
@@ -300,7 +346,7 @@ impl Infer {
                     Tm::Lam(
                         empty_span(var_name),
                         *icit,
-                        Box::new(self.lams_go(
+                        Rc::new(self.lams_go(
                             l,
                             t,
                             &self.closure_apply(&closure, Val::Rigid(l_prime, List::new()).into()),
@@ -311,7 +357,7 @@ impl Infer {
                 Val::Pi(span, icit, val, closure) => Tm::Lam(
                     span.clone(),
                     *icit,
-                    Box::new(self.lams_go(
+                    Rc::new(self.lams_go(
                         l,
                         t,
                         &self.closure_apply(&closure, Val::Rigid(l_prime, List::new()).into()),
@@ -356,14 +402,14 @@ impl Infer {
             self.prune_ty(&pr, &mty)?;
         }
 
-        let rhs = self.rename(
-            &PartialRenaming {
-                occ: Some(m),
-                ..pren
-            },
-            rhs,
-        )?;
-        let solution = self.eval(&List::new(), &self.lams(pren.dom, &mty, rhs));
+        let dom = pren.dom;
+        // occ 换成本 meta（occurs 守卫）；dom/cod/ren 原样转移
+        let mut pren = PartialRenaming {
+            occ: Some(m),
+            ..pren
+        };
+        let rhs = self.rename(&mut pren, rhs)?;
+        let solution = self.eval(&List::new(), &self.lams(dom, &mty, rhs));
         self.meta[m.0 as usize] = MetaEntry::Solved(solution, mty);
 
         Ok(())

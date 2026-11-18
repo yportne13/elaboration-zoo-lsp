@@ -5,6 +5,8 @@
 
 use bumpalo::Bump;
 
+use std::rc::Rc;
+
 use super::parser::syntax::Decl;
 use super::pretty;
 use super::{empty_span, Error, Ix};
@@ -80,12 +82,12 @@ pub(super) fn export(t: &Tm<'_>) -> CTm {
             J::Do(Tm::Decl(s)) => done.push(B::Decl(name(s))),
             J::Lam2(x, i) => {
                 let b = done.pop().expect("export 栈：Lam 缺体");
-                done.push(B::Lam(name(x), i, Box::new(b)));
+                done.push(B::Lam(name(x), i, Rc::new(b)));
             }
             J::Pi2(x, i) => {
                 let cod = done.pop().expect("export 栈：Pi 缺余定义域");
                 let dom = done.pop().expect("export 栈：Pi 缺定义域");
-                done.push(B::Pi(name(x), i, Box::new(dom), Box::new(cod)));
+                done.push(B::Pi(name(x), i, Rc::new(dom), Rc::new(cod)));
             }
             J::Let2(x) => {
                 let u = done.pop().expect("export 栈：Let 缺体");
@@ -409,4 +411,52 @@ mod tests {
         assert!(!NO_CONV_MEMO.load(std::sync::atomic::Ordering::Relaxed));
         assert!(!NO_NAME_MAP.load(std::sync::atomic::Ordering::Relaxed));
     }
+}
+
+// L07 优化回填的回归钉（2026-11-18）
+// --------------------------------------------------------------------------------
+
+/// 载体切换（top-level defs 只走 decl 表，不进 env）：引用距离与 def 数无关。
+///
+/// 回归口径：`strchain` 每层都回头引用**最早**注册的 `string_concat`。旧
+/// 实现把它 `define` 进 env 头部，`eval(Tm::Var)` 用 `env.iter().nth()` 线性
+/// 走链 ⇒ O(D²) 指针追逐（k=11 实测 57 ms）；现在 builtin / def 都只在 decl
+/// 表，引用走 `Tm::Decl` 的 O(1) 查找（同负载 5.6 ms）。这里钉住的是**复杂
+/// 度形态**：k 翻倍时耗时比应接近 2（线性），而不是 4（平方）。
+#[test]
+fn carrier_defs_live_only_in_decl_table() {
+    use std::time::Instant;
+    let time_one = |k: u32| {
+        let src = super::strchain_src(k) + &format!("println s{}\n", (1u64 << (k + 1)) - 1);
+        let ok = super::super::run(&src, 0).unwrap();
+        let t0 = Instant::now();
+        for _ in 0..3 {
+            let out = super::super::run(&src, 0).unwrap();
+            assert_eq!(out, ok);
+        }
+        t0.elapsed().as_secs_f64() / 3.0
+    };
+    let t9 = time_one(9);
+    let t11 = time_one(11);
+    // 线性应为 4×（D 翻 4 倍）；旧平方形态会是 16×。取 8× 作为宽松上界
+    // （覆盖计时噪声；旧实现在同机同口径下是 13×+）。
+    assert!(
+        t11 / t9 < 8.0,
+        "strchain k=11/k=9 耗时比 {:.1}×（应近线性：4×；平方形态 ≥13×）",
+        t11 / t9
+    );
+}
+
+/// P5 跨 meta 环守卫：`?a := ?b`、`?b := ?a` 的展开必须**有界终止**，
+/// 不得无限递归（旧实现只能等爆栈）。
+#[test]
+fn cross_meta_cycle_force_is_bounded() {
+    use super::super::{Infer, Val};
+    let mut infer = Infer::new();
+    infer.solve_meta_cycle_for_test();
+    let out = infer.force(&infer.meta_cycle_root_for_test());
+    assert!(
+        matches!(out.as_ref(), Val::Flex(..)),
+        "环上的展开应停在卡住的 Flex，实际 {out:?}"
+    );
 }

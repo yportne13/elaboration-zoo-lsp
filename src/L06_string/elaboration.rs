@@ -78,7 +78,7 @@ impl Infer {
                     *t,
                     &self.closure_apply(&b_closure, Val::vvar(cxt.lvl).into()),
                 )?;
-                Ok(Tm::Lam(x, *i_t, Box::new(body)))
+                Ok(Tm::Lam(x, *i_t, Rc::new(body)))
             }
             (t, Val::Pi(x, Icit::Impl, a, b_closure)) => {
                 let body = self.check(
@@ -86,14 +86,27 @@ impl Infer {
                     t,
                     &self.closure_apply(&b_closure, Val::vvar(cxt.lvl).into()),
                 )?;
-                Ok(Tm::Lam(x.clone(), Icit::Impl, Box::new(body)))
+                Ok(Tm::Lam(x.clone(), Icit::Impl, Rc::new(body)))
             }
             // Check let bindings
             (Raw::Let(x, a_, t, u), _) => {
-                let a_checked = self.check_ty(cxt, *a_)?;
-                let va = self.eval(&cxt.env, &a_checked);
-                let t_checked = self.check(cxt, *t, &va)?;
-                let vt = self.eval(&cxt.env, &t_checked);
+                // 无类型注解的 let：直接推导 `t` 的类型（L07 同款快路径）。
+                // 旧实现为 binder 造一个闭合 meta（`fresh_meta` 的
+                // `close_ty` 在 n 层嵌套 let 的 hole 链上逐层重建整条
+                // Locals 的 Π/Let 类型 = O(n²)）；直接推断后 quote 用推断
+                // 类型，结果类型不变、`?N` 编号少一个洞。
+                let (a_checked, va, t_checked, vt) = if matches!(a_.as_ref(), Raw::Hole) {
+                    let (t_checked, ty) = self.infer_expr(cxt, *t)?;
+                    let a_checked = self.quote(cxt.lvl, &ty);
+                    let vt = self.eval(&cxt.env, &t_checked);
+                    (a_checked, ty, t_checked, vt)
+                } else {
+                    let a_checked = self.check_ty(cxt, *a_)?;
+                    let va = self.eval(&cxt.env, &a_checked);
+                    let t_checked = self.check(cxt, *t, &va)?;
+                    let vt = self.eval(&cxt.env, &t_checked);
+                    (a_checked, va, t_checked, vt)
+                };
                 let u_checked = self.check(
                     &cxt.define(x.clone(), t_checked.clone(), vt, a_checked.clone(), va),
                     *u,
@@ -152,7 +165,7 @@ impl Infer {
             let cxt2 = cxt.bind(x.clone(), self.quote(cxt.lvl, &a_eval), a_eval);
             self.ty_precheck(&cxt2, b)?;
             let b_checked = self.check(&cxt2, *b.clone(), &Val::U.into())?;
-            Ok(Tm::Pi(x.clone(), *i, Box::new(a_checked), Box::new(b_checked)))
+            Ok(Tm::Pi(x.clone(), *i, Rc::new(a_checked), Rc::new(b_checked)))
         } else {
             self.ty_precheck(cxt, &t)?;
             self.check(cxt, t, &Val::U.into())
@@ -192,18 +205,26 @@ impl Infer {
                         vt: Val::Decl(name.clone(), List::new()).into(),
                         va: vtyp.clone(),
                         prim: None,
+                        arity: 0,
                     });
                     let t_tm = self.check(cxt, bod, &vtyp)?;
                     let vt = self.eval(&cxt.env, &t_tm);
                     // Decl-table entry: top-level defs become runtime
                     // name-lookups (`string_to_global_type`), mirroring
                     // L13's `cxt.decl(...)` at Def elaboration.
+                    //
+                    // 不再 `define` 进上下文（L07 载体）：顶层名字只留在 decl
+                    // 表，`Raw::Var` 的 miss 回退把后续引用写成 `Tm::Decl`
+                    // （O(1) 哈希查找）。旧实现在 env 头部压一条 define 槽，
+                    // 引用距离随 def 数线性增长——strchain/global 这类每层都
+                    // 回头引用早期名字的负载因此是 O(D²) 指针追逐。
                     self.decls.insert(name.data.clone(), DeclEntry {
                         vt: vt.clone(),
                         va: vtyp.clone(),
                         prim: None,
+                        arity: 0,
                     });
-                    cxt.define(name.clone(), t_tm, vt, typ_tm, vtyp)
+                    cxt.clone()
                 };
                 // 首个元素是 decl 层"类型"占位（run/bench 均不消费）
                 Ok((DeclTm::Def, Val::U, ret_cxt))
@@ -244,7 +265,7 @@ impl Infer {
                 let (t_inferred, b) = self.insert(&new_cxt, infered)?;
                 let b_closure = self.close_val(cxt, &b);
                 Ok((
-                    Tm::Lam(x.clone(), i, Box::new(t_inferred)),
+                    Tm::Lam(x.clone(), i, Rc::new(t_inferred)),
                     Val::Pi(x, i, a, b_closure).into(),
                 ))
             }
@@ -324,7 +345,7 @@ impl Infer {
                     *b,
                 )?;
                 Ok((
-                    Tm::Pi(x, i, Box::new(a_checked), Box::new(b_checked)),
+                    Tm::Pi(x, i, Rc::new(a_checked), Rc::new(b_checked)),
                     Val::U.into(),
                 ))
             }

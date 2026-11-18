@@ -111,89 +111,121 @@ fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &P
 }
 
 pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {
+    let mut out = String::with_capacity(64);
+    go(prec, ns, tm, &mut out);
+    out
+}
+
+/// `pretty_tm` 的增量核心：逐节点写入单个输出缓冲，任何字节只写一次。
+///
+/// 旧实现逐节点 `format!` 从子串拼新串——深度 d 处的字符串上下文 O(d)，
+/// 嵌套链全链 O(n²) 字节复制（L07 性能评审的同款修复）。输出与旧实现
+/// 逐字节一致：括号/分隔符的插入点与 `bracket`/`paren` 的包裹关系不变。
+fn go(prec: i32, ns: List<String>, tm: &Tm, out: &mut String) {
     match tm {
-        Tm::Var(ix) => go_ix(ns, ix.0),
+        Tm::Var(ix) => out.push_str(&go_ix(ns, ix.0)),
         Tm::App(t, u, i) => {
             let need_paren = prec > APPP;
-            let f_t = pretty_tm(APPP, ns.clone(), t);
-            let f_u = match i {
-                Icit::Expl => pretty_tm(ATP, ns, u),
-                Icit::Impl => bracket(pretty_tm(ATP, ns, u)),
-            };
             if need_paren {
-                format!("{{{f_t} {f_u}}}")
-            } else {
-                format!("{f_t} {f_u}")
+                out.push('{');
+            }
+            go(APPP, ns.clone(), t, out);
+            out.push(' ');
+            match i {
+                Icit::Expl => go(ATP, ns, u, out),
+                Icit::Impl => {
+                    out.push('{');
+                    go(ATP, ns, u, out);
+                    out.push('}');
+                }
+            }
+            if need_paren {
+                out.push('}');
             }
         }
         Tm::Lam(span, i, body) => {
             let need_paren = prec > LETP;
             let x = fresh(ns.clone(), &span.data);
             let new_ns = ns.prepend(x.clone());
-
-            let binder = match i {
-                Icit::Expl => x,
-                Icit::Impl => bracket(x),
-            };
-
-            let body_printer = format!("=> {}", pretty_tm(LETP, new_ns, &body));
-
-            let ret = format!("{binder}{body_printer}");
             if need_paren {
-                paren(ret)
-            } else {
-                ret
+                out.push('(');
+            }
+            match i {
+                Icit::Expl => out.push_str(&x),
+                Icit::Impl => {
+                    out.push('{');
+                    out.push_str(&x);
+                    out.push('}');
+                }
+            }
+            out.push_str("=> ");
+            go(LETP, new_ns, body, out);
+            if need_paren {
+                out.push(')');
             }
         }
-        Tm::U => "U".to_owned(),
+        Tm::U => out.push('U'),
         Tm::Pi(name_span, i, a, b) => {
             let need_paren = prec > PIP;
             let is_anonymous = name_span.data == "_" || matches!(i, Icit::Impl);
+            if need_paren {
+                out.push('(');
+            }
             if is_anonymous {
-                let f_a = pretty_tm(APPP, ns.clone(), a);
-                let f_b = pretty_tm(PIP, ns.prepend("_".to_owned()), b);
-                let ret = format!("{f_a} → {f_b}");
-                if need_paren {
-                    paren(ret)
-                } else {
-                    ret
-                }
+                go(APPP, ns.clone(), a, out);
+                out.push_str(" → ");
+                go(PIP, ns.prepend("_".to_owned()), b, out);
             } else {
                 let x = fresh(ns.clone(), &name_span.data);
                 let new_ns = ns.prepend(x.clone());
-                let binder = match i {
-                    Icit::Expl => paren(format!("{x}: {}", pretty_tm(LETP, ns, a))),
-                    Icit::Impl => bracket(format!("{x}: {}", pretty_tm(LETP, ns, a))),
-                };
-                let f_b = pretty_tm(PIP, new_ns, b);
-                let ret = format!("{binder} → {f_b}");
-                if need_paren {
-                    paren(ret)
-                } else {
-                    ret
+                // binder 里的域类型是小串，单独渲染（binder 需要整体加括号）
+                let dom = pretty_tm(LETP, ns, a);
+                match i {
+                    Icit::Expl => {
+                        out.push('(');
+                        out.push_str(&x);
+                        out.push_str(": ");
+                        out.push_str(&dom);
+                        out.push(')');
+                    }
+                    Icit::Impl => {
+                        out.push('{');
+                        out.push_str(&x);
+                        out.push_str(": ");
+                        out.push_str(&dom);
+                        out.push('}');
+                    }
                 }
+                out.push_str(" → ");
+                go(PIP, new_ns, b, out);
+            }
+            if need_paren {
+                out.push(')');
             }
         }
         Tm::Let(name_span, a, t, u) => {
             let need_paren = prec > LETP;
             let x = fresh(ns.clone(), &name_span.data);
             let new_ns = ns.prepend(x.clone());
-            let ret = format!(
-                "let {x}: {} = {};\n\n{}",
-                pretty_tm(LETP, ns.clone(), a),
-                pretty_tm(LETP, ns, t),
-                pretty_tm(LETP, new_ns, u),
-            );
-            if need_paren { 
-                paren(ret)
-            } else {
-                ret
+            if need_paren {
+                out.push('(');
+            }
+            out.push_str("let ");
+            out.push_str(&x);
+            out.push_str(": ");
+            go(LETP, ns.clone(), a, out);
+            out.push_str(" = ");
+            go(LETP, ns, t, out);
+            out.push_str(";\n\n");
+            go(LETP, new_ns, u, out);
+            if need_paren {
+                out.push(')');
             }
         }
-        Tm::Meta(m) => format!("?{}", m.0),
-        Tm::AppPruning(t, pr) => go_app_pruning(prec, ns.clone(), ns, t, pr),
-        Tm::LiteralType => "String".to_owned(),
-        Tm::LiteralIntro(span) => span.data.clone(),
-        Tm::Decl(span) => span.data.clone(),
+        Tm::Meta(m) => out.push_str(&format!("?{}", m.0)),
+        Tm::AppPruning(t, pr) => out.push_str(&go_app_pruning(prec, ns.clone(), ns, t, pr)),
+        Tm::LiteralType => out.push_str("String"),
+        Tm::LiteralIntro(span) => out.push_str(&span.data),
+        Tm::Decl(span) => out.push_str(&span.data),
     }
 }

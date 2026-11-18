@@ -90,6 +90,40 @@ L06 在 L05（typed metas + pruning）之上加 **String 字面量类型**、
 6. **quote/unify 记忆化、复合环境、稳态复用、迭代内核、`PrCons` 跳段、
    `RenBuf` 哨兵、fresh meta 三级快捷**全部继承 L05。
 
+## 2026-11-18：L07 参考版优化的回填
+
+本章原先是"L05 + string 层"，11 月的多轮优化只落在 L07/L08，参考版因此
+落后。本轮把 L07 中**与 L06 语言面无关**的机制按原样移植（判定与 Ok
+输出逐字节不变，`l06_blackbox` ×3 = 144 例全绿）：
+
+| 项 | 旧 | 新 | 同机实测（`l06bench --only basic`，k=11，ms） |
+|---|---|---|---|
+| **载体切换** | builtin / def 都 `define` 进 env 头部 | 只登记 decl 表，引用走 `Tm::Decl` | implicit 386 → **8.5**、strchain 57.0 → **5.6**、global 63.7 → **11.0**；prune（k=9）30 173 → **25.3** |
+| **`Rc<Tm>` 闭包体** | `Val::Lam` 每次求值深拷整棵 `Box<Tm>` 体 | 闭包体 `Rc<Tm>` 共享（+ Π 域/余域） | church 2.20 → **1.05**、solve 4.94 → **2.26**（载体切换后口径） |
+| **rename 原位 lift** | 每 binder `ren.clone()` 整表（O(bind²)） | 原位插入 + 递归后回滚（P1-1） | prune/solve 的 rename 段（另两项已并入上两行） |
+| **prim 元数预检** | 每次应用先收集整条实参 `Vec` 再判元数 | 不足元数零分配保持卡住 | strchain/global 热路径 |
+| **pretty 增量渲染** | 逐节点 `format!` 拼接（O(n²) 字节复制） | 单缓冲逐字节写入（输出逐字节不变） | 大 nf 树 |
+| **P5 跨 meta 环守卫** | 无，间接环只能等爆栈 | `meta_expanding` 展开栈，环处返回卡住 Flex | `cross_meta_cycle_force_is_bounded` 钉住 |
+| **`DeclEntry.arity`** | — | builtin 元数随条目登记（v_app 预检用） | — |
+
+> 交付口径：`l06_blackbox` ×3（42 + 25 + 83）与 `implicit_comma_args`（523）
+> 全绿；`cargo test --lib L06_string` 15 例全绿。`workload_node_counts`
+> 在本机（Windows 主线程 1 MB 栈）基线即爆栈（church k=11 的 `quote`
+> 递归深度 ~4096），与本次改动无关，用 `--skip` 排除；Linux CI 的 8 MB
+> 主线程栈不受影响。
+
+**不改的部分（有意）**：
+
+- L07 的 σ 显式替换 / `Subst` / `VSub` / `SpecSolve` / `Sum` / `SumCase` /
+  `Obj` / `Match` / `struct_eq` / `MATCH_CMP_BUDGET` 都是**和类型与依赖
+  匹配**的机制，L06 没有 `enum`/`match`/构造子值，移植过来没有承载面；
+- `VSpan`（Val 名字 span 句柄化）在 L07 的收益来自"`Val` 按值 +
+  名字 `String` 随值克隆"；L06 的 `Val` 始终在 `Rc<Val>` 里，克隆是引用
+  计数自增，名字深拷只发生在 `Val` **构造**点（每个 λ 求值一次），不是
+  `Val` 克隆点——语义上等价的收益面在 L06 不存在，故不移植；
+- `unify_fuel` / `UnifyKind` 三档诊断只在依赖匹配的索引槽互相嵌入时
+  才有消费者（覆盖判定/可达性），L06 的合一器没有这条路径。
+
 ## 已知限制与偏差
 
 - **错误消息内容**：参考版 `{:?}` 直接 Debug 打印引读项/名字 Span，

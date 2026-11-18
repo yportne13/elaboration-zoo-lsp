@@ -40,11 +40,15 @@ pub enum DeclTm {
 #[derive(Debug, Clone)]
 enum Tm {
     Var(Ix),
-    Lam(Span<String>, Icit, Box<Tm>),
+    /// 体与 Π 域/余域用 `Rc` 共享（L07 性能评审 P0-1）：`Val::Lam`/`Val::Pi`
+    /// 求值时的闭包捕获只做引用计数自增，不再把整棵 `Box<Tm>` 体深拷贝一份。
+    /// 旧实现 `Box<Tm>` + `Closure(env, Rc<Tm>)` 在**每次** λ 求值时
+    /// `t.clone().into()` = 整棵体深拷贝，n 次 β 归约是 O(n·size)。
+    Lam(Span<String>, Icit, Rc<Tm>),
     App(Box<Tm>, Box<Tm>, Icit),
     AppPruning(Box<Tm>, Pruning),
     U,
-    Pi(Span<String>, Icit, Box<Ty>, Box<Ty>),
+    Pi(Span<String>, Icit, Rc<Ty>, Rc<Ty>),
     Let(Span<String>, Box<Ty>, Box<Tm>, Box<Tm>),
     Meta(MetaVar),
     LiteralType,
@@ -61,6 +65,13 @@ impl Add<u32> for Lvl {
     type Output = Lvl;
     fn add(self, rhs: u32) -> Lvl {
         Lvl(self.0 + rhs)
+    }
+}
+
+impl std::ops::Sub<u32> for Lvl {
+    type Output = Lvl;
+    fn sub(self, rhs: u32) -> Lvl {
+        Lvl(self.0 - rhs)
     }
 }
 
@@ -140,11 +151,16 @@ impl std::fmt::Debug for PrimFunc {
 /// that makes it a builtin.  Top-level `def`s are inserted by the elaborator
 /// (runtime name lookup, e.g. `string_to_global_type`), builtins by
 /// `Cxt::add_builtin`.
+///
+/// `arity` 是 builtin 的元数（非 builtin 为 0）：`v_app` 的 Decl 臂据此
+/// 做**元数预检**，不足即零分配保持卡住（L07 同款纪律；防止每次应用都
+/// 收集一条注定用不上的实参 Vec）。
 #[derive(Debug)]
 pub(crate) struct DeclEntry {
     pub(crate) vt: Rc<Val>,
     pub(crate) va: Rc<VTy>,
     pub(crate) prim: Option<PrimFunc>,
+    pub(crate) arity: usize,
 }
 
 pub struct Infer {
@@ -156,20 +172,44 @@ pub struct Infer {
     /// Runtime-global store for the create_global / get_global / ... builtins
     /// (L13 uses a RwLock; single-threaded here, so RefCell).
     pub(crate) mutable_map: RefCell<FxHashMap<String, Rc<Val>>>,
+    /// 正在展开的 meta 链（跨 meta 环守卫，L07 P5）：`force` 展开已解 meta
+    /// 时压栈，同一 meta 在栈上再次出现即判定环，返回卡住的 Flex，不再
+    /// 无限递归。`Cell`/`RefCell` 让 `&self` 的 force 路径可用。
+    meta_expanding: RefCell<Vec<MetaVar>>,
 }
 
 impl Infer {
     pub fn new() -> Self {
-        Self { meta: vec![], decls: FxHashMap::default(), mutable_map: RefCell::new(FxHashMap::default()) }
+        Self {
+            meta: vec![],
+            decls: FxHashMap::default(),
+            mutable_map: RefCell::new(FxHashMap::default()),
+            meta_expanding: RefCell::new(Vec::new()),
+        }
     }
     /// Insert a builtin entry: head value `Val::Decl(name, [])` (prim fires
-    /// on application), declared type, native implementation.
-    pub(crate) fn register_builtin(&mut self, name: &str, vt: Rc<Val>, va: Rc<VTy>, prim: PrimFunc) {
-        self.decls.insert(name.to_owned(), DeclEntry { vt, va, prim: Some(prim) });
+    /// on application), declared type, native implementation, arity.
+    pub(crate) fn register_builtin(&mut self, name: &str, vt: Rc<Val>, va: Rc<VTy>, prim: PrimFunc, arity: usize) {
+        self.decls.insert(name.to_owned(), DeclEntry { vt, va, prim: Some(prim), arity });
     }
     fn new_meta(&mut self, a: Rc<VTy>) -> u32 {
         self.meta.push(MetaEntry::Unsolved(a));
         self.meta.len() as u32 - 1
+    }
+
+    /// 测试辅助：构造 `?0 := ?1`、`?1 := ?0` 的跨 meta 环（P5 环守卫回归钉）。
+    #[cfg(test)]
+    pub(crate) fn solve_meta_cycle_for_test(&mut self) {
+        let ty: Rc<VTy> = Val::U.into();
+        self.meta.push(MetaEntry::Unsolved(ty.clone()));
+        self.meta.push(MetaEntry::Unsolved(ty.clone()));
+        self.meta[0] = MetaEntry::Solved(Val::vmeta(MetaVar(1)).into(), ty.clone());
+        self.meta[1] = MetaEntry::Solved(Val::vmeta(MetaVar(0)).into(), ty.clone());
+    }
+
+    #[cfg(test)]
+    pub(crate) fn meta_cycle_root_for_test(&self) -> Rc<Val> {
+        Val::vmeta(MetaVar(0)).into()
     }
     fn fresh_meta(&mut self, cxt: &Cxt, a: &Rc<VTy>) -> Tm {
         let closed = self.close_meta_ty(cxt, self.quote(cxt.lvl, a));
@@ -208,7 +248,25 @@ impl Infer {
         //println!("{} {:?}", "force".red(), t);
         match t.as_ref() {
             Val::Flex(m, sp) => match self.lookup_meta(m) {
-                MetaEntry::Solved(t_solved, _) => self.force(&self.v_app_sp(t_solved.clone(), sp.clone())),
+                MetaEntry::Solved(t_solved, _) => {
+                    // P5 跨 meta 环守卫（移植自 L07）：solve 侧没有跨 meta 的
+                    // occurs 检查，`?a := ?b`、`?b := ?a` 这类间接环会让展开
+                    // 无限递归（本实现无 fuel 池，只能等爆栈）。同一 meta 已在
+                    // 展开栈上 ⇒ 按未解处理，返回卡住的 Flex，把"未定义行为"
+                    // 变成确定性的有界终止。
+                    if self.meta_expanding.borrow().contains(m) {
+                        return Val::Flex(*m, sp.clone()).into();
+                    }
+                    self.meta_expanding.borrow_mut().push(*m);
+                    let out = self.force(&self.v_app_sp(t_solved.clone(), sp.clone()));
+                    // 展开完成：弹出本次压栈的条目（rposition 容错嵌套）
+                    let mut st = self.meta_expanding.borrow_mut();
+                    if let Some(i) = st.iter().rposition(|x| x == m) {
+                        st.remove(i);
+                    }
+                    drop(st);
+                    out
+                }
                 MetaEntry::Unsolved(_) => Val::Flex(*m, sp.clone()).into(),
             },
             _ => t.clone(),
@@ -236,17 +294,23 @@ impl Infer {
             // arguments in natural order.  None (partial application / stuck
             // non-literal args) keeps the application stuck, carrying the
             // name so it quotes/prints as `name args...`.
+            //
+            // 元数预检（L07 同款纪律）：spine 长度不足元数时**零分配**保持
+            // 卡住——strchain/global 这类"每层一次应用"的热路径上，旧实现
+            // 每次先收集整条实参 Vec 再交给 prim 判元数，等于每次都付一次
+            // 堆分配；实参非字面量时还会白建一遍。
             Val::Decl(name, sp) => {
                 let acc = sp.prepend((u, i));
                 if let Some(entry) = self.decls.get(&name.data) {
                     if let Some(prim) = &entry.prim {
-                        let args: Vec<Rc<Val>> = {
-                            let mut v: Vec<Rc<Val>> = acc.iter().map(|(v, _)| v.clone()).collect();
+                        let n = acc.len();
+                        if n >= entry.arity {
+                            let mut v: Vec<Rc<Val>> = Vec::with_capacity(n);
+                            v.extend(acc.iter().map(|(v, _)| v.clone()));
                             v.reverse();
-                            v
-                        };
-                        if let Some(result) = prim.0(self, &args) {
-                            return result;
+                            if let Some(result) = prim.0(self, &v) {
+                                return result;
+                            }
                         }
                     }
                 }
@@ -288,8 +352,8 @@ impl Infer {
         match tm {
             Tm::Var(x) => env.iter().nth(x.0 as usize).unwrap().clone(),
             Tm::App(t, u, i) => self.v_app(self.eval(env, t), self.eval(env, u), *i),
-            Tm::Lam(x, i, t) => Val::Lam(x.clone(), *i, Closure(env.clone(), t.clone().into())).into(),//TODO:use reference?
-            Tm::Pi(x, i, a, b) => Val::Pi(x.clone(), *i, self.eval(env, a), Closure(env.clone(), b.clone().into())).into(),//TODO:use reference?
+            Tm::Lam(x, i, t) => Val::Lam(x.clone(), *i, Closure(env.clone(), t.clone())).into(),
+            Tm::Pi(x, i, a, b) => Val::Pi(x.clone(), *i, self.eval(env, a), Closure(env.clone(), b.clone())).into(),
             Tm::Let(_, _, t, u) => {
                 let t_val = self.eval(env, t);
                 self.eval(&env.prepend(t_val), u)
@@ -328,13 +392,13 @@ impl Infer {
             Val::Lam(x, i, closure) => Tm::Lam(
                 x.clone(),
                 *i,
-                Box::new(self.quote(l + 1, &self.closure_apply(&closure, Val::vvar(l).into()))),
+                Rc::new(self.quote(l + 1, &self.closure_apply(&closure, Val::vvar(l).into()))),
             ),
             Val::Pi(x, i, a, closure) => Tm::Pi(
                 x.clone(),
                 *i,
-                Box::new(self.quote(l, a)),
-                Box::new(self.quote(l + 1, &self.closure_apply(&closure, Val::vvar(l).into()))),
+                Rc::new(self.quote(l, a)),
+                Rc::new(self.quote(l + 1, &self.closure_apply(&closure, Val::vvar(l).into()))),
             ),
             Val::U => Tm::U,
             Val::LiteralIntro(x) => Tm::LiteralIntro(x.clone()),
@@ -379,12 +443,20 @@ pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
 /// 注释剥离(行 `//` 与块 `/* */`),**字符串字面量内不生效**——旧版对
 /// `//` / `/*` 做纯文本剥离,会把 `"http://…"` 之类的字面量截成未闭合
 /// 字符串导致解析失败。现按词法规则跳过字符串区间(含 `\` 转义);注释
-/// 内容只替换为空白,保持 span 偏移稳定。块注释不嵌套(与旧版一致)。
+/// 内容只替换为**等字节数**的空白，使后续 token 的 span 偏移相对原文本
+/// 保持稳定（L07 review R7 同款：旧实现每个注释字符只写一个空格，非 ASCII
+/// 注释会让后续偏移前移）。块注释不嵌套(与旧版一致)。
 pub fn preprocess(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
     let mut in_string = false;
     let mut escaped = false;
+    // 把注释字符替换为**等字节数**的空白，保持后续偏移不变。
+    fn push_blank(out: &mut String, c: char) {
+        for _ in 0..c.len_utf8() {
+            out.push(' ');
+        }
+    }
     while let Some(c) = chars.next() {
         if in_string {
             out.push(c);
@@ -405,26 +477,26 @@ pub fn preprocess(s: &str) -> String {
             '/' if chars.peek() == Some(&'/') => {
                 chars.next();
                 out.push_str("  ");
-                // 行注释:换行前的内容替换为空白(保留换行符)
+                // 行注释:换行前的内容替换为等字节空白(保留换行符)
                 for rc in chars.by_ref() {
                     if rc == '\n' {
                         out.push('\n');
                         break;
                     }
-                    out.push(if rc.is_whitespace() { rc } else { ' ' });
+                    push_blank(&mut out, rc);
                 }
             }
             '/' if chars.peek() == Some(&'*') => {
                 chars.next();
                 out.push_str("  ");
-                // 块注释:到 `*/` 为止的内容替换为空白
+                // 块注释:到 `*/` 为止的内容替换为等字节空白
                 while let Some(rc) = chars.next() {
                     if rc == '*' && chars.peek() == Some(&'/') {
                         chars.next();
                         out.push_str("  ");
                         break;
                     }
-                    out.push(if rc.is_whitespace() { rc } else { ' ' });
+                    push_blank(&mut out, rc);
                 }
             }
             _ => out.push(c),

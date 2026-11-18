@@ -1183,3 +1183,56 @@ fn redex_family_solvable_ok() {
     assert_out(&src, "U\n");
     assert_full_text_parity(&src);
 }
+
+// 2026-11-18 L07 优化回填的回归钉
+// --------------------------------------------------------------------------------
+
+/// `preprocess` 注释替换**保持字节长度**（L07 review R7）：非 ASCII 注释
+/// 之后 token 的 span 偏移必须仍对应原文本。
+///
+/// 旧实现每个注释字符只写一个空格：`// 中文注释` 之后所有偏移前移
+/// `len_utf8 - 1` 字节。回归钉用"解析错误消息里的偏移"读回原文坐标——
+/// 该消息由共用 parser 产出，与两版实现无关，因此能直接校验 preprocess。
+#[test]
+fn preprocess_comment_keeps_byte_offsets() {
+    // "def a : U = U\n" = 14 字节；`// 中文`（2+2 字 × 3 字节）占 2+1+6 = 9 字节 + \n
+    let src = "def a : U = U\n// 中文注释\n???\n";
+    let want = src.find("???").unwrap();
+    let basic = run_basic(src).unwrap_err().to_string();
+    let fast = run_fast(src).unwrap_err().to_string();
+    assert!(
+        basic.contains(&format!("@ {want},")),
+        "basic 残余 token 偏移应保持原文坐标 {want}（非 ASCII 注释不得前移），实际：{basic}"
+    );
+    assert_eq!(basic, fast, "两版解析消息应全文一致（共用 preprocess）");
+    // 块注释同理
+    let src2 = "def b : U = U\n/* 块注释 */\n???\n";
+    let want2 = src2.find("???").unwrap();
+    let out2 = run_basic(src2).unwrap_err().to_string();
+    assert!(
+        out2.contains(&format!("@ {want2},")),
+        "块注释后偏移应保持原文坐标 {want2}，实际：{out2}"
+    );
+}
+
+/// 无注解 `let` 走推断快路径（L07 同款）：不再为 binder 造闭合 meta。
+///
+/// 回归钉取**编号面**：注解位是洞的 `let` 若先造 meta 再解，会占掉一个
+/// `?N` 编号并使后续洞编号后移。快路径直接推断类型，编号保持连续。
+#[test]
+fn let_without_annotation_skips_binder_meta() {
+    // let 无注解 + 后续洞：洞编号应从 ?0 起（旧路径会先消耗 ?0 给 binder）
+    assert_out(
+        "def f : _ -> _ = x => x\nprintln f\n",
+        "x=> x\n",
+    );
+    // 深层嵌套无注解 let（快路径专治的 O(n²) 形态）：只钉终值与 parity
+    let mut src = String::from("def r : U = ");
+    let n = 60;
+    for i in 0..n {
+        src.push_str(&format!("let v{i} = U; "));
+    }
+    src.push_str("U\nprintln r\n");
+    assert_out(&src, "U\n");
+    assert_full_text_parity(&src);
+}

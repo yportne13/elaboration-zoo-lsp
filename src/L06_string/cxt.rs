@@ -238,13 +238,13 @@ fn file_delete(_: &Infer, args: &[Rc<Val>]) -> Option<Rc<Val>> {
 /// `(String ->)^n ret` — every L06 builtin argument type is `String`.
 fn str_pi(params: &[&str], ret: Tm) -> Tm {
     params.iter().rev().fold(ret, |acc, name| {
-        Tm::Pi(empty_span((*name).to_owned()), Icit::Expl, Box::new(Tm::LiteralType), Box::new(acc))
+        Tm::Pi(empty_span((*name).to_owned()), Icit::Expl, Rc::new(Tm::LiteralType), Rc::new(acc))
     })
 }
 
 /// `(name : dom) -> cod` — local Pi builder for builtin signatures.
 fn tm_pi(name: &str, dom: Tm, cod: Tm) -> Tm {
-    Tm::Pi(empty_span(name.to_owned()), Icit::Expl, Box::new(dom), Box::new(cod))
+    Tm::Pi(empty_span(name.to_owned()), Icit::Expl, Rc::new(dom), Rc::new(cod))
 }
 
 /// `string_to_global_type Var(ix)` — the de Bruijn ref resolves at eval time
@@ -318,13 +318,14 @@ pub struct Cxt {
 
 impl Cxt {
     pub fn new(infer: &mut Infer) -> Self {
-        let mut cxt = Self::empty().define(
-            empty_span("String".to_owned()),
-            Tm::LiteralType,
-            Val::LiteralType.into(),
-            Tm::U,
-            Val::U.into(),
-        );
+        // 顶层名字只登记 decl 表，**不进 env / locals / 名字表**（L07 载体：
+        // `Cxt::new` 与 `add_builtin` 都不 `define`）。旧实现把 String 与全部
+        // builtin 压进 env 头部，`Infer::eval` 的 `Tm::Var` 用
+        // `env.iter().nth(ix)` 线性走链——strchain 每层都引用最早注册的
+        // `string_concat`，距离随 def 数线性增长 ⇒ O(D²) 指针追逐
+        // （k=11 D=4096 实测 57 ms vs L07 同负载 7.9 ms）。改走 decl 表后
+        // 引用变成 `Tm::Decl`（O(1) 哈希查找），env 只剩 λ/let 绑定器。
+        let mut cxt = Self::empty();
         // Builtin registration, ported from L13's startup builtins (cxt.rs):
         // the whole string / file / global group.  str_eq returns the
         // `"true"`/`"false"` STRING literals because L06 has no Boolean type
@@ -334,6 +335,7 @@ impl Cxt {
             vt: Val::LiteralType.into(),
             va: Val::U.into(),
             prim: None,
+            arity: 0,
         });
         cxt = cxt.add_builtin(infer, "string_concat", str_pi(&["x", "y"], Tm::LiteralType), PrimFunc(Rc::new(string_concat)));
         cxt = cxt.add_builtin(infer, "str_eq", str_pi(&["x", "y"], Tm::LiteralType), PrimFunc(Rc::new(str_eq)));
@@ -371,26 +373,35 @@ impl Cxt {
 
     /// Register a builtin in the decl table: value = stuck head
     /// `Val::Decl(name, [])` (the prim fires on application), type = `ty`
-    /// evaluated against the empty env (all our builtin types are closed),
-    /// plus a positional definition so the name is usable in code — L13's
-    /// `add_builtin` analog (there the table lives on `Cxt.decl`, here on
-    /// `Infer.decls`).
+    /// evaluated against the empty env (all our builtin types are closed).
+    /// L13's `Cxt::add_builtin` analog (there the table lives on `Cxt.decl`,
+    /// here on `Infer.decls`).
+    ///
+    /// 不再 `define` 进 cxt（L07 同款）：顶层名字只经 decl 表解析，
+    /// `Raw::Var` 的 miss 回退把引用写成 `Tm::Decl`。env 从此只承载
+    /// λ/let 绑定器，`env.iter().nth()` 的距离与 builtin 数无关。
     pub fn add_builtin(self, infer: &mut Infer, name: &str, ty: Tm, prim: PrimFunc) -> Self {
         let va = infer.eval(&List::new(), &ty);
+        // 元数 = Π 链长度（`v_app` 的 Decl 臂元数预检用；与 prim 体里的
+        // `args.len() < N` 判据一致）。
+        let arity = {
+            let mut n = 0usize;
+            let mut cur = &ty;
+            while let Tm::Pi(_, _, _, body) = cur {
+                n += 1;
+                cur = body.as_ref();
+            }
+            n
+        };
         let name_span = empty_span(name.to_owned());
         infer.register_builtin(
             name,
-            Val::Decl(name_span.clone(), List::new()).into(),
-            va.clone(),
-            prim,
-        );
-        self.define(
-            name_span.clone(),
-            Tm::Decl(name_span.clone()),
             Val::Decl(name_span, List::new()).into(),
-            ty,
             va,
-        )
+            prim,
+            arity,
+        );
+        self
     }
     pub fn empty() -> Self {
         Cxt {
