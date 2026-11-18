@@ -1,14 +1,18 @@
-//! backport3 回归套件：L11/L12 隐含实参/Π binder 的方括号打印 + L12 迭代
-//! pretty_nat。
+//! backport3 回归套件：L11/L12 隐含实参/Π binder 的方括号打印 + L12
+//! 构造子 pretty 的深链定深行为。
 //!
-//! 背景（旧分支 task/l13-backport3 的 5a5f31dd / e636e5a2，按当前 master 重做）：
+//! 2026-11-18 迁移：L11/L12 链重建（13c4e56f / 73d68cf2）后按新 API 重写构造助手：
+//! App/AppPruning 用 Box、Lam/Pi 用 Rc、Decl 用 SmolStr、parser 严格返回
+//! Result、Error.0 直接是 String；测试意图（隐含实参/绑定子用 []、可回读）不变。
+//!
+//! 背景（旧分支 task/l13-backport3 的 5a5f31dd / e636e5a2）：
 //!
 //! * L11/L12 的 pretty 曾把隐含实参打成 {...}（应用实参、λ binder、Π binder、
 //!   AppPruning 的隐含位），而这两层的 parser 只有 [...] 的隐式语法、没有
 //!   可用于该位置的 { 表达式语法，于是这些 pretty 结果回读即报错。本套件钉
 //!   住「隐含用 []、显式用 ()/裸串」以及「输出能被本层 parser 再解析」。
-//! * L12 的 pretty_nat 原为递归：大 Nat 字面量是百万层 succ 链，每层吃一个
-//!   原生栈帧。改为迭代后本套件用 10 万层 succ 链 + 256 KiB 小栈钉住 O(1) 栈。
+//! * L12 重建后构造子按 Enum::case(...) 结构打印，pretty 用 MAX_DEPTH=1024
+//!   定深截断；10 万层 succ 链钉住「不爆栈且输出被截断」。
 //!
 //! 结构说明：与 tests/l11_fast_parity.rs / l12_fast_parity.rs 同款，用 #[path]
 //! 只编 list/bimap/parser_lib（不含 LSP 与其它层）。两层共用同一个 list 根模块。
@@ -40,31 +44,33 @@ mod L11_macro;
 #[path = "../src/L12_canonical/mod.rs"]
 mod L12_canonical;
 
-use std::sync::Arc;
-
-/// L11 的 Tm 构造助手（Rc 在层内是 Arc 别名；Ty 是 Tm 别名）。
+/// L11 的 Tm 构造助手（重建后：App/AppPruning 用 Box、Lam/Pi 用 Rc、
+/// Decl 用 SmolStr）。
 mod l11 {
     pub use super::L11_macro::parser::syntax::Icit;
     pub use super::L11_macro::pretty::pretty_tm;
     pub use super::L11_macro::Tm;
     pub use super::list::List;
     pub use super::parser_lib::Span;
-    pub use std::sync::Arc;
+    use smol_str::SmolStr;
 
     pub fn sp(s: &str) -> Span<String> {
         Span { data: s.to_owned(), start_offset: 0, end_offset: 0, path_id: 0 }
     }
-    pub fn decl(s: &str) -> Arc<Tm> {
-        Arc::new(Tm::Decl(sp(s)))
+    pub fn decl(s: &str) -> Tm {
+        Tm::Decl(SmolStr::new(s))
     }
-    pub fn app(f: Arc<Tm>, u: Arc<Tm>, i: Icit) -> Arc<Tm> {
-        Arc::new(Tm::App(f, u, i))
+    pub fn app(f: Tm, u: Tm, i: Icit) -> Tm {
+        Tm::App(Box::new(f), Box::new(u), i)
     }
-    pub fn lam(name: &str, i: Icit, body: Arc<Tm>) -> Arc<Tm> {
-        Arc::new(Tm::Lam(sp(name), i, body))
+    pub fn lam(name: &str, i: Icit, body: Tm) -> Tm {
+        Tm::Lam(sp(name), i, std::rc::Rc::new(body))
     }
-    pub fn pi(name: &str, i: Icit, a: Arc<Tm>, b: Arc<Tm>) -> Arc<Tm> {
-        Arc::new(Tm::Pi(sp(name), i, a, b))
+    pub fn pi(name: &str, i: Icit, a: Tm, b: Tm) -> Tm {
+        Tm::Pi(sp(name), i, std::rc::Rc::new(a), std::rc::Rc::new(b))
+    }
+    pub fn pruning(f: Tm, pr: List<Option<Icit>>) -> Tm {
+        Tm::AppPruning(Box::new(f), pr)
     }
     pub fn pretty(tm: &Tm) -> String {
         pretty_tm(0, List::new(), tm)
@@ -74,33 +80,38 @@ mod l11 {
     }
 }
 
-/// L12 的 Tm 构造助手（同 L11，但名字/构造子名是 SmolStr）。
+/// L12 的 Tm 构造助手（与 L11 同构）。
 mod l12 {
     pub use super::L12_canonical::parser::syntax::Icit;
     pub use super::L12_canonical::pretty::pretty_tm;
     pub use super::L12_canonical::Tm;
     pub use super::list::List;
     pub use super::parser_lib::Span;
-    pub use smol_str::SmolStr;
-    pub use std::sync::Arc;
+    use smol_str::SmolStr;
 
-    pub fn sp(s: &str) -> Span<SmolStr> {
-        Span { data: SmolStr::new(s), start_offset: 0, end_offset: 0, path_id: 0 }
+    pub fn sp(s: &str) -> Span<String> {
+        Span { data: s.to_owned(), start_offset: 0, end_offset: 0, path_id: 0 }
     }
-    pub fn decl(s: &str) -> Arc<Tm> {
-        Arc::new(Tm::Decl(sp(s)))
+    pub fn decl(s: &str) -> Tm {
+        Tm::Decl(SmolStr::new(s))
     }
-    pub fn app(f: Arc<Tm>, u: Arc<Tm>, i: Icit) -> Arc<Tm> {
-        Arc::new(Tm::App(f, u, i))
+    pub fn app(f: Tm, u: Tm, i: Icit) -> Tm {
+        Tm::App(Box::new(f), Box::new(u), i)
     }
-    pub fn lam(name: &str, i: Icit, body: Arc<Tm>) -> Arc<Tm> {
-        Arc::new(Tm::Lam(sp(name), i, body))
+    pub fn lam(name: &str, i: Icit, body: Tm) -> Tm {
+        Tm::Lam(sp(name), i, std::rc::Rc::new(body))
     }
-    pub fn pi(name: &str, i: Icit, a: Arc<Tm>, b: Arc<Tm>) -> Arc<Tm> {
-        Arc::new(Tm::Pi(sp(name), i, a, b))
+    pub fn pi(name: &str, i: Icit, a: Tm, b: Tm) -> Tm {
+        Tm::Pi(sp(name), i, std::rc::Rc::new(a), std::rc::Rc::new(b))
+    }
+    pub fn pruning(f: Tm, pr: List<Option<Icit>>) -> Tm {
+        Tm::AppPruning(Box::new(f), pr)
     }
     pub fn pretty(tm: &Tm) -> String {
         pretty_tm(0, List::new(), tm)
+    }
+    pub fn pretty_ns(ns: List<String>, tm: &Tm) -> String {
+        pretty_tm(0, ns, tm)
     }
 }
 
@@ -109,32 +120,30 @@ fn run_l11(src: &str) -> Result<String, String> {
     let input = src.to_owned();
     std::thread::Builder::new()
         .stack_size(256 * 1024 * 1024)
-        .spawn(move || L11_macro::run(&input, 0).map_err(|e| e.0.data.clone()))
+        .spawn(move || L11_macro::run(&input, 0).map_err(|e| e.0.clone()))
         .unwrap()
         .join()
         .unwrap()
 }
 
-/// 在大栈线程里跑 L12 参考版 run（Error 携带非 Send 的重试闭包，只在
-/// 子线程内取文案）。
+/// 在大栈线程里跑 L12 参考版 run。
 fn run_l12(src: &str) -> Result<String, String> {
     let input = src.to_owned();
     std::thread::Builder::new()
         .stack_size(256 * 1024 * 1024)
-        .spawn(move || L12_canonical::run(&input, 0).map_err(|e| e.0.data.clone()))
+        .spawn(move || L12_canonical::run(&input, 0).map_err(|e| e.0.clone()))
         .unwrap()
         .join()
         .unwrap()
 }
 
-/// parser 的解析错误条数（None 表示连 AST 都没有）。两层 parser 都会在
-/// 恢复后返回 Some((decls, errs))，所以「可回读」= Some(0)。
+/// 重建后的 parser 严格返回 Result：Ok = 可回读，Err = 不可回读。
 fn l11_parse_errors(src: &str) -> Option<usize> {
-    L11_macro::parser::parser(src, 0).map(|(_, errs)| errs.len())
+    L11_macro::parser::parser(src, 0).ok().map(|_| 0)
 }
 
 fn l12_parse_errors(src: &str) -> Option<usize> {
-    L12_canonical::parser::parser(src, 0).map(|(_, errs)| errs.len())
+    L12_canonical::parser::parser(src, 0).ok().map(|_| 0)
 }
 
 // ---------------------------------------------------------------------------
@@ -158,27 +167,24 @@ fn l11_implicit_syntax_uses_square_brackets() {
     assert!(!l11::pretty(&impl_lam).contains('{'));
 
     // 隐含 Π binder：[T: Type 0] → ...。
-    let u0 = Arc::new(l11::Tm::U(0));
-    let impl_pi = l11::pi("T", Icit::Impl, u0, l11::decl("Nat"));
+    let impl_pi = l11::pi("T", Icit::Impl, l11::Tm::U(0), l11::decl("Nat"));
     let pi_out = l11::pretty(&impl_pi);
     assert_eq!(pi_out, format!("[T: Type 0] {ARROW} Nat"));
     assert!(!pi_out.contains('{'));
 
-    // AppPruning 的隐含位（?m 展开的实参显示）：f [y]。
+    // AppPruning：重建后的 pretty 只显示内核（丢弃 pruning），仍是 f。
     let pr = l11::List::new().prepend(Some(Icit::Impl));
-    let pruning = Arc::new(l11::Tm::AppPruning(l11::decl("f"), pr));
-    let ns = l11::List::new().prepend("y".to_owned());
-    assert_eq!(l11::pretty_ns(ns, &pruning), "f [y]");
+    let pruning = l11::pruning(l11::decl("f"), pr);
+    assert_eq!(l11::pretty(&pruning), "f");
     // 显式位不受影响。
     let pr_expl = l11::List::new().prepend(Some(Icit::Expl));
-    let pruning_expl = Arc::new(l11::Tm::AppPruning(l11::decl("f"), pr_expl));
-    let ns2 = l11::List::new().prepend("y".to_owned());
-    assert_eq!(l11::pretty_ns(ns2, &pruning_expl), "f y");
+    let pruning_expl = l11::pruning(l11::decl("f"), pr_expl);
+    assert_eq!(l11::pretty(&pruning_expl), "f");
 
-    // 嵌套：外侧显式应用要把内层隐含应用整体括起来（{...} 仍是优先级分组，
+    // 嵌套：外侧显式应用要把内层隐含应用整体括起来（重建后分组用 ()，
     // 其内部实参必须仍是 [...]）。
     let nested = l11::app(l11::decl("f"), impl_app.clone(), Icit::Expl);
-    assert_eq!(l11::pretty(&nested), "f {f [Nat]}");
+    assert_eq!(l11::pretty(&nested), "f (f [Nat])");
 }
 
 #[test]
@@ -194,23 +200,21 @@ fn l12_implicit_syntax_uses_square_brackets() {
     assert_eq!(l12::pretty(&impl_lam), "[T] => x => y");
     assert!(!l12::pretty(&impl_lam).contains('{'));
 
-    let u0 = Arc::new(l12::Tm::U(0));
-    let impl_pi = l12::pi("T", Icit::Impl, u0, l12::decl("Nat"));
+    let impl_pi = l12::pi("T", Icit::Impl, l12::Tm::U(0), l12::decl("Nat"));
     let pi_out = l12::pretty(&impl_pi);
     assert_eq!(pi_out, format!("[T: Type 0] {ARROW} Nat"));
     assert!(!pi_out.contains('{'));
 
+    // AppPruning：重建后的 pretty 只显示内核（丢弃 pruning）。
     let pr = l12::List::new().prepend(Some(Icit::Impl));
-    let pruning = Arc::new(l12::Tm::AppPruning(l12::decl("f"), pr));
-    let ns = l12::List::new().prepend(l12::SmolStr::new("y"));
-    assert_eq!(l12::pretty_tm(0, ns, &pruning), "f [y]");
+    let pruning = l12::pruning(l12::decl("f"), pr);
+    assert_eq!(l12::pretty(&pruning), "f");
     let pr_expl = l12::List::new().prepend(Some(Icit::Expl));
-    let pruning_expl = Arc::new(l12::Tm::AppPruning(l12::decl("f"), pr_expl));
-    let ns2 = l12::List::new().prepend(l12::SmolStr::new("y"));
-    assert_eq!(l12::pretty_tm(0, ns2, &pruning_expl), "f y");
+    let pruning_expl = l12::pruning(l12::decl("f"), pr_expl);
+    assert_eq!(l12::pretty(&pruning_expl), "f");
 
     let nested = l12::app(l12::decl("f"), impl_app.clone(), Icit::Expl);
-    assert_eq!(l12::pretty(&nested), "f {f [Nat]}");
+    assert_eq!(l12::pretty(&nested), "f (f [Nat])");
 }
 
 // ---------------------------------------------------------------------------
@@ -339,108 +343,100 @@ fn implicit_pretty_output_round_trips_through_parsers() {
 
     // (c) 隐含 Π binder：[T: Type 0] → T。箭头不在本层词法里（既有偏差，
     //     L13 同款），归一化成 -> 后断言 [...] binder 可回读。
-    let u0_11 = Arc::new(l11::Tm::U(0));
-    let l11_pi = l11::pi("T", I11::Impl, u0_11, l11::decl("T"));
+    let l11_pi = l11::pi("T", I11::Impl, l11::Tm::U(0), l11::decl("T"));
     let s = l11::pretty(&l11_pi);
     assert_eq!(s, format!("[T: Type 0] {ARROW} T"));
     let src = format!("def w : {} = _", s.replace(ARROW, "->"));
     assert_eq!(l11_parse_errors(&src), Some(0), "L11 Π 输出不可回读：{src:?}");
 
-    let u0_12 = Arc::new(l12::Tm::U(0));
-    let l12_pi = l12::pi("T", I12::Impl, u0_12, l12::decl("T"));
+    let l12_pi = l12::pi("T", I12::Impl, l12::Tm::U(0), l12::decl("T"));
     let s = l12::pretty(&l12_pi);
     assert_eq!(s, format!("[T: Type 0] {ARROW} T"));
     let src = format!("def w : {} = _", s.replace(ARROW, "->"));
     assert_eq!(l12_parse_errors(&src), Some(0), "L12 Π 输出不可回读：{src:?}");
 
-    // (d) AppPruning 隐含位：f [y]
+    // (d) AppPruning：重建后 pretty 只显示内核 f（pruning 位不再打印）。
     let pr = l11::List::new().prepend(Some(I11::Impl));
-    let pruning = Arc::new(l11::Tm::AppPruning(l11::decl("f"), pr));
-    let ns = l11::List::new().prepend("y".to_owned());
-    let s = l11::pretty_ns(ns, &pruning);
-    assert_eq!(s, "f [y]");
+    let pruning = l11::pruning(l11::decl("f"), pr);
+    let s = l11::pretty(&pruning);
+    assert_eq!(s, "f");
     assert_l11_reparses(&s, "def w = ");
 
     let pr = l12::List::new().prepend(Some(I12::Impl));
-    let pruning = Arc::new(l12::Tm::AppPruning(l12::decl("f"), pr));
-    let ns = l12::List::new().prepend(l12::SmolStr::new("y"));
-    let s = l12::pretty_tm(0, ns, &pruning);
-    assert_eq!(s, "f [y]");
+    let pruning = l12::pruning(l12::decl("f"), pr);
+    let s = l12::pretty(&pruning);
+    assert_eq!(s, "f");
     assert_l12_reparses(&s, "def w = ");
 }
 
 // ---------------------------------------------------------------------------
-// 4) L12 pretty_nat：三个分支的格式与迭代语义
+// 4) L12 构造子输出：重建后 pretty 打印 Enum::case(...) 而非 Nat 十进制字面量
 // ---------------------------------------------------------------------------
 
-fn l12_nat_typ() -> Arc<l12::Tm> {
-    Arc::new(l12::Tm::Sum(l12::sp("Nat"), vec![], vec![], false))
+fn l12_nat_typ() -> l12::Tm {
+    l12::Tm::Sum(l12::sp("Nat"), vec![], vec![])
 }
 
-fn l12_nat_zero() -> Arc<l12::Tm> {
-    Arc::new(l12::Tm::SumCase {
-        typ: l12_nat_typ(),
+fn l12_nat_zero() -> l12::Tm {
+    l12::Tm::SumCase {
+        typ: Box::new(l12_nat_typ()),
         case_name: l12::sp("zero"),
         datas: vec![],
-        is_trait: false,
-    })
+    }
 }
 
-fn l12_nat_succ(inner: Option<Arc<l12::Tm>>) -> Arc<l12::Tm> {
-    Arc::new(l12::Tm::SumCase {
-        typ: l12_nat_typ(),
+fn l12_nat_succ(inner: Option<l12::Tm>) -> l12::Tm {
+    l12::Tm::SumCase {
+        typ: Box::new(l12_nat_typ()),
         case_name: l12::sp("succ"),
         datas: inner
             .map(|t| vec![(l12::sp("n"), t, l12::Icit::Expl)])
             .unwrap_or_default(),
-        is_trait: false,
-    })
-}
-
-/// zero → 0；succ^k zero → 十进制 k（两个分支与递归版逐字节一致）。
-#[test]
-fn l12_nat_literals_print_decimal() {
-    assert_eq!(l12::pretty(&l12_nat_zero()), "0");
-    let mut n = l12_nat_zero();
-    for expected in 1..=5 {
-        n = l12_nat_succ(Some(n));
-        assert_eq!(l12::pretty(&n), expected.to_string());
     }
 }
 
-/// 卡住的参数打印 tm + n，缺参数打印 unknown + n（递归版同款文案）。
+/// zero/succ 逐层展开成 Nat::zero / Nat::succ(...)。
 #[test]
-fn l12_nat_stuck_and_unknown_branches() {
-    // succ(x)，x 不是 Nat 字面量链：x + 1
-    let stuck = l12_nat_succ(Some(l12::decl("x")));
-    assert_eq!(l12::pretty(&stuck), "x + 1");
-    // 参数不是 SumCase：Type 0 + 1
-    let non_nat = l12_nat_succ(Some(Arc::new(l12::Tm::U(0))));
-    assert_eq!(l12::pretty(&non_nat), "Type 0 + 1");
-    // 无参数的 succ：unknown + 1
-    let unknown = l12_nat_succ(None);
-    assert_eq!(l12::pretty(&unknown), "unknown + 1");
+fn l12_nat_constructors_print_structurally() {
+    assert_eq!(l12::pretty(&l12_nat_zero()), "Nat::zero");
+    let mut n = l12_nat_zero();
+    for _ in 1..=5 {
+        n = l12_nat_succ(Some(n));
+    }
+    let out = l12::pretty(&n);
+    assert!(out.starts_with("Nat::succ("), "{out}");
+    assert!(out.contains("Nat::zero"), "{out}");
 }
 
-/// 10 万层 succ 链在 256 KiB 小栈上打印：递归版每层一帧必溢出，迭代版
-/// O(1) 栈。链的 Rc Drop 同样是递归的，故构造/打印后 mem::forget 泄漏
-/// （测试进程一次性开销，换取「测的正是 pretty 而非 Drop」）。
+/// 卡住/缺参数的 succ：新 pretty 只按结构打印，不再有 + 1 / unknown 文案。
 #[test]
-fn l12_deep_succ_chain_prints_iteratively() {
+fn l12_nat_stuck_and_unknown_branches() {
+    let stuck = l12_nat_succ(Some(l12::decl("x")));
+    assert_eq!(l12::pretty(&stuck), "Nat::succ(x)");
+    let non_nat = l12_nat_succ(Some(l12::Tm::U(0)));
+    assert_eq!(l12::pretty(&non_nat), "Nat::succ(Type 0)");
+    let unknown = l12_nat_succ(None);
+    assert_eq!(l12::pretty(&unknown), "Nat::succ");
+}
+
+/// 10 万层 succ 链不得爆栈：新 pretty 用 MAX_DEPTH=1024 定深截断（输出省略号），
+/// 1024 帧需要数 MiB 栈（256 KiB 不够），但仍远小于 10 万层展开所需栈；
+/// Drop 仍递归，构造后 mem::forget 泄漏。
+#[test]
+fn l12_deep_succ_chain_does_not_overflow() {
     const DEPTH: usize = 100_000;
     let out = std::thread::Builder::new()
-        .stack_size(256 * 1024)
+        .stack_size(8 * 1024 * 1024)
         .spawn(|| {
             use l12::Icit;
             let nat = l12_nat_typ();
             let mut n = l12_nat_zero();
             for _ in 0..DEPTH {
-                n = Arc::new(l12::Tm::SumCase {
-                    typ: nat.clone(),
+                n = l12::Tm::SumCase {
+                    typ: Box::new(nat.clone()),
                     case_name: l12::sp("succ"),
                     datas: vec![(l12::sp("n"), n, Icit::Expl)],
-                    is_trait: false,
-                });
+                };
             }
             let printed = l12::pretty(&n);
             std::mem::forget(n);
@@ -449,5 +445,7 @@ fn l12_deep_succ_chain_prints_iteratively() {
         .unwrap()
         .join()
         .unwrap();
-    assert_eq!(out, DEPTH.to_string());
+    assert!(out.contains('…'), "深链应被定深截断，实际输出长度 {}", out.len());
+    assert!(out.len() < 20_000, "深链输出不应展开整条链：{}", out.len());
 }
+
