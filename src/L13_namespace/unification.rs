@@ -937,23 +937,47 @@ impl Infer {
         m_prime: MetaVar,
         sp_prime: Spine,
     ) -> Result<(), UnifyError> {
-        let mut go =
-            |m: MetaVar, sp: Spine, m_prime: MetaVar, sp_prime: Spine| -> Result<(), UnifyError> {
-                match self.invert(gamma, &cxt.decl, &sp) {
-                    Err(_) => {
-                        self.solve(gamma, &cxt.decl, m_prime, sp_prime, &Val::Flex(m, sp).into())?;
-                        self.solve_multi_trait(cxt, m_prime, false)
-                    },
-                    Ok((pren, p1)) => {
-                        self.solve_with_pren(&cxt.decl, m, pren, p1, &Val::Flex(m_prime, sp_prime).into())
-                    }
-                }
-            };
+        let mut go = |this: &mut Self,
+                      m: MetaVar,
+                      sp: Spine,
+                      m_prime: MetaVar,
+                      sp_prime: Spine|
+         -> Result<(), UnifyError> {
+            match this.invert(gamma, &cxt.decl, &sp) {
+                Err(_) => {
+                    this.solve(gamma, &cxt.decl, m_prime, sp_prime, &Val::Flex(m, sp).into())?;
+                    this.solve_multi_trait(cxt, m_prime, false)
+                },
+                Ok((pren, p1)) => this.solve_with_pren(
+                    &cxt.decl,
+                    m,
+                    pren,
+                    p1,
+                    &Val::Flex(m_prime, sp_prime).into(),
+                ),
+            }
+        };
 
-        if sp.len() < sp_prime.len() {
-            go(m_prime, sp_prime, m, sp)
+        // 先试一方，失败再试另一方：只按 spine 长度选一个方向，会在“长 spine
+        // 含非 rigid 项（变量槽被精化成构造子值）”时漏掉可行方向（L12 review
+        // R9 同款；test5 的内层 match 场景）。第一次尝试可能已 solve 部分 meta
+        // 才失败，反向尝试前恢复 meta 快照；`unify_kind` 是 Infer 上的 Cell、
+        // **不在**快照内，首次尝试的失败分档（Undecided/Fuel）会单调残留，把
+        // 真 Absurd 报成“无法判定”，故一并恢复到尝试前水位。
+        let snap = self.meta.clone();
+        let kind_before = self.unify_kind();
+        let (m1, sp1, m2, sp2) = if sp.len() < sp_prime.len() {
+            (m_prime, sp_prime, m, sp)
         } else {
-            go(m, sp, m_prime, sp_prime)
+            (m, sp, m_prime, sp_prime)
+        };
+        match go(self, m1, sp1.clone(), m2, sp2.clone()) {
+            Ok(()) => Ok(()),
+            Err(_) => {
+                self.meta = snap;
+                self.unify_kind.set(kind_before);
+                go(self, m2, sp2, m1, sp1)
+            }
         }
     }
 

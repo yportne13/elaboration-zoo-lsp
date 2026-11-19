@@ -338,6 +338,7 @@ fn intersect_bump<'a>(
 /// 异头 flex-flex（上游 `flexFlex`）：**短 spine 一侧优先**反演求解；反演
 /// 失败则用另一侧求解（rhs 是整条 flex 值）——solve 含 L13 的 non-invertible
 /// 常数解 fallback；该分支解后跑 trait 合成（参考版 `go` 的 Err 臂逐字）。
+/// 首选方向整体失败时回滚 metas 快照并反向重试（L12 review R9 的孪生对位）。
 #[allow(clippy::too_many_arguments)]
 fn flex_flex_bump<'a>(
     bump: &'a Bump,
@@ -368,7 +369,12 @@ fn flex_flex_bump<'a>(
     } else {
         (m1, args1, v1, m2, args2, v2)
     };
-    match invert_bump(bump, spine, defs, metas, decl, mutable, ren, aa) {
+    // 先试一方，失败再试另一方（参考版 flex_flex 的 L12 review R9 同款）：
+    // 只按 spine 长度选一个方向，会在“长 spine 含非 rigid 项”时漏掉可行
+    // 方向。第一次尝试可能已写部分 metas 才失败，反向尝试前回滚快照
+    // （与 L12 孪生同口径：整表 clone/restore；孪生无 unify_kind 三档）。
+    let snap = metas.clone();
+    let first_ok = match invert_bump(bump, spine, defs, metas, decl, mutable, ren, aa) {
         Some(mask) => matches!(
             solve_with_pren_bump(
                 bump, spine, work, vals, icits, defs, metas, decl, mutable, ren, fa,
@@ -384,9 +390,36 @@ fn flex_flex_bump<'a>(
                 ),
                 SolveRes::Ok
             ) {
-                return false;
+                false
+            } else {
+                unsafe { (&mut *mach_ptr).solve_multi_trait_ref(bump, cxt, fb, false).is_ok() }
             }
-            unsafe { (&mut *mach_ptr).solve_multi_trait_ref(bump, cxt, fb, false).is_ok() }
+        }
+    };
+    if first_ok {
+        return true;
+    }
+    *metas = snap;
+    match invert_bump(bump, spine, defs, metas, decl, mutable, ren, ab) {
+        Some(mask) => matches!(
+            solve_with_pren_bump(
+                bump, spine, work, vals, icits, defs, metas, decl, mutable, ren, fb,
+                ab.len() as u32, gamma, mask, vb,
+            ),
+            SolveRes::Ok
+        ),
+        None => {
+            if !matches!(
+                solve_bump(
+                    bump, spine, work, vals, icits, defs, metas, decl, mutable, ren, gamma, fa, aa,
+                    va,
+                ),
+                SolveRes::Ok
+            ) {
+                false
+            } else {
+                unsafe { (&mut *mach_ptr).solve_multi_trait_ref(bump, cxt, fa, false).is_ok() }
+            }
         }
     }
 }
