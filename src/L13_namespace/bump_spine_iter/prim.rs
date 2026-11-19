@@ -295,8 +295,9 @@ pub(super) fn nat_step_value(typ: V, index: u32, datas: &[SumDataV<'_>]) -> Opti
     }
 }
 
-/// decl 表条目（参考版 decl 行 7 元组 `(Span, Tm, Val, Ty, VTy,
-/// Option<PrimFunc>, String)` 的快版：`ty` 类型项在快版无读取点，省略；
+/// decl 表条目（参考版 `DeclEntry` 行——根模块的命名行类型，字段仍为位置序
+/// `(Span, Tm, Val, Ty, VTy, Option<PrimFunc>, String)`——的快版：
+/// `ty` 类型项在快版无读取点，省略；
 /// Span/typ_pretty 为观察面（LSP 接线阶段 1）回填——错误消息仍用零 Span
 /// 渲染，不受影响）。
 #[derive(Clone)]

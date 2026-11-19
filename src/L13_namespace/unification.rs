@@ -7,7 +7,7 @@ use crate::parser_lib::Span;
 use super::{
     Ix, Infer, Lvl, MetaEntry, MetaVar, PatternDetail, Spine, SumCaseDatas, Tm, UnifyError, UnifyKind, VTy, Val, cxt::Cxt,
     is_nat_sum, lvl2ix, parser::syntax::Icit, syntax::Pruning, empty_span, pretty::pretty_tm,
-    typeclass::{Assertion, Instance}, Raw, Rc, Decl,
+    typeclass::{Assertion, Instance}, Raw, Rc, Decl, decl_prim,
     pattern_match::Compiler,
 };
 
@@ -37,7 +37,7 @@ thread_local! {
 /// leaves without paying the quote+eval or burning fuel.
 fn is_prim_application(decl: &Decl, v: &Val) -> bool {
     match v {
-        Val::Decl(x, _) => decl.get(&x.data).map_or(false, |e| e.5.is_some()),
+        Val::Decl(x, _) => decl.get(&x.data).and_then(decl_prim).is_some(),
         _ => false,
     }
 }

@@ -20,7 +20,8 @@
 //!   所属 Sum 的 cases 表中的下标），名字反查 `cases[index]`；
 //!   `PatternDetail::Con` 首字段同步为 index（共享类型免费）。
 //! - **prim 挂 decl 表**（不再有 `Tm::Prim`/`Val::Prim`）：decl 表条目
-//!   7 元组（快版 [`DeclEntry`] 加 `prim: Option<PrimId>`），`Cxt::new`
+//!   `DeclEntry` 行（参考版为根模块同名行类型；快版 [`DeclEntry`] 加
+//!   `prim: Option<PrimId>`），`Cxt::new`
 //!   注册 String + 15 个内建。执行点 = force 的 Decl 臂（结果再 force）
 //!   + v_app 的 Decl 臂（结果直接返回）；实参逆 spine 序收集后转正序；
 //!   `None` = 卡住留 spine 上。nat 算术 prim 与 vconnT 仅 prelude 挂载，

@@ -27,10 +27,14 @@ parser / pretty / preprocess / trait 求解器 `Synth`，**Ok 输出逐字节
 
 ### 1.1 全限定 decl 键与名字解析
 
-- **decl 表七元组**（`mod.rs:309`）：
-  `FxHashMap<SmolStr, (span, Tm, Val, Ty, VTy, Option<PrimFunc>, typ_pretty)>`
-  ——比 L12 多 prim 槽与 `typ_pretty` 渲染缓存（§3.4）。`decl.get` 在
-  求值热路径上，故用 FxHash（prelude 装载一次 ~4M 次查表）。
+- **decl 表行 `DeclEntry`**（`mod.rs` 的 `type DeclEntry`）：
+  `FxHashMap<SmolStr, DeclEntry>`，行为位置序
+  `(span, Tm, Val, Ty, VTy, prim, typ_pretty)`——比 L12 多 prim 槽与
+  `typ_pretty` 渲染缓存（§3.4）。prim 槽经统一命名访问点 `decl_prim`
+  读取（P1.4 调度形状对齐；完整字段名拆分待 L13 外消费者
+  `src/doc/collect.rs` 迁到命名访问器，见
+  `docs/l13-p1-alignment-2026-11-19.md` §S2）。`decl.get` 在求值热路径上，
+  故用 FxHash（prelude 装载一次 ~4M 次查表）。
 - **构造子只登记限定名** `Enum.case`，**不设裸名别名**
   （`elaboration.rs` enum 臂；struct 脱糖出 `Name.mk` 同路）。解析交给
   命名空间机制而不是裸名兜底——这是 L13 与 L10-L12（裸名登记）的根

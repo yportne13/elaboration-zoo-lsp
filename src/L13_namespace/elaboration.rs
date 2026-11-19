@@ -8,7 +8,7 @@ use crate::{list::List, parser_lib::{Span, ToSpan}};
 use super::{
     Closure, Cxt, DeclTm, Error, Infer, Ix, PrimFunc, Tm, VTy, Val,
     Lvl, Rc, MetaVar,
-    empty_span, lvl2ix,
+    empty_span, lvl2ix, decl_prim,
     parser::syntax::{ClassItem, Decl, Either, Icit, Raw},
     pattern_match::Compiler, MetaEntry,
     typeclass::Instance,
@@ -249,7 +249,7 @@ impl<'a> TermWalker<'a> {
     /// 条目——nat 内建换装的 nat_div 等——不算）。
     fn is_ctor(&self, key: &str) -> bool {
         match self.decl.get(key) {
-            Some(e) if e.5.is_none() => {
+            Some(e) if decl_prim(e).is_none() => {
                 let mut t = e.1.as_ref();
                 while let Tm::Lam(_, _, b) = t {
                     t = b.as_ref();

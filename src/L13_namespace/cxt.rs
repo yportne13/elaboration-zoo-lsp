@@ -1305,7 +1305,7 @@ impl Cxt {
         // `PRIM_VERSION`): registering a prim (`register_nat_builtins`,
         // startup builtins) or shadowing one with a plain def both change
         // what `force` computes for spines of that name.
-        let had_prim = self.decl.get(&x.data).map_or(false, |e| e.5.is_some());
+        let had_prim = self.decl.get(&x.data).and_then(decl_prim).is_some();
         let now_prim = prim.is_some();
         Rc::make_mut(&mut self.decl).insert(x.data.clone(), (x.to_span(), t, vt, a, va, prim, typ_pretty));
         if had_prim != now_prim {

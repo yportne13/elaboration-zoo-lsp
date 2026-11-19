@@ -426,15 +426,32 @@ mod termination_check_tests;
 
 type Rc<T> = std::rc::Rc<T>;
 
+/// 一条 decl 表行：`(span, Tm, Val, 类型项, 类型值, prim 槽, typ_pretty)`。
+///
+/// 命名对齐新 L12 `cxt::DeclEntry` 与孪生 `bump_spine_iter::DeclEntry` 的
+/// **调度位**（P1.4）。本轮仍用位置序元组作表示：L13 外的消费者
+/// `src/doc/collect.rs` 直接读 `.1`/`.6`，该文件不在本轮源码改动白名单；
+/// 完整字段名拆分留待该消费者迁到命名访问器（见
+/// `docs/l13-p1-alignment-2026-11-19.md` §S2）。
+pub(crate) type DeclEntry = (Span<()>, Rc<Tm>, Rc<Val>, Rc<Ty>, Rc<VTy>, Option<PrimFunc>, String);
+
+/// prim 槽的命名访问点（位置序 `.5`）：`force`/`v_app` 的归约派发、def replay
+/// 排除、unify 的不透明叶判定都经这里，读法对齐新 L12 `DeclEntry.prim` 与
+/// 孪生 `DeclEntry.prim`。`#[inline]`：热路径上与原元组访问同码。
+#[inline]
+pub(crate) fn decl_prim(entry: &DeclEntry) -> Option<&PrimFunc> {
+    entry.5.as_ref()
+}
+
 // `decl.get` sits on the evaluator's hot paths (`Tm::Decl` eval arm, `v_app`,
 // `force`); FxHash keys on the string bytes directly instead of SipHashing
 // them (~4M lookups during prelude load alone).
-pub(crate) type Decl = rustc_hash::FxHashMap<SmolStr, (Span<()>, Rc<Tm>, Rc<Val>, Rc<Ty>, Rc<VTy>, Option<PrimFunc>, String)>;
+pub(crate) type Decl = rustc_hash::FxHashMap<SmolStr, DeclEntry>;
 
 /// 一条由孪生导出、与参考版 `Decl` 行同形的声明条目（阶段 4 数据面：
 /// 孪生自产诊断/观察外，还需把它本轮登记的用户声明交回 LSP 的参考域
 /// 全局表——Path1 定义处悬浮、`pretty_sum_definition` 成员渲染、跨文件
-/// 分派都读这张表）。字段与 `Decl` 七元组逐一对位；`.5` prim 恒 `None`
+/// 分派都读这张表）。字段与 `DeclEntry` 逐一对位；prim 槽恒 `None`
 /// （用户声明不会是 prim；prim 条目仍由参考版 prelude 表持有）。
 #[derive(Clone)]
 pub struct ExportedDecl {
@@ -1300,7 +1317,7 @@ pub(crate) fn simpl_decl(decl: &Decl) -> Rc<Decl> {
                     },
                     x.1.3.clone(),
                     x.1.4.clone(),
-                    x.1.5.clone(),
+                    decl_prim(x.1).cloned(),
                     x.1.6.clone(),
                 ),
             )
@@ -2360,8 +2377,10 @@ impl Infer {
         let meta_contrains_cap_bytes = constraints_cap * meta_contrains_entry_sz;
         let hover_entry_sz = std::mem::size_of::<HoverEntry>();
         let hover_cap_bytes = hover_cap * hover_entry_sz;
-        type DeclEntry = (SmolStr, (Span<()>, Rc<Tm>, Rc<Val>, Rc<Ty>, Rc<VTy>));
-        let decl_entry_sz = std::mem::size_of::<DeclEntry>();
+        // 口径保持既有输出（只量键 + 前 5 个槽，与历史 `DeclEntry` 读数一致）；
+        // 模块级 `DeclEntry` 现在是整行 7 槽，故此处改名避免同名遮蔽。
+        type DeclRowSz = (SmolStr, (Span<()>, Rc<Tm>, Rc<Val>, Rc<Ty>, Rc<VTy>));
+        let decl_entry_sz = std::mem::size_of::<DeclRowSz>();
         // 线程本地 force 记忆表的容量口径（`typort stats`）：`clear()` 不还
         // 桶数组，故峰值后 capacity 才反映常驻字节（见 `CACHE_SHRINK_MIN_ENTRIES`）。
         // TLS 可能已析构，`try_with` 取不到即记 0。
@@ -2887,7 +2906,7 @@ impl Infer {
                 // decl-table check below stays authoritative, so a later user
                 // redefinition of the name as a plain def disables the branch.
                 if nat_primop_symbol(name).is_some()
-                    && decl.get(name).map_or(false, |e| e.5.is_some())
+                    && decl.get(name).and_then(decl_prim).is_some()
                 {
                     let mut acc: Rc<Val> = Val::Decl(empty_span(name.clone()), List::new()).into();
                     for (a, i) in args.iter() {
@@ -2917,7 +2936,7 @@ impl Infer {
                 }
             },
             Val::Decl(x, sp) => {
-                if let Some((_, _, _, _, _, Some(prim_fn), _)) = decl.get(&x.data) {
+                if let Some(prim_fn) = decl.get(&x.data).and_then(decl_prim) {
                     // Impure prims (mutable globals / IO / diagnostics) are
                     // memo-tainting: skipping their re-execution on a cache
                     // hit would be observable.  The prim-ness lookup itself
@@ -3113,22 +3132,20 @@ impl Infer {
             Val::Rigid(x, sp) => Val::Rigid(*x, sp.prepend((u, i))).into(),
             Val::Decl(x, sp) => {
                 let acc = sp.prepend((u, i));
-                if let Some(entry) = decl.get(&x.data) {
-                    if let Some(ref prim_fn) = entry.5 {
-                        // Impure prims taint any enclosing force-memo walk
-                        // (their application is observable; pure prims'
-                        // results are a function of their arguments).
-                        if !prim_is_pure(&x.data) {
-                            force_taint_bump();
-                        }
-                        let args: Vec<Rc<Val>> = {
-                            let mut v: Vec<Rc<Val>> = acc.iter().map(|(v, _)| v.clone()).collect();
-                            v.reverse();
-                            v
-                        };
-                        if let Some(result) = prim_fn.0(self, decl, &args) {
-                            return result;
-                        }
+                if let Some(prim_fn) = decl.get(&x.data).and_then(decl_prim) {
+                    // Impure prims taint any enclosing force-memo walk
+                    // (their application is observable; pure prims'
+                    // results are a function of their arguments).
+                    if !prim_is_pure(&x.data) {
+                        force_taint_bump();
+                    }
+                    let args: Vec<Rc<Val>> = {
+                        let mut v: Vec<Rc<Val>> = acc.iter().map(|(v, _)| v.clone()).collect();
+                        v.reverse();
+                        v
+                    };
+                    if let Some(result) = prim_fn.0(self, decl, &args) {
+                        return result;
                     }
                 }
                 Val::Decl(x.clone(), acc).into()
@@ -3258,7 +3275,7 @@ impl Infer {
             // Builtins (prim) are never replayed: their stored body term is a
             // self-referential `Tm::Decl(name)` placeholder, and the actual
             // behavior runs through the prim function at application time.
-            Some(e) if e.5.is_some() => false,
+            Some(e) if decl_prim(e).is_some() => false,
             Some(e) => {
                 let body = e.1.clone();
                 let mut found = false;
