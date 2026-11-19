@@ -12,9 +12,29 @@ use super::{
 
 type Constructor = Span<SmolStr>;
 
+/// 构造子可达性三态（P1.2；命名对齐 L12 `pattern_match::Walk` 的第三态）。
+///
+/// 映射：索引方程 `Ok` 与预算耗尽（`UnifyKind::Fuel`）→ `Matched`；结构
+/// 矛盾（`Absurd`）→ `Unreachable`；语义判不出（`Undecided`）→ 本态。
+/// **覆盖结论保持 L13 产品口径**：只有 `Matched` 要求覆盖，`Unreachable`
+/// 与 `Undecided` 都不产生覆盖义务（`update_cxt` 精化载体下臂上下文可能
+/// 解出探测期判不出的方程，见 docs/l13-p1-alignment-2026-11-19.md §S3）。
+/// 第三态只用于把“判不出”从“矛盾”里分出来，接给覆盖检查与臂诊断。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Walk {
+    Matched,
+    Unreachable,
+    Undecided,
+}
+
 #[derive(Debug, Clone)]
 pub enum Warning {
     Unreachable(Raw),
+    /// 索引方程判不出、按产品口径仍按不可达处理；独立变体让诊断可分。
+    /// Display 暂与 [`Warning::Unreachable`] 同形：`l13_fast_parity` 对
+    /// Err 正文做逐字比对，而孪生侧尚无三档（L12 孪生同款）；文案差异
+    /// 留待 S4（孪生三档）一并放行。
+    Undecided(Raw),
     Unmatched(Pattern),
     /// 嵌套位置覆盖缺失（L07 同文案：`match 不完整：模式位置 {path} 缺少
     /// 构造子 {ctor}`；2026-09-18 评审修复 P0 的 L13 移植）。
@@ -24,7 +44,9 @@ pub enum Warning {
 impl std::fmt::Display for Warning {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Warning::Unreachable(body) => write!(f, "unreachable pattern: {}", body),
+            Warning::Unreachable(body) | Warning::Undecided(body) => {
+                write!(f, "unreachable pattern: {}", body)
+            }
             Warning::Unmatched(pat) => write!(f, "non-exhaustive pattern: `{}` not covered", pat),
             Warning::IncompleteNested(msg) => write!(f, "{msg}"),
         }
@@ -101,14 +123,15 @@ impl Compiler {
     /// 命名空间解析取出（decl 只登记限定名 `Enum.case`，无裸名别名），走 Π 链
     /// 实例化——头部 Sum 的隐式参数用其实参，其余绑定器用超出上下文的 scratch
     /// 层 fresh rigid（同为刚性，可被方程解出；探测状态弃掉即回滚），返回类型再
-    /// 与头部类型跑一次索引方程。成功 = 该构造子可能出现在头部类型的值里；
-    /// 结构冲突（`Vec[A] zero` 上不可能有 `cons`）= absurd，不报缺失。
+    /// 与头部类型跑一次索引方程。返回三态：`Matched` = 该构造子可能出现在
+    /// 头部类型的值里；`Unreachable` = 结构冲突（`Vec[A] zero` 上不可能有
+    /// `cons`）；`Undecided` = 判不出（语义档；预算档按 `Matched` 保守处理）。
     fn probe_accessible(
         infer: &mut Infer,
         cxt: &Cxt,
         head_sum: &Rc<Val>,
         ctor: &Constructor,
-    ) -> bool {
+    ) -> Walk {
         // TEMP-PROBE: 参考版可达性探测次数（与孪生同口径对比）。
         PROBE_COUNT.with(|c| c.set(c.get() + 1));
         let (sum_name, head_params, impl_vals) = match head_sum.as_ref() {
@@ -122,7 +145,7 @@ impl Compiler {
                     // 渲染（`infer_expr(Raw::Obj(..))` 会对声明的 case span 推一条
                     // hover——可达性探测不看渲染面）。带参数/索引的 Sum（Vec 型
                     // GADT）仍走完整探测。
-                    return true;
+                    return Walk::Matched;
                 }
                 (
                     name.clone(),
@@ -134,13 +157,13 @@ impl Compiler {
                         .collect::<Vec<_>>(),
                 )
             }
-            _ => return false,
+            _ => return Walk::Unreachable,
         };
         // 限定名解析交给命名空间机制（struct 脱糖的 `Type.mk` 形态同路）
         let ctor_raw = Raw::Obj(Box::new(Raw::Var(sum_name.clone())), Some(ctor.clone()));
         let entry_ty = match infer.infer_expr(cxt, ctor_raw) {
             Ok((_, ty)) => ty,
-            Err(_) => return false,
+            Err(_) => return Walk::Unreachable,
         };
         // 每个探测独立充值：多构造子枚举的逐 ctor 探测不互相挤占共享池
         // （探测本身回滚，只有燃料单向消耗）。
@@ -176,7 +199,7 @@ impl Compiler {
                     &head_params,
                     &tyf,
                 ) {
-                    Ok(()) => true,
+                    Ok(()) => Walk::Matched,
                     // 三档诊断的**消费口径（L13 产品语义优先）**：只有预算
                     // 耗尽（fuel 池 / 卡住 match 比较次数）才按可达处理（保守
                     // 要求覆盖，避免深负载下非穷尽 match 被静默接受）。语义上
@@ -184,9 +207,10 @@ impl Compiler {
                     // ——update_cxt 精化载体下，臂上下文可能解出探测期判不出的
                     // 索引方程，L13/twin 一直按不可达过滤（l13_fast_parity 的
                     // GADT 函数索引用例即此口径；与 L12 的 σ 路线不同，记录为
-                    // 载体约束下的偏差）。
-                    Err(UnifyKind::Fuel) => true,
-                    Err(UnifyKind::Absurd | UnifyKind::Undecided) => false,
+                    // 载体约束下的偏差）。第三态只把后者分流给诊断。
+                    Err(UnifyKind::Fuel) => Walk::Matched,
+                    Err(UnifyKind::Absurd) => Walk::Unreachable,
+                    Err(UnifyKind::Undecided) => Walk::Undecided,
                 },
             }
         };
@@ -233,15 +257,15 @@ impl Compiler {
         cxt: &Cxt,
         typ: &Rc<Val>,
         constrs: &[Constructor],
-        memo: &mut [Option<bool>],
+        memo: &mut [Option<Walk>],
         i: usize,
-    ) -> bool {
+    ) -> Walk {
         match memo[i] {
-            Some(b) => b,
+            Some(w) => w,
             None => {
-                let b = Self::probe_accessible(infer, cxt, typ, &constrs[i]);
-                memo[i] = Some(b);
-                b
+                let w = Self::probe_accessible(infer, cxt, typ, &constrs[i]);
+                memo[i] = Some(w);
+                w
             }
         }
     }
@@ -477,7 +501,7 @@ impl Compiler {
         };
         // 构造子可达性 memo（下标对齐 constrs）：覆盖检查与臂前置过滤共用同一
         // 判定（决策树 filter 的 probe_memo 同口径——同节点同构造子判定不变）。
-        let mut accessible: Vec<Option<bool>> = vec![None; constrs.len()];
+        let mut accessible: Vec<Option<Walk>> = vec![None; constrs.len()];
         // 覆盖检查：可达且无臂覆盖 → Unmatched（形态 = 「构造子 + 999 通配」，
         // 与 L10–L12 的产出一致）。不可达（如 `Vec[A] zero` 上的 `cons`）不报
         // ——索引方程不可解即结构上不可能。
@@ -495,6 +519,7 @@ impl Compiler {
         if !fully_covered {
             for (i, ctor) in constrs.iter().enumerate() {
                 if Self::ctor_accessible(infer, cxt, &typ, &constrs, &mut accessible, i)
+                    == Walk::Matched
                     && !arms
                         .iter()
                         .any(|(pat, _)| covers(pat, ctor.data.as_str(), &ctor_names))
@@ -522,9 +547,19 @@ impl Compiler {
             // 让它落进 check_pm_final 报出假的特化错误。
             if let Pattern::Con(name, _, _) = pat {
                 if let Some(i) = ctor_names.iter().position(|c| c.as_str() == name.data.as_str()) {
-                    if !Self::ctor_accessible(infer, cxt, &typ, &constrs, &mut accessible, i) {
-                        unreachable.push(Warning::Unreachable(body.clone()));
-                        continue;
+                    // 三态分流：Matched 才继续走查；Unreachable/Undecided 都
+                    // 按产品既有口径跳过该臂（不落进 check_pm_final 报假特化
+                    // 错误），但诊断变体分开——Undecided 不再伪装成结构矛盾。
+                    match Self::ctor_accessible(infer, cxt, &typ, &constrs, &mut accessible, i) {
+                        Walk::Matched => {}
+                        Walk::Undecided => {
+                            unreachable.push(Warning::Undecided(body.clone()));
+                            continue;
+                        }
+                        Walk::Unreachable => {
+                            unreachable.push(Warning::Unreachable(body.clone()));
+                            continue;
+                        }
                     }
                 }
             }
@@ -615,7 +650,11 @@ impl Compiler {
                     _ => continue,
                 };
                 for ctor in ctor_cases {
-                    if !Self::probe_accessible(infer, &nc.arm_cxt, &field_sum, &ctor) {
+                    // 覆盖结论同产品口径：只有 Matched 要求该位置覆盖；
+                    // Undecided（判不出）与 Unreachable 一样不计义务。
+                    if Self::probe_accessible(infer, &nc.arm_cxt, &field_sum, &ctor)
+                        != Walk::Matched
+                    {
                         continue;
                     }
                     let covered = self.pats.iter().any(|(d, _)| match cover_at(d, &nc.path) {
