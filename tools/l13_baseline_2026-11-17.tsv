@@ -10,3 +10,6 @@ examples/hdl/06-select-cat.typort	hdl	-- 06-select-cat.typort (1380 decls) nf=21
 examples/hdl/07-registers.typort	hdl	-- 07-registers.typort (1392 decls) nf=219	6CBCD815D5833F3679F979B5A47E4C0E011C38C61EF899E7A5A828091F09E031
 examples/hdl/08-control-flow.typort	hdl	-- 08-control-flow.typort (1389 decls) nf=219	17D875B20E494799881099A57B7D7993A9DBB8160F5E3A33FB61227CD3156D6B
 examples/hdl/09-hierarchy.typort	hdl	-- 09-hierarchy.typort (1381 decls) nf=1	FF40B4BCA05663D4997FF3DD47F6B11A5B1C77AFC93E5D65836B0FF8F0C5BD48
+examples/hdl_ops.typort	core	-- hdl_ops.typort (232 decls) BOTH-FAILED (两版都未跑完，与范式一致无关)	90B01BB90FBC33AC7E69F8BB6C2A12B73AD8B3E332346D053B7CEDD0067F679F
+examples/theorem_proving.typort	core	-- theorem_proving.typort (248 decls) nf=42	A1FFF439AF6692FF00E1E1F6FE7CB909743AFEB2AEF8DC805F89D8A3A72108E7
+examples/typeclass_complex.typort	core	-- typeclass_complex.typort (279 decls) nf=48	C71F27D438E5EA292A2DB377468455384A117C9EF6C902FBED882FAE88DC46BD
