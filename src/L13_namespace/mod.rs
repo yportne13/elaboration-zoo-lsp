@@ -3940,7 +3940,11 @@ impl Infer {
         // 诊断：单次 nf 超过 50ms 时打印（`L13BENCH_PROF=1` 时启用）。
         // 用途：bundle 模块的多实例场景里 nf 的**次数不变、总耗时暴涨 100×**，
         // 需要知道是哪一次 nf、以及它要归一化的项有多大。
-        let slow_probe = std::env::var_os("L13BENCH_PROF").is_some();
+        // 只读一个原子位（`L13BENCH_PROF` 已把它置 true）：用 env 查询会
+        // 每次 nf 付一次环境表锁，实测把 prelude-core 的 basic 拖慢约 7%。
+        let slow_probe = FUNC_PROF
+            .enabled
+            .load(std::sync::atomic::Ordering::Relaxed);
         let t0 = std::time::Instant::now();
         let l = Lvl(env.len() as u32);
         // R4 大数显示压缩：走显示口径 quote_dec（原生 Nat(k) → 十进制
