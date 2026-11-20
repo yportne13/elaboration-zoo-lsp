@@ -30,8 +30,78 @@
 
 #![allow(dead_code)]
 
+/// 计数分配器（仅 bench 诊断）：`L13BENCH_MEM=1` 时统计 live/peak 字节，
+/// 让 `--file` 路径能按 decl 采样 prelude 装载的内存曲线
+/// （见 docs/l13-hdl-prelude-cost-2026-11-20.md）。
+mod memprobe {
+    use std::alloc::{GlobalAlloc, Layout};
+    use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicUsize, Ordering};
+
+    /// `L13BENCH_MEM=1` 时打开（`run()` 入口置位）。
+    pub static TRACK: AtomicBool = AtomicBool::new(false);
+    static LIVE: AtomicIsize = AtomicIsize::new(0);
+    static PEAK: AtomicIsize = AtomicIsize::new(0);
+
+    pub struct Counting<A: GlobalAlloc>(pub A);
+
+    impl<A: GlobalAlloc> Counting<A> {
+        #[inline]
+        fn on_alloc(&self, size: usize) {
+            if TRACK.load(Ordering::Relaxed) {
+                let live = LIVE.fetch_add(size as isize, Ordering::Relaxed) + size as isize;
+                PEAK.fetch_max(live, Ordering::Relaxed);
+            }
+        }
+        #[inline]
+        fn on_free(&self, size: usize) {
+            if TRACK.load(Ordering::Relaxed) {
+                LIVE.fetch_sub(size as isize, Ordering::Relaxed);
+            }
+        }
+    }
+
+    unsafe impl<A: GlobalAlloc> GlobalAlloc for Counting<A> {
+        unsafe fn alloc(&self, l: Layout) -> *mut u8 {
+            let p = unsafe { self.0.alloc(l) };
+            if !p.is_null() {
+                self.on_alloc(l.size());
+            }
+            p
+        }
+        unsafe fn alloc_zeroed(&self, l: Layout) -> *mut u8 {
+            let p = unsafe { self.0.alloc_zeroed(l) };
+            if !p.is_null() {
+                self.on_alloc(l.size());
+            }
+            p
+        }
+        unsafe fn dealloc(&self, ptr: *mut u8, l: Layout) {
+            unsafe { self.0.dealloc(ptr, l) };
+            self.on_free(l.size());
+        }
+        unsafe fn realloc(&self, ptr: *mut u8, l: Layout, new_size: usize) -> *mut u8 {
+            let p = unsafe { self.0.realloc(ptr, l, new_size) };
+            if !p.is_null() {
+                self.on_alloc(new_size);
+                self.on_free(l.size());
+            }
+            p
+        }
+    }
+
+    pub fn live() -> isize {
+        LIVE.load(Ordering::Relaxed)
+    }
+    pub fn peak() -> isize {
+        PEAK.load(Ordering::Relaxed)
+    }
+    pub fn reset_peak() {
+        PEAK.store(LIVE.load(Ordering::Relaxed), Ordering::Relaxed);
+    }
+}
+
 #[global_allocator]
-static ALLOC: mimalloc::MiMalloc = MiMalloc;
+static ALLOC: memprobe::Counting<mimalloc::MiMalloc> = memprobe::Counting(MiMalloc);
 
 #[path = "../list.rs"]
 mod list;
@@ -104,6 +174,10 @@ fn median(ts: &mut [u128]) -> u128 {
 }
 
 fn main() {
+    if std::env::var_os("L13BENCH_MEM").is_some() {
+        memprobe::TRACK.store(true, std::sync::atomic::Ordering::Relaxed);
+        memprobe::reset_peak();
+    }
     let cli = Cli::parse();
     // Round-4 (N): this default MUST stay in sync with the CLI worker stack
     // (src/bin/cli.rs, TYPORT_STACK_MB).  The two entry points used to disagree
@@ -265,17 +339,46 @@ const NF_PRETTY_RENDER_BUDGET: u64 = 200_000;
 /// 现在在尺寸一致之外再比一次**渲染后的内容**（`bench_check_nf_pretty_bounded`，
 /// 两版都有现成 API），只对 `NF_PRETTY_RENDER_BUDGET` 以下的形状生效：超过
 /// 该预算后 pretty 串本身会很大，这一轮退回只比尺寸。
-fn nf_parity(decls: &[Decl], nat_after: &[usize]) -> (u64, u64, bool) {
+/// pretty 对比（两次全量装载 + 渲染）只在语料小时跑：hdl prelude（1371 decls）
+/// 下它自己就吃掉 ~1GB arena，而用途只是给 DIVERGE 解释差异。大语料退回尺寸
+/// 口径（`b == f`），并把口径打印出来。
+fn pretty_compare_worthy(decls: &[Decl], file_ends: &[usize]) -> bool {
+    file_ends.is_empty() || decls.len() <= 512
+}
+
+fn nf_parity(decls: &[Decl], nat_after: &[usize], file_ends: &[usize]) -> (u64, u64, bool) {
+    let mem = std::env::var_os("L13BENCH_MEM").is_some();
+    macro_rules! mark {
+        ($name:expr) => {
+            if mem {
+                println!(
+                    "   [MEM] parity-step={} live_mb={:.1} peak_mb={:.1}",
+                    $name,
+                    memprobe::live() as f64 / 1e6,
+                    memprobe::peak() as f64 / 1e6
+                );
+                memprobe::reset_peak();
+            }
+        };
+    }
+    mark!("start");
     let b = L13_namespace::bench_check_nf_bounded(decls, nat_after);
+    mark!("ref-pass");
     let mut t = fast::Tycker::new();
-    let f = t.bench_check_nf_bounded(decls, nat_after);
+    mark!("twin-new");
+    let f = t.bench_check_nf_bounded_files(decls, nat_after, file_ends);
+    mark!("twin-pass");
     if b == 0 || f == 0 {
         // 0 = 该版失败（与旧口径一致：无值可谈一致）。
         return (b, f, false);
     }
-    if b <= NF_PRETTY_RENDER_BUDGET && f <= NF_PRETTY_RENDER_BUDGET {
+    if b <= NF_PRETTY_RENDER_BUDGET && f <= NF_PRETTY_RENDER_BUDGET
+        && pretty_compare_worthy(decls, file_ends)
+    {
         let bp = L13_namespace::bench_check_nf_pretty_bounded(decls, nat_after);
+        mark!("ref-pretty");
         let fp = t.bench_check_nf_pretty_bounded(decls, nat_after);
+        mark!("twin-pretty");
         return (
             b,
             f,
@@ -378,9 +481,24 @@ fn decl_name_of(d: &Decl) -> String {
     }
 }
 
-fn bench_one(label: &str, decls: &[Decl], nat_after: &[usize], cli: &Cli, want: &dyn Fn(&str) -> bool) {
+fn bench_one(
+    label: &str,
+    decls: &[Decl],
+    nat_after: &[usize],
+    file_ends: &[usize],
+    cli: &Cli,
+    want: &dyn Fn(&str) -> bool,
+) {
     // 计时外：正确性互检
-    let (b_nf, f_nf, ok) = nf_parity(decls, nat_after);
+    let (b_nf, f_nf, ok) = nf_parity(decls, nat_after, file_ends);
+    if std::env::var_os("L13BENCH_MEM").is_some() {
+        println!(
+            "   [MEM] phase=parity done live_mb={:.1} peak_mb={:.1}",
+            memprobe::live() as f64 / 1e6,
+            memprobe::peak() as f64 / 1e6
+        );
+        memprobe::reset_peak();
+    }
     diagnose_fast(label, decls, nat_after);
     diagnose_basic(label, decls, nat_after);
     let verdict = if ok {
@@ -440,17 +558,37 @@ fn bench_one(label: &str, decls: &[Decl], nat_after: &[usize], cli: &Cli, want: 
         }
     }
 
+    if std::env::var_os("L13BENCH_MEM").is_some() {
+        memprobe::reset_peak();
+        let base = memprobe::live();
+        println!("   [MEM] per-decl live/peak (reference path, base={:.1}MB)", base as f64 / 1e6);
+        L13_namespace::bench_check_nf_bounded_with_hook(decls, nat_after, |i| {
+            if i % 10 == 0 {
+                println!(
+                    "   [MEM] decl={i} live_mb={:.1} peak_mb={:.1}",
+                    (memprobe::live() - base) as f64 / 1e6,
+                    (memprobe::peak() - base) as f64 / 1e6,
+                );
+            }
+        });
+        println!(
+            "   [MEM] done live_mb={:.1} peak_mb={:.1}",
+            (memprobe::live() - base) as f64 / 1e6,
+            (memprobe::peak() - base) as f64 / 1e6,
+        );
+    }
+
     let mut ts_basic: Vec<u128> = Vec::new();
     let mut ts_fast: Vec<u128> = Vec::new();
     let mut ts_ss: Vec<u128> = Vec::new();
     let mut tycker_ss = if want("fast_ss") { Some(fast::Tycker::new()) } else { None };
     if let Some(t) = tycker_ss.as_mut() {
-        t.bench_check_nf_bounded(decls, nat_after);
+        t.bench_check_nf_bounded_files(decls, nat_after, file_ends);
     }
     for _ in 0..cli.rounds {
         if let Some(t) = tycker_ss.as_mut() {
             let s = Instant::now();
-            t.bench_check_nf_bounded(decls, nat_after);
+            t.bench_check_nf_bounded_files(decls, nat_after, file_ends);
             ts_ss.push(s.elapsed().as_micros());
         }
         if want("fast") {
@@ -460,7 +598,7 @@ fn bench_one(label: &str, decls: &[Decl], nat_after: &[usize], cli: &Cli, want: 
             }
             let s = Instant::now();
             let mut t = fast::Tycker::new();
-            t.bench_check_nf_bounded(decls, nat_after);
+            t.bench_check_nf_bounded_files(decls, nat_after, file_ends);
             ts_fast.push(s.elapsed().as_micros());
             #[cfg(feature = "sampler")]
             if std::env::var_os("L13SAMPLE").is_some() {
@@ -498,6 +636,10 @@ fn bench_one(label: &str, decls: &[Decl], nat_after: &[usize], cli: &Cli, want: 
 }
 
 fn run(cli: Cli) {
+    if std::env::var_os("L13BENCH_MEM").is_some() {
+        memprobe::TRACK.store(true, std::sync::atomic::Ordering::Relaxed);
+        memprobe::reset_peak();
+    }
     let want = |name: &str| {
         cli.only
             .as_deref()
@@ -513,7 +655,7 @@ fn run(cli: Cli) {
             return;
         };
         if cli.with_prelude == "none" {
-            bench_one(&label, &bare_decls, &[], &cli, &want);
+            bench_one(&label, &bare_decls, &[], &[], &cli, &want);
             return;
         }
         // 装载 prelude 后跑（--with-prelude core|hdl）：示例级两版互检
@@ -533,6 +675,16 @@ fn run(cli: Cli) {
             }
         };
         let p = parse_prelude(&files);
+        if std::env::var_os("L13BENCH_MEM").is_some() {
+            println!(
+                "   [MEM] phase=parsed files={} decls={} live_mb={:.1} peak_mb={:.1}",
+                files.len(),
+                p.decls.len(),
+                memprobe::live() as f64 / 1e6,
+                memprobe::peak() as f64 / 1e6
+            );
+            memprobe::reset_peak();
+        }
         let (mut all, failed, nat_after) = (p.decls, p.failed, p.nat_after);
         if let Some(f) = &failed {
             eprintln!("prelude PARSE-FAILED at {f}");
@@ -558,7 +710,7 @@ fn run(cli: Cli) {
             }
         };
         all.extend(user_decls);
-        bench_one(&label, &all, &nat_after, &cli, &want);
+        bench_one(&label, &all, &nat_after, &p.file_ends, &cli, &want);
         return;
     }
     let workloads: Vec<&str> = match cli.workload.as_str() {
@@ -601,7 +753,7 @@ fn run(cli: Cli) {
                         eprintln!("parse failed at k={k}");
                         continue;
                     };
-                    bench_one(&format!("{workload} k={k}"), &decls, &[], &cli, &want);
+                    bench_one(&format!("{workload} k={k}"), &decls, &[], &[], &cli, &want);
                 }
             }
             "prelude-core" | "prelude-core-show" | "prelude-hdl" => {
@@ -619,7 +771,7 @@ fn run(cli: Cli) {
                 if let Some(f) = &p.failed {
                     println!("   PARSE-FAILED at {f}");
                 }
-                bench_one(workload, &p.decls, &p.nat_after, &cli, &want);
+                bench_one(workload, &p.decls, &p.nat_after, &p.file_ends, &cli, &want);
             }
             "examples-hdl" => {
                 // 核心 prelude + 每个 example 单独一段（避免宏跨文件冲突）
@@ -646,7 +798,7 @@ fn run(cli: Cli) {
                             continue;
                         }
                     }
-                    bench_one(&format!("examples-hdl[{i}]"), &decls, &core_nat, &cli, &want);
+                    bench_one(&format!("examples-hdl[{i}]"), &decls, &core_nat, &[], &cli, &want);
                 }
             }
             other => eprintln!("unknown workload: {other}"),

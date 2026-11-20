@@ -4988,6 +4988,18 @@ pub(crate) fn bench_check_nf_bounded(
     decls: &[parser::syntax::Decl],
     nat_after: &[usize],
 ) -> u64 {
+    bench_check_nf_bounded_with_hook(decls, nat_after, |_| {})
+}
+
+/// `bench_check_nf_bounded` 的**逐 decl 钩子**变体：同一路径，每完成一个 decl
+/// 调一次 `hook(i)`。仅供 bench 诊断用——`l13bench` 在 `L13BENCH_MEM=1` 时
+/// 借它按 decl 采样 live/peak 字节，定位 prelude 装载的超线性内存
+/// （见 docs/l13-hdl-prelude-cost-2026-11-20.md）。
+pub(crate) fn bench_check_nf_bounded_with_hook(
+    decls: &[parser::syntax::Decl],
+    nat_after: &[usize],
+    mut hook: impl FnMut(usize),
+) -> u64 {
     // 每轮入口清 FORCE_MEMO（孪生 bench_nf_impl 入口同款，2026-09-22）：
     // memo 键是值指针且条目持 Rc keepalive，跨轮指针不复用——不清则表只涨
     // 不中（CAP 前每 force 付死表 miss，CAP 1M 后还钉住数百万死值）。
@@ -5013,6 +5025,7 @@ pub(crate) fn bench_check_nf_bounded(
         if is_def {
             last = name;
         }
+        hook(i);
     }
     match last.and_then(|n| cxt.decl.get(&n).map(|e| e.2.clone())) {
         Some(v) => {

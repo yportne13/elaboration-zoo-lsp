@@ -1785,6 +1785,87 @@ impl Tycker {
         r
     }
 
+    /// bench 口径的**按 prelude 文件边界压实**变体（`l13bench --with-prelude`）。
+    ///
+    /// 旧口径 [`Tycker::bench_check_nf_bounded`] 把整串 prelude 当"一个文件"塞进
+    /// 同一 arena：bump 不回收，hdl prelude 装载末 arena 累计到 ~2.2GB
+    /// （2026-11-20 实测），而产品加载器 [`Tycker::prime_resident`] 在文件边界
+    /// 与累计阈值处**就地压实**，常驻量钉在 live 附近。两者测的不是同一条装载
+    /// 路径，bench 峰值 RSS 因此不反映产品行为
+    /// （见 docs/l13-hdl-prelude-cost-2026-11-20.md）。
+    ///
+    /// 本变体镜像 `prime_resident` 的压实纪律（文件边界 + `PRIME_COMPACT_BYTES`），
+    /// decl 序列与 nat 边界与旧口径相同，只多压实；`file_ends` 为空时回落旧口径。
+    pub(crate) fn bench_check_nf_bounded_files(
+        &mut self,
+        ast: &[Decl],
+        nat_after: &[usize],
+        file_ends: &[usize],
+    ) -> u64 {
+        if file_ends.is_empty() {
+            return self.bench_check_nf_bounded(ast, nat_after);
+        }
+        self.bump.reset();
+        self.resident = None;
+        self.machine.clear_round();
+        force_memo_clear();
+        // 与 prime_resident 同款：cxt 以 'static 存放口径持有（压实会换 arena），
+        // 故不缓存 &self.bump，每处用前现取。
+        let mut cxt: Cxt<'static> = unsafe {
+            std::mem::transmute::<Cxt<'_>, Cxt<'static>>(self.machine.prime_round(&self.bump))
+        };
+        let mut cap_hint: usize = 8 << 20;
+        let mut file_i = 0usize;
+        let mut last: Option<V> = None;
+        for (i, d) in ast.iter().enumerate() {
+            if compact::compact_enabled() && self.bump.allocated_bytes() > PRIME_COMPACT_BYTES {
+                force_memo_clear();
+                let (nc, live) = self.compact_state(cxt, cap_hint);
+                cxt = nc;
+                self.machine.ns_method_cache = None;
+                cap_hint = (live + live / 8 + (1 << 20)).max(8 << 20);
+            }
+            let (out, nc) = {
+                let b: &Bump = &self.bump;
+                // 浅克隆出本地可变副本再走 infer_decl（同 prime_resident）。
+                let mut cxt_local = clone_cxt(&cxt);
+                match self.machine.infer_decl(b, &mut cxt_local, d) {
+                    Ok(v) => v,
+                    Err(_) => return 0,
+                }
+            };
+            cxt = unsafe { std::mem::transmute::<Cxt<'_>, Cxt<'static>>(nc) };
+            if nat_after.contains(&i) {
+                let nc = {
+                    let b: &Bump = &self.bump;
+                    self.machine.register_nat_builtins(b, &cxt)
+                };
+                cxt = unsafe { std::mem::transmute::<Cxt<'_>, Cxt<'static>>(nc) };
+            }
+            if let DeclOut::Def { name } = out {
+                last = cxt.decls.get(name).map(|e| e.val);
+            }
+            if file_i < file_ends.len() && file_ends[file_i] == i {
+                force_memo_clear();
+                if compact::compact_enabled() {
+                    let (nc, live) = self.compact_state(cxt, cap_hint);
+                    cxt = nc;
+                    self.machine.ns_method_cache = None;
+                    cap_hint = (live + live / 8 + (1 << 20)).max(8 << 20);
+                }
+                file_i += 1;
+            }
+        }
+        let Some(v) = last else {
+            return 0;
+        };
+        let b: &Bump = &self.bump;
+        let cxt_ref: &Cxt<'_> = unsafe { std::mem::transmute::<&Cxt<'static>, &Cxt<'_>>(&cxt) };
+        let q = self.machine.quote(b, cxt_ref, 0, v);
+        tm_size(q)
+    }
+
+
     /// [`Tycker::bench_check_nf_bounded`] 的**内容**变体：回末 def 值的 pretty
     /// 串而非节点数（参考版 `bench_check_nf_pretty_bounded` 的对位）。互检只报
     /// 尺寸时，`NF-DIVERGE basic=26307 fast=26357` 说不出差异在哪；本变体让
