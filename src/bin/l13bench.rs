@@ -161,6 +161,13 @@ struct Cli {
     #[arg(long, default_value = "none")]
     with_prelude: String,
 
+    /// **只用参考版**：跳过 `nf_parity` 的孪生趟、跳过 fast/fast_ss 计时，
+    /// 判定行标 `(ref-only)`。hdl prelude 装载的主要内存开销与后续 P2/P3
+    /// 改动都在参考版一侧，ramid 采集基线只需要参考版判定
+    /// （见 docs/l13-hdl-prelude-cost-2026-11-20.md §7）。
+    #[arg(long)]
+    ref_only: bool,
+
     /// `--with-prelude hdl` 配套：只取 HDL 文件列表的前 N 个（诊断用）。
     /// 用来扫描"文件成本随 prelude 规模如何变化"——渐变 ⇒ 规模/局部性效应，
     /// 断崖 ⇒ 某个具体 prelude 文件的交互（2026-09-23 adder_proof 归因）。
@@ -346,7 +353,12 @@ fn pretty_compare_worthy(decls: &[Decl], file_ends: &[usize]) -> bool {
     file_ends.is_empty() || decls.len() <= 512
 }
 
-fn nf_parity(decls: &[Decl], nat_after: &[usize], file_ends: &[usize]) -> (u64, u64, bool) {
+fn nf_parity(
+    decls: &[Decl],
+    nat_after: &[usize],
+    file_ends: &[usize],
+    ref_only: bool,
+) -> (u64, u64, bool) {
     let mem = std::env::var_os("L13BENCH_MEM").is_some();
     macro_rules! mark {
         ($name:expr) => {
@@ -362,8 +374,42 @@ fn nf_parity(decls: &[Decl], nat_after: &[usize], file_ends: &[usize]) -> (u64, 
         };
     }
     mark!("start");
-    let b = L13_namespace::bench_check_nf_bounded(decls, nat_after);
+    let b = if mem {
+        L13_namespace::bench_check_nf_bounded_with_hook(decls, nat_after, |i| {
+            if i == usize::MAX {
+                println!(
+                    "   [MEM] ref quote-start live_mb={:.1} peak_mb={:.1}",
+                    memprobe::live() as f64 / 1e6,
+                    memprobe::peak() as f64 / 1e6,
+                );
+                return;
+            }
+            let label = match &decls[i] {
+                Decl::Def { name, .. } => format!("def {}", name.data),
+                Decl::Enum { name, .. } => format!("enum {}", name.data),
+                Decl::TraitDecl { name, .. } => format!("trait {}", name.data),
+                Decl::Class { name, .. } => format!("class {}", name.data),
+                Decl::ImplDecl { inherent, .. } => {
+                    if *inherent { "impl(inherent)" } else { "impl(trait)" }.to_string()
+                }
+                Decl::Derive { traits, .. } => format!("derive[{}]", traits.len()),
+                Decl::Package { .. } => "package".to_string(),
+                Decl::Import { .. } => "import".to_string(),
+                Decl::Println(_) => "println".to_string(),
+            };
+            println!(
+                "   [MEM] ref decl={i} live_mb={:.1} peak_mb={:.1} {label}",
+                memprobe::live() as f64 / 1e6,
+                memprobe::peak() as f64 / 1e6,
+            );
+        })
+    } else {
+        L13_namespace::bench_check_nf_bounded(decls, nat_after)
+    };
     mark!("ref-pass");
+    if ref_only {
+        return (b, b, b != 0);
+    }
     let mut t = fast::Tycker::new();
     mark!("twin-new");
     let f = t.bench_check_nf_bounded_files(decls, nat_after, file_ends);
@@ -490,7 +536,8 @@ fn bench_one(
     want: &dyn Fn(&str) -> bool,
 ) {
     // 计时外：正确性互检
-    let (b_nf, f_nf, ok) = nf_parity(decls, nat_after, file_ends);
+    let ref_only = cli.ref_only;
+    let (b_nf, f_nf, ok) = nf_parity(decls, nat_after, file_ends, ref_only);
     if std::env::var_os("L13BENCH_MEM").is_some() {
         println!(
             "   [MEM] phase=parity done live_mb={:.1} peak_mb={:.1}",
@@ -502,7 +549,14 @@ fn bench_one(
     diagnose_fast(label, decls, nat_after);
     diagnose_basic(label, decls, nat_after);
     let verdict = if ok {
-        format!("nf={b_nf}")
+        if ref_only {
+            format!("nf={b_nf} (ref-only)")
+        } else {
+            format!("nf={b_nf}")
+        }
+    } else if ref_only {
+        // 孪生没跑，别报 BOTH-FAILED（那是"两版都失败"的口径）。
+        "REF-FAILED (参考版未跑完)".to_string()
     } else if b_nf == 0 && f_nf == 0 {
         // round-4 (R): 0 = 该版 elaboration 失败。两版都失败时打 DIVERGE 是
         // 标签假象——它们不是「范式不一致」，而是「都跑不出来」。校准样本
@@ -521,7 +575,7 @@ fn bench_one(
     // pretty 对比把判定说清楚（只在分歧时付这一次额外 elaboration 的钱）。
     // `L13BENCH_NF_DUMP=1` 可强制在尺寸一致时也打印。
     let force_dump = std::env::var_os("L13BENCH_NF_DUMP").is_some();
-    if force_dump || (!ok && b_nf != 0 && f_nf != 0) {
+    if !ref_only && (force_dump || (!ok && b_nf != 0 && f_nf != 0)) {
         let bp = L13_namespace::bench_check_nf_pretty_bounded(decls, nat_after);
         let mut t = fast::Tycker::new();
         let fp = t.bench_check_nf_pretty_bounded(decls, nat_after);
@@ -581,7 +635,11 @@ fn bench_one(
     let mut ts_basic: Vec<u128> = Vec::new();
     let mut ts_fast: Vec<u128> = Vec::new();
     let mut ts_ss: Vec<u128> = Vec::new();
-    let mut tycker_ss = if want("fast_ss") { Some(fast::Tycker::new()) } else { None };
+    let mut tycker_ss = if !ref_only && want("fast_ss") {
+        Some(fast::Tycker::new())
+    } else {
+        None
+    };
     if let Some(t) = tycker_ss.as_mut() {
         t.bench_check_nf_bounded_files(decls, nat_after, file_ends);
     }
@@ -591,7 +649,7 @@ fn bench_one(
             t.bench_check_nf_bounded_files(decls, nat_after, file_ends);
             ts_ss.push(s.elapsed().as_micros());
         }
-        if want("fast") {
+        if !ref_only && want("fast") {
             #[cfg(feature = "sampler")]
             if std::env::var_os("L13SAMPLE").is_some() {
                 sampler::enable();
@@ -616,10 +674,10 @@ fn bench_one(
     if want("basic") {
         rows.push(("basic", *ts_basic.iter().min().unwrap(), median(&mut ts_basic)));
     }
-    if want("fast") {
+    if !ref_only && want("fast") {
         rows.push(("fast", *ts_fast.iter().min().unwrap(), median(&mut ts_fast)));
     }
-    if want("fast_ss") {
+    if !ref_only && want("fast_ss") {
         rows.push(("fast_ss", *ts_ss.iter().min().unwrap(), median(&mut ts_ss)));
     }
     let fastest = rows.iter().map(|r| r.1).min().unwrap_or(0);

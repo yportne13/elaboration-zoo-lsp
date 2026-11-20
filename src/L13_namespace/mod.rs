@@ -5027,6 +5027,9 @@ pub(crate) fn bench_check_nf_bounded_with_hook(
         }
         hook(i);
     }
+    // 哨兵：循环结束、进入末值 quote（大模块值可能是热点，见
+    // docs/l13-hdl-prelude-cost-2026-11-20.md）。
+    hook(usize::MAX);
     match last.and_then(|n| cxt.decl.get(&n).map(|e| e.2.clone())) {
         Some(v) => {
             let q = infer.quote(&cxt.decl, Lvl(0), &v);
