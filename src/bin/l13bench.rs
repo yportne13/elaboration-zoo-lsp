@@ -103,6 +103,51 @@ mod memprobe {
 #[global_allocator]
 static ALLOC: memprobe::Counting<mimalloc::MiMalloc> = memprobe::Counting(MiMalloc);
 
+/// 函数级探针快照（`TYPORT_PRELUDE_PROF` 同款计数器，`L13BENCH_PROF=1` 时打）。
+/// 用于把一条 decl 的成本归到 force / quote / nf / unify 等具体入口。
+fn dump_func_prof(tag: &str) {
+    use std::sync::atomic::Ordering::Relaxed;
+    let fp = &L13_namespace::FUNC_PROF;
+    let row = |name: &str, c: &(std::sync::atomic::AtomicU64, std::sync::atomic::AtomicU64)| {
+        format!(
+            "{name}={}({:.1}ms)",
+            c.1.load(Relaxed),
+            c.0.load(Relaxed) as f64 / 1e6
+        )
+    };
+    println!(
+        "   [PROF] {tag} {}",
+        [
+            row("check", &fp.check),
+            row("infer_expr", &fp.infer_expr),
+            row("check_universe", &fp.check_universe),
+            row("eval", &fp.eval),
+            row("force", &fp.force),
+            row("v_app", &fp.v_app),
+            row("quote", &fp.quote),
+            row("nf", &fp.nf),
+            row("unify", &fp.unify),
+            row("solve_trait", &fp.solve_trait),
+        ]
+        .join(" ")
+    );
+    println!(
+        "   [PROF] {tag} force_hits={} misses={} tainted={} leaves={}",
+        fp.force_hits.1.load(Relaxed),
+        fp.force_misses.1.load(Relaxed),
+        fp.force_tainted.1.load(Relaxed),
+        fp.force_leaves.1.load(Relaxed),
+    );
+    let mut shapes: Vec<(usize, u64)> = fp
+        .force_shape
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (i, c.load(Relaxed)))
+        .collect();
+    shapes.sort_by_key(|(_, c)| std::cmp::Reverse(*c));
+    println!("   [PROF] {tag} force_shape_top={:?}", &shapes[..8.min(shapes.len())]);
+}
+
 #[path = "../list.rs"]
 mod list;
 
@@ -725,6 +770,9 @@ fn bench_one(
     if !ref_only && want("fast_ss") {
         rows.push(("fast_ss", *ts_ss.iter().min().unwrap(), median(&mut ts_ss)));
     }
+    if std::env::var_os("L13BENCH_PROF").is_some() {
+        dump_func_prof(label);
+    }
     let fastest = rows.iter().map(|r| r.1).min().unwrap_or(0);
     for (name, min, med) in &rows {
         let star = if *min == fastest { "*" } else { " " };
@@ -739,6 +787,11 @@ fn bench_one(
 }
 
 fn run(cli: Cli) {
+    if std::env::var_os("L13BENCH_PROF").is_some() {
+        L13_namespace::FUNC_PROF
+            .enabled
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
     if std::env::var_os("L13BENCH_MEM").is_some() {
         memprobe::TRACK.store(true, std::sync::atomic::Ordering::Relaxed);
         memprobe::reset_peak();
