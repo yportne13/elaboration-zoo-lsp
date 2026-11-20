@@ -11,7 +11,13 @@
 param(
   [string]$Out = "tools/l13_baseline_2026-11-17.tsv",
   [int]$Max = 8,
-  [ValidateSet("all", "core", "hdl")] [string]$Mode = "all"
+  [ValidateSet("all", "core", "hdl")] [string]$Mode = "all",
+  # 只用参考版判定（--ref-only）：P2/P3 改的是参考版与产品面，hdl 基线只需要参考版。
+  [switch]$RefOnly,
+  # 每例经 tools/bench_watchdog.ps1 跑：墙钟与 RSS 双上限（裸跑 l13bench 曾两次
+  # 把整机拖崩，见 docs/l13-hdl-prelude-cost-2026-11-20.md §1）。
+  [int]$TimeoutSec = 180,
+  [int]$CapMB = 4000
 )
 # l13bench 的判定行含中文（BOTH-FAILED 文案）；显式固定控制台解码为 UTF-8，
 # 否则 PS 5.1 按 ANSI 解码会写出乱码文案（2026-11-17 首批 alu 行即此残留）。
@@ -45,9 +51,15 @@ foreach ($f in $pending) {
   if ($n -ge $Max) { break }
   $rel = $f.FullName.Substring($root.Length + 1).Replace("\", "/")
   $mode = if ($rel -like "examples/hdl/*") { "hdl" } else { "core" }
-  $out = & $bench --file $f.FullName --with-prelude $mode --rounds 1 2>&1 | Out-String
-  $verdict = ($out -split "`n" | Where-Object { $_ -match "^-- |BOTH|DIFF" } | Select-Object -First 1)
-  if ($null -eq $verdict) { $verdict = "NO-VERDICT" } else { $verdict = $verdict.Trim() }
+  $argList = @('--file', $f.FullName, '--with-prelude', $mode, '--rounds', '1')
+  if ($RefOnly) { $argList += '--ref-only' }
+  $res = & (Join-Path $PSScriptRoot 'bench_watchdog.ps1') -Exe $bench -ArgList $argList -TimeoutSec $TimeoutSec -CapMB $CapMB
+  $verdict = $res.Verdict
+  if (-not $verdict) {
+    # 没吃到判定行（被墙钟/RSS 上限掐停）：把看门狗读数记成判定，保持可 diff。
+    $verdict = ('WATCHDOG killed=' + $res.Killed + ' peak=' + $res.PeakMB + 'MB elapsed=' + $res.ElapsedSec + 's')
+  }
+  $verdict = $verdict.Trim()
   $sha = [Security.Cryptography.SHA256]::Create()
   $hash = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($verdict))).Replace("-", "")
   # 用 LF + 无 BOM 追加：与表既有风格一致（.gitattributes eol=lf），且避开

@@ -13,3 +13,21 @@ examples/hdl/09-hierarchy.typort	hdl	-- 09-hierarchy.typort (1381 decls) nf=1	FF
 examples/hdl_ops.typort	core	-- hdl_ops.typort (232 decls) BOTH-FAILED (两版都未跑完，与范式一致无关)	90B01BB90FBC33AC7E69F8BB6C2A12B73AD8B3E332346D053B7CEDD0067F679F
 examples/theorem_proving.typort	core	-- theorem_proving.typort (248 decls) nf=42	A1FFF439AF6692FF00E1E1F6FE7CB909743AFEB2AEF8DC805F89D8A3A72108E7
 examples/typeclass_complex.typort	core	-- typeclass_complex.typort (279 decls) nf=48	C71F27D438E5EA292A2DB377468455384A117C9EF6C902FBED882FAE88DC46BD
+examples/hdl/10-bundle.typort	hdl	-- 10-bundle.typort (1406 decls) nf=302 (ref-only)	70FD32ABAF5342A4483A1F895C452673FA6DF2CC40F2FE19A315497F1A3F03B7
+examples/hdl/11-bundle-deep.typort	hdl	-- 11-bundle-deep.typort (1407 decls) nf=641 (ref-only)	7B31EE9083C71F6BF686B7DF961B4C708FB0542B7DD4E80B902DBBBCC810833B
+examples/hdl/12-memory.typort	hdl	-- 12-memory.typort (1383 decls) nf=219 (ref-only)	4002294808881522F44EAF3CA21D7AC983C2A508430C1EDBA3004CFAB7304793
+examples/hdl/13-adder-tree.typort	hdl	-- 13-adder-tree.typort (1388 decls) nf=70 (ref-only)	5FCC815DF9A75923B934C8F010E396FA1C9B4D7B4AB241531245958C90ED7217
+examples/hdl/14-arithmetic-extra.typort	hdl	-- 14-arithmetic-extra.typort (1380 decls) nf=219 (ref-only)	4C729ACDFE8F9527817BC5F85D2AC8214290B78C4A67EF36BDACBC56644F67F7
+examples/hdl/15-inout.typort	hdl	-- 15-inout.typort (1385 decls) nf=172 (ref-only)	634189815103B47F82263A1F303D13EB6266F3D522E9BE01EB45ED461F2182AA
+examples/hdl/16-counter.typort	hdl	-- 16-counter.typort (1380 decls) nf=219 (ref-only)	AEB7C06A6A431275A5BDAE8DF57A6DFDE89888F190CA9524B215075064889BC3
+examples/hdl/17-output-reg.typort	hdl	-- 17-output-reg.typort (1383 decls) nf=219 (ref-only)	0AB3F94581C721726F0BD9D45BF36E6E5BE72CF5E72150308545C78916153D15
+examples/hdl/18-utils.typort	hdl	-- 18-utils.typort (1392 decls) nf=219 (ref-only)	7DE29A7986054FD77BE47E6785D12F2BCC26680E82784D858FAD50A36AC3691A
+examples/hdl/19-stream.typort	hdl	-- 19-stream.typort (1397 decls) nf=219 (ref-only)	745824AF30DFE87CCDD510668991D99AD1E744CB2D1170464664951F726EB112
+examples/hdl/20-misc.typort	hdl	-- 20-misc.typort (1404 decls) nf=219 (ref-only)	B01BC7DC4A5654BAACEFB69D610AE3DBD282C3C2CD06CBFC9A1E39FF36EDC661
+examples/hdl/21-crossclock.typort	hdl	-- 21-crossclock.typort (1379 decls) nf=10 (ref-only)	76B801B108A7156D2C972B84F27EA414DCE1C0F2067011D98AABC750DED28EDD
+examples/hdl/22-widthadapter.typort	hdl	-- 22-widthadapter.typort (1377 decls) nf=219 (ref-only)	AB887FDB077E7A5BDD982BA8B939987AF6FBF4595D9AC3255A658C9620882895
+examples/hdl/26-assert.typort	hdl	-- 26-assert.typort (1380 decls) nf=219 (ref-only)	97F718DE5585B204069B0B9A14F07494BFC9E70FB2AF4A3791F6A5D58A97AD34
+examples/hdl/27-blackbox.typort	hdl	-- 27-blackbox.typort (1381 decls) nf=219 (ref-only)	C566C97AB426AE8DD45891BB3AD05F573DA7FF28B080A02BF0A4E38A93DB0DFD
+examples/hdl/23-verilog-compat.typort	hdl	-- 23-verilog-compat.typort (1387 decls) REF-FAILED (参考版未跑完)	DFA23A0127953945B39E622B93FC55E460098E3453CB100333189A6D6E0E8687
+examples/hdl/24-verilog-practice.typort	hdl	-- 24-verilog-practice.typort (1386 decls) REF-FAILED (参考版未跑完)	E94E10BD9B7B0DB6D37F6225B7B8307A00E4ADDB00B4CFB07D25517D3A4AEFDA
+examples/hdl/25-verilog-reset.typort	hdl	-- 25-verilog-reset.typort (1380 decls) REF-FAILED (参考版未跑完)	B4DD3CC818D8C93D26A645402D9D61C214F2C2F841CB522C546DFCCCDF1BDDEF

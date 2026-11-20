@@ -3937,6 +3937,11 @@ impl Infer {
         let _g = prof_enter(&FUNC_PROF.nf.0, &FUNC_PROF.nf.1);
         // quote → eval 会 force；一次 nf 充值 fuel 防循环解（L08 同款）
         self.refuel();
+        // 诊断：单次 nf 超过 50ms 时打印（`L13BENCH_PROF=1` 时启用）。
+        // 用途：bundle 模块的多实例场景里 nf 的**次数不变、总耗时暴涨 100×**，
+        // 需要知道是哪一次 nf、以及它要归一化的项有多大。
+        let slow_probe = std::env::var_os("L13BENCH_PROF").is_some();
+        let t0 = std::time::Instant::now();
         let l = Lvl(env.len() as u32);
         // R4 大数显示压缩：走显示口径 quote_dec（原生 Nat(k) → 十进制
         // LiteralIntro，不建 k 节点 succ 链）。调用方审计（2026-10）：
@@ -3945,7 +3950,18 @@ impl Infer {
         // bench_head 输出——均**即时 pretty_tm**，无结构化下游（unify/
         // match/occurs 走 quote 本体，不受影响）。若未来出现 nf 产出的
         // 结构化消费点，须改走 quote。
-        self.quote_dec(decl, l, &self.eval(decl, env, t))
+        let out = self.quote_dec(decl, l, &self.eval(decl, env, t));
+        if slow_probe {
+            let ms = t0.elapsed().as_millis();
+            if ms >= 50 {
+                println!(
+                    "   [NF-SLOW] {ms}ms size_in={} size_out={}",
+                    tm_size_ref(t),
+                    tm_size_ref(&out),
+                );
+            }
+        }
+        out
     }
 
     fn close_val(&self, cxt: &Cxt, t: &Rc<Val>) -> Closure {
@@ -5006,6 +5022,11 @@ pub(crate) fn bench_check_nf_bounded_with_hook(
     force_memo_clear();
     let mut infer = Infer::new();
     infer.lsp_collect = false; // bench entry: observations are never consumed
+    // bench: println 只做 LSP/CLI 展示消费——`t_pretty` 的 nf 是纯展示成本。
+    // hdl bundle 示例里 `println(moduleTreeVL(...))` 的展示 nf 会物化 7M 节点
+    // （`[NF-SLOW]` 实测），而 bench 只读末 def 的 nf。走 defer 口径与 LSP
+    // 一致，也把这笔展示成本从 bench 里拿掉（见 docs/l13-hdl-prelude-cost-2026-11-20.md）。
+    infer.defer_println = true;
     let mut cxt = Cxt::new(&infer);
     let mut last: Option<SmolStr> = None;
     for (i, d) in decls.iter().enumerate() {

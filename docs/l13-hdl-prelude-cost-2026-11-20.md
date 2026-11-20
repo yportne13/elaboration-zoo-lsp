@@ -108,86 +108,73 @@ decl 的中间 garbage 全部累积。
 pretty 对比（两次全量装载）在大语料上关闭（>512 decls 时退回尺寸口径），
 省下约 1 GB，且它本来的用途只是给 `NF-DIVERGE` 解释差异。
 
-## 6. 未解：bundle 模块树渲染在**参考版**上指数膨胀
+## 6. 根因：bench 把 println 的**展示 nf** 当成了求值（已修）
 
-用 `--ref-only` + 逐 decl 探针（`[MEM] ref decl=…`）把 10-bundle 拆到单条声明：
+### 6.1 现象
 
-- 炸弹是最后一条 `println(moduleTreeVL(bundleTop.create.tree))`；
-- 前置 decl 全部正常（prelude 1371 条 + `enum AxiLite` / `impl` / `AxiLite.create` /
-  `class bundleTop` / 第一条 `println`），跑到 decl=1377 时 live 只有 **684 MB**；
-- `bundleTop.create.tree` 本身**很便宜**（`println(bundleTop.create.tree)` 正常出
-  nf=533 / 763 MB），炸点只在 `moduleTreeVL`（Verilog 渲染）这一条路径上。
+`examples/hdl/10-bundle.typort` 在参考版上冲到 >12 GB 仍不出判定行；而
+`01-basics` 只要 763 MB。两者 prelude 相同、字段规模不同，早期用"字段数扫描"
+看到的是每字段约 2.3× 的增长，容易误判成模块树渲染或 `#[derive(Bundle)]` 的
+问题（本文早先版本就是这么写的，**已被证伪**）。
 
-字段数扫描（`#[derive(Bundle)]` + 1 条 `m := m` + `moduleTreeVL`）：
+### 6.2 决定性证据：一次 nf 物化 7M 节点
 
-| 字段数 | nf | 峰值 RSS | 墙钟 |
-|---:|---:|---:|---:|
-| 1 | 47 | 762 MB | 9.6 s |
-| 2 | 91 | 761 MB | 9.6 s |
-| 4 | 179 | **1782 MB** | 12.9 s |
-| 6（AxiLite） | — | **>3.6 GB（被抓停）** | — |
+在 `Infer::nf` 上加慢调用探针（`L13BENCH_PROF=1` 时 >50ms 打印），4 字段 bundle
+"两个实例 + 一条 `println(moduleTreeVL(...))`" 的用例给出：
 
-nf 随字段数**线性**（≈44/字段），内存却超线性（4 字段已 2.3× 于 2 字段）——
-说明爆炸在**检查期**而不是最终范式大小。
+```
+[MEM] ...
+[NF-SLOW] 2095ms size_in=9 size_out=7078582
+[NF-SLOW] 2089ms size_in=9 size_out=7078582
+```
 
-`--eval-budget 5000` 也没能在 3.3 GB 之前中止 ⇒ **不在 `eval` 主循环的
-checkpoint 上**（更可能在 force/nf/quote 或精化上下文复制路径）。
+**输入项只有 9 个节点，归一化结果 707 万节点**——而且全程 `nf` 的**次数不变**
+（3598 次），只有单次成本涨了 112×。也就是说：不是算法指数，是**某一次 nf 把
+一个巨大的值物化成了项**。
 
-### 6.1 触发器：`:=` 批量赋值（derive(Bundle) 生成的那条）
+### 6.3 根因
 
-同一份 4 字段 bundle，只差一句 `m := B4.create.asSlave`：
+参考版 `Decl::Println` 的处理（`elaboration.rs:1716`）：
 
-| 变体 | 峰值 RSS | 墙钟 | nf |
-|---|---:|---:|---:|
-| 不含 `:=` | 768 MB | 9.5 s | 179 |
-| 含 `:=` | **1783 MB** | 12.9 s | 179 |
+```rust
+if self.defer_println { /* 入队延迟 */ } else {
+    let t_pretty = super::pretty_tm(0, cxt.names(),
+        &self.nf(&cxt.decl, &cxt.env, &tm));   // ← 纯展示成本
+    DeclTm::Println(tm, t_pretty, span)
+}
+```
 
-⇒ 爆炸在 **`#[derive(Bundle)]` 生成的逐字段 `:=` 批量赋值**的求值上，
-不在模块树渲染、不在 derive 展开本身（`class top4` 单独求值很便宜）。
+`t_pretty` 是**纯展示**用的：把 println 的实参求值再 quote 成字符串。对
+`println(moduleTreeVL(m.tree))` 来说，这一步会把整个模块树渲染结果**物化成一个
+项**，而模块树随实例数 × 字段数增长——于是内存/时间爆炸，且与 `#[derive(Bundle)]`、
+`:=`、`asSlave` 都无关（那些变体只是**间接改变了实例数与 println 的规模**）。
 
-字段数扫描（含 1 条 `:=`，`Bool` 字段）：
+**产品不受影响**：`lib.rs:2597` 的 LSP 路径一直设 `defer_println = true`，展示
+nf 从不在求值主路径上。**只有 bench（走 CLI `run()` 口径）把它算进去了**。
 
-| 字段数 | 峰值 RSS | 墙钟 | nf |
-|---:|---:|---:|---:|
-| 1 | 762 MB | 9.6 s | 47 |
-| 2 | 761 MB | 9.6 s | 91 |
-| 3 | 834 MB | 10.0 s | 135 |
-| 4 | **1782 MB** | 12.9 s | 179 |
-| 5 | **>4000 MB（被抓停）** | — | — |
-| 6（AxiLite） | >3.6 GB（被抓停） | — | — |
+### 6.4 修复
 
-从 3 字段起每加一字段约 **2.3×** 内存 ⇒ 指数。
+`L13_namespace::bench_check_nf_bounded`（hook 变体）入口加：
 
-### 6.2 函数级归因（`L13BENCH_PROF=1`）
+```rust
+infer.defer_println = true;   // bench 只读末 def 的 nf，println 展示 nf 无用
+```
 
-4 字段，含/不含 `:=` 的差值（其余完全相同）：
+与 LSP 口径对齐，把纯展示成本从 bench 里拿掉。
 
-| 计数器 | 不含 `:=` | 含 `:=` | 差 |
-|---|---:|---:|---:|
-| check / infer_expr | 134846 / 383312 | 134890 / 383420 | ≈0 |
-| unify / solve_trait | 734196 / 79718 | 734230 / 79728 | ≈0 |
-| eval | 15.51M | 19.50M | +3.99M |
-| force | 13.72M | **26.94M** | **+13.2M** |
-| v_app | 9.55M | 16.97M | +7.4M |
-| force_leaves | 8.75M | 20.27M | +11.5M |
-| nf 次数 | 3598 | 3598 | 0 |
-| nf 独占耗时 | 16 ms | **1805 ms** | **112×** |
+### 6.5 修复实测
 
-**类型检查侧（check/infer_expr/unify/solve_trait）完全不变**——不是精化上下文、
-不是合一、不是类型级物化；是**求值/强制**侧，且 `force` 调用量翻倍、
-`nf` 每次调用的成本涨了 112 倍。
+| 用例 | 修复前 | 修复后 |
+|---|---:|---:|
+| `01-basics` | 762 MB / 9.6 s / nf=219 | **763 MB / 9.6 s / nf=219**（不变） |
+| 4 字段 bundle × 2 实例 | 1782 MB / 17 s | **760 MB / 9.6 s** |
+| `10-bundle`（AxiLite 6 字段） | **>12 GB，跑不完** | **767 MB / 9.6 s / nf=302** |
 
-> 这是**产品面可见**的问题：LSP 对一个 bundle 模块做「生成 Verilog / 悬浮渲染」
-> 会走同一条 prelude 求值路径并同样爆掉。后续单独开一单（P2 首个实质 bug）。
+`nf` 判定对常规用例**逐位不变**（01-basics 仍是 219），bundle 类从"跑不完"变成
+"9.6 秒出判定"。
 
-### 6.3 下一刀（留给下一轮）
-
-1. 看 `parser/derive.rs` 的 `build_bundle_body` 生成的
-   `let __b0 = this.f0 := that.f0; …` 在求值期是否对同一子项**重复求值**
-   （nbe 下 `let` 若不被共享，嵌套 let + 二次引用会指数化）；
-2. 看 `hdl-types.typort` 里逐类型 `:=`（UInt/Bits/Bool 版）与
-   `createSignalExpr` 的组合是否每次重建整张模块表达式表；
-3. 若确认是"每字段一次 force 整棵表达式表"，优先改增量追加 + let 共享。
+> 教训：这次是**第二次**"bench 口径 ≠ 产品口径"造成的假爆炸（第一次是孪生
+> bench 不压实，§4）。定位同类问题优先问一句"这个成本产品真的会付吗"。
 
 ## 7. 口径落地（2026-11-20）
 
@@ -204,3 +191,20 @@ hdl 基线采集**只需要参考版判定**（P2/P3 改的是参考版与产品
 
 下一步：bundle 指数膨胀按 §6 单独修（产品面 bug）；修好前 hdl 基线里的 bundle 类
 示例只能记 `MEM-CAP` 行，其余照常采。
+
+## 8. 解封：hdl 基线 32/32 全量采完（2026-11-20）
+
+修完之后 hdl 基线采集能力恢复：
+
+- 口径：`l13bench --ref-only`（参考版判定；P2/P3 改的是参考版与产品面），每例经
+  `tools/bench_watchdog.ps1`（-TimeoutSec 180 / -CapMB 4000），采集器
+  `tools/l13_rebase_baseline.ps1 -Mode hdl -RefOnly`；
+- 结果：27 个 hdl 例子全部采到，基线表 **32/32**；
+- 单例成本：**9.4–10.7 s / 761–775 MB**（此前 10-bundle 是 >12 GB 跑不完）；
+- 3 条 `REF-FAILED (参考版未跑完)`：23-verilog-compat / 24-verilog-practice /
+  25-verilog-reset。两版一起跑（不加 --ref-only）是 BOTH-FAILED——属**既有缺口**
+  （与 11-17 基线里 alu.typort 的 BOTH-FAILED 同族），不是本次改动引入，记为待查。
+
+> 采集器同时修了三处：判定行从看门狗返回的**对象**里取（PS 5.1 下多行字符串会被
+> 拍平成空格分隔的单串）；看门狗用 UTF-8 读子进程输出（判定行含中文，否则乱码写表）；
+> 脚本恢复单 BOM（重复 BOM 会让 param 块解析失败）。
