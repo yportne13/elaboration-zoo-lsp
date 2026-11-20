@@ -108,15 +108,46 @@ decl 的中间 garbage 全部累积。
 pretty 对比（两次全量装载）在大语料上关闭（>512 decls 时退回尺寸口径），
 省下约 1 GB，且它本来的用途只是给 `NF-DIVERGE` 解释差异。
 
-## 6. 未解
+## 6. 未解：bundle 模块树渲染在**参考版**上指数膨胀
 
-- `examples/hdl/10-bundle.typort`（`#[derive(Bundle)]` 展开）在修复后**仍然**
-  冲过 8 GB 被抓停 —— 炸弹在**用户文件段**（derive 展开后的 impl 检查），
-  不在 prelude 装载。下一步按参考版单独定位（见 §7）。
-- 参考版一趟 685 MB 对 bench 仍偏高，但已不是阻塞项。
+用 `--ref-only` + 逐 decl 探针（`[MEM] ref decl=…`）把 10-bundle 拆到单条声明：
 
-## 7. 口径决定（2026-11-20）
+- 炸弹是最后一条 `println(moduleTreeVL(bundleTop.create.tree))`；
+- 前置 decl 全部正常（prelude 1371 条 + `enum AxiLite` / `impl` / `AxiLite.create` /
+  `class bundleTop` / 第一条 `println`），跑到 decl=1377 时 live 只有 **684 MB**；
+- `bundleTop.create.tree` 本身**很便宜**（`println(bundleTop.create.tree)` 正常出
+  nf=533 / 763 MB），炸点只在 `moduleTreeVL`（Verilog 渲染）这一条路径上。
+
+字段数扫描（`#[derive(Bundle)]` + 1 条 `m := m` + `moduleTreeVL`）：
+
+| 字段数 | nf | 峰值 RSS | 墙钟 |
+|---:|---:|---:|---:|
+| 1 | 47 | 762 MB | 9.6 s |
+| 2 | 91 | 761 MB | 9.6 s |
+| 4 | 179 | **1782 MB** | 12.9 s |
+| 6（AxiLite） | — | **>3.6 GB（被抓停）** | — |
+
+nf 随字段数**线性**（≈44/字段），内存却超线性（4 字段已 2.3× 于 2 字段）——
+说明爆炸在**检查期**而不是最终范式大小。
+
+`--eval-budget 5000` 也没能在 3.3 GB 之前中止 ⇒ **不在 `eval` 主循环的
+checkpoint 上**（更可能在 force/nf/quote 或精化上下文复制路径）。
+
+> 这是**产品面可见**的问题：LSP 对一个 bundle 模块做「生成 Verilog / 悬浮渲染」
+> 会同样爆掉。后续单独开一单（P2 首个实质 bug），不在 bench 层绕过。
+
+## 7. 口径落地（2026-11-20）
 
 hdl 基线采集**只需要参考版判定**（P2/P3 改的是参考版与产品面；孪生对位另算）。
-下一步给 `l13bench` 加 `--ref-only`：跳过 `nf_parity` 的孪生趟与孪生计时，
-判定行标 `(ref-only)`，基线表同批换口径并重冻。
+`l13bench` 已加：
+
+- `--ref-only`：跳过 `nf_parity` 的孪生趟与 fast/fast_ss 计时，判定行标
+  `(ref-only)`；参考版单跑失败时报 `REF-FAILED`（不再误报 BOTH-FAILED）；
+- `--eval-budget <ms>`：把参考版趟包进 `eval_budget::scope(ms)` + `catch_unwind`，
+  超时记 `BUDGET aborted (…ms, ref-only)` 并跳过计时（**注意 §6：本 bug 不在
+  eval checkpoint 上，预算拦不住它**）。
+
+实测（`--ref-only` + 看门狗）：`01-basics` 9.6 s / 762 MB（含孪生时 1764 MB）。
+
+下一步：bundle 指数膨胀按 §6 单独修（产品面 bug）；修好前 hdl 基线里的 bundle 类
+示例只能记 `MEM-CAP` 行，其余照常采。

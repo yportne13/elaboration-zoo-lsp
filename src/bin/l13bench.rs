@@ -161,6 +161,13 @@ struct Cli {
     #[arg(long, default_value = "none")]
     with_prelude: String,
 
+    /// 求值预算（毫秒）：把参考版趟包进 `eval_budget::scope(ms)`，
+    /// 超时中止并记 `BUDGET` 判定（而不是 OOM 整机）。hdl bundle 类示例
+    /// 的 `moduleTreeVL` 求值会指数膨胀（见
+    /// docs/l13-hdl-prelude-cost-2026-11-20.md §6），采集基线时必须带预算。
+    #[arg(long)]
+    eval_budget: Option<u64>,
+
     /// **只用参考版**：跳过 `nf_parity` 的孪生趟、跳过 fast/fast_ss 计时，
     /// 判定行标 `(ref-only)`。hdl prelude 装载的主要内存开销与后续 P2/P3
     /// 改动都在参考版一侧，ramid 采集基线只需要参考版判定
@@ -353,11 +360,51 @@ fn pretty_compare_worthy(decls: &[Decl], file_ends: &[usize]) -> bool {
     file_ends.is_empty() || decls.len() <= 512
 }
 
+/// 预算中止的哨兵 nf（不可能是真实的节点数）。
+/// 预算中止的哨兵 nf（不可能是真实的节点数）。
+const BUDGET_NF: u64 = u64::MAX;
+
+/// 参考版趟：可选逐 decl 内存探针（`L13BENCH_MEM=1`）。
+fn run_ref_pass(decls: &[Decl], nat_after: &[usize], mem: bool) -> u64 {
+    if !mem {
+        return L13_namespace::bench_check_nf_bounded(decls, nat_after);
+    }
+    L13_namespace::bench_check_nf_bounded_with_hook(decls, nat_after, |i| {
+        if i == usize::MAX {
+            println!(
+                "   [MEM] ref quote-start live_mb={:.1} peak_mb={:.1}",
+                memprobe::live() as f64 / 1e6,
+                memprobe::peak() as f64 / 1e6,
+            );
+            return;
+        }
+        let label = match &decls[i] {
+            Decl::Def { name, .. } => format!("def {}", name.data),
+            Decl::Enum { name, .. } => format!("enum {}", name.data),
+            Decl::TraitDecl { name, .. } => format!("trait {}", name.data),
+            Decl::Class { name, .. } => format!("class {}", name.data),
+            Decl::ImplDecl { inherent, .. } => {
+                if *inherent { "impl(inherent)" } else { "impl(trait)" }.to_string()
+            }
+            Decl::Derive { traits, .. } => format!("derive[{}]", traits.len()),
+            Decl::Package { .. } => "package".to_string(),
+            Decl::Import { .. } => "import".to_string(),
+            Decl::Println(_) => "println".to_string(),
+        };
+        println!(
+            "   [MEM] ref decl={i} live_mb={:.1} peak_mb={:.1} {label}",
+            memprobe::live() as f64 / 1e6,
+            memprobe::peak() as f64 / 1e6,
+        );
+    })
+}
+
 fn nf_parity(
     decls: &[Decl],
     nat_after: &[usize],
     file_ends: &[usize],
     ref_only: bool,
+    eval_budget_ms: Option<u64>,
 ) -> (u64, u64, bool) {
     let mem = std::env::var_os("L13BENCH_MEM").is_some();
     macro_rules! mark {
@@ -374,41 +421,30 @@ fn nf_parity(
         };
     }
     mark!("start");
-    let b = if mem {
-        L13_namespace::bench_check_nf_bounded_with_hook(decls, nat_after, |i| {
-            if i == usize::MAX {
-                println!(
-                    "   [MEM] ref quote-start live_mb={:.1} peak_mb={:.1}",
-                    memprobe::live() as f64 / 1e6,
-                    memprobe::peak() as f64 / 1e6,
-                );
-                return;
-            }
-            let label = match &decls[i] {
-                Decl::Def { name, .. } => format!("def {}", name.data),
-                Decl::Enum { name, .. } => format!("enum {}", name.data),
-                Decl::TraitDecl { name, .. } => format!("trait {}", name.data),
-                Decl::Class { name, .. } => format!("class {}", name.data),
-                Decl::ImplDecl { inherent, .. } => {
-                    if *inherent { "impl(inherent)" } else { "impl(trait)" }.to_string()
+    let b = match eval_budget_ms {
+        None => run_ref_pass(decls, nat_after, mem),
+        Some(ms) => {
+            let _budget = L13_namespace::eval_budget::scope(ms);
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                run_ref_pass(decls, nat_after, mem)
+            })) {
+                Ok(n) => n,
+                Err(payload) => {
+                    if L13_namespace::eval_budget::is_timeout(payload.as_ref()) {
+                        BUDGET_NF
+                    } else {
+                        std::panic::resume_unwind(payload)
+                    }
                 }
-                Decl::Derive { traits, .. } => format!("derive[{}]", traits.len()),
-                Decl::Package { .. } => "package".to_string(),
-                Decl::Import { .. } => "import".to_string(),
-                Decl::Println(_) => "println".to_string(),
-            };
-            println!(
-                "   [MEM] ref decl={i} live_mb={:.1} peak_mb={:.1} {label}",
-                memprobe::live() as f64 / 1e6,
-                memprobe::peak() as f64 / 1e6,
-            );
-        })
-    } else {
-        L13_namespace::bench_check_nf_bounded(decls, nat_after)
+            }
+        }
     };
     mark!("ref-pass");
     if ref_only {
-        return (b, b, b != 0);
+        return (b, b, b != 0 && b != BUDGET_NF);
+    }
+    if b == BUDGET_NF {
+        return (b, b, false);
     }
     let mut t = fast::Tycker::new();
     mark!("twin-new");
@@ -437,6 +473,7 @@ fn nf_parity(
     }
     (b, f, b == f)
 }
+
 
 /// 诊断：逐 decl 喂孪生，报首个失败的 decl 序号与错误（twin 早退时定位用）。
 fn diagnose_fast(label: &str, decls: &[Decl], nat_after: &[usize]) {
@@ -537,7 +574,7 @@ fn bench_one(
 ) {
     // 计时外：正确性互检
     let ref_only = cli.ref_only;
-    let (b_nf, f_nf, ok) = nf_parity(decls, nat_after, file_ends, ref_only);
+    let (b_nf, f_nf, ok) = nf_parity(decls, nat_after, file_ends, ref_only, cli.eval_budget);
     if std::env::var_os("L13BENCH_MEM").is_some() {
         println!(
             "   [MEM] phase=parity done live_mb={:.1} peak_mb={:.1}",
@@ -548,7 +585,12 @@ fn bench_one(
     }
     diagnose_fast(label, decls, nat_after);
     diagnose_basic(label, decls, nat_after);
-    let verdict = if ok {
+    let verdict = if b_nf == BUDGET_NF {
+        format!(
+            "BUDGET aborted ({}ms, ref-only) —— 求值预算中止，非语义失败",
+            cli.eval_budget.unwrap_or(0)
+        )
+    } else if ok {
         if ref_only {
             format!("nf={b_nf} (ref-only)")
         } else {
@@ -567,6 +609,9 @@ fn bench_one(
         format!("NF-DIVERGE basic={b_nf} fast={f_nf}")
     };
     println!("-- {label} ({} decls) {verdict}", decls.len());
+    if b_nf == BUDGET_NF {
+        return;
+    }
     // **尺寸不同 ≠ 语义不同**：`nf` 是 `tm_size` 的节点数，而 `tm_size` 会计入
     // pretty **不打印**的槽位（`Sum` 的参数类型槽、`Match` 的模式内部、
     // `AppPruning` 的掩码长度）。2026-09-23 adder_proof 实测 `NF-DIVERGE
