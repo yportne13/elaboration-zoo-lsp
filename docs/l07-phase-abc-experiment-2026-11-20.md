@@ -134,3 +134,69 @@ python toolsl07optsummarize_ab.py --dir targetl07opt
 
 原始数据：`F:\projects\hermes\_ref\l07opt\ab\`（base/new 的 elab/nf/alloc/synth 日志）、
 `F:\projects\hermes\_ref\l07opt\gates_*.log`（门禁输出）。
+
+## 7. 第二轮：把 glued evaluation 做成真正的值变体（2026-11-20 晚）
+
+第一轮失败的关键是"没有独立的折叠头表示"，于是这轮直接加值变体：
+
+```rust
+Decl(SmolStr, Spine),                                  // 递归占位 / 中性全局引用
+Glued(SmolStr, Spine, Rc<Val>),                        // 折叠头 + 惰性展开体
+```
+
+`eval(Tm::Decl)` 返回 `Glued`（递归占位除外），`force` 在需要时才
+`v_app_sp` 展开体、继续 force 到 WHNF，环守卫用深度上限而不是名字栈
+（`succ (succ zero)` 这类合法嵌套会重入同名 Glued，按名字判环会误杀）。
+
+### 7.1 结果：语义仍然不成立
+
+门禁（`cargo test --release --lib -- L07_sum_type`）失败，最小复现：
+
+```text
+enum Bool { true  false }
+enum Nat  { zero  succ(x: Nat) }
+def is_zero(x: Nat): Bool = match x { case zero => true  case other => false }
+println (is_zero zero)          // 期望 Bool::true，实际 Bool::false
+```
+
+更直接的探针显示**匹配根本没被选中**，结果原样停在 match 上：
+
+```text
+println (f zero)   ->  match Nat::zero { case zero => true }      // 未归约
+println (f true)   ->  match Bool::true { case true => false; ... }  // 未归约
+```
+
+逐个排查并修掉的三层问题（每次修复后仍不通过，说明还有更深的表示耦合）：
+
+| 尝试 | 现象 | 修法 | 结果 |
+|---|---|---|---|
+| 展开烧 `unify_fuel` | fuel 只在 unify/nf 入口充值，elaboration 里的 force 大量在入口之外，很快耗尽 → 值被钉成折叠态 | 改深度安全阀，不烧 fuel | 仍失败 |
+| 同名环守卫 | `succ (succ zero)` 合法嵌套被误判成环 | 改深度上限（100k） | 仍失败 |
+| `v_app` 对 `Glued` 只拼 spine | 展开体是 λ 时不立即 β 归约，调用方拿到未归约值 | 展开体是 `Lam` 时立即 `v_app_sp` + β | 仍失败 |
+| `force`/`quote` 的 `Glued` 臂 | 兜底展开 | — | 仍失败 |
+
+### 7.2 为什么修不好（根因）
+
+- `Def` 注册时把值 `force` 到 WHNF 再存（`elaboration.rs`），所以 `Match` 体里的
+  捕获 env 是**注册时刻**的；折叠头把这份已求值的东西推迟应用，路径上任何一处"不经 force 的结构
+  检查"（match 编译、`v_applicable`、`is_canonical_head`、`simpl_decl` 的递归处理、
+  `struct_eq`、`prune_vflex` 的 Tm 重建……）都会看到与旧语义不同的形态。
+- smalltt 能做，是因为它**从求值器到转换器到双实现全是同一套 folded 语义**（`VUnfold` 是
+  一等值，`forceAll`/`forceMetas`/`force` 三档贯穿，`G` 成对值 + `ConvState`
+  配合）。本仓库有 47 处 `force` 调用、35 处 `Val` 结构匹配，且孪生版是**独立**的第二份实现
+  （parity 门禁要求两份逐字节一致）——单边改表示不可能通过。
+
+### 7.3 结论
+
+第二轮比第一轮更明确：**「加一个值变体」不是增量改动，而是把整套求值/转换/报价语义换掉**，
+并且必须与孪生版同步（否则 parity 直接红）。已全部回退，工作树干净，master 未动。
+
+若确实要做，正确形态是：
+1. 一次性引入 folded 值（含 decl 表存"头 + 惰性体"）、`force/forceAll/forceMetas` 三档、
+   `quote UnfoldAll/UnfoldMetas/UnfoldNone` 三档；
+2. 把 35 处 `Val` 结构匹配逐处改成显式 force（或用访问器封装），并补齐 `G` 成对值与
+   `ConvState`；
+3. ref 与 twin 同步（或先让 twin 做参照）、跑 100 条 parity + 218 条 blackbox + 27 档 realbench；
+4. 估 2–3 周，且收益集中在 pairTest 形态与 stlc 每-def 常数，转换族仍受"无有界近似"限制。
+
+在此之前，L07 参考版可做的仍然只是**不改变值表示**的局部优化。
