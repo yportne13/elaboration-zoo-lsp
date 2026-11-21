@@ -30,6 +30,26 @@ use super::parser::syntax::{Decl, Raw};
 /// `HoverEntry`（`L13_namespace/mod.rs:1459`）逐字段同型。
 pub type HoverEntry = (Span<()>, Span<()>, String);
 
+/// 观察面的**查询口径**（惰性采集）：`hover` 是光标偏移（只渲染命中它的悬停
+/// 条目），`inlay` 是可见区字节区间（只渲染插入点落在其中的 inlay——inlay 是
+/// 全文件通道，LSP 一次 inlay 请求也带可见区）。`None` = 该通道全量。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SurfaceQuery {
+    pub hover: Option<usize>,
+    pub inlay: Option<(u32, u32)>,
+}
+
+impl SurfaceQuery {
+    /// 只关心一个光标的悬停（inlay 全量）。
+    pub fn hover_only(offset: usize) -> Self {
+        Self { hover: Some(offset), inlay: None }
+    }
+    /// 光标 + 可见区（LSP 一次请求的常见形态）。
+    pub fn view(hover: usize, inlay_start: u32, inlay_end: u32) -> Self {
+        Self { hover: Some(hover), inlay: Some((inlay_start, inlay_end)) }
+    }
+}
+
 /// 一轮（一次 `run*` 调用）的观察面快照。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LspSurface {

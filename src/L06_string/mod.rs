@@ -219,6 +219,10 @@ pub struct Infer {
     /// 从采集路径上拿掉（telescope 类型负载上这就是 O(n²) ⇒ O(n) 的关键）。
     /// `None` = 全量采集（测试/全量诊断用）。
     pub(crate) hover_query: Option<usize>,
+    /// **inlay 可见区**（字节区间）：`Some` 时只渲染插入点落在区间内的 inlay。
+    /// inlay 是全文件通道，LSP 的 inlay 请求本身带可见区，故按区间过滤是
+    /// 语义无损的；telescope 类型负载上"每 decl 渲染一次"的线性成本在此消掉。
+    pub(crate) inlay_query: Option<(u32, u32)>,
 }
 
 impl Infer {
@@ -239,6 +243,7 @@ impl Infer {
             eval_ticks: std::cell::Cell::new(0),
             budget_on: false,
             hover_query: None,
+            inlay_query: None,
         }
     }
     /// Insert a builtin entry: head value `Val::Decl(name, [])` (prim fires
@@ -496,7 +501,8 @@ impl Infer {
 }
 
 pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
-    run_impl(input, path_id, false, None, None).map(|(out, _)| out)
+    run_impl(input, path_id, false, None, surface::SurfaceQuery::default())
+        .map(|(out, _)| out)
 }
 
 /// 带**观察面**的入口：与 [`run`] 同一驱动、同一输出，差别只是采集开着
@@ -514,11 +520,20 @@ pub fn run_with_surface_at(
     path_id: u32,
     offset: usize,
 ) -> Result<(String, surface::LspSurface), Error> {
-    run_impl(input, path_id, true, None, Some(offset))
+    run_impl(input, path_id, true, None, surface::SurfaceQuery::hover_only(offset))
+}
+
+/// 按**查询口径**采集（惰性 hover + inlay 可见区）：LSP 一次请求的真实成本。
+pub fn run_with_surface_query(
+    input: &str,
+    path_id: u32,
+    q: surface::SurfaceQuery,
+) -> Result<(String, surface::LspSurface), Error> {
+    run_impl(input, path_id, true, None, q)
 }
 
 pub fn run_with_surface(input: &str, path_id: u32) -> Result<(String, surface::LspSurface), Error> {
-    run_impl(input, path_id, true, None, None)
+    run_impl(input, path_id, true, None, surface::SurfaceQuery::default())
 }
 
 /// [`run_with_surface`] + 求值预算（毫秒）。超时按 [`Error`] 返回（错误串
@@ -528,7 +543,7 @@ pub fn run_with_surface_budget(
     path_id: u32,
     ms: u64,
 ) -> Result<(String, surface::LspSurface), Error> {
-    run_impl(input, path_id, true, Some(ms), None)
+    run_impl(input, path_id, true, Some(ms), surface::SurfaceQuery::default())
 }
 
 /// 带观察面的**继续型**检查驱动：遇错记 [`surface::LspSurface::failed_decls`]
@@ -583,11 +598,11 @@ fn run_impl(
     path_id: u32,
     collect: bool,
     budget_ms: Option<u64>,
-    hover_query: Option<usize>,
+    q: surface::SurfaceQuery,
 ) -> Result<(String, surface::LspSurface), Error> {
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _scope = budget_ms.map(eval_budget::scope);
-        run_body(input, path_id, collect, hover_query)
+        run_body(input, path_id, collect, q)
     }));
     match outcome {
         Ok(r) => r,
@@ -603,12 +618,13 @@ fn run_body(
     input: &str,
     path_id: u32,
     collect: bool,
-    hover_query: Option<usize>,
+    q: surface::SurfaceQuery,
 ) -> Result<(String, surface::LspSurface), Error> {
     let ast = parser::parser(&preprocess(input), path_id).map_err(Error)?;
     let mut infer = Infer::new();
     infer.lsp_collect = collect;
-    infer.hover_query = hover_query;
+    infer.hover_query = q.hover;
+    infer.inlay_query = q.inlay;
     // 预算是否已由入口 scope 挂上（tick 只在有预算时打点）
     infer.budget_on = eval_budget::enabled();
     // 采集关闭时 [`Cxt::new`] 不做任何渲染；`add_builtin` 的 decl 条目

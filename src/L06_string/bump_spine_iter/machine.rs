@@ -107,6 +107,9 @@ pub(crate) struct Machine {
     /// 含 off"的悬停条目，其余 push 点只做 O(1) span 判定。inlay / println /
     /// check issue 仍全量。见 `docs/l06-lsp-port-2026-11-20.md` §3.4。
     pub(crate) hover_query: Option<u32>,
+    /// **inlay 可见区**（字节区间）：`Some` 时只渲染插入点落在区间内的 inlay
+    /// （与参考版 `Infer::inlay_query` 同义）。
+    pub(crate) inlay_query: Option<(u32, u32)>,
 }
 
 /// 整表/整栈清空不归还缓冲：容量到过该量级时在清空点主动归还，否则峰值
@@ -224,6 +227,7 @@ impl Machine {
             binder_spans: Vec::new(),
         decl_base_lvl: 0,
         hover_query: None,
+        inlay_query: None,
         }
     }
 
@@ -393,6 +397,12 @@ impl Machine {
 
     /// 局部 hover 的 def_span：按绑定层级回查 `binder_spans`（线性扫，只在
     /// 采集开启时调用）。
+    /// inlay 条目是否要渲染：采集总闸 + 可选的可见区过滤。
+    #[inline]
+    pub(super) fn inlay_wanted(&self, offset: u32) -> bool {
+        self.observe && self.inlay_query.map_or(true, |(lo, hi)| offset >= lo && offset <= hi)
+    }
+
     /// 悬停条目是否要渲染：采集总闸 + 可选的"按偏移采集"过滤。
     #[inline]
     pub(super) fn hover_wanted(&self, span: crate::parser_lib::Span<()>) -> bool {
@@ -1278,21 +1288,25 @@ impl Machine {
                 // 观察面：def 无显式返回类型 → inlay 推断返回类型（参考版
                 // 同点位；锚点 = 最后参数结束 +1，无参则名结束）。
                 if self.observe && matches!(ret_type, Raw::Hole) {
-                    let (ret_val, ret_lvl, peeled) = self.peel_pi_collect(bump, cxt, vtyp);
-                    let q = self.quote(bump, ret_lvl, ret_val);
-                    if !no_metas(q, &self.metas) {
-                        let mut names = types_names_list(cxt.types);
-                        // peeled 是外→内剥集序；List 头 = 最内层 ⇒ 逆序 prepend
-                        for pn in peeled.iter().rev() {
-                            names = names.prepend(pn.to_string());
+                    // 先算锚点再判可见区：视口外的 inlay 不该付渲染成本
+                    // （telescope 类型上"每 decl 渲染一次"是 O(n²)）。
+                    let pos = params
+                        .last()
+                        .map(|p| raw_span(&p.1).end_offset + 1)
+                        .unwrap_or_else(|| name.to_span().end_offset);
+                    if self.inlay_wanted(pos) {
+                        let (ret_val, ret_lvl, peeled) = self.peel_pi_collect(bump, cxt, vtyp);
+                        let q = self.quote(bump, ret_lvl, ret_val);
+                        if !no_metas(q, &self.metas) {
+                            let mut names = types_names_list(cxt.types);
+                            // peeled 是外→内剥集序；List 头 = 最内层 ⇒ 逆序 prepend
+                            for pn in peeled.iter().rev() {
+                                names = names.prepend(pn.to_string());
+                            }
+                            let label =
+                                surface::inlay_label(&pretty::pretty_tm(0, names, &export(q)));
+                            self.inlay_hint_table.push((pos, label));
                         }
-                        let label =
-                            surface::inlay_label(&pretty::pretty_tm(0, names, &export(q)));
-                        let pos = params
-                            .last()
-                            .map(|p| raw_span(&p.1).end_offset + 1)
-                            .unwrap_or_else(|| name.to_span().end_offset);
-                        self.inlay_hint_table.push((pos, label));
                     }
                 }
                 // display=false：顶层 def 的名字不进 pretty 名字表（参考版 Def

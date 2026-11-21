@@ -279,20 +279,23 @@ impl Infer {
                     // 观察面：def 无显式返回类型 → inlay 推断返回类型（参考版
                     // 用 `peel_pi` 的等价物 + quote 在返回层级；锚点取最后参数
                     // 结束 +1，无参取 def 名尾。L13 elaboration.rs:1674-1688）。
-                    if self.lsp_collect && matches!(ret_type, Raw::Hole) {
-                        let (ret_val, ret_lvl, peeled) = self.peel_pi_collect(cxt, &vtyp);
-                        let q = self.quote(ret_lvl, &ret_val);
-                        if !self.tm_has_unsolved_meta(&q) {
-                            let mut names = cxt.names();
-                            for pn in peeled.iter().rev() {
-                                names = names.prepend(pn.clone());
+                    if matches!(ret_type, Raw::Hole) {
+                        // 先算锚点再判可见区：视口外的 inlay 不该付渲染成本。
+                        let pos = params
+                            .last()
+                            .map(|p| raw_span(&p.1).end_offset + 1)
+                            .unwrap_or(name.to_span().end_offset);
+                        if self.inlay_wanted(pos) {
+                            let (ret_val, ret_lvl, peeled) = self.peel_pi_collect(cxt, &vtyp);
+                            let q = self.quote(ret_lvl, &ret_val);
+                            if !self.tm_has_unsolved_meta(&q) {
+                                let mut names = cxt.names();
+                                for pn in peeled.iter().rev() {
+                                    names = names.prepend(pn.clone());
+                                }
+                                let label = inlay_label(&pretty::pretty_tm(0, names, &q));
+                                self.push_inlay_label(pos, label);
                             }
-                            let label = inlay_label(&pretty::pretty_tm(0, names, &q));
-                            let pos = params
-                                .last()
-                                .map(|p| raw_span(&p.1).end_offset + 1)
-                                .unwrap_or(name.to_span().end_offset);
-                            self.push_inlay_label(pos, label);
                         }
                     }
                     cxt.clone()

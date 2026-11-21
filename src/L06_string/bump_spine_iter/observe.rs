@@ -67,7 +67,7 @@ impl Machine {
     /// 观察面 inlay：含未解 meta 的类型跳过，标签超 80 字符截断（L13
     /// `push_inlay_hint` 同口径）。
     pub(super) fn push_inlay_hint<'a>(&mut self, bump: &'a Bump, cxt: Cxt<'a>, offset: u32, v: V) {
-        if !self.observe {
+        if !self.inlay_wanted(offset) {
             return;
         }
         let q = self.quote(bump, cxt.lvl, v);

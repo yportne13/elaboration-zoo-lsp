@@ -278,11 +278,14 @@ L06 原先没有任何 LSP 相关机制。本轮审计了 L13 为 LSP 交互路�
 - **采集开启**：曾有一处真 **O(n²)** —— 孪生把每个顶层 `def`（与 builtin）压进了
   显示名字表 `cxt.types`，而每个采集 push 点都要重建整张表（`types_names_list`）
   ⇒ 表长 O(D) × push 数 O(D)。k=11（D=4096）实测 implicit 887 ms、strchain
-  944 ms、global 1018 ms、prune 9372 ms（172~322×）。修复一：`define_name
-  (display=false)` 让顶层 def/builtin 不进显示名字表（照旧写 `env`/`name_map`，
-  参考版本来就不进 `locals`）⇒ 降到 implicit 20.1 / strchain 12.6 / global 21.5 /
-  prune 102.9 ms（1.3~6.3×）。修复二（**惰性 hover**，`run_with_surface_at`）：
-  push 点只做 `span.contains(offset)` 判定，只有光标处命中才渲染 ⇒ 悬停采集降到
-  噪声级（church/solve/implicit 1.00×、strchain/global 1.10×、prune 1.28×；
-  prune 的剩余是 inlay 全文件渲染）。bench：`--observe --observe-at` 出
-  `fast_obs_at` / `basic_obs_at` 行（与关闭采集同一调用口径）。真实小文件亚毫秒。
+  944 ms、global 1018 ms、prune 9372 ms（172~322×）。
+  - 修复一 `define_name(display=false)`：顶层 def/builtin 不进显示名字表（照旧
+    写 `env`/`name_map`，参考版本来就不进 `locals`）⇒ 1.3~5.2×；
+  - 修复二 **查询口径**（`surface::SurfaceQuery` / `run_with_surface_query`）：
+    hover 只渲染光标处命中（`span.contains(offset)`），inlay 只渲染可见区内的
+    锚点（视口外不付渲染成本）⇒ 采集成本 0.91~1.22×（噪声级）：church/solve/
+    implicit/global/prune 0.91~1.00×、strchain 1.15~1.22×（在其自身波动带内）。
+    `run_with_surface_at(off)` 是 `hover_only(off)` 的快捷。
+  - bench：`--observe --observe-at [--observe-view]` 出 `fast_obs_at` /
+    `fast_obs_view` 行（与关闭采集同一 check/nf 入口）。全文件 inlay 的宿主会回到
+    `fast_obs_at` 那一档（prune 1.28×，inlay 数量 × 类型规模的固有成本）。

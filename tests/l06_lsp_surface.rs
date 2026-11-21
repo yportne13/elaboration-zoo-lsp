@@ -481,3 +481,37 @@ fn hover_query_miss_leaves_file_wide_channels_intact() {
     assert_eq!(b.1.println_spans.len(), 1, "println 通道不随偏移过滤");
     assert_eq!(b.1.println_spans[0].1, "x");
 }
+
+// ── 14. inlay 可见区（查询口径的 inlay 半边）────────────────────────────
+
+#[test]
+fn inlay_view_only_renders_hints_in_range() {
+    // 两个无返回类型注解的 def ⇒ 每个各两条 inlay：洞型注解的 `: U`（锚点退到
+    // 0，顶层无 binder）与 def 名尾的 `: String`（推断返回类型）。
+    let src = "def a = \"x\"\ndef b = \"y\"\n";
+    let full = L06_string::run_with_surface(src, 0).expect("全量");
+    let full_str: Vec<&(u32, String)> =
+        full.1.inlay_hint.iter().filter(|(_, l)| l == ": String").collect();
+    assert_eq!(full_str.len(), 2, "全量应有两条名尾 inlay: {:?}", full.1.inlay_hint);
+
+    // 视口只覆盖 def a 的名尾（0..=5）：def b 的名尾 inlay 必须不渲染。
+    // （洞型注解的 `: U` 锚点被降级到 0，落在视口内，属既有降级规则。）
+    let a_end = (at(src, "a", 0) + 1) as u32;
+    let q = L06_string::surface::SurfaceQuery::view(a_end as usize, 0, a_end);
+    let b = L06_string::run_with_surface_query(src, 0, q).expect("参考版 view");
+    let mut t = fast::Tycker::new();
+    let f = t.run_input_with_surface_query(src, 0, q).expect("孪生 view");
+    assert_eq!(b.0, f.0);
+    assert_surface_parity(&b.1, &f.1);
+    let view_str: Vec<&(u32, String)> =
+        b.1.inlay_hint.iter().filter(|(_, l)| l == ": String").collect();
+    assert_eq!(
+        view_str.len(),
+        1,
+        "视口只含第一个 def 的名尾 inlay: {:?}",
+        b.1.inlay_hint
+    );
+    assert!(view_str[0].0 <= a_end);
+    // 视口外的 inlay 不渲染，但 println 通道等全量通道不受影响
+    assert_eq!(b.1.println_spans.len(), full.1.println_spans.len());
+}

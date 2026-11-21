@@ -29,6 +29,16 @@ impl Infer {
         self.lsp_collect && self.hover_query.map_or(true, |q| span.contains(q))
     }
 
+    /// inlay 条目是否要采：采集总闸 + 可选的可见区过滤（见
+    /// [`Infer::inlay_query`]）。
+    #[inline]
+    pub(crate) fn inlay_wanted(&self, offset: u32) -> bool {
+        self.lsp_collect
+            && self
+                .inlay_query
+                .map_or(true, |(lo, hi)| offset >= lo && offset <= hi)
+    }
+
     /// 观察表清空（轮入口用；`Infer` 每轮新建，本方法服务多轮复用的调用方）。
     pub(crate) fn clear_observation_tables(&mut self) {
         self.hover_table.clear();
@@ -129,7 +139,7 @@ impl Infer {
     /// 观察面 inlay：含未解 meta 的类型跳过，标签超 80 字符截断（L13
     /// `push_inlay_hint` 同口径）。
     pub(crate) fn push_inlay_hint(&mut self, cxt: &Cxt, offset: u32, v: &Rc<Val>) {
-        if !self.lsp_collect {
+        if !self.inlay_wanted(offset) {
             return;
         }
         let q = self.quote(cxt.lvl, v);
@@ -143,7 +153,7 @@ impl Infer {
     /// 已渲染的 inlay（def 返回类型：peel/quote/names 由调用方按各自引擎
     /// 的上下文拼好，标签格式统一在 [`super::surface::inlay_label`]）。
     pub(crate) fn push_inlay_label(&mut self, offset: u32, label: String) {
-        if !self.lsp_collect {
+        if !self.inlay_wanted(offset) {
             return;
         }
         self.inlay_hint_table.push((offset, label));

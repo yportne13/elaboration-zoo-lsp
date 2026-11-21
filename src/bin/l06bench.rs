@@ -53,6 +53,7 @@ use clap::Parser;
 use mimalloc::MiMalloc;
 use std::time::Instant;
 
+use L06_string::surface as k_surface;
 use L06_string::bump_spine_iter::{
     church_src, globals_src, implicit_src, prune_src, solve_src, strchain_src, Tycker,
 };
@@ -94,6 +95,11 @@ struct Cli {
     /// 成本。行名 `fast_obs_at` / `basic_obs_at`。
     #[arg(long)]
     observe_at: bool,
+
+    /// `--observe-at` 时再跑**查询口径全形态**（hover 取光标 + inlay 取可见区
+    /// 光标 ±2048 字节）。行名 `fast_obs_view`；`basic_obs` 行同时给出 `basic_obs_view`。
+    #[arg(long)]
+    observe_view: bool,
 }
 
 fn median(ts: &mut [u128]) -> u128 {
@@ -242,22 +248,25 @@ fn run(cli: Cli) {
                     // 同一个稳态 Tycker），只把采集闸打开。
                     if nf_workload {
                         assert_eq!(
-                            tycker.bench_check_nf_observe(&raw, None, true),
+                            tycker.bench_check_nf_observe(&raw, Default::default(), true),
                             expect_nodes,
                             "fast_obs nf 节点数不符"
                         );
                     } else {
                         assert!(
-                            tycker.bench_check_observe(&raw, None, true),
+                            tycker.bench_check_observe(&raw, Default::default(), true),
                             "fast_obs 未通过 k={k} ({workload})"
                         );
                     }
                     for _ in 0..cli.rounds {
                         let start = Instant::now();
                         if nf_workload {
-                            assert_eq!(tycker.bench_check_nf_observe(&raw, None, true), expect_nodes);
+                            assert_eq!(
+                                tycker.bench_check_nf_observe(&raw, Default::default(), true),
+                                expect_nodes
+                            );
                         } else {
-                            assert!(tycker.bench_check_observe(&raw, None, true));
+                            assert!(tycker.bench_check_observe(&raw, Default::default(), true));
                         }
                         ts.push(start.elapsed().as_micros());
                     }
@@ -283,34 +292,74 @@ fn run(cli: Cli) {
                 let mut tycker = Tycker::new();
                 // 与 fast_obs 同一工作量（同一个 check/check+nf 入口），只是
                 // 采集改成"按偏移"（只渲染光标处那一条 = 惰性 hover）。
+                let q_at = k_surface::SurfaceQuery::hover_only(off as usize);
                 if nf_workload {
-                    assert_eq!(tycker.bench_check_nf_observe(&raw, Some(off), true), expect_nodes);
+                    assert_eq!(tycker.bench_check_nf_observe(&raw, q_at, true), expect_nodes);
                 } else {
-                    assert!(tycker.bench_check_observe(&raw, Some(off), true));
+                    assert!(tycker.bench_check_observe(&raw, q_at, true));
                 }
                 for _ in 0..cli.rounds {
                     let start = Instant::now();
                     if nf_workload {
-                        assert_eq!(tycker.bench_check_nf_observe(&raw, Some(off), true), expect_nodes);
+                        assert_eq!(tycker.bench_check_nf_observe(&raw, q_at, true), expect_nodes);
                     } else {
-                        assert!(tycker.bench_check_observe(&raw, Some(off), true));
+                        assert!(tycker.bench_check_observe(&raw, q_at, true));
                     }
                     ts.push(start.elapsed().as_micros());
                 }
                 rows.push(("fast_obs_at", *ts.iter().min().unwrap(), median(&mut ts)));
+
+                // 惰性档的完整形态（LSP 一次请求）：hover 取光标、inlay 取可见区
+                // （光标 ±2048 字节 ≈ 几十行）。
+                if cli.observe_view {
+                    let lo = off.saturating_sub(2048);
+                    let hi = off.saturating_add(2048);
+                    let q_view = k_surface::SurfaceQuery::view(off as usize, lo, hi);
+                    let mut ts = Vec::new();
+                    let mut tycker = Tycker::new();
+                    if nf_workload {
+                        assert_eq!(tycker.bench_check_nf_observe(&raw, q_view, true), expect_nodes);
+                    } else {
+                        assert!(tycker.bench_check_observe(&raw, q_view, true));
+                    }
+                    for _ in 0..cli.rounds {
+                        let start = Instant::now();
+                        if nf_workload {
+                            assert_eq!(tycker.bench_check_nf_observe(&raw, q_view, true), expect_nodes);
+                        } else {
+                            assert!(tycker.bench_check_observe(&raw, q_view, true));
+                        }
+                        ts.push(start.elapsed().as_micros());
+                    }
+                    rows.push(("fast_obs_view", *ts.iter().min().unwrap(), median(&mut ts)));
+                }
 
                 if cli.observe_impls.split(',').any(|x| x.trim() == "basic_obs") {
                     let mut ts = Vec::new();
                     for _ in 0..cli.rounds {
                         let start = Instant::now();
                         let r = L06_string::run_with_surface_at(&src, 0, off as usize);
+                        let _ = &r;
                         ts.push(start.elapsed().as_micros());
                         assert!(r.is_ok(), "basic_obs_at 未通过 k={k} ({workload})");
                     }
                     rows.push(("basic_obs_at", *ts.iter().min().unwrap(), median(&mut ts)));
+
+                    if cli.observe_view {
+                        let lo = off.saturating_sub(2048);
+                        let hi = off.saturating_add(2048);
+                        let q_view = k_surface::SurfaceQuery::view(off as usize, lo, hi);
+                        let mut ts = Vec::new();
+                        for _ in 0..cli.rounds {
+                            let start = Instant::now();
+                            let r = L06_string::run_with_surface_query(&src, 0, q_view);
+                            ts.push(start.elapsed().as_micros());
+                            assert!(r.is_ok(), "basic_obs_view 未通过 k={k} ({workload})");
+                        }
+                        rows.push(("basic_obs_view", *ts.iter().min().unwrap(), median(&mut ts)));
+                    }
                 }
             }
-
             // quote 记忆化口径（有 quote 的负载才出赛）
             if want("fast_memo") && nf_workload {
                 let mut ts = Vec::new();
