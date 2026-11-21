@@ -412,8 +412,9 @@ fn demo_src_surface_parity() {
     let _guard = L06_string::FILE_IO_LOCK.lock().unwrap();
     let (b, f) = both(L06_string::DEMO_SRC, 0);
     // 全量语料（217 条 hover）：逐条相等，除**恰好 1 条**撇号差异（`x` vs
-    // `x'`，两版局部名字表快照差一个 binder；alpha-等价，见 helper 注释与
-    // 移植文档 §3.4 的偏差登记）。这条豁免数是回归钉：再出现第二条即失败。
+    // `x'`）。根因是"登记期缓存串 vs 使用处实时渲染"的局部名字表快照差
+    // （参考版在使用处实时渲染，孪生复用登记期串；alpha-等价，L13 记作
+    // "残余 fresh 后缀显示差异"）。豁免数是回归钉：再出现第二条即失败。
     assert_surface_parity_impl(&b.1, &f.1, 1);
     // Ok 输出与关闭采集的 `run` 逐字节一致
     let plain = L06_string::run(L06_string::DEMO_SRC, 0).expect("run");

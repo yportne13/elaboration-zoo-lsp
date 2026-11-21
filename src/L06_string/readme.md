@@ -275,8 +275,12 @@ L06 原先没有任何 LSP 相关机制。本轮审计了 L13 为 LSP 交互路�
 - **采集关闭**：无可见回退。中位差 ≤1%；最坏格 +3~5%（church / strchain /
   global 这类 eval 密集链）来自求值预算的 tick——消融掉 tick 的对照构建回到
   基线 1% 内（church 0.801 vs 0.798 ms、strchain 21.31 vs 21.35 ms）。
-- **采集开启**：push 期渲染是 O(类型打印规模) ⇒ 在 4096 层的合成链上是
-  **O(n²)**：implicit 3.9→887 ms（224×）、strchain 2.9→944 ms（322×）、
-  prune 49→9372 ms（191×）、global 5.9→1018 ms（172×）；k=9→k=11 采集耗时
-  增长 15~19×（规模 4×）。真实小文件（DEMO_SRC，45 条 decl）为亚毫秒级。
-  要给 LSP 用需按 L13 的 `typ_pretty_final` + 键缓存思路加渲染缓存/惰性渲染。
+- **采集开启**：曾有一处真 **O(n²)** —— 孪生把每个顶层 `def`（与 builtin）压进了
+  显示名字表 `cxt.types`，而每个采集 push 点都要重建整张表（`types_names_list`）
+  ⇒ 表长 O(D) × push 数 O(D)。k=11（D=4096）实测 implicit 887 ms、strchain
+  944 ms、global 1018 ms、prune 9372 ms（172~322×），k=9→11 涨 15~19×。
+  修复：`define_name(display=false)` 让顶层 def/builtin 不进显示名字表（照旧写
+  `env`/`name_map`，参考版本来就不进 `locals`）⇒ 同口径降到 implicit 20.1 ms、
+  strchain 12.6 ms、global 21.5 ms、prune 102.9 ms（1.3~6.3×，与参考版同量级）。
+  剩余是线性的"每 push 一次 quote+pretty"，可再按惰性 hover / 按 decl 键缓存
+  渲染串 / 名字表增量维护收敛（移植文档 §3.4）。真实小文件（DEMO_SRC）亚毫秒。

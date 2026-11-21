@@ -317,6 +317,12 @@ impl Machine {
 
     /// Extend Cxt with a definition（pruning 记 `None`、telescope 记 Define
     /// 槽）。
+    /// `display`：是否把该名字压进 `cxt.types`（**只**喂 pretty 的名字表）。
+    /// 顶层 `def` 与 builtin 必须传 `false`——参考版 `Cxt::new`/`add_builtin`
+    /// 与 Def 臂都只登记 decl 表、不进 `locals`，故它们的名字不在 pretty 名字
+    /// 表里。传 `true` 会让 `types_names_list` 随 decl 数线性增长，而它每个
+    /// push 点都要构造一次 ⇒ 采集开启时 O(n²)（strchain k=11 采集 3.6ms →
+    /// 939ms 的根因，见移植文档 §3.4 修订）。
     #[allow(clippy::too_many_arguments)]
     fn define_name<'a>(
         &mut self,
@@ -328,6 +334,7 @@ impl Machine {
         val: V,
         ty: V,
         src_span: crate::parser_lib::Span<()>,
+        display: bool,
     ) -> Cxt<'a> {
         debug_assert_eq!(self.name_trail.len(), cxt.mark as usize);
         let key = SmolStr::new(x);
@@ -339,12 +346,16 @@ impl Machine {
         let env = env_ext_defs(bump, &mut self.defs, cxt.env, val);
         Cxt {
             env,
-            types: Some(bump.alloc(TCons {
-                name: bump.alloc_str(x),
-                ty,
-                source: true,
-                next: cxt.types,
-            })),
+            types: if display {
+                Some(bump.alloc(TCons {
+                    name: bump.alloc_str(x),
+                    ty,
+                    source: true,
+                    next: cxt.types,
+                }))
+            } else {
+                cxt.types
+            },
             locals: Some(LCons::alloc(bump, bump.alloc_str(x), a_t, Some(t_t), cxt.locals)),
             pruning: Some(bump.alloc(PrCons::new(None, cxt.pruning))),
             binds: cxt.binds, // define 槽不产生 Π 层
@@ -843,7 +854,7 @@ impl Machine {
                     self.push_inlay_hint(bump, cxt, x.to_span().end_offset, va);
                 }
             }
-            let cxt2 = self.define_name(bump, cxt, &x.data, a_tm, t_tm, vt, va, x.to_span());
+            let cxt2 = self.define_name(bump, cxt, &x.data, a_tm, t_tm, vt, va, x.to_span(), true);
             let u_tm = self.check(bump, cxt2, u, a)?;
             self.unwind_names(mark);
             Ok(bump.alloc(Tm::Let(name, a_tm, t_tm, u_tm)))
@@ -1139,7 +1150,7 @@ impl Machine {
                         self.push_inlay_hint(bump, cxt, x.to_span().end_offset, va);
                     }
                 }
-                let cxt2 = self.define_name(bump, cxt, &x.data, a_tm, t_tm, vt, va, x.to_span());
+                let cxt2 = self.define_name(bump, cxt, &x.data, a_tm, t_tm, vt, va, x.to_span(), true);
                 let (u_tm, uty) = self.infer(bump, cxt2, u)?;
                 self.unwind_names(mark);
                 Ok((bump.alloc(Tm::Let(name, a_tm, t_tm, u_tm)), uty))
@@ -1267,7 +1278,10 @@ impl Machine {
                         self.inlay_hint_table.push((pos, label));
                     }
                 }
-                let cxt2 = self.define_name(bump, cxt, &name.data, typ_tm, t_tm, vt, vtyp, name.to_span());
+                // display=false：顶层 def 的名字不进 pretty 名字表（参考版 Def
+                // 臂只登记 decl 表）。否则 names 表随 decl 数线性增长，而它在每个
+                // 采集 push 点都要重建一次 ⇒ 采集开启 O(n²)（移植文档 §3.4）。
+                let cxt2 = self.define_name(bump, cxt, &name.data, typ_tm, t_tm, vt, vtyp, name.to_span(), false);
                 Ok((
                     DeclOut::Def {
                         name: bump.alloc_str(&name.data),
@@ -1484,6 +1498,7 @@ impl Machine {
             v_lit_ty(),
             v_u(),
             empty_span(()),
+            false,
         );
         // builtin 组（名, 类型项, prim）——与参考版 Cxt::new 同序
         let lit_ty = bump.alloc(Tm::LiteralType);
@@ -1598,7 +1613,7 @@ impl Machine {
                 },
             );
             let name_tm: &'a Tm<'a> = bump.alloc(Tm::Decl(bump.alloc_str(name)));
-            cxt = self.define_name(bump, cxt, name, ty, name_tm, head, va, empty_span(()));
+            cxt = self.define_name(bump, cxt, name, ty, name_tm, head, va, empty_span(()), false);
         }
         cxt
     }
