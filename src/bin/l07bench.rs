@@ -76,6 +76,11 @@ struct Cli {
     /// force/eval/quote/v_app/unify/unify_sp）。见 L07 mod.rs `prof` 模块。
     #[arg(long)]
     prof: bool,
+
+    /// 参考版观察面采集口径（`basic_obs` 全量 / `basic_obs_at` 按光标 /
+    /// `basic_obs_view` 光标 + inlay 可见区）。孪生没有观察面，故只出参考版行。
+    #[arg(long)]
+    observe: bool,
 }
 
 
@@ -262,6 +267,36 @@ fn run(cli: Cli) {
                 rows.push(("basic", *ts.iter().min().unwrap(), median(&mut ts)));
             }
 
+            // 观察面采集口径（`--observe`）：与 basic 同一 elaborate 工作量，只是把
+            // 采集闸打开；三档（全量 / 按光标 / 光标+可见区）给出采集开销与惰性收益。
+            if cli.observe {
+                let off = src.len() / 2;
+                for (name, q) in [
+                    ("basic_obs", L07_sum_type::surface::SurfaceQuery::default()),
+                    (
+                        "basic_obs_at",
+                        L07_sum_type::surface::SurfaceQuery::hover_only(off),
+                    ),
+                    (
+                        "basic_obs_view",
+                        L07_sum_type::surface::SurfaceQuery::view(
+                            off,
+                            (off.saturating_sub(2048)) as u32,
+                            (off + 2048) as u32,
+                        ),
+                    ),
+                ] {
+                    let mut ts = Vec::new();
+                    for _ in 0..cli.rounds {
+                        let start = Instant::now();
+                        // 与 basic 同一入口（elaborate + 末值 nf），只把采集闸打开
+                        let n = L07_sum_type::bench_check_nf_observe(&raw, q);
+                        ts.push(start.elapsed().as_micros());
+                        assert!(n > 0, "{name} 未通过 k={k} ({workload})");
+                    }
+                    rows.push((name, *ts.iter().min().unwrap(), median(&mut ts)));
+                }
+            }
             let fastest = rows.iter().map(|r| r.1).min().unwrap();
             print!("k={k:<3} n={n:<8}");
             for (name, min, med) in &rows {

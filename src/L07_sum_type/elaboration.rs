@@ -133,7 +133,19 @@ impl Infer {
                 ))
             }
             // 洞
-            (Raw::Hole, a) => Ok(self.fresh_meta(decl, cxt, a)),
+            (Raw::Hole, a) => {
+                // 观察面：期望类型已知（无未解 meta）时补一条 inlay；洞没有源码
+                // span，锚点退到当前最内层 binder 尾（顶层 def 体 ⇒ 0）。
+                if self.lsp_collect {
+                    let pos = if cxt.lvl.0 > 0 {
+                        self.local_binder_span(cxt, cxt.lvl - 1).end_offset
+                    } else {
+                        0
+                    };
+                    self.push_inlay_hint(cxt, pos, a.clone());
+                }
+                Ok(self.fresh_meta(decl, cxt, a))
+            }
             // match：编译 + 逐分支检查
             (Raw::Match(expr, clauses), expected) => {
                 let (tm, typ) = self.infer_expr(cxt, *expr)?;
@@ -555,14 +567,45 @@ impl Infer {
                 // b66f5e4（L08 评审修复）回合：L07 同码潜伏。
                 if let Raw::Var(n) = &*x {
                     if !cxt.has_src(&n.data) {
+                        // 观察面：限定投影 `E.c` 的补全候选 = 该枚举的构造子名
+                        // （receiver span = 枚举名 token）。
+                        if self.lsp_collect {
+                            let enum_val = cxt.decl_get(&n.data).map(|e| e.val.clone());
+                            if let Some(v) = enum_val {
+                                if let Val::Sum(_, _, cases) = self.force(decl, v) {
+                                    for c in cases.iter() {
+                                        self.completion_table.push((n.to_span(), c.data.clone()));
+                                    }
+                                }
+                            }
+                        }
                         let key = format!("{}.{}", n.data, f.data);
                         if let Some(e) = cxt.decl_get(&key) {
                             return Ok((Tm::Decl(SmolStr::new(key)), e.ty.clone()));
                         }
                     }
                 }
+                let recv_span = surface::raw_span(&x);
                 let (tm, ty) = self.infer_expr(cxt, *x)?;
-                match self.force(decl, ty) {
+                let ty_forced = self.force(decl, ty);
+                // 观察面：投影的补全候选 = 接收者类型上的字段名（Sum 的索引参数 /
+                // 构造子值的字段）；receiver span 取表达式折叠出的源码区间。
+                if self.lsp_collect {
+                    match &ty_forced {
+                        Val::Sum(_, params, _) => {
+                            for (n, ..) in params.iter() {
+                                self.completion_table.push((recv_span, n.data.clone()));
+                            }
+                        }
+                        Val::SumCase { datas, .. } => {
+                            for (n, _, _) in datas.iter() {
+                                self.completion_table.push((recv_span, n.data.clone()));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                match ty_forced {
                     // 接收者类型是 Sum：字段=索引参数，类型取参数的**类型槽**
                     Val::Sum(sname, params, _) => params
                         .iter()

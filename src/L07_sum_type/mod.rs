@@ -2441,7 +2441,27 @@ fn tm_size_ref(t: &Tm) -> u64 {
 /// 登记的值，空层级引读并数节点（深 Box 树的递归析构会爆栈，基准里
 /// `mem::forget`——L03/L04/L05/L06 同款处理）。
 pub(crate) fn bench_check_nf(decls: &[parser::syntax::Decl]) -> u64 {
+    bench_check_nf_impl(decls, false, surface::SurfaceQuery::default())
+}
+
+/// 基准口径 + 观察面采集（与 [`bench_check_nf`] 同一工作量，只是打开采集闸；
+/// `q` 走查询口径：hover 按光标、inlay 按可见区）。
+pub(crate) fn bench_check_nf_observe(
+    decls: &[parser::syntax::Decl],
+    q: surface::SurfaceQuery,
+) -> u64 {
+    bench_check_nf_impl(decls, true, q)
+}
+
+fn bench_check_nf_impl(
+    decls: &[parser::syntax::Decl],
+    collect: bool,
+    q: surface::SurfaceQuery,
+) -> u64 {
     let mut infer = Infer::new();
+    infer.lsp_collect = collect;
+    infer.hover_query = q.hover;
+    infer.inlay_query = q.inlay;
     let mut cxt = Cxt::new(&infer);
     let mut last: Option<String> = None;
     for d in decls {

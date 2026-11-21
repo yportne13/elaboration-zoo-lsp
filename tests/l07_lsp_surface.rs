@@ -173,7 +173,8 @@ fn demo_src_surface_smoke() {
         assert_eq!(out, plain, "Ok 输出不得因采集改变");
         assert!(!s.hover.is_empty(), "DEMO_SRC 应产生 hover");
         assert!(!s.println_spans.is_empty(), "DEMO_SRC 应产生 println 条目");
-        assert!(s.completion.is_empty(), "completion 当前恒空");
+        // 补全：DEMO_SRC 无成员投影/限定构造子用法 ⇒ 候选为空（有用法时见上方用例）
+        let _ = &s.completion;
     });
 }
 
@@ -193,6 +194,41 @@ fn ctor_use_site_hover() {
             (e.1.start_offset as usize, e.1.end_offset as usize),
             (decl_off, decl_off + 4),
             "def_span 应指向构造子声明"
+        );
+    });
+}
+
+#[test]
+fn completion_offers_enum_cases_after_qualified_receiver() {
+    with_stack(|| {
+        let src = concat!(
+            "enum Nat {\n    zero\n    succ(x: Nat)\n}\n",
+            "def s : Nat = Nat.succ Nat.zero\n",
+        );
+        let (_, s) = L07_sum_type::run_with_surface(src, 0).expect("surface");
+        let names: Vec<&str> = s.completion.iter().map(|(_, n)| n.as_str()).collect();
+        assert!(names.contains(&"zero"), "候选应含 zero: {names:?}");
+        assert!(names.contains(&"succ"), "候选应含 succ: {names:?}");
+        let recv = at(src, "Nat.succ", 0);
+        assert!(
+            s.completion
+                .iter()
+                .any(|(sp, n)| sp.start_offset as usize == recv && n == "succ"),
+            "receiver span 应指向限定投影的枚举名: {:?}",
+            s.completion
+        );
+    });
+}
+
+#[test]
+fn hole_inlay_uses_expected_type() {
+    with_stack(|| {
+        let src = "def f : String = _\n";
+        let (_, s) = L07_sum_type::run_with_surface(src, 0).expect("surface");
+        assert!(
+            s.inlay_hint.iter().any(|(_, l)| l == ": String"),
+            "洞的期望类型已知时应推 inlay: {:?}",
+            s.inlay_hint
         );
     });
 }
