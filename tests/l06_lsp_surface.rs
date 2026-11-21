@@ -94,7 +94,15 @@ fn assert_surface_parity_impl(b: &LspSurface, f: &LspSurface, prime_allow: usize
     if b.hover == f.hover {
         return;
     }
-    assert_eq!(b.hover.len(), f.hover.len(), "hover 条目数不一致");
+    assert_eq!(
+        b.hover.len(),
+        f.hover.len(),
+        "hover 条目数不一致: 参考版 {} / 孪生 {}\n  参考版 {:?}\n  孪生   {:?}",
+        b.hover.len(),
+        f.hover.len(),
+        b.hover,
+        f.hover
+    );
     let mut hard: Vec<usize> = Vec::new();
     let mut prime_only: Vec<usize> = Vec::new();
     for (i, (x, y)) in b.hover.iter().zip(f.hover.iter()).enumerate() {
@@ -424,4 +432,52 @@ fn demo_src_surface_parity() {
     assert!(!b.1.println_spans.is_empty(), "DEMO_SRC 应产生 println 条目");
     // 已知降级：completion 恒空（L06 无成员访问）
     assert!(b.1.completion.is_empty(), "L06 无成员访问 ⇒ completion 恒空");
+}
+
+// ── 13. 按偏移采集（惰性 hover）：只在光标处渲染 ───────────────────────
+
+#[test]
+fn hover_query_renders_only_the_entry_at_the_offset() {
+    let src = "def foo : String = \"x\"\ndef bar : String = foo\n";
+    let use_off = at(src, "foo", 1);
+
+    let b = L06_string::run_with_surface_at(src, 0, use_off).expect("参考版 _at");
+    let mut t = fast::Tycker::new();
+    let f = t
+        .run_input_with_surface_at(src, 0, use_off)
+        .expect("孪生 _at");
+    assert_eq!(b.0, f.0, "Ok 输出与全量采集一致");
+    assert_surface_parity(&b.1, &f.1);
+    assert_eq!(b.1.hover.len(), 1, "按偏移采集只应命中一条: {:?}", b.1.hover);
+    assert_eq!(b.1.hover_text_at(0, use_off), Some("String"));
+
+    // 与全量采集的**同一条**逐字节一致（同一渲染管线、同一站点上下文）
+    let full = L06_string::run_with_surface(src, 0).expect("参考版 full");
+    let want = full.1.hover_entry_at(0, use_off).expect("全量里应有该条");
+    assert_eq!(&b.1.hover[0], want, "按偏移采集的条目应与全量逐字节相同");
+
+    // 命中 def 名（定义处）：同样只一条，且渲染的是登记串
+    let def_off = at(src, "foo", 0);
+    let bd = L06_string::run_with_surface_at(src, 0, def_off).expect("参考版 _at def");
+    let mut td = fast::Tycker::new();
+    let fd = td.run_input_with_surface_at(src, 0, def_off).expect("孪生 _at def");
+    assert_surface_parity(&bd.1, &fd.1);
+    assert_eq!(bd.1.hover.len(), 1);
+    assert_eq!(bd.1.hover_text_at(0, def_off), Some("String"));
+}
+
+#[test]
+fn hover_query_miss_leaves_file_wide_channels_intact() {
+    let src = "def a : String = \"x\"\nprintln a\n";
+    // 落在 \"println\" 之后、不在任何使用处 span 内的偏移：hover 空，但
+    // println 通道（全文件消费）仍在。
+    let miss = at(src, "println", 0) + 7;
+    let b = L06_string::run_with_surface_at(src, 0, miss).expect("参考版 _at");
+    let mut t = fast::Tycker::new();
+    let f = t.run_input_with_surface_at(src, 0, miss).expect("孪生 _at");
+    assert_eq!(b.0, f.0);
+    assert_surface_parity(&b.1, &f.1);
+    assert!(b.1.hover.is_empty(), "未命中时不应渲染悬停: {:?}", b.1.hover);
+    assert_eq!(b.1.println_spans.len(), 1, "println 通道不随偏移过滤");
+    assert_eq!(b.1.println_spans[0].1, "x");
 }

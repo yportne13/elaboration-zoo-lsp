@@ -88,6 +88,12 @@ struct Cli {
     /// `--observe` 时额外跑的开采实现（逗号分隔：basic_obs,fast_obs）
     #[arg(long, default_value = "fast_obs")]
     observe_impls: String,
+
+    /// `--observe` 时再跑**按偏移采集**（惰性 hover）口径：同一负载、同一实现，
+    /// 只渲染"使用处 span 含源码中点"的那条悬停——LSP 一次 hover 请求的真实
+    /// 成本。行名 `fast_obs_at` / `basic_obs_at`。
+    #[arg(long)]
+    observe_at: bool,
 }
 
 fn median(ts: &mut [u128]) -> u128 {
@@ -232,18 +238,26 @@ fn run(cli: Cli) {
                     // （早先误用 run_decls_with_surface（不含 nf）不可比。）
                     let mut ts = Vec::new();
                     let mut tycker = Tycker::new();
-                    tycker.set_observe(true);
+                    // **与 fast_ss 同一调用口径**（同一个 check/check+nf 入口、
+                    // 同一个稳态 Tycker），只把采集闸打开。
                     if nf_workload {
-                        assert_eq!(tycker.bench_check_nf(&raw), expect_nodes, "fast_obs nf 节点数不符");
+                        assert_eq!(
+                            tycker.bench_check_nf_observe(&raw, None, true),
+                            expect_nodes,
+                            "fast_obs nf 节点数不符"
+                        );
                     } else {
-                        assert!(tycker.bench_check(&raw), "fast_obs 未通过 k={k} ({workload})");
+                        assert!(
+                            tycker.bench_check_observe(&raw, None, true),
+                            "fast_obs 未通过 k={k} ({workload})"
+                        );
                     }
                     for _ in 0..cli.rounds {
                         let start = Instant::now();
                         if nf_workload {
-                            assert_eq!(tycker.bench_check_nf(&raw), expect_nodes);
+                            assert_eq!(tycker.bench_check_nf_observe(&raw, None, true), expect_nodes);
                         } else {
-                            assert!(tycker.bench_check(&raw));
+                            assert!(tycker.bench_check_observe(&raw, None, true));
                         }
                         ts.push(start.elapsed().as_micros());
                     }
@@ -258,6 +272,42 @@ fn run(cli: Cli) {
                         assert!(r.is_ok(), "basic_obs 未通过 k={k} ({workload})");
                     }
                     rows.push(("basic_obs", *ts.iter().min().unwrap(), median(&mut ts)));
+                }
+            }
+
+            // 按偏移采集（惰性 hover）：同一负载/实现，只渲染光标处那一条。
+            // 与 fast_obs 的差 = "每 push 渲染"与"只渲染命中处"的成本差。
+            if cli.observe && cli.observe_at {
+                let off = (src.len() / 2) as u32;
+                let mut ts = Vec::new();
+                let mut tycker = Tycker::new();
+                // 与 fast_obs 同一工作量（同一个 check/check+nf 入口），只是
+                // 采集改成"按偏移"（只渲染光标处那一条 = 惰性 hover）。
+                if nf_workload {
+                    assert_eq!(tycker.bench_check_nf_observe(&raw, Some(off), true), expect_nodes);
+                } else {
+                    assert!(tycker.bench_check_observe(&raw, Some(off), true));
+                }
+                for _ in 0..cli.rounds {
+                    let start = Instant::now();
+                    if nf_workload {
+                        assert_eq!(tycker.bench_check_nf_observe(&raw, Some(off), true), expect_nodes);
+                    } else {
+                        assert!(tycker.bench_check_observe(&raw, Some(off), true));
+                    }
+                    ts.push(start.elapsed().as_micros());
+                }
+                rows.push(("fast_obs_at", *ts.iter().min().unwrap(), median(&mut ts)));
+
+                if cli.observe_impls.split(',').any(|x| x.trim() == "basic_obs") {
+                    let mut ts = Vec::new();
+                    for _ in 0..cli.rounds {
+                        let start = Instant::now();
+                        let r = L06_string::run_with_surface_at(&src, 0, off as usize);
+                        ts.push(start.elapsed().as_micros());
+                        assert!(r.is_ok(), "basic_obs_at 未通过 k={k} ({workload})");
+                    }
+                    rows.push(("basic_obs_at", *ts.iter().min().unwrap(), median(&mut ts)));
                 }
             }
 

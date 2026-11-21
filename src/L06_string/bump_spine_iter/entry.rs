@@ -171,7 +171,7 @@ impl Tycker {
     /// println 的 nf 经 pretty 输出（quote 走记忆化口径——与无记忆化
     /// 输出逐字节一致，L03-L05 已证）。
     pub(crate) fn run_decls(&mut self, ast: &[Decl]) -> Result<String, Error> {
-        self.run_decls_impl(ast, false).map(|(out, _)| out)
+        self.run_decls_impl(ast, false, None).map(|(out, _)| out)
     }
 
     /// 带**观察面**的驱动：与 [`Tycker::run_decls`] 同输出，返回 owned 快照
@@ -180,7 +180,17 @@ impl Tycker {
         &mut self,
         ast: &[Decl],
     ) -> Result<(String, crate::L06_string::surface::LspSurface), Error> {
-        self.run_decls_impl(ast, true)
+        self.run_decls_impl(ast, true, None)
+    }
+
+    /// 带观察面 + **按偏移采集**（惰性 hover，参考版 `run_with_surface_at`
+    /// 的孪生版）：只有使用处 span 含 `offset` 的悬停条目被渲染。
+    pub(crate) fn run_decls_with_surface_at(
+        &mut self,
+        ast: &[Decl],
+        offset: u32,
+    ) -> Result<(String, crate::L06_string::surface::LspSurface), Error> {
+        self.run_decls_impl(ast, true, Some(offset))
     }
 
     /// 采集开关（默认关；与 L13 的默认相反，见移植文档 §1.1）。
@@ -211,10 +221,12 @@ impl Tycker {
         &mut self,
         ast: &[Decl],
         collect: bool,
+        hover_query: Option<u32>,
     ) -> Result<(String, crate::L06_string::surface::LspSurface), Error> {
         self.bump.reset();
         self.machine.clear_round();
         self.machine.observe = collect;
+        self.machine.hover_query = hover_query;
         let bump = &self.bump;
         let mut cxt = self.machine.prime_round(bump);
         let mut ret = String::new();
@@ -288,7 +300,7 @@ impl Tycker {
 
     /// 参考版 `run` 的全流程等价物（含 preprocess/parse）。
     pub(crate) fn run_input(&mut self, input: &str, path_id: u32) -> Result<String, Error> {
-        self.run_input_impl(input, path_id, false, None)
+        self.run_input_impl(input, path_id, false, None, None)
             .map(|(out, _)| out)
     }
 
@@ -298,7 +310,18 @@ impl Tycker {
         input: &str,
         path_id: u32,
     ) -> Result<(String, crate::L06_string::surface::LspSurface), Error> {
-        self.run_input_impl(input, path_id, true, None)
+        self.run_input_impl(input, path_id, true, None, None)
+    }
+
+    /// [`Tycker::run_input_with_surface`] + **按偏移采集**（惰性 hover）：只在
+    /// 光标处渲染悬停条目（参考版 `L06_string::run_with_surface_at` 的孪生版）。
+    pub(crate) fn run_input_with_surface_at(
+        &mut self,
+        input: &str,
+        path_id: u32,
+        offset: usize,
+    ) -> Result<(String, crate::L06_string::surface::LspSurface), Error> {
+        self.run_input_impl(input, path_id, true, None, Some(offset as u32))
     }
 
     /// [`Tycker::run_input_with_surface`] + 求值预算（毫秒）。超时落成 `Err`。
@@ -308,7 +331,7 @@ impl Tycker {
         path_id: u32,
         ms: u64,
     ) -> Result<(String, crate::L06_string::surface::LspSurface), Error> {
-        self.run_input_impl(input, path_id, true, Some(ms))
+        self.run_input_impl(input, path_id, true, Some(ms), None)
     }
 
     fn run_input_impl(
@@ -317,11 +340,12 @@ impl Tycker {
         path_id: u32,
         collect: bool,
         budget_ms: Option<u64>,
+        hover_query: Option<u32>,
     ) -> Result<(String, crate::L06_string::surface::LspSurface), Error> {
         let ast = super::parser::parser(&super::preprocess(input), path_id).map_err(Error)?;
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _scope = budget_ms.map(crate::L06_string::eval_budget::scope);
-            self.run_decls_impl(&ast, collect)
+            self.run_decls_impl(&ast, collect, hover_query)
         }));
         match outcome {
             Ok(r) => r,
@@ -333,10 +357,24 @@ impl Tycker {
         }
     }
 
-    /// 基准口径（bench 用）：仅 elaborate。
+    /// 基准口径（bench 用）：仅 elaborate。采集显式关（`clear_round` 不碰
+    /// `observe`，跨轮复用同一 `Tycker` 时必须自己置位）。
     pub(crate) fn bench_check(&mut self, ast: &[Decl]) -> bool {
+        self.bench_check_observe(ast, None, false)
+    }
+
+    /// 基准口径 + 观察面采集（`query=None` 全量；`Some(off)` 按偏移采集）。
+    /// 与 [`Tycker::bench_check`] 同一工作量，差值即采集开销。
+    pub(crate) fn bench_check_observe(
+        &mut self,
+        ast: &[Decl],
+        query: Option<u32>,
+        observe: bool,
+    ) -> bool {
         self.bump.reset();
         self.machine.clear_round();
+        self.machine.observe = observe;
+        self.machine.hover_query = query;
         let bump = &self.bump;
         self.machine.elab_all(bump, ast).0.is_ok()
     }
@@ -352,9 +390,32 @@ impl Tycker {
         self.bench_nf_impl(ast, true)
     }
 
+    /// 基准口径 + 观察面采集（`query=None` 全量；`Some(off)` 按偏移采集 =
+    /// 惰性 hover）。与 [`Tycker::bench_check_nf`] 同一工作量（含 nf）。
+    pub(crate) fn bench_check_nf_observe(
+        &mut self,
+        ast: &[Decl],
+        query: Option<u32>,
+        observe: bool,
+    ) -> u64 {
+        self.bench_nf_impl_with(ast, false, observe, query)
+    }
+
     fn bench_nf_impl(&mut self, ast: &[Decl], use_memo: bool) -> u64 {
+        self.bench_nf_impl_with(ast, use_memo, false, None)
+    }
+
+    fn bench_nf_impl_with(
+        &mut self,
+        ast: &[Decl],
+        use_memo: bool,
+        observe: bool,
+        query: Option<u32>,
+    ) -> u64 {
         self.bump.reset();
         self.machine.clear_round();
+        self.machine.observe = observe;
+        self.machine.hover_query = query;
         let bump = &self.bump;
         let (r, last) = self.machine.elab_all(bump, ast);
         if r.is_err() {

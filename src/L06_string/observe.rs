@@ -21,6 +21,14 @@ use super::parser::syntax::Decl;
 use super::*;
 
 impl Infer {
+    /// 悬停条目是否要采：采集总闸 + 可选的"按偏移采集"过滤（见
+    /// [`Infer::hover_query`]）。**只影响 hover**——inlay / println /
+    /// check issue 是全文件消费，仍按采集总闸走。
+    #[inline]
+    fn hover_wanted(&self, span: Span<()>) -> bool {
+        self.lsp_collect && self.hover_query.map_or(true, |q| span.contains(q))
+    }
+
     /// 观察表清空（轮入口用；`Infer` 每轮新建，本方法服务多轮复用的调用方）。
     pub(crate) fn clear_observation_tables(&mut self) {
         self.hover_table.clear();
@@ -79,7 +87,7 @@ impl Infer {
 
     /// 观察面 hover：`(使用处 span, 定义处 span, 渲染串)`。
     pub(crate) fn push_hover(&mut self, cxt: &Cxt, t_span: Span<()>, def_span: Span<()>, v: &Rc<Val>) {
-        if !self.lsp_collect {
+        if !self.hover_wanted(t_span) {
             return;
         }
         let rendered = self.render_val(cxt, v);
@@ -88,7 +96,7 @@ impl Infer {
 
     /// 已有渲染串的 hover（def 定义处：渲染一次喂两处消费，L13 评审机会 4）。
     pub(crate) fn push_hover_rendered(&mut self, t_span: Span<()>, def_span: Span<()>, rendered: &str) {
-        if !self.lsp_collect {
+        if !self.hover_wanted(t_span) {
             return;
         }
         self.hover_table.push((t_span, def_span, rendered.to_owned()));
@@ -107,7 +115,7 @@ impl Infer {
         cached_final: bool,
         v: &Rc<Val>,
     ) {
-        if !self.lsp_collect {
+        if !self.hover_wanted(t_span) {
             return;
         }
         if let (Some(s), true) = (&cached, cached_final) {

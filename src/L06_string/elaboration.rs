@@ -251,7 +251,12 @@ impl Infer {
                     // 登记面（L13 `cxt.decl(..., typ_pretty)` 的对位）：采集
                     // 开启时把类型渲染一次存进条目（def-site 悬浮直读、
                     // 使用处 `final` 短路复用）；关闭时零渲染。
-                    let (typ_pretty, typ_pretty_final) = if self.lsp_collect {
+                    // 按偏移采集（[`Infer::hover_query`]）：光标不在本 def 名上
+                    // 就不渲染登记串——"每个 decl 渲染一次 O(类型规模)"在
+                    // telescope 负载上正是 O(n²)，而 LSP 一次 hover 只看一个点。
+                    let want_def_hover = self.lsp_collect
+                        && self.hover_query.map_or(true, |q| name.to_span().contains(q));
+                    let (typ_pretty, typ_pretty_final) = if want_def_hover {
                         let (s, f) = self.render_typ_pretty(cxt, &vtyp);
                         (Some(Rc::new(s)), f)
                     } else {

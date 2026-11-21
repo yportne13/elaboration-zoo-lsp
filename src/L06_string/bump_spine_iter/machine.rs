@@ -103,6 +103,10 @@ pub(crate) struct Machine {
     /// ⇒ 必须减掉 decl 基线，否则顶层洞的锚点会落成上一个 def 名尾（观察面
     /// parity 实测分叉：`: U` 在 0 vs 234）。
     pub(crate) decl_base_lvl: u32,
+    /// **按偏移采集**（惰性 hover 的第一档）：`Some(off)` 时只渲染"使用处 span
+    /// 含 off"的悬停条目，其余 push 点只做 O(1) span 判定。inlay / println /
+    /// check issue 仍全量。见 `docs/l06-lsp-port-2026-11-20.md` §3.4。
+    pub(crate) hover_query: Option<u32>,
 }
 
 /// 整表/整栈清空不归还缓冲：容量到过该量级时在清空点主动归还，否则峰值
@@ -219,6 +223,7 @@ impl Machine {
             observe: false,
             binder_spans: Vec::new(),
         decl_base_lvl: 0,
+        hover_query: None,
         }
     }
 
@@ -388,6 +393,12 @@ impl Machine {
 
     /// 局部 hover 的 def_span：按绑定层级回查 `binder_spans`（线性扫，只在
     /// 采集开启时调用）。
+    /// 悬停条目是否要渲染：采集总闸 + 可选的"按偏移采集"过滤。
+    #[inline]
+    pub(super) fn hover_wanted(&self, span: crate::parser_lib::Span<()>) -> bool {
+        self.observe && self.hover_query.map_or(true, |q| span.contains(q as usize))
+    }
+
     pub(super) fn binder_span_at(&self, lvl: u32) -> crate::parser_lib::Span<()> {
         self.binder_spans
             .iter()
@@ -847,12 +858,12 @@ impl Machine {
             let mark = cxt.mark;
             // 观察面：check 路径的 let binder（参考版 check 的 Let 臂同点位；
             // `docs/lsp-twin-wiring-2026-09.md` §2026-09-09 续的 P1 修复）
-            if self.observe {
+            if self.hover_wanted(x.to_span()) {
                 let rendered = self.render_val(bump, cxt, va);
                 self.hover_table.push((x.to_span(), x.to_span(), rendered));
-                if a_is_hole {
-                    self.push_inlay_hint(bump, cxt, x.to_span().end_offset, va);
-                }
+            }
+            if self.observe && a_is_hole {
+                self.push_inlay_hint(bump, cxt, x.to_span().end_offset, va);
             }
             let cxt2 = self.define_name(bump, cxt, &x.data, a_tm, t_tm, vt, va, x.to_span(), true);
             let u_tm = self.check(bump, cxt2, u, a)?;
@@ -957,7 +968,7 @@ impl Machine {
                     // O(1)：表与 types 链由 bind/define + trail 同步维护
                     if let Some(&(blvl, ty)) = self.name_map.get(x.data.as_str()) {
                         // 观察面：局部名使用处 hover（def_span 从 binder 轨迹取）
-                        if self.observe {
+                        if self.hover_wanted(x.to_span()) {
                             let def_span = self.binder_span_at(blvl);
                             let rendered = self.render_val(bump, cxt, ty);
                             self.hover_table.push((x.to_span(), def_span, rendered));
@@ -970,7 +981,7 @@ impl Machine {
                     let mut tys = cxt.types;
                     while let Some(tc) = tys {
                         if tc.source && tc.name == x.data {
-                            if self.observe {
+                            if self.hover_wanted(x.to_span()) {
                                 let def_span = self.binder_span_at(cxt.lvl - i - 1);
                                 let rendered = self.render_val(bump, cxt, tc.ty);
                                 self.hover_table.push((x.to_span(), def_span, rendered));
@@ -990,7 +1001,7 @@ impl Machine {
                         (e.va, e.span, e.typ_pretty.clone(), e.typ_pretty_final);
                     // 观察面：全局名使用处 hover（登记期串 final ⇒ 直推缓存，
                     // 否则实时渲染——L13 `push_hover_cached` 同款）
-                    if self.observe {
+                    if self.hover_wanted(x.to_span()) {
                         let rendered = match &cached {
                             Some(s) if cached_final => (**s).clone(),
                             _ => self.render_val(bump, cxt, va),
@@ -1009,7 +1020,7 @@ impl Machine {
 
             Raw::LiteralIntro(l) => {
                 // 观察面：字面量自身的类型（L06 增量，见移植文档 §1.3）。
-                if self.observe {
+                if self.hover_wanted(l.to_span()) {
                     self.hover_table
                         .push((l.to_span(), l.to_span(), "String".to_owned()));
                 }
@@ -1242,8 +1253,14 @@ impl Machine {
                 let vt = self.eval(bump, cxt.env, t_tm);
                 // 观察面（L13 `decl_reg_in` 的同点位）：登记处渲染一次类型串，
                 // def-site hover 与「使用处 final 短路」共用同一份 `Rc<String>`。
-                // 采集关闭时零渲染。
-                let rendered = self.render_typ_pretty(bump, cxt, vtyp);
+                // 采集关闭或"按偏移采集"未命中本 def 名时零渲染（后者是惰性
+                // hover 的关键：telescope 类型上"每 decl 渲染一次"就是 O(n²)）。
+                let want_def_hover = self.hover_wanted(name.to_span());
+                let rendered = if want_def_hover {
+                    self.render_typ_pretty(bump, cxt, vtyp)
+                } else {
+                    None
+                };
                 if let Some((r, _)) = &rendered {
                     self.hover_table
                         .push((name.to_span(), name.to_span(), r.as_ref().clone()));
