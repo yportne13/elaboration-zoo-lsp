@@ -93,6 +93,8 @@ use smol_str::SmolStr;
 mod cxt;
 mod struct_eq;
 mod elaboration;
+mod observe;
+pub mod surface;
 pub(crate) mod parser;
 mod pattern_match;
 mod pretty;
@@ -735,6 +737,33 @@ pub struct Infer {
     /// 同一 meta 在栈上再次出现即判定环，返回卡住的 Flex，不再递归烧 fuel。
     /// RefCell 让 &self 的 force 路径可用；展开完成后显式弹栈。
     meta_expanding: RefCell<Vec<MetaVar>>,
+    // ── 观察面（LSP 引擎侧接线；docs/l07-lsp-port-2026-11-21.md）──
+    /// 采集总闸（默认 false：L07 的 run/bench 口径不带渲染）。
+    pub(crate) lsp_collect: bool,
+    /// 悬浮表：(使用处 span, 定义处 span, 渲染串)。owned 快照，轮界清空。
+    pub(crate) hover_table: Vec<surface::HoverEntry>,
+    /// 补全表（当前恒空，契约字段保留）。
+    pub(crate) completion_table: Vec<(Span<()>, String)>,
+    /// inlay 表：(插入点偏移, ": <type>")。
+    pub(crate) inlay_hint_table: Vec<(u32, String)>,
+    /// println 通道：(println 体 span, 渲染串)。
+    pub(crate) println_spans: Vec<(Span<()>, String)>,
+    /// 自检行通道：(decl 下标, "code|module|signal|message")。
+    pub(crate) check_issue_lines: Vec<(usize, String)>,
+    /// CheckIssues 全局的已排水字节游标（只读排水）。
+    issue_drained: usize,
+    /// 本轮失败的 decl 名字（opt-in 继续驱动填充）。
+    pub(crate) failed_decls: Vec<String>,
+    /// 按偏移采集：Some(off) 时只渲染命中该偏移的悬停条目。
+    pub(crate) hover_query: Option<usize>,
+    /// inlay 可见区：Some((lo,hi)) 时只渲染锚点落在区间内的 inlay。
+    pub(crate) inlay_query: Option<(u32, u32)>,
+    /// 登记面旁表：全局名 → 定义处 span（def / enum / 构造子限定键）。
+    pub(crate) decl_spans: FxHashMap<SmolStr, Span<()>>,
+    /// 登记面旁表：全局名 → 登记期渲染串 + final 标记（使用处可直取）。
+    pub(crate) decl_pretty: FxHashMap<SmolStr, (Rc<String>, bool)>,
+    /// 构造子 hover 的渲染记忆化（限定键 → 串）。
+    pub(crate) ctor_pretty: FxHashMap<SmolStr, Rc<String>>,
 }
 
 const UNIFY_FUEL: u32 = 4096;
@@ -785,6 +814,19 @@ impl Infer {
             match_cmp_budget: std::cell::Cell::new(MATCH_CMP_BUDGET),
             unify_kind: std::cell::Cell::new(UnifyKind::Absurd),
             meta_expanding: RefCell::new(Vec::new()),
+            lsp_collect: false,
+            hover_table: Vec::new(),
+            completion_table: Vec::new(),
+            inlay_hint_table: Vec::new(),
+            println_spans: Vec::new(),
+            check_issue_lines: Vec::new(),
+            issue_drained: 0,
+            failed_decls: Vec::new(),
+            hover_query: None,
+            inlay_query: None,
+            decl_spans: FxHashMap::default(),
+            decl_pretty: FxHashMap::default(),
+            ctor_pretty: FxHashMap::default(),
         }
     }
 
@@ -2135,6 +2177,114 @@ pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
         }
     }
     Ok(ret)
+}
+
+// ── LSP 引擎侧入口（观察面；docs/l07-lsp-port-2026-11-21.md）──────────────
+
+/// 带观察面的 run：Ok 输出与 run 逐字节一致，另返回 owned 快照。
+pub fn run_with_surface(input: &str, path_id: u32) -> Result<(String, surface::LspSurface), Error> {
+    run_with_surface_query(input, path_id, surface::SurfaceQuery::default())
+}
+
+/// 按光标偏移采集（惰性 hover）：只有使用处 span 含 offset 的悬停条目被渲染。
+pub fn run_with_surface_at(
+    input: &str,
+    path_id: u32,
+    offset: usize,
+) -> Result<(String, surface::LspSurface), Error> {
+    run_with_surface_query(input, path_id, surface::SurfaceQuery::hover_only(offset))
+}
+
+/// 按查询口径采集（惰性 hover + inlay 可见区）。
+pub fn run_with_surface_query(
+    input: &str,
+    path_id: u32,
+    q: surface::SurfaceQuery,
+) -> Result<(String, surface::LspSurface), Error> {
+    run_surface_impl(input, path_id, true, q)
+}
+
+/// 带观察面的继续型检查驱动：遇错记失败 decl 名字后继续（错误文案不变）。
+pub fn check_with_surface(input: &str, path_id: u32) -> (Option<Error>, surface::LspSurface) {
+    let ast = match parser::parser_with_span(&preprocess(input), path_id) {
+        Ok(a) => a,
+        Err((msg, span)) => {
+            let e = match span {
+                Some(s) => Error::at(msg, s),
+                None => Error::new(msg),
+            };
+            return (Some(e), surface::LspSurface::default());
+        }
+    };
+    let mut infer = Infer::new();
+    infer.lsp_collect = true;
+    let mut cxt = Cxt::new(&infer);
+    let mut first_err: Option<Error> = None;
+    for (idx, d) in ast.iter().enumerate() {
+        match infer.infer_owned(cxt.clone(), d.clone()) {
+            Ok((x, _, new_cxt)) => {
+                cxt = new_cxt;
+                if let DeclTm::Println(t) = x {
+                    let rendered = pretty_tm(0, cxt.names(), &infer.nf(cxt.decl(), &cxt.env, t));
+                    let span = match d {
+                        parser::syntax::Decl::Println(r) => surface::raw_span(r),
+                        _ => empty_span(()),
+                    };
+                    infer.push_println_span(span, &rendered);
+                }
+            }
+            Err(e) => {
+                infer.note_failed_decl(d);
+                if first_err.is_none() {
+                    first_err = Some(e);
+                }
+            }
+        }
+        infer.drain_check_issues(idx);
+    }
+    (first_err, infer.surface())
+}
+
+/// 观察面驱动的公共实现（Ok 输出与 run 同管线）。
+fn run_surface_impl(
+    input: &str,
+    path_id: u32,
+    collect: bool,
+    q: surface::SurfaceQuery,
+) -> Result<(String, surface::LspSurface), Error> {
+    let ast = parser::parser_with_span(&preprocess(input), path_id).map_err(|(msg, span)| {
+        match span {
+            Some(s) => Error::at(msg, s),
+            None => Error::new(msg),
+        }
+    })?;
+    let mut infer = Infer::new();
+    infer.lsp_collect = collect;
+    infer.hover_query = q.hover;
+    infer.inlay_query = q.inlay;
+    let mut cxt = Cxt::new(&infer);
+    let mut ret = String::new();
+    for (idx, d) in ast.into_iter().enumerate() {
+        let println_span = match &d {
+            parser::syntax::Decl::Println(r) => Some(surface::raw_span(r)),
+            _ => None,
+        };
+        if *L07_DEBUG_ON {
+            eprintln!("> {}", parser::syntax::Decl::name(&d));
+        }
+        let (x, _, new_cxt) = infer.infer_owned(cxt, d)?;
+        cxt = new_cxt;
+        if let DeclTm::Println(t) = x {
+            let rendered = pretty_tm(0, cxt.names(), &infer.nf(cxt.decl(), &cxt.env, t));
+            ret += &rendered;
+            ret += "\n";
+            if let Some(span) = println_span {
+                infer.push_println_span(span, &rendered);
+            }
+        }
+        infer.drain_check_issues(idx);
+    }
+    Ok((ret, infer.surface()))
 }
 
 /// 内嵌 `test` 与性能版互检共用的演示源：enum + 依赖 match + String
