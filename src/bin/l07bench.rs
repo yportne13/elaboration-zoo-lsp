@@ -71,6 +71,11 @@ struct Cli {
     /// 负载族：church（check+nf，默认）| strchain | global | match | enum | all
     #[arg(long, default_value = "church")]
     workload: String,
+
+    /// 负载画像（`L07_PROF=1` 时每次计时前清零并打印参考版的函数级计数：
+    /// force/eval/quote/v_app/unify/unify_sp）。见 L07 mod.rs `prof` 模块。
+    #[arg(long)]
+    prof: bool,
 }
 
 
@@ -107,6 +112,9 @@ fn median(ts: &mut [u128]) -> u128 {
 
 fn main() {
     let cli = Cli::parse();
+    if cli.prof || std::env::var_os("L07_PROF").is_some() {
+        L07_sum_type::prof::enable();
+    }
     let stack_mb: usize = std::env::var("L07_STACK_MB")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -195,6 +203,12 @@ fn run(cli: Cli) {
             }
             drop(t0);
             drop(t1);
+
+            if cli.prof {
+                L07_sum_type::prof::reset();
+                let _ = L07_sum_type::bench_check_nf(&raw);
+                println!("  prof(ref) {workload} k={k}: {}", L07_sum_type::prof::report());
+            }
 
             let mut rows: Vec<(&str, u128, u128)> = Vec::new();
 

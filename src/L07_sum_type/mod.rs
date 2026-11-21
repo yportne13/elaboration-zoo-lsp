@@ -24,6 +24,64 @@ use rustc_hash::FxHashMap;
 pub(crate) static LOOP_DEBUG: LazyLock<AtomicBool> =
     LazyLock::new(|| AtomicBool::new(std::env::var("L07_LOOP").is_ok()));
 
+/// 负载画像探针（`L07_PROF=1` 时启用；关闭时每个打点只付一次 atomic 读 + 分支）。
+///
+/// 口径与 L13 的 `FUNC_PROF` 一致（计数 + 可选独占耗时这里先只做计数）：
+/// 用于回答"一次 elaborate 里 force/eval/quote/unify 各被调多少次"——
+/// 表示层重构（docs/smalltt-opt-techniques-analysis-2026-11-20.md §5 的
+/// Phase A/B/C）之前必须先有这张账，否则无法判断改动打到的是哪一条链。
+pub mod prof {
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+    /// 探针总闸：**普通 relaxed 原子**（不是 `LazyLock`——后者每次解引用都要走
+    /// 一次状态机，几万次/毫秒的热路径上实测会吃掉 2–3%）。由入口（bench 的
+    /// `--prof` 或显式 `prof::enable()`）置位，默认全关、零行为变化。
+    pub static ON: AtomicBool = AtomicBool::new(false);
+
+    /// 打开探针（入口调用一次；热路径只读 [`ON`]）。
+    pub fn enable() {
+        ON.store(true, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn on() -> bool {
+        ON.load(Ordering::Relaxed)
+    }
+
+    macro_rules! counters {
+        ($($name:ident),* $(,)?) => {
+            $(pub static $name: AtomicU64 = AtomicU64::new(0);)*
+            /// 全部计数器的名字（`report` 的列序）。
+            pub const NAMES: &[(&str, &AtomicU64)] = &[$((stringify!($name), &$name)),*];
+        };
+    }
+
+    counters!(FORCE, EVAL, QUOTE, VAPP, UNIFY, UNIFY_SP, MATCH_RUN, DECL_FORCE);
+
+    #[inline]
+    pub fn bump(c: &AtomicU64) {
+        if on() {
+            c.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// 清零（一次计时/一次 decl 之前调用）。
+    pub fn reset() {
+        for (_, c) in NAMES {
+            c.store(0, Ordering::Relaxed);
+        }
+    }
+
+    /// `k=v k=v ...` 单行报告（bench 直接打印）。
+    pub fn report() -> String {
+        let mut s = String::new();
+        for (n, c) in NAMES {
+            s.push_str(&format!("{}={} ", n.to_lowercase(), c.load(Ordering::Relaxed)));
+        }
+        s.trim_end().to_owned()
+    }
+}
+
 
 use cxt::{Cxt, DeclEntry, Decls};
 use pretty::pretty_tm;
@@ -856,6 +914,7 @@ impl Infer {
     /// **展开递归**时消耗 fuel（高频直通路径不消耗），fuel 耗尽时停止
     /// 展开，把值当作未解处理。
     pub fn force(&self, decl: &Decls, t: Val) -> Val {
+        prof::bump(&prof::FORCE);
         match t {
             Val::Flex(m, sp) => {
                 let solved = match self.lookup_meta(m) {
@@ -1357,6 +1416,7 @@ impl Infer {
     /// 项层 splice 需要把实参 quote 成项，而实参的自由变量层级可能超出
     /// 捕获 env，无法引到正确上下文。
     fn v_app(&self, decl: &Decls, t: Val, u: Val, i: Icit) -> Val {
+        prof::bump(&prof::VAPP);
         match t {
             // 精化包裹的值先推开再分发（eval(App) 等不经 force 的调用点
             // 会把 VSub 头送进来——如臂上下文里 Var 引用了被解槽）
@@ -1413,6 +1473,7 @@ impl Infer {
     /// - Match 臂把 cases move 进值变为卡住时 `cases.clone()`（选中分支
     ///   的 Some 路径不克隆）。
     fn eval(&self, decl: &Decls, env: &Env, tm: &Tm) -> Val {
+        prof::bump(&prof::EVAL);
         match tm {
             Tm::Var(x) => match env.iter().nth(x.0 as usize) {
                 Some(v) => v.clone(),
@@ -1537,6 +1598,7 @@ impl Infer {
     }
 
     fn quote(&self, decl: &Decls, l: Lvl, t: Val) -> Tm {
+        prof::bump(&prof::QUOTE);
         let t = self.force(decl, t);
         match t {
             // 深链形态（Sum/SumCase/Obj 可按值深度自嵌，如 `succ^N zero`）
