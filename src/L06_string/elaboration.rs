@@ -1,9 +1,9 @@
 use std::rc::Rc;
 
-use crate::{list::List, parser_lib::Span};
+use crate::{list::List, parser_lib::{Span, ToSpan}};
 
 use super::{
-    empty_span, lvl2ix, parser::syntax::{Decl, Either, Icit, Raw}, Closure, Cxt, DeclEntry, DeclTm, Error, Infer, Tm, VTy, Val
+    empty_span, lvl2ix, parser::syntax::{Decl, Either, Icit, Raw}, pretty, surface::{inlay_label, raw_span}, Closure, Cxt, DeclEntry, DeclTm, Error, Infer, Tm, VTy, Val
 };
 
 impl Infer {
@@ -95,7 +95,9 @@ impl Infer {
                 // `close_ty` 在 n 层嵌套 let 的 hole 链上逐层重建整条
                 // Locals 的 Π/Let 类型 = O(n²)）；直接推断后 quote 用推断
                 // 类型，结果类型不变、`?N` 编号少一个洞。
-                let (a_checked, va, t_checked, vt) = if matches!(a_.as_ref(), Raw::Hole) {
+                // 类型注解是否为洞：判定要在 `*a_` 被移动前取（inlay 用）。
+                let a_is_hole = matches!(a_.as_ref(), Raw::Hole);
+                let (a_checked, va, t_checked, vt) = if a_is_hole {
                     let (t_checked, ty) = self.infer_expr(cxt, *t)?;
                     let a_checked = self.quote(cxt.lvl, &ty);
                     let vt = self.eval(&cxt.env, &t_checked);
@@ -107,6 +109,17 @@ impl Infer {
                     let vt = self.eval(&cxt.env, &t_checked);
                     (a_checked, va, t_checked, vt)
                 };
+                // 观察面：check 路径的 let binder（L13 check 的 Let 臂同点位，
+                // 见 `docs/lsp-twin-wiring-2026-09.md` §2026-09-09 续的 P1 修复）
+                if self.lsp_collect {
+                    self.push_hover(cxt, x.to_span(), x.to_span(), &va);
+                    // inlay 显示**类型**（L13 该站点传的是 `vt`（值）——与其
+                    // `push_inlay_hint` 文档"`: <type>`"矛盾；L06 两版统一
+                    // 取类型值，见移植文档 §2.4 的偏差登记）
+                    if a_is_hole {
+                        self.push_inlay_hint(cxt, x.to_span().end_offset, &va);
+                    }
+                }
                 let u_checked = self.check(
                     &cxt.define(x.clone(), t_checked.clone(), vt, a_checked.clone(), va),
                     *u,
@@ -119,9 +132,22 @@ impl Infer {
                     Box::new(u_checked),
                 ))
             }
-
             // Handle holes
-            (Raw::Hole, _) => Ok(self.fresh_meta(cxt, &a)),
+            (Raw::Hole, _) => {
+                // 观察面：期望类型已知（无未解 meta）时补一条 `: <type>`。
+                // 洞没有源码 span（`Raw::Hole` 是零字段变体），锚点退到当前
+                // 上下文最内层 binder 尾（顶层 def 体 ⇒ 0）。`push_inlay_hint`
+                // 自带"含未解 meta 即跳过"，故未定类型不会漏出 `?N`。
+                if self.lsp_collect {
+                    let pos = if cxt.lvl.0 > 0 {
+                        self.local_binder_span(cxt, cxt.lvl - 1).end_offset
+                    } else {
+                        0
+                    };
+                    self.push_inlay_hint(cxt, pos, &a);
+                }
+                Ok(self.fresh_meta(cxt, &a))
+            }
 
             // General case: infer type and unify
             (t, _) => {
@@ -206,6 +232,9 @@ impl Infer {
                         va: vtyp.clone(),
                         prim: None,
                         arity: 0,
+                        span: name.to_span(),
+                        typ_pretty: None,
+                        typ_pretty_final: false,
                     });
                     let t_tm = self.check(cxt, bod, &vtyp)?;
                     let vt = self.eval(&cxt.env, &t_tm);
@@ -218,12 +247,49 @@ impl Infer {
                     // （O(1) 哈希查找）。旧实现在 env 头部压一条 define 槽，
                     // 引用距离随 def 数线性增长——strchain/global 这类每层都
                     // 回头引用早期名字的负载因此是 O(D²) 指针追逐。
+                    //
+                    // 登记面（L13 `cxt.decl(..., typ_pretty)` 的对位）：采集
+                    // 开启时把类型渲染一次存进条目（def-site 悬浮直读、
+                    // 使用处 `final` 短路复用）；关闭时零渲染。
+                    let (typ_pretty, typ_pretty_final) = if self.lsp_collect {
+                        let (s, f) = self.render_typ_pretty(cxt, &vtyp);
+                        (Some(Rc::new(s)), f)
+                    } else {
+                        (None, false)
+                    };
                     self.decls.insert(name.data.clone(), DeclEntry {
                         vt: vt.clone(),
                         va: vtyp.clone(),
                         prim: None,
                         arity: 0,
+                        span: name.to_span(),
+                        typ_pretty: typ_pretty.clone(),
+                        typ_pretty_final,
                     });
+                    // 观察面：def 名定义处 hover（L13 elaboration.rs:1658 同点位），
+                    // 渲染串与登记面共用一次（评审机会 4 同款）。
+                    if let Some(s) = &typ_pretty {
+                        self.push_hover_rendered(name.to_span(), name.to_span(), s);
+                    }
+                    // 观察面：def 无显式返回类型 → inlay 推断返回类型（参考版
+                    // 用 `peel_pi` 的等价物 + quote 在返回层级；锚点取最后参数
+                    // 结束 +1，无参取 def 名尾。L13 elaboration.rs:1674-1688）。
+                    if self.lsp_collect && matches!(ret_type, Raw::Hole) {
+                        let (ret_val, ret_lvl, peeled) = self.peel_pi_collect(cxt, &vtyp);
+                        let q = self.quote(ret_lvl, &ret_val);
+                        if !self.tm_has_unsolved_meta(&q) {
+                            let mut names = cxt.names();
+                            for pn in peeled.iter().rev() {
+                                names = names.prepend(pn.clone());
+                            }
+                            let label = inlay_label(&pretty::pretty_tm(0, names, &q));
+                            let pos = params
+                                .last()
+                                .map(|p| raw_span(&p.1).end_offset + 1)
+                                .unwrap_or(name.to_span().end_offset);
+                            self.push_inlay_label(pos, label);
+                        }
+                    }
                     cxt.clone()
                 };
                 // 首个元素是 decl 层"类型"占位（run/bench 均不消费）
@@ -243,14 +309,38 @@ impl Infer {
             // Infer variable types
             Raw::Var(x) => {
                 match cxt.lookup_src(&x.data) {
-                    Some((x, a)) => Ok((Tm::Var(lvl2ix(cxt.lvl, x)), a.clone())),
+                    Some((blvl, a)) => {
+                        // 观察面：局部名使用处 hover，def_span 取 binder 的
+                        // 源码 span（采集关闭时 `local_binder_span` 不被调用）。
+                        if self.lsp_collect {
+                            let def_span = self.local_binder_span(cxt, blvl);
+                            self.push_hover(cxt, x.to_span(), def_span, &a);
+                        }
+                        Ok((Tm::Var(lvl2ix(cxt.lvl, blvl)), a.clone()))
+                    }
                     // decl 表回退（L13 fake_bind 语义的另一半）：正常程序
                     // 里 src_names 覆盖全部可见名（def/builtin 都 define），
                     // 唯一 miss 而 decl 表命中的是递归 def 体检查期间的
                     // 自身占位——引用走 `Tm::Decl`（求值期查表取登记值，
                     // 检查期即占位的卡住 Decl 头）
                     None => match self.decls.get(&x.data) {
-                        Some(entry) => Ok((Tm::Decl(x.clone()), entry.va.clone())),
+                        Some(entry) => {
+                            let va = entry.va.clone();
+                            if self.lsp_collect {
+                                let def_span = entry.span;
+                                let cached = entry.typ_pretty.clone();
+                                let cached_final = entry.typ_pretty_final;
+                                self.push_hover_decl(
+                                    cxt,
+                                    x.to_span(),
+                                    def_span,
+                                    cached,
+                                    cached_final,
+                                    &va,
+                                );
+                            }
+                            Ok((Tm::Decl(x.clone()), va))
+                        }
                         None => Err(Error(format!("error name not in scope: {:?}", x))),
                     },
                 }
@@ -352,10 +442,21 @@ impl Infer {
 
             // Infer let bindings
             Raw::Let(x, a, t, u) => {
+                let a_is_hole = matches!(a.as_ref(), Raw::Hole);
                 let a_checked = self.check_ty(cxt, *a)?;
                 let va = self.eval(&cxt.env, &a_checked);
                 let t_checked = self.check(cxt, *t, &va)?;
                 let vt = self.eval(&cxt.env, &t_checked);
+                // 观察面：let binder 定义处 hover + 无类型注解时的 inlay
+                // （L13 elaboration.rs:3409-3413 同点位；注解为 `_` 时
+                // 补 `: <推断类型>`，锚点取 binder 名尾）。
+                if self.lsp_collect {
+                    self.push_hover(cxt, x.to_span(), x.to_span(), &va);
+                    // inlay 显示类型（偏差登记见 check 路径同名注释）
+                    if a_is_hole {
+                        self.push_inlay_hint(cxt, x.to_span().end_offset, &va);
+                    }
+                }
                 let (u_inferred, b) = self.infer_expr(
                     &cxt.define(x.clone(), t_checked.clone(), vt.clone(), a_checked.clone(), va),
                     *u
@@ -376,10 +477,28 @@ impl Infer {
                 let new_meta = self.fresh_meta(cxt, &Val::U.into());
                 let a = self.eval(&cxt.env, &new_meta);
                 let t = self.fresh_meta(cxt, &a);
+                // 观察面：洞本身没有源码 span（`Raw::Hole` 是零字段变体），
+                // 无法定位；锚点退到当前上下文最内层 binder 的尾端
+                // （L06 已知降级，见 `docs/l06-lsp-port-2026-11-20.md` §1.10
+                // 降级点 2）。`push_inlay_hint` 自带"含未解 meta 即跳过"。
+                if self.lsp_collect {
+                    let pos = if cxt.lvl.0 > 0 {
+                        self.local_binder_span(cxt, cxt.lvl - 1).end_offset
+                    } else {
+                        0
+                    };
+                    self.push_inlay_hint(cxt, pos, &a);
+                }
                 Ok((t, a))
             }
 
             Raw::LiteralIntro(literal) => {
+                // 观察面：字面量自身的类型（L06 增量——L13 的字面量是 prelude
+                // 类型、不做 push；L06 的 `LiteralType` 是内建原子类型，
+                // `"…" : String` 是主要悬浮用途之一）。
+                if self.lsp_collect {
+                    self.push_hover_rendered(literal.to_span(), literal.to_span(), "String");
+                }
                 Ok((Tm::LiteralIntro(literal), Val::LiteralType.into()))
             }
         }

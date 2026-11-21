@@ -62,10 +62,19 @@ fn prim_arity(p: Prim) -> usize {
 }
 
 /// decl 表条目（参考版 `DeclEntry` 的快版）：定义的值与类型，可选 builtin。
+///
+/// 观察面（LSP 引擎侧接线，`docs/l06-lsp-port-2026-11-20.md` §1.2）三字段：
+/// - `span`：登记处源码 span（def 名 token；builtin 为零 span）。孪生的 `Tm`
+///   不存 span，故 span 只从 AST 取；
+/// - `typ_pretty`：登记处渲染的类型串，**采集关闭时 None**（零渲染）；
+/// - `typ_pretty_final`：该串可否被使用处直接复用（登记期无未解 meta）。
 pub(crate) struct DeclEntryF {
     pub(crate) vt: V,
     pub(crate) va: V,
     pub(crate) prim: Option<Prim>,
+    pub(crate) span: crate::parser_lib::Span<()>,
+    pub(crate) typ_pretty: Option<std::rc::Rc<String>>,
+    pub(crate) typ_pretty_final: bool,
 }
 
 /// 可变全局表（参考版 `Infer.mutable_map`；单线程 RefCell）。key 用
@@ -79,7 +88,7 @@ pub(crate) type MutableMap = RefCell<FxHashMap<SmolStr, V>>;
 /// 跨轮 `bump.reset()` 前一切句柄已消亡（`clear_round` 清空
 /// mutable_map / decl 表，见 `cross_round_isolation` 测试）。
 #[inline]
-fn lit_of<'a>(v: V) -> Option<&'a str> {
+pub(super) fn lit_of<'a>(v: V) -> Option<&'a str> {
     match v_tag(v) {
         7 => match v_xcell_of(v) {
             XCell::Lit(s) => Some(s),

@@ -222,3 +222,61 @@ church 持平；参考版 strchain/global 曲线进一步接近线性。）
   `change_mutable "k" (s => string_concat s "x")`——mutable_map 读写 +
   函数实参的 β 应用 + 重入 prim 触发；末值 = U（nf 节点数 = 1）。
   参考版超线性（k=12 已 35s），快版近线性（k=12 21.6ms，≈1600×）。
+
+## 2026-11-20/21：L13 的 LSP 引擎侧特性移植 + 性能回退测试
+
+L06 原先没有任何 LSP 相关机制。本轮审计了 L13 为 LSP 交互路径做的一整套
+**引擎侧**设施（观察面 / 登记面 / 求值预算 / 失败 decl 通道 / check issue
+通道），把可移植子集落到两版（**默认关闭**），并给出同机 A/B 与采集开销数据。
+完整审计表、代码坐标与实测见 `docs/l06-lsp-port-2026-11-20.md`。
+
+**可移植（已落地）**
+
+- owned 快照契约 `surface.rs`：`LspSurface`（hover / completion / inlay /
+  println_spans / check_issues / failed_decls）+ `hover_entry_at`（最窄 span）
+  + `format_check_warning` / `raw_span` 折叠；
+- 观察表与 push 点：两版 `observe.rs`（hover：def-site / 使用处 / builtin /
+  let binder / 字面量 / 洞；inlay：无注解 let、无返回类型 def、已知期望类型的洞；
+  println span；check issue 只读排水）；
+- 登记面：`DeclEntry` 增 `span` + `typ_pretty` + `typ_pretty_final`（采集关闭时
+  零渲染；使用处 `final` 时直取登记串）；
+- 求值预算 `eval_budget.rs`：`scope`/`scope_default`/`tick`/`ElabTimeout` +
+  入口 `catch_unwind`，**只在有预算时打点**（见下性能）；
+- 失败 decl 记录通道（opt-in `check_with_surface`，不改错误文案）。
+
+**判为不适用（附审计证据）**：常驻 prelude / arena 压实 / twin kick、
+`FORCE_MEMO`、`NatChainOverflow`（L06 无原生 Nat / SumCase）、
+`push_ctor_hover` / `push_qualified_hover` / completion（无 enum、无成员访问）、
+`defer_println` 两阶段（只有一个返回串消费方）。
+
+**入口**
+
+- 参考版：`L06_string::{run_with_surface, check_with_surface, run_with_surface_budget}`；
+- 孪生：`Tycker::{set_observe, surface, hover_entry_at, run_input_with_surface,
+  check_with_surface, run_input_with_surface_budget}`；
+- bench：`l06bench --observe`（`fast_obs` / `basic_obs` 行，与关闭采集同一调用口径）。
+
+**门禁**（`CARGO_PROFILE_TEST_DEBUG=0` 规避本机 MSVC LNK2019；opt-level 不变）
+
+| 套件 | 结果 |
+|---|---|
+| `l06_blackbox`（`--skip workload_node_counts`） | 51 passed |
+| `l06_blackbox_v2` | 34 passed |
+| `l06_blackbox_v3` | 94 passed |
+| `implicit_comma_args` | 532 passed |
+| `--lib L06_string` | 24 passed |
+| `tests/l06_lsp_surface.rs`（新增） | 36 passed |
+
+（各套件比移植前多 9 例：新增的 `surface` / `eval_budget` 单元测试随
+`#[path]` 包含进每个 L06 测试二进制；既有断言一条未改。）
+
+**性能（同机交错 A/B，k=13，`min`）**
+
+- **采集关闭**：无可见回退。中位差 ≤1%；最坏格 +3~5%（church / strchain /
+  global 这类 eval 密集链）来自求值预算的 tick——消融掉 tick 的对照构建回到
+  基线 1% 内（church 0.801 vs 0.798 ms、strchain 21.31 vs 21.35 ms）。
+- **采集开启**：push 期渲染是 O(类型打印规模) ⇒ 在 4096 层的合成链上是
+  **O(n²)**：implicit 3.9→887 ms（224×）、strchain 2.9→944 ms（322×）、
+  prune 49→9372 ms（191×）、global 5.9→1018 ms（172×）；k=9→k=11 采集耗时
+  增长 15~19×（规模 4×）。真实小文件（DEMO_SRC，45 条 decl）为亚毫秒级。
+  要给 LSP 用需按 L13 的 `typ_pretty_final` + 键缓存思路加渲染缓存/惰性渲染。

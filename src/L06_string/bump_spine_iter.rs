@@ -77,6 +77,7 @@ mod entry;
 mod env;
 mod eval;
 mod machine;
+mod observe;
 mod prim;
 mod quote;
 mod rename;
@@ -89,6 +90,7 @@ mod unify;
 // 与拆分前单文件逐字一致。
 use crate::L06_string::parser;
 use crate::L06_string::pretty;
+use crate::L06_string::surface;
 use crate::L06_string::{empty_span, preprocess, Error, Ix, MetaVar};
 
 // 内嵌测试在 entry 子模块里经 `super::super::` 取 mod.rs 项——拆分后其

@@ -171,29 +171,166 @@ impl Tycker {
     /// println 的 nf 经 pretty 输出（quote 走记忆化口径——与无记忆化
     /// 输出逐字节一致，L03-L05 已证）。
     pub(crate) fn run_decls(&mut self, ast: &[Decl]) -> Result<String, Error> {
+        self.run_decls_impl(ast, false).map(|(out, _)| out)
+    }
+
+    /// 带**观察面**的驱动：与 [`Tycker::run_decls`] 同输出，返回 owned 快照
+    /// （`docs/l06-lsp-port-2026-11-20.md` §2.2）。
+    pub(crate) fn run_decls_with_surface(
+        &mut self,
+        ast: &[Decl],
+    ) -> Result<(String, crate::L06_string::surface::LspSurface), Error> {
+        self.run_decls_impl(ast, true)
+    }
+
+    /// 采集开关（默认关；与 L13 的默认相反，见移植文档 §1.1）。
+    pub(crate) fn set_observe(&mut self, on: bool) {
+        self.machine.observe = on;
+    }
+
+    /// 当前采集开关状态（测试/诊断用）。
+    pub(crate) fn observe_on(&self) -> bool {
+        self.machine.observe
+    }
+
+    /// 当前观察面快照（`run_decls*` 返回后读取本轮结果）。
+    pub(crate) fn surface(&self) -> crate::L06_string::surface::LspSurface {
+        self.machine.surface()
+    }
+
+    /// 与 L13 `Tycker::hover_entry_at` 同签名同规则。
+    pub(crate) fn hover_entry_at(
+        &self,
+        path_id: u32,
+        offset: usize,
+    ) -> Option<&crate::L06_string::surface::HoverEntry> {
+        self.machine.hover_entry_at(path_id, offset)
+    }
+
+    fn run_decls_impl(
+        &mut self,
+        ast: &[Decl],
+        collect: bool,
+    ) -> Result<(String, crate::L06_string::surface::LspSurface), Error> {
         self.bump.reset();
         self.machine.clear_round();
+        self.machine.observe = collect;
         let bump = &self.bump;
         let mut cxt = self.machine.prime_round(bump);
         let mut ret = String::new();
-        for d in ast {
+        for (idx, d) in ast.iter().enumerate() {
             let (out, nc) = self.machine.infer_decl(bump, cxt, d)?;
             cxt = nc;
+            if collect {
+                self.machine.drain_check_issues(idx);
+            }
             if let DeclOut::Println(t) = out {
                 let v = self.machine.eval(bump, cxt.env, t);
                 let q = self.machine.quote_memo(bump, cxt.lvl, v);
                 let names = types_names_list(cxt.types);
-                ret += &pretty::pretty_tm(0, names, &export(q));
+                let rendered = pretty::pretty_tm(0, names, &export(q));
+                ret += &rendered;
                 ret += "\n";
+                if collect {
+                    let span = match d {
+                        Decl::Println(r) => crate::L06_string::surface::raw_span(r),
+                        Decl::Def { .. } => empty_span(()),
+                    };
+                    self.machine.push_println_span(span, &rendered);
+                }
             }
         }
-        Ok(ret)
+        Ok((ret, self.machine.surface()))
+    }
+
+    /// 带观察面的**继续型**检查驱动（失败 decl 通道的观察/测试用；与参考版
+    /// `L06_string::check_with_surface` 同语义：遇错记名字后继续）。
+    pub(crate) fn check_with_surface(
+        &mut self,
+        ast: &[Decl],
+    ) -> (Option<Error>, crate::L06_string::surface::LspSurface) {
+        self.bump.reset();
+        self.machine.clear_round();
+        self.machine.observe = true;
+        let bump = &self.bump;
+        let mut cxt = self.machine.prime_round(bump);
+        let mut first_err: Option<Error> = None;
+        for (idx, d) in ast.iter().enumerate() {
+            match self.machine.infer_decl(bump, cxt, d) {
+                Ok((out, nc)) => {
+                    cxt = nc;
+                    if let DeclOut::Println(t) = out {
+                        let v = self.machine.eval(bump, cxt.env, t);
+                        let q = self.machine.quote_memo(bump, cxt.lvl, v);
+                        let names = types_names_list(cxt.types);
+                        let rendered = pretty::pretty_tm(0, names, &export(q));
+                        let span = match d {
+                            Decl::Println(r) => crate::L06_string::surface::raw_span(r),
+                            Decl::Def { .. } => empty_span(()),
+                        };
+                        self.machine.push_println_span(span, &rendered);
+                    }
+                    self.machine.drain_check_issues(idx);
+                }
+                Err(e) => {
+                    self.machine.note_failed_decl(d);
+                    // 失败 decl 不进上下文（保留旧 cxt 继续），后续引用
+                    // 会落到 not-in-scope。
+                    if first_err.is_none() {
+                        first_err = Some(e);
+                    }
+                    self.machine.drain_check_issues(idx);
+                }
+            }
+        }
+        (first_err, self.machine.surface())
     }
 
     /// 参考版 `run` 的全流程等价物（含 preprocess/parse）。
     pub(crate) fn run_input(&mut self, input: &str, path_id: u32) -> Result<String, Error> {
+        self.run_input_impl(input, path_id, false, None)
+            .map(|(out, _)| out)
+    }
+
+    /// [`Tycker::run_input`] + 观察面。
+    pub(crate) fn run_input_with_surface(
+        &mut self,
+        input: &str,
+        path_id: u32,
+    ) -> Result<(String, crate::L06_string::surface::LspSurface), Error> {
+        self.run_input_impl(input, path_id, true, None)
+    }
+
+    /// [`Tycker::run_input_with_surface`] + 求值预算（毫秒）。超时落成 `Err`。
+    pub(crate) fn run_input_with_surface_budget(
+        &mut self,
+        input: &str,
+        path_id: u32,
+        ms: u64,
+    ) -> Result<(String, crate::L06_string::surface::LspSurface), Error> {
+        self.run_input_impl(input, path_id, true, Some(ms))
+    }
+
+    fn run_input_impl(
+        &mut self,
+        input: &str,
+        path_id: u32,
+        collect: bool,
+        budget_ms: Option<u64>,
+    ) -> Result<(String, crate::L06_string::surface::LspSurface), Error> {
         let ast = super::parser::parser(&super::preprocess(input), path_id).map_err(Error)?;
-        self.run_decls(&ast)
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _scope = budget_ms.map(crate::L06_string::eval_budget::scope);
+            self.run_decls_impl(&ast, collect)
+        }));
+        match outcome {
+            Ok(r) => r,
+            Err(p) if crate::L06_string::eval_budget::is_timeout(&*p) => Err(Error(format!(
+                "elab timeout: evaluation exceeded {}ms budget",
+                budget_ms.unwrap_or(0)
+            ))),
+            Err(p) => std::panic::resume_unwind(p),
+        }
     }
 
     /// 基准口径（bench 用）：仅 elaborate。

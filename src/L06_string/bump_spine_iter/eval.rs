@@ -10,6 +10,7 @@ use smol_str::SmolStr;
 use super::parser::syntax::Icit;
 
 use super::env::{env_ext, env_nth, CloCell, Env, PiCell};
+use crate::L06_string::eval_budget;
 use super::prim::{decl_apply, vapp1, DeclEntryF, MutableMap};
 use super::spine::{is_declheaded, meta_val_of, MetaEntry, Spine};
 use super::syntax::{PrCons, Tm, V, XCell, v_clo, v_clo_of, v_lit_ty, v_meta_of, v_pi, v_spine_of, v_tag, v_u, v_xcell};
@@ -35,7 +36,15 @@ pub(super) fn force<'a>(
     let mut v = v0;
     // 实参缓冲在本次 force 调用内的已解链轮间复用（clear 保容量）
     let mut args: Vec<(V, Icit)> = Vec::new();
+    // 求值预算 checkpoint（L13 孪生只给 eval_iter 打点；L06 的 force 也是
+    // **循环**且会反复应用已解 meta 的实参链，同属自旋面，故一并打点）。
+    // 无预算时循环内只留一次寄存器分支（`enabled` 在入口读一次）。
+    let budget_on = eval_budget::enabled();
+    let mut budget_ctr: u32 = 0;
     loop {
+        if budget_on {
+            eval_budget::tick(&mut budget_ctr);
+        }
         match v_tag(v) {
             5 => match &metas[v_meta_of(v) as usize] {
                 MetaEntry::Solved(sol, _) => v = *sol,
@@ -122,7 +131,14 @@ pub(super) fn eval_iter<'a>(
     // 改放循环局部 `cur`（省一次 store+load 与一轮跳转分发）。
     // 严格 LIFO 等价：每个 `cur` 站点之后到循环头之前没有 work 操作。
     let mut cur: Option<W<'a>> = None;
+    // 求值预算 checkpoint 计数器（无 deadline 时循环内只有一次寄存器分支：
+    // `enabled` 在入口读一次 TLS；见 `crate::L06_string::eval_budget` 模块头）。
+    let budget_on = eval_budget::enabled();
+    let mut budget_ctr: u32 = 0;
     loop {
+        if budget_on {
+            eval_budget::tick(&mut budget_ctr);
+        }
         let w = match cur.take().or_else(|| work.pop()) {
             Some(w) => w,
             None => break,

@@ -79,6 +79,15 @@ struct Cli {
     /// 负载族：church（check+nf，默认）| implicit | prune | solve | strchain | global | all
     #[arg(long, default_value = "church")]
     workload: String,
+
+    /// 开启观察面采集（`fast_ss_obs` 行）：同一负载下量 push 期渲染开销。
+    /// 采集不在默认口径里（`docs/l06-lsp-port-2026-11-20.md` §1.1）。
+    #[arg(long)]
+    observe: bool,
+
+    /// `--observe` 时额外跑的开采实现（逗号分隔：basic_obs,fast_obs）
+    #[arg(long, default_value = "fast_obs")]
+    observe_impls: String,
 }
 
 fn median(ts: &mut [u128]) -> u128 {
@@ -212,6 +221,44 @@ fn run(cli: Cli) {
                     ts.push(start.elapsed().as_micros());
                 }
                 rows.push(("fast", *ts.iter().min().unwrap(), median(&mut ts)));
+            }
+
+            // 观察面采集口径（`--observe`）：同一负载、同一实现，只是把
+            // push 期渲染打开。差值即"采集开销"（移植文档 §3 的核心数字）。
+            if cli.observe {
+                if cli.observe_impls.split(',').any(|x| x.trim() == "fast_obs") {
+                    // **与 fast_ss 同一调用口径**（同一个 Tycker 稳态复用、同一个
+                    // check/check+nf 入口），只把采集闸打开——差值才是采集开销。
+                    // （早先误用 run_decls_with_surface（不含 nf）不可比。）
+                    let mut ts = Vec::new();
+                    let mut tycker = Tycker::new();
+                    tycker.set_observe(true);
+                    if nf_workload {
+                        assert_eq!(tycker.bench_check_nf(&raw), expect_nodes, "fast_obs nf 节点数不符");
+                    } else {
+                        assert!(tycker.bench_check(&raw), "fast_obs 未通过 k={k} ({workload})");
+                    }
+                    for _ in 0..cli.rounds {
+                        let start = Instant::now();
+                        if nf_workload {
+                            assert_eq!(tycker.bench_check_nf(&raw), expect_nodes);
+                        } else {
+                            assert!(tycker.bench_check(&raw));
+                        }
+                        ts.push(start.elapsed().as_micros());
+                    }
+                    rows.push(("fast_obs", *ts.iter().min().unwrap(), median(&mut ts)));
+                }
+                if cli.observe_impls.split(',').any(|x| x.trim() == "basic_obs") {
+                    let mut ts = Vec::new();
+                    for _ in 0..cli.rounds {
+                        let start = Instant::now();
+                        let r = L06_string::run_with_surface(&src, 0);
+                        ts.push(start.elapsed().as_micros());
+                        assert!(r.is_ok(), "basic_obs 未通过 k={k} ({workload})");
+                    }
+                    rows.push(("basic_obs", *ts.iter().min().unwrap(), median(&mut ts)));
+                }
             }
 
             // quote 记忆化口径（有 quote 的负载才出赛）

@@ -336,6 +336,9 @@ impl Cxt {
             va: Val::U.into(),
             prim: None,
             arity: 0,
+            span: empty_span(()),
+            typ_pretty: None,
+            typ_pretty_final: false,
         });
         cxt = cxt.add_builtin(infer, "string_concat", str_pi(&["x", "y"], Tm::LiteralType), PrimFunc(Rc::new(string_concat)));
         cxt = cxt.add_builtin(infer, "str_eq", str_pi(&["x", "y"], Tm::LiteralType), PrimFunc(Rc::new(str_eq)));

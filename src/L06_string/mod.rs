@@ -17,6 +17,9 @@ mod cxt;
 mod unification;
 mod syntax;
 mod pretty;
+mod observe;
+pub(crate) mod eval_budget;
+pub mod surface;
 pub(crate) mod bump_spine_iter;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -161,6 +164,15 @@ pub(crate) struct DeclEntry {
     pub(crate) va: Rc<VTy>,
     pub(crate) prim: Option<PrimFunc>,
     pub(crate) arity: usize,
+    /// 登记处 span（L13 `DeclEntry.span` 的对位）：def 名 token；builtin 为
+    /// 零 span。只服务 LSP 的 goto-definition 与 hover 的 def_span。
+    pub(crate) span: Span<()>,
+    /// 登记处渲染的类型串（L13 行的 `typ_pretty`）：**采集关闭时为 None**
+    /// （零渲染）。消费方是 def-site 悬浮与使用处缓存短路。
+    pub(crate) typ_pretty: Option<Rc<String>>,
+    /// `typ_pretty` 可安全复用旗：登记期引读项无未解 meta 时，该串与使用处
+    /// 实时渲染逐字节一致（L13 `typ_pretty_final` 同义）。
+    pub(crate) typ_pretty_final: bool,
 }
 
 pub struct Infer {
@@ -176,6 +188,31 @@ pub struct Infer {
     /// 时压栈，同一 meta 在栈上再次出现即判定环，返回卡住的 Flex，不再
     /// 无限递归。`Cell`/`RefCell` 让 `&self` 的 force 路径可用。
     meta_expanding: RefCell<Vec<MetaVar>>,
+    // ── 观察面（LSP 引擎侧接线；`docs/l06-lsp-port-2026-11-20.md`）──
+    /// 采集总闸（L13 `Infer.lsp_collect` 的对位，**默认 false**：L06 的
+    /// `run` / `bench_check*` 口径不带渲染，且没有 prelude 装载段可豁免）。
+    pub(crate) lsp_collect: bool,
+    /// 悬浮表：`(使用处 span, 定义处 span, 渲染串)`。owned 快照，轮界清空。
+    pub(crate) hover_table: Vec<surface::HoverEntry>,
+    /// 补全表：L06 无成员访问，恒空（契约对称保留）。
+    pub(crate) completion_table: Vec<(Span<()>, String)>,
+    /// inlay 表：`(插入点偏移, ": <type>")`。
+    pub(crate) inlay_hint_table: Vec<(u32, String)>,
+    /// println 通道：`(println 体 span, 渲染串)`。
+    pub(crate) println_spans: Vec<(Span<()>, String)>,
+    /// HDL 自检行通道：`(decl 下标, "code|module|signal|message")`。
+    pub(crate) check_issue_lines: Vec<(usize, String)>,
+    /// `"CheckIssues"` 全局的已排水字节游标（只读排水，见 `observe.rs`）。
+    issue_drained: usize,
+    /// 本轮失败的 decl 名字（opt-in 继续驱动填充；fail-fast 路径不用）。
+    pub(crate) failed_decls: Vec<String>,
+    /// 参考版 `eval` 的预算计数器（递归实现 ⇒ 计数器挂引擎，见
+    /// `eval_budget` 模块头）。无预算时只付一次自增 + 掩码分支。
+    eval_ticks: std::cell::Cell<u32>,
+    /// 本轮是否挂了求值预算（`eval_budget::enabled()` 的入口快照）：为
+    /// false 时递归 `eval` 连 tick 都不付（church/strchain 这类 eval 密集
+    /// 负载实测 tick 单独占 5-13%，见移植文档性能表）。
+    budget_on: bool,
 }
 
 impl Infer {
@@ -185,12 +222,33 @@ impl Infer {
             decls: FxHashMap::default(),
             mutable_map: RefCell::new(FxHashMap::default()),
             meta_expanding: RefCell::new(Vec::new()),
+            lsp_collect: false,
+            hover_table: Vec::new(),
+            completion_table: Vec::new(),
+            inlay_hint_table: Vec::new(),
+            println_spans: Vec::new(),
+            check_issue_lines: Vec::new(),
+            issue_drained: 0,
+            failed_decls: Vec::new(),
+            eval_ticks: std::cell::Cell::new(0),
+            budget_on: false,
         }
     }
     /// Insert a builtin entry: head value `Val::Decl(name, [])` (prim fires
     /// on application), declared type, native implementation, arity.
     pub(crate) fn register_builtin(&mut self, name: &str, vt: Rc<Val>, va: Rc<VTy>, prim: PrimFunc, arity: usize) {
-        self.decls.insert(name.to_owned(), DeclEntry { vt, va, prim: Some(prim), arity });
+        self.decls.insert(
+            name.to_owned(),
+            DeclEntry {
+                vt,
+                va,
+                prim: Some(prim),
+                arity,
+                span: empty_span(()),
+                typ_pretty: None,
+                typ_pretty_final: false,
+            },
+        );
     }
     fn new_meta(&mut self, a: Rc<VTy>) -> u32 {
         self.meta.push(MetaEntry::Unsolved(a));
@@ -348,6 +406,12 @@ impl Infer {
     }
 
     fn eval(&self, env: &Env, tm: &Tm) -> Rc<Val> {
+        // 求值预算 checkpoint（L13 参考版挂在 eval 主循环的同款位置）。
+        // 本版 eval 是递归的：自旋形态是无限递归，只能在每次调用处计数；
+        // 计数器 `Cell` 让 `&self` 路径可用（无预算时只付 自增+掩码 分支）。
+        if self.budget_on {
+            eval_budget::tick_cell(&self.eval_ticks);
+        }
         //println!("{} {:?}", "eval".yellow(), tm);
         match tm {
             Tm::Var(x) => env.iter().nth(x.0 as usize).unwrap().clone(),
@@ -425,19 +489,129 @@ impl Infer {
 }
 
 pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
+    run_impl(input, path_id, false, None).map(|(out, _)| out)
+}
+
+/// 带**观察面**的入口：与 [`run`] 同一驱动、同一输出，差别只是采集开着
+/// （[`LspSurface`] 为 owned 快照，`docs/l06-lsp-port-2026-11-20.md` §2.2）。
+///
+/// 采集只影响观察表：错误判定、错误文案与 Ok 输出逐字节同 [`run`]
+/// （`tests/l06_lsp_surface.rs` 钉住）。
+pub fn run_with_surface(input: &str, path_id: u32) -> Result<(String, surface::LspSurface), Error> {
+    run_impl(input, path_id, true, None)
+}
+
+/// [`run_with_surface`] + 求值预算（毫秒）。超时按 [`Error`] 返回（错误串
+/// 前缀 `elab timeout`），不把 panic 泄漏给调用方。
+pub fn run_with_surface_budget(
+    input: &str,
+    path_id: u32,
+    ms: u64,
+) -> Result<(String, surface::LspSurface), Error> {
+    run_impl(input, path_id, true, Some(ms))
+}
+
+/// 带观察面的**继续型**检查驱动：遇错记 [`surface::LspSurface::failed_decls`]
+/// 后**继续**下一个 decl（错误本身照旧返回在 `Option<Error>` 里，只保留首个）。
+/// 这不是 `run` 的语义（`run` 是 fail-fast），只服务"失败 decl 通道"的观察
+/// 与测试；返回的串同样只含成功 decl 的 println。
+pub fn check_with_surface(input: &str, path_id: u32) -> (Option<Error>, surface::LspSurface) {
+    let ast = match parser::parser(&preprocess(input), path_id) {
+        Ok(ast) => ast,
+        Err(e) => return (Some(Error(e)), surface::LspSurface::default()),
+    };
     let mut infer = Infer::new();
+    infer.lsp_collect = true;
+    let mut cxt = Cxt::new(&mut infer);
+    let mut first_err: Option<Error> = None;
+    for (idx, tm) in ast.iter().enumerate() {
+        match infer.infer(&cxt, tm.clone()) {
+            Ok((DeclTm::Println(x), _, nc)) => {
+                let rendered = pretty::pretty_tm(0, nc.names(), &infer.nf(&nc.env, x));
+                let span = match tm {
+                    parser::syntax::Decl::Println(r) => surface::raw_span(r),
+                    parser::syntax::Decl::Def { .. } => empty_span(()),
+                };
+                infer.push_println_span(span, &rendered);
+                infer.drain_check_issues(idx);
+                cxt = nc;
+            }
+            Ok((DeclTm::Def, _, nc)) => {
+                infer.drain_check_issues(idx);
+                cxt = nc;
+            }
+            Err(e) => {
+                infer.note_failed_decl(tm);
+                // 失败 decl 不进上下文（与 L13 `observe_user` 同口径：保留
+                // 旧 cxt 继续），后续引用将落到 not-in-scope。
+                if first_err.is_none() {
+                    first_err = Some(e);
+                }
+                infer.drain_check_issues(idx);
+            }
+        }
+    }
+    (first_err, infer.surface())
+}
+
+/// 统一驱动：`collect` 决定采集开关，`budget_ms` 决定预算。
+///
+/// 预算用 `catch_unwind` 落成 `Err`：`panic_any(ElabTimeout)` 只在本族
+/// payload 上转换，其它 panic 一律 `resume_unwind` 原样上抛（L13 边界同款）。
+fn run_impl(
+    input: &str,
+    path_id: u32,
+    collect: bool,
+    budget_ms: Option<u64>,
+) -> Result<(String, surface::LspSurface), Error> {
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _scope = budget_ms.map(eval_budget::scope);
+        run_body(input, path_id, collect)
+    }));
+    match outcome {
+        Ok(r) => r,
+        Err(p) if eval_budget::is_timeout(&*p) => Err(Error(format!(
+            "elab timeout: evaluation exceeded {}ms budget",
+            budget_ms.unwrap_or(0)
+        ))),
+        Err(p) => std::panic::resume_unwind(p),
+    }
+}
+
+fn run_body(
+    input: &str,
+    path_id: u32,
+    collect: bool,
+) -> Result<(String, surface::LspSurface), Error> {
     let ast = parser::parser(&preprocess(input), path_id).map_err(Error)?;
+    let mut infer = Infer::new();
+    infer.lsp_collect = collect;
+    // 预算是否已由入口 scope 挂上（tick 只在有预算时打点）
+    infer.budget_on = eval_budget::enabled();
+    // 采集关闭时 [`Cxt::new`] 不做任何渲染；`add_builtin` 的 decl 条目
+    // 也只有零 span / None 串。
     let mut cxt = Cxt::new(&mut infer);
     let mut ret = String::new();
-    for tm in ast {
+    for (idx, tm) in ast.iter().enumerate() {
         let (x, _, new_cxt) = infer.infer(&cxt, tm.clone())?;
         cxt = new_cxt;
         if let DeclTm::Println(x) = x {
-            ret += &pretty::pretty_tm(0, cxt.names(), &infer.nf(&cxt.env, x));
+            let rendered = pretty::pretty_tm(0, cxt.names(), &infer.nf(&cxt.env, x));
+            ret += &rendered;
             ret += "\n";
+            if collect {
+                let span = match tm {
+                    parser::syntax::Decl::Println(r) => surface::raw_span(r),
+                    parser::syntax::Decl::Def { .. } => empty_span(()),
+                };
+                infer.push_println_span(span, &rendered);
+            }
+        }
+        if collect {
+            infer.drain_check_issues(idx);
         }
     }
-    Ok(ret)
+    Ok((ret, infer.surface()))
 }
 
 /// 注释剥离(行 `//` 与块 `/* */`),**字符串字面量内不生效**——旧版对

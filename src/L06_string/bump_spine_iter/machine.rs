@@ -8,8 +8,10 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smol_str::SmolStr;
 use std::cell::RefCell;
 
+use crate::parser_lib::ToSpan;
 use super::parser::syntax::{Decl, Either, Icit, Raw};
-use super::{empty_span, Error};
+use super::{empty_span, pretty, surface, Error};
+use crate::L06_string::surface::raw_span;
 
 use super::entry::{export, NO_NAME_MAP};
 use super::env::{env_ext, env_ext_defs, EMPTY_ENV, Env, PiCell};
@@ -56,7 +58,7 @@ pub(crate) struct Machine {
     decls: FxHashMap<SmolStr, DeclEntryF>,
     /// 可变全局（L06）：builtin `create_global` / `change_mutable` 族的
     /// 存取目标。值指向本轮 bump——每轮清空（参考版每次调用新建 Infer）。
-    mutable_map: MutableMap,
+    pub(crate) mutable_map: MutableMap,
     /// [perf] 常驻 eval/unify/quote 工作栈（lifetime 洗白存储：核函数进入
     /// 即 clear，条目仅在核函数活动期被读，bump 生命期覆盖之，跨轮无读取）。
     /// eval/quote/unify 共用一个 `workbuf` 是安全的：`work` 是「排空即返回」
@@ -72,6 +74,35 @@ pub(crate) struct Machine {
     /// quote 记忆化表：容量跨调用复用，内容**每次调用 clear**——meta 可
     /// 能在两次调用之间被求解，跨调用保留条目会拿到过期中性项。
     quote_memo: QuoteMemo<'static>,
+    // ── 观察面（LSP 引擎侧接线；`docs/l06-lsp-port-2026-11-20.md`）──
+    // 与参考版 `Infer` 同名表逐字段同契约（push 期渲染成 owned String；
+    // bump 域 Tm 轮末即弃）。每轮 `clear_round` 清空。
+    pub(crate) hover_table: Vec<(crate::parser_lib::Span<()>, crate::parser_lib::Span<()>, String)>,
+    /// 补全表：L06 无成员访问，恒空（与参考版契约对称保留）。
+    pub(crate) completion_table: Vec<(crate::parser_lib::Span<()>, SmolStr)>,
+    pub(crate) inlay_hint_table: Vec<(u32, String)>,
+    /// println 输出（span + 渲染串）：LSP INFORMATION 诊断用。
+    pub(crate) println_spans: Vec<(crate::parser_lib::Span<()>, String)>,
+    /// HDL 自检行（decl 下标 + 原始行）：LSP WARNING 诊断用。
+    pub(crate) check_issue_lines: Vec<(usize, String)>,
+    /// `"CheckIssues"` 全局的已排水字节游标（**只读**排水：L06 把该全局当
+    /// 用户可见值打印，不能像 L13 那样清空）。
+    pub(crate) issue_drained: usize,
+    /// 本轮失败的 decl 名字（opt-in 继续驱动填充）。
+    pub(crate) failed_decls: Vec<String>,
+    /// 观察面 push 总闸：**默认 false**（与 L13 相反——L06 没有 prelude 装载
+    /// 段可豁免，bench/run 口径保持无渲染；见移植文档 §1.1）。
+    pub(crate) observe: bool,
+    /// 源码 binder 的 span 轨迹（与 `name_trail` 同 push/pop 纪律，**只在
+    /// `observe` 时**记）：`Raw::Var` 的局部 hover 需要 def_span，而孪生
+    /// 的 `Tm`/`TCons` 都不存 span。
+    pub(crate) binder_spans: Vec<(u32, crate::parser_lib::Span<()>)>,
+    /// 当前 decl 起点处的 `cxt.lvl`（`infer_decl` 入口刷新）：洞的 inlay 锚点
+    /// 判据是"本 decl 内是否进入了 binder"。参考版 `cxt.lvl` 只含局部 binder
+    /// （它的 Def 臂不 define），孪生的 `define_name` 会为每个 def 加 define 槽
+    /// ⇒ 必须减掉 decl 基线，否则顶层洞的锚点会落成上一个 def 名尾（观察面
+    /// parity 实测分叉：`: U` 在 0 vs 234）。
+    pub(crate) decl_base_lvl: u32,
 }
 
 /// 整表/整栈清空不归还缓冲：容量到过该量级时在清空点主动归还，否则峰值
@@ -178,6 +209,16 @@ impl Machine {
             qdone: Vec::new(),
             rename_pool: Vec::new(),
             quote_memo: FxHashMap::default(),
+            hover_table: Vec::new(),
+            completion_table: Vec::new(),
+            inlay_hint_table: Vec::new(),
+            println_spans: Vec::new(),
+            check_issue_lines: Vec::new(),
+            issue_drained: 0,
+            failed_decls: Vec::new(),
+            observe: false,
+            binder_spans: Vec::new(),
+        decl_base_lvl: 0,
         }
     }
 
@@ -194,9 +235,24 @@ impl Machine {
         self.decls.clear();
         self.mutable_map.borrow_mut().clear();
         self.spine.clear();
+        // 观察面六表 + 两条通道（均为 per-run 状态：decl 表轮界重建，
+        // 跨轮保留只会白占内存）。**不清 `observe`**——那是调用方设定的
+        // 口径（与 L13 `clear_round` 同纪律）。
+        self.hover_table.clear();
+        self.completion_table.clear();
+        self.inlay_hint_table.clear();
+        self.println_spans.clear();
+        self.check_issue_lines.clear();
+        self.issue_drained = 0;
+        self.failed_decls.clear();
+        self.binder_spans.clear();
     }
 
     /// Extend Cxt with a bound variable（源码 binder）。
+    ///
+    /// `src_span` 只喂观察面（`Raw::Var` 的局部 hover 要 def_span）：孪生的
+    /// `TCons`/`Tm` 都不存 span，故只在 `observe` 开启时压一条轨迹，与
+    /// `name_trail` 严格同 push/pop 纪律（`unwind_names` 一并截断）。
     #[allow(clippy::too_many_arguments)]
     fn bind_name<'a>(
         &mut self,
@@ -205,11 +261,15 @@ impl Machine {
         x: &str,
         a_t: &'a Tm<'a>,
         ty: V,
+        src_span: crate::parser_lib::Span<()>,
     ) -> Cxt<'a> {
         debug_assert_eq!(self.name_trail.len(), cxt.mark as usize);
         let key = SmolStr::new(x);
         let prev = self.name_map.insert(key.clone(), (cxt.lvl, ty));
         self.name_trail.push((key, prev));
+        if self.observe {
+            self.binder_spans.push((cxt.lvl, src_span));
+        }
         let env = env_ext(bump, cxt.env, v_lvl(cxt.lvl));
         Cxt {
             env,
@@ -267,11 +327,15 @@ impl Machine {
         t_t: &'a Tm<'a>,
         val: V,
         ty: V,
+        src_span: crate::parser_lib::Span<()>,
     ) -> Cxt<'a> {
         debug_assert_eq!(self.name_trail.len(), cxt.mark as usize);
         let key = SmolStr::new(x);
         let prev = self.name_map.insert(key.clone(), (cxt.lvl, ty));
         self.name_trail.push((key, prev));
+        if self.observe {
+            self.binder_spans.push((cxt.lvl, src_span));
+        }
         let env = env_ext_defs(bump, &mut self.defs, cxt.env, val);
         Cxt {
             env,
@@ -289,7 +353,11 @@ impl Machine {
         }
     }
 
-    /// 截断撤销轨迹到 `mark`（binder 作用域退出）。
+    /// 截断撤销轨迹到 `mark`（binder 作用域退出）。`binder_spans` 与
+    /// `name_trail` 严格同纪（bind_name / define_name 各压一条），故用同一
+    /// 截断条件：**不按 `mark` 直接截**——inserted binder（`new_binder`）
+    /// 不动 mark 也不压 span，但它在 mark 之上的 binder_spans 里本来就没有
+    /// 条目，故按 trail 长度对齐即可。
     fn unwind_names(&mut self, mark: u32) {
         while self.name_trail.len() > mark as usize {
             let (key, prev) = self.name_trail.pop().expect("unwind_names: 轨迹为空");
@@ -301,7 +369,21 @@ impl Machine {
                     self.name_map.remove(&key);
                 }
             }
+            if self.observe {
+                self.binder_spans.pop();
+            }
         }
+    }
+
+    /// 局部 hover 的 def_span：按绑定层级回查 `binder_spans`（线性扫，只在
+    /// 采集开启时调用）。
+    pub(super) fn binder_span_at(&self, lvl: u32) -> crate::parser_lib::Span<()> {
+        self.binder_spans
+            .iter()
+            .rev()
+            .find(|(l, _)| *l == lvl)
+            .map(|(_, s)| *s)
+            .unwrap_or_else(|| empty_span(()))
     }
 
     /// 挂新洞（上游 `freshMeta`）：物化闭类型、追加未解条目，产出
@@ -629,7 +711,7 @@ impl Machine {
 
     /// force 的方法包装（Machine 内 elaboration 侧的散装调用点用；解值
     /// 应用可能 β / 触发 prim——分配一律落本轮 bump）。
-    fn force_v(&mut self, bump: &Bump, v: V) -> V {
+    pub(super) fn force_v(&mut self, bump: &Bump, v: V) -> V {
         let Machine {
             spine,
             vals,
@@ -686,7 +768,7 @@ impl Machine {
                     };
                     let mark = cxt.mark;
                     let a_t = self.quote(bump, cxt.lvl, p.dom);
-                    let cxt2 = self.bind_name(bump, cxt, &x.data, a_t, p.dom);
+                    let cxt2 = self.bind_name(bump, cxt, &x.data, a_t, p.dom, x.to_span());
                     let body = self.check(bump, cxt2, tbody, body_a)?;
                     self.unwind_names(mark);
                     Ok(bump.alloc(Tm::Lam(name, p.icit, body)))
@@ -732,18 +814,50 @@ impl Machine {
             self.unwind_names(mark);
             Ok(bump.alloc(Tm::Lam(name, Icit::Impl, body)))
         } else if let Raw::Let(x, a_ty, t, u) = t {
-            let a_tm = self.check_ty(bump, cxt, a_ty)?;
-            let va = self.eval(bump, cxt.env, a_tm);
-            let t_tm = self.check(bump, cxt, t, va)?;
-            let vt = self.eval(bump, cxt.env, t_tm);
+            let a_is_hole = matches!(a_ty.as_ref(), Raw::Hole);
+            // 无类型注解的 let：直接推断体的类型（**与参考版 check 的 Let 臂同构**，
+            // 见 elaboration.rs 同名注释）：注解是洞时绕过 check_ty ⇒ 少一个
+            // fresh_meta(U)，?N 编号与参考版对齐。旧实现无条件 check_ty(a_ty)，
+            // 把洞当类型检查，多出一个 ": U" 的 inlay 条目——观察面 parity 测试
+            // let_binder_hover_and_inlay 抓到的唯一分叉。
+            let (a_tm, va, t_tm, vt) = if a_is_hole {
+                let (t_tm, ty) = self.infer(bump, cxt, t)?;
+                let a_tm = self.quote(bump, cxt.lvl, ty);
+                let vt = self.eval(bump, cxt.env, t_tm);
+                (a_tm, ty, t_tm, vt)
+            } else {
+                let a_tm = self.check_ty(bump, cxt, a_ty)?;
+                let va = self.eval(bump, cxt.env, a_tm);
+                let t_tm = self.check(bump, cxt, t, va)?;
+                let vt = self.eval(bump, cxt.env, t_tm);
+                (a_tm, va, t_tm, vt)
+            };
             let name: &'a str = bump.alloc_str(&x.data);
             let mark = cxt.mark;
-            let cxt2 = self.define_name(bump, cxt, &x.data, a_tm, t_tm, vt, va);
+            // 观察面：check 路径的 let binder（参考版 check 的 Let 臂同点位；
+            // `docs/lsp-twin-wiring-2026-09.md` §2026-09-09 续的 P1 修复）
+            if self.observe {
+                let rendered = self.render_val(bump, cxt, va);
+                self.hover_table.push((x.to_span(), x.to_span(), rendered));
+                if a_is_hole {
+                    self.push_inlay_hint(bump, cxt, x.to_span().end_offset, va);
+                }
+            }
+            let cxt2 = self.define_name(bump, cxt, &x.data, a_tm, t_tm, vt, va, x.to_span());
             let u_tm = self.check(bump, cxt2, u, a)?;
             self.unwind_names(mark);
             Ok(bump.alloc(Tm::Let(name, a_tm, t_tm, u_tm)))
         } else if let Raw::Hole = t {
             // hole：以 fresh meta 填充（类型 = 期望类型）
+            // 观察面：期望类型已知时补一条 `: <type>`（锚点降级同参考版）
+            if self.observe {
+                let pos = if cxt.lvl > self.decl_base_lvl {
+                    self.binder_span_at(cxt.lvl - 1).end_offset
+                } else {
+                    0
+                };
+                self.push_inlay_hint(bump, cxt, pos, a);
+            }
             Ok(self.fresh_meta(bump, cxt, a))
         } else {
             let (t2, tty) = self.infer(bump, cxt, t)?;
@@ -810,7 +924,7 @@ impl Machine {
             let name: &'a str = bump.alloc_str(&x.data);
             let mark = cxt.mark;
             let a_t = self.quote(bump, cxt.lvl, va);
-            let cxt2 = self.bind_name(bump, cxt, &x.data, a_t, va);
+            let cxt2 = self.bind_name(bump, cxt, &x.data, a_t, va, x.to_span());
             let res: Result<&'a Tm<'a>, Error> = {
                 self.ty_precheck(bump, b)?;
                 let b_tm = self.check(bump, cxt2, b, v_u())?;
@@ -831,6 +945,12 @@ impl Machine {
                 if !NO_NAME_MAP.load(std::sync::atomic::Ordering::Relaxed) {
                     // O(1)：表与 types 链由 bind/define + trail 同步维护
                     if let Some(&(blvl, ty)) = self.name_map.get(x.data.as_str()) {
+                        // 观察面：局部名使用处 hover（def_span 从 binder 轨迹取）
+                        if self.observe {
+                            let def_span = self.binder_span_at(blvl);
+                            let rendered = self.render_val(bump, cxt, ty);
+                            self.hover_table.push((x.to_span(), def_span, rendered));
+                        }
                         return Ok((bump.alloc(Tm::Var(cxt.lvl - blvl - 1)), ty));
                     }
                 } else {
@@ -839,6 +959,11 @@ impl Machine {
                     let mut tys = cxt.types;
                     while let Some(tc) = tys {
                         if tc.source && tc.name == x.data {
+                            if self.observe {
+                                let def_span = self.binder_span_at(cxt.lvl - i - 1);
+                                let rendered = self.render_val(bump, cxt, tc.ty);
+                                self.hover_table.push((x.to_span(), def_span, rendered));
+                            }
                             return Ok((bump.alloc(Tm::Var(i)), tc.ty));
                         }
                         i += 1;
@@ -850,7 +975,18 @@ impl Machine {
                 // 是递归 def 体检查期间的自身占位——引用走 `Tm::Decl`
                 // （求值期查表取登记值，检查期即占位的卡住 Decl 头）
                 if let Some(e) = self.decls.get(x.data.as_str()) {
-                    return Ok((bump.alloc(Tm::Decl(bump.alloc_str(&x.data))), e.va));
+                    let (va, span, cached, cached_final) =
+                        (e.va, e.span, e.typ_pretty.clone(), e.typ_pretty_final);
+                    // 观察面：全局名使用处 hover（登记期串 final ⇒ 直推缓存，
+                    // 否则实时渲染——L13 `push_hover_cached` 同款）
+                    if self.observe {
+                        let rendered = match &cached {
+                            Some(s) if cached_final => (**s).clone(),
+                            _ => self.render_val(bump, cxt, va),
+                        };
+                        self.hover_table.push((x.to_span(), span, rendered));
+                    }
+                    return Ok((bump.alloc(Tm::Decl(bump.alloc_str(&x.data))), va));
                 }
                 Err(Error(format!(
                     "error name not in scope: {:?}",
@@ -860,10 +996,17 @@ impl Machine {
 
             Raw::U => Ok((bump.alloc(Tm::U), v_u())),
 
-            Raw::LiteralIntro(l) => Ok((
-                bump.alloc(Tm::LiteralIntro(bump.alloc_str(&l.data))),
-                v_lit_ty(),
-            )),
+            Raw::LiteralIntro(l) => {
+                // 观察面：字面量自身的类型（L06 增量，见移植文档 §1.3）。
+                if self.observe {
+                    self.hover_table
+                        .push((l.to_span(), l.to_span(), "String".to_owned()));
+                }
+                Ok((
+                    bump.alloc(Tm::LiteralIntro(bump.alloc_str(&l.data))),
+                    v_lit_ty(),
+                ))
+            }
 
             // 定义域挂洞；余定义域闭包住当前环境；体推断后在扩展后的
             // 上下文里 insert
@@ -873,7 +1016,7 @@ impl Machine {
                 let a = self.eval_fresh(bump, cxt.env, new_meta);
                 let mark = cxt.mark;
                 let a_t = self.quote(bump, cxt.lvl, a);
-                let cxt2 = self.bind_name(bump, cxt, &x.data, a_t, a);
+                let cxt2 = self.bind_name(bump, cxt, &x.data, a_t, a, x.to_span());
                 let (t, b) = self.infer(bump, cxt2, tbody)?;
                 let (t, b) = self.insert(bump, cxt2, t, b)?;
                 self.unwind_names(mark);
@@ -972,20 +1115,31 @@ impl Machine {
                 let name: &'a str = bump.alloc_str(&x.data);
                 let mark = cxt.mark;
                 let a_t = self.quote(bump, cxt.lvl, va);
-                let cxt2 = self.bind_name(bump, cxt, &x.data, a_t, va);
+                let cxt2 = self.bind_name(bump, cxt, &x.data, a_t, va, x.to_span());
                 let b_tm = self.check_ty(bump, cxt2, b)?;
                 self.unwind_names(mark);
                 Ok((bump.alloc(Tm::Pi(name, *i, a_tm, b_tm)), v_u()))
             }
 
             Raw::Let(x, a_ty, t, u) => {
+                let a_is_hole = matches!(a_ty.as_ref(), Raw::Hole);
                 let a_tm = self.check_ty(bump, cxt, a_ty)?;
                 let va = self.eval(bump, cxt.env, a_tm);
                 let t_tm = self.check(bump, cxt, t, va)?;
                 let vt = self.eval(bump, cxt.env, t_tm);
                 let name: &'a str = bump.alloc_str(&x.data);
                 let mark = cxt.mark;
-                let cxt2 = self.define_name(bump, cxt, &x.data, a_tm, t_tm, vt, va);
+                // 观察面：let binder 定义处 hover + 无类型注解时的 inlay
+                // （参考版 infer 的 Let 臂 / L13 elaboration.rs:3409-3413）
+                if self.observe {
+                    let rendered = self.render_val(bump, cxt, va);
+                    self.hover_table.push((x.to_span(), x.to_span(), rendered));
+                    // inlay 显示类型（偏差登记见参考版 elaboration.rs 同名注释）
+                    if a_is_hole {
+                        self.push_inlay_hint(bump, cxt, x.to_span().end_offset, va);
+                    }
+                }
+                let cxt2 = self.define_name(bump, cxt, &x.data, a_tm, t_tm, vt, va, x.to_span());
                 let (u_tm, uty) = self.infer(bump, cxt2, u)?;
                 self.unwind_names(mark);
                 Ok((bump.alloc(Tm::Let(name, a_tm, t_tm, u_tm)), uty))
@@ -995,6 +1149,16 @@ impl Machine {
                 let new_meta = self.fresh_meta(bump, cxt, v_u());
                 let a = self.eval_fresh(bump, cxt.env, new_meta);
                 let t = self.fresh_meta(bump, cxt, a);
+                // 观察面：洞无源码 span，锚点退到最内层 binder 尾
+                // （与参考版同降级，见移植文档 §1.10）。
+                if self.observe {
+                    let pos = if cxt.lvl > 0 {
+                        self.binder_span_at(cxt.lvl - 1).end_offset
+                    } else {
+                        0
+                    };
+                    self.push_inlay_hint(bump, cxt, pos, a);
+                }
                 Ok((t, a))
             }
         }
@@ -1008,6 +1172,8 @@ impl Machine {
         cxt: Cxt<'a>,
         d: &Decl,
     ) -> Result<(DeclOut<'a>, Cxt<'a>), Error> {
+        // 洞 inlay 锚点的 decl 基线（见 `Machine::decl_base_lvl` 注释）
+        self.decl_base_lvl = cxt.lvl;
         match d {
             Decl::Def {
                 name,
@@ -1055,18 +1221,53 @@ impl Machine {
                             vt: v_xcell(bump.alloc(XCell::Decl(self_name))),
                             va: vtyp,
                             prim: None,
+                            span: name.to_span(),
+                            typ_pretty: None,
+                            typ_pretty_final: false,
                         });
                     }
                 }
                 let t_tm = self.check(bump, cxt, &bod, vtyp)?;
                 let vt = self.eval(bump, cxt.env, t_tm);
+                // 观察面（L13 `decl_reg_in` 的同点位）：登记处渲染一次类型串，
+                // def-site hover 与「使用处 final 短路」共用同一份 `Rc<String>`。
+                // 采集关闭时零渲染。
+                let rendered = self.render_typ_pretty(bump, cxt, vtyp);
+                if let Some((r, _)) = &rendered {
+                    self.hover_table
+                        .push((name.to_span(), name.to_span(), r.as_ref().clone()));
+                }
                 // decl 表终值原地覆写（运行期按名取值：string_to_global_type
                 // 等）：占位刚插入且无中途删除路径，get_mut 必命中，免二次
                 // key 克隆
                 if let Some(slot) = self.decls.get_mut(name.data.as_str()) {
                     slot.vt = vt;
+                    if let Some((r, f)) = rendered {
+                        slot.typ_pretty = Some(r);
+                        slot.typ_pretty_final = f;
+                    }
                 }
-                let cxt2 = self.define_name(bump, cxt, &name.data, typ_tm, t_tm, vt, vtyp);
+                // 观察面：def 无显式返回类型 → inlay 推断返回类型（参考版
+                // 同点位；锚点 = 最后参数结束 +1，无参则名结束）。
+                if self.observe && matches!(ret_type, Raw::Hole) {
+                    let (ret_val, ret_lvl, peeled) = self.peel_pi_collect(bump, cxt, vtyp);
+                    let q = self.quote(bump, ret_lvl, ret_val);
+                    if !no_metas(q, &self.metas) {
+                        let mut names = types_names_list(cxt.types);
+                        // peeled 是外→内剥集序；List 头 = 最内层 ⇒ 逆序 prepend
+                        for pn in peeled.iter().rev() {
+                            names = names.prepend(pn.to_string());
+                        }
+                        let label =
+                            surface::inlay_label(&pretty::pretty_tm(0, names, &export(q)));
+                        let pos = params
+                            .last()
+                            .map(|p| raw_span(&p.1).end_offset + 1)
+                            .unwrap_or_else(|| name.to_span().end_offset);
+                        self.inlay_hint_table.push((pos, label));
+                    }
+                }
+                let cxt2 = self.define_name(bump, cxt, &name.data, typ_tm, t_tm, vt, vtyp, name.to_span());
                 Ok((
                     DeclOut::Def {
                         name: bump.alloc_str(&name.data),
@@ -1171,6 +1372,41 @@ impl<'a> Cxt<'a> {
     }
 }
 
+/// 项里是否有**未解** meta（`Tm::Meta` 指向 `MetaEntry::Unsolved`）。迭代
+/// 走查、零分配；`quote` 产出的形态无 `AppPruning`，故不做掩码展开。
+/// L13 `no_metas`（`bump_spine_iter/entry.rs:576`）的 L06 精简版：L06 的项
+/// 只有这些构造子，也不需要"按 lvl 引读解"（L13 那套依赖 `AppPruning` 与
+/// decl 展开，L06 两者都没有）。
+pub(super) fn no_metas(t: &Tm<'_>, metas: &[MetaEntry]) -> bool {
+    let mut stack: Vec<&Tm<'_>> = vec![t];
+    while let Some(x) = stack.pop() {
+        match x {
+            Tm::Meta(m) => {
+                if matches!(metas[*m as usize], MetaEntry::Unsolved(_)) {
+                    return true;
+                }
+            }
+            Tm::Var(_) | Tm::U | Tm::LiteralType | Tm::LiteralIntro(_) | Tm::Decl(_) => {}
+            Tm::Lam(_, _, b) => stack.push(b),
+            Tm::App(f, a, _) => {
+                stack.push(f);
+                stack.push(a);
+            }
+            Tm::AppPruning(h, _) => stack.push(h),
+            Tm::Pi(_, _, a, b) => {
+                stack.push(a);
+                stack.push(b);
+            }
+            Tm::Let(_, a, t, u) => {
+                stack.push(a);
+                stack.push(t);
+                stack.push(u);
+            }
+        }
+    }
+    false
+}
+
 /// types 链 → 参考版 pretty 的名字 List（头 = 最内层；List::prepend 从尾
 /// 起构回，序不变）。
 pub(super) fn types_names_list(tys: Option<&TCons<'_>>) -> crate::list::List<String> {
@@ -1232,6 +1468,9 @@ impl Machine {
                 vt: v_lit_ty(),
                 va: v_u(),
                 prim: None,
+                span: empty_span(()),
+                typ_pretty: None,
+                typ_pretty_final: false,
             },
         );
         let u_tm: &'a Tm<'a> = bump.alloc(Tm::U);
@@ -1244,6 +1483,7 @@ impl Machine {
             lit_ty_tm,
             v_lit_ty(),
             v_u(),
+            empty_span(()),
         );
         // builtin 组（名, 类型项, prim）——与参考版 Cxt::new 同序
         let lit_ty = bump.alloc(Tm::LiteralType);
@@ -1352,10 +1592,13 @@ impl Machine {
                     vt: head,
                     va,
                     prim: Some(prim),
+                    span: empty_span(()),
+                    typ_pretty: None,
+                    typ_pretty_final: false,
                 },
             );
             let name_tm: &'a Tm<'a> = bump.alloc(Tm::Decl(bump.alloc_str(name)));
-            cxt = self.define_name(bump, cxt, name, ty, name_tm, head, va);
+            cxt = self.define_name(bump, cxt, name, ty, name_tm, head, va, empty_span(()));
         }
         cxt
     }
