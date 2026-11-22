@@ -1014,7 +1014,6 @@ mod L07_sum_type;
 use L07_sum_type::bump_spine_iter as fast;
 
 /// 在大栈线程里跑参考版 `run`。
-#[cfg(feature = "l07-twin")]
 fn run_basic(src: &str) -> Result<String, L07_sum_type::Error> {
     let input = src.to_owned();
     std::thread::Builder::new()
@@ -1449,7 +1448,6 @@ fn assert_terminates_full_parity(src: &str, secs: u64) {
 /// 随后 `?5` 被 flex_flex 解成**双 λ 转发解**，而引用它的 spine 值（建链早
 /// 于求解）仍是陈旧位模式。修复前快版报错混入红ex
 /// `?0 ((b' => ?5 a b') b) a`；修复后两版都给干净形态 `?0 (?5 a b)`。
-#[cfg(feature = "l07-twin")]
 #[test]
 fn redex_regression_eq_swapped_args() {
     let src = format!(
@@ -1459,13 +1457,15 @@ fn redex_regression_eq_swapped_args() {
     // 参考版：干净形态（无重拼红ex），golden 钉死
     let b = run_basic(&src).unwrap_err();
     assert_eq!(format!("{b:?}"), golden);
-    // 快版：修复后与参考版逐字节同形
-    let f = run_fast(&src).unwrap_err();
-    assert_eq!(format!("{f:?}"), golden);
+    // 快版：修复后与参考版逐字节同形（孪生已封印，默认不跑）
+    #[cfg(feature = "l07-twin")]
+    {
+        let f = run_fast(&src).unwrap_err();
+        assert_eq!(format!("{f:?}"), golden);
+    }
 }
 
 /// 同族镜像：实参顺序互换（`m1 a` vs `m1 b`），失败方向镜像。
-#[cfg(feature = "l07-twin")]
 #[test]
 fn redex_regression_eq_args_order_mirror() {
     let src = format!(
@@ -1474,12 +1474,14 @@ fn redex_regression_eq_args_order_mirror() {
     let golden = r#"Error("can't unify (P: U → U) → P (?0 (?5 a b) a) → P (?0 (?5 a b) b) == (P: U → U) → P (?0 (?5 a b) a) → P (?0 (?5 a b) a)")"#;
     let b = run_basic(&src).unwrap_err();
     assert_eq!(format!("{b:?}"), golden);
-    let f = run_fast(&src).unwrap_err();
-    assert_eq!(format!("{f:?}"), golden);
+    #[cfg(feature = "l07-twin")]
+    {
+        let f = run_fast(&src).unwrap_err();
+        assert_eq!(format!("{f:?}"), golden);
+    }
 }
 
 /// 同族：`m1` 多一个显式域（P 的定义域带箭头），转发解照旧、红ex 照旧。
-#[cfg(feature = "l07-twin")]
 #[test]
 fn redex_regression_extra_domain() {
     let src = format!(
@@ -1488,8 +1490,11 @@ fn redex_regression_extra_domain() {
     let golden = r#"Error("can't unify (P: (U → U) → U) → P (?0 (?5 a b) b) → P (?0 (?5 a b) a) == (P: (U → U) → U) → P (?0 (?5 a b) b) → P (?0 (?5 a b) b)")"#;
     let b = run_basic(&src).unwrap_err();
     assert_eq!(format!("{b:?}"), golden);
-    let f = run_fast(&src).unwrap_err();
-    assert_eq!(format!("{f:?}"), golden);
+    #[cfg(feature = "l07-twin")]
+    {
+        let f = run_fast(&src).unwrap_err();
+        assert_eq!(format!("{f:?}"), golden);
+    }
 }
 
 /// 家族批量全文 parity（L05 同款形状网格：6 体 × 3 声明），带看门狗。
@@ -1519,13 +1524,13 @@ fn redex_family_full_parity_scan() {
 
 /// 可解例（Ok 路径对照）：η 展开后经 intersect 剪掉差异槽，方程可解、
 /// 程序成功——修复不得影响中性路径的正常引读。
-#[cfg(feature = "l07-twin")]
 #[test]
 fn redex_family_solvable_ok() {
     let src = format!(
         "{CHURCH}def m1 : U -> U -> U = _\ndef t = a => b => the (Eq (m1 a) (z => m1 b z)) refl\nprintln U\n"
     );
     assert_lines(&src, &["U"]);
+    #[cfg(feature = "l07-twin")]
     assert_full_parity(&src);
 }
 
