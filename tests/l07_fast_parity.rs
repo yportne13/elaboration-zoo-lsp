@@ -1,3 +1,4 @@
+#![cfg(feature = "l07-twin")]
 //! L07_sum_type 双 oracle 互检套件（参考版 `run` ↔ 性能版 `bump_spine_iter::
 //! run_fast`）。`#[path]` 只编 list.rs / parser_lib.rs / L07_sum_type/mod.rs
 //! （不含 LSP / L02-L06 / L13），迭代快数倍（tests/l06_blackbox.rs 同款）。
