@@ -412,6 +412,39 @@ def f(p: Point): Nat = p.z
     }
 }
 
+/// 同 [`elaborate_infer`]，但**关闭观察面采集**（`lsp_collect = false`）——
+/// 复杂度探针的对照组（只差采集开关，其余完全相同）。
+fn elaborate_infer_no_collect(input: &str) -> Infer {
+    let (mut infer, mut cxt, global_macros) = prelude_state_for_probe();
+    infer.lsp_collect = false;
+    let ast = parser::parser_with_macros(&preprocess(input), 24, &global_macros)
+        .map(|(d, e, _, _)| (d, e)).unwrap();
+    for tm in ast.0 {
+        let (_, _, new_cxt) = infer.infer(&cxt, tm.clone()).unwrap();
+        cxt = new_cxt;
+    }
+    infer
+}
+
+fn elaborate_infer_pair(input: &str) -> Option<(Infer, super::Cxt)> {
+    Some(elaborate_infer_ctx(input))
+}
+
+fn prelude_state_for_probe() -> (Infer, super::Cxt, super::PreludeMacros) {
+    PRELUDE_CACHE.with(|c: &super::PreludeSlot| {
+        let mut guard = c.cell.borrow_mut();
+        if guard.is_none() {
+            *guard = Some(load_prelude_state().unwrap());
+        }
+        let state = guard.as_ref().unwrap();
+        let mut infer = state.infer.clone();
+        infer.mutable_map = Rc::new(std::sync::RwLock::new(
+            state.infer.mutable_map.read().unwrap().clone(),
+        ));
+        (infer, state.cxt.clone(), state.global_macros.clone())
+    })
+}
+
 /// 同 [`elaborate_infer`]，但同时返回**最终 Cxt**（读 decl 表里登记期渲染串用）。
 fn elaborate_infer_ctx(input: &str) -> (Infer, super::Cxt) {
     let (mut infer, mut cxt, global_macros) = {
@@ -641,4 +674,137 @@ fn dbg_probe() {
     }
     let pos = input.find("foo").unwrap();
     println!("pos={pos} entry={:?}", infer.hover_entry_at(24, pos).map(|x| x.2.clone()));
+}
+
+
+
+/// 复杂度探针（单一来源）：所有数值打印到 stdout，供文档引用。
+///
+/// A) `lsp_surface()` 相对直接 `hover_table.clone()` 的额外开销（应 ≈ 0）
+/// B) 采集开启（`lsp_collect = true`）相对关闭时的**整轮推断**开销
+/// C) `match_to_decl` 的扫描成本随形状表条目数增长
+///
+/// 默认不跑（耗时 ~10s，且只打印不断言）：`cargo test --release --lib
+/// L13_namespace::debug_test::complexity_probe -- --ignored --nocapture`。
+#[test]
+#[ignore = "复杂度探针：只打印不断言，需 --ignored 显式跑"]
+fn complexity_probe() {
+    fn per_call<F: FnMut()>(n: usize, mut f: F) -> f64 {
+        f();
+        let t = std::time::Instant::now();
+        for _ in 0..n { f(); }
+        t.elapsed().as_secs_f64() * 1e6 / n as f64
+    }
+
+    println!("--- A: lsp_surface() vs hover_table.clone() ---");
+    for d in [20usize, 100, 400] {
+        let mut src = String::from("def T(n: Nat): Type 0 =\n    match n {\n        case zero => Boolean\n        case succ(m) => Nat\n    }\n");
+        for i in 0..d {
+            src.push_str(&format!("def f{i}(n: Nat): Nat = n\n"));
+        }
+        let infer = elaborate_infer(&src);
+        let a_snap = per_call(200, || { let _ = infer.lsp_surface(); });
+        let a_clone = per_call(200, || { let _: Vec<(Span<()>, Span<()>, String)> = infer.hover_table.clone(); });
+        println!(
+            "D={d:<4} hover={:<5} | lsp_surface={a_snap:>7.2}µs  hover.clone={a_clone:>7.2}µs  delta={:+.2}µs",
+            infer.hover_table.len(),
+            a_snap - a_clone
+        );
+    }
+
+    println!("--- B: lsp_collect on/off（整轮推断，D 个有注解 def）---");
+    for d in [10usize, 50, 200] {
+        let mut src = String::from("def T(n: Nat): Type 0 =\n    match n {\n        case zero => Boolean\n        case succ(m) => Nat\n    }\n");
+        for i in 0..d {
+            src.push_str(&format!("def g{i}(n: Nat): T n =\n    match n {{\n        case zero => true\n        case succ(m) => zero\n    }}\n"));
+        }
+        let on = per_call(5, || { let _ = elaborate_infer(&src); });
+        // 关闭采集：同一份源码，把 gate 关掉重跑
+        let off = per_call(5, || {
+            let infer = elaborate_infer_no_collect(&src);
+            let _ = infer;
+        });
+        println!("D={d:<4} on={on:>9.1}µs  off={off:>9.1}µs  ratio={:.3}x", on / off);
+    }
+
+    println!("--- C: 形状表扫描（match_to_decl 的线性扫描）---");
+    for n in [1usize, 10, 50, 200] {
+        let mut m: rustc_hash::FxHashMap<SmolStr, Vec<super::shape::MatchShape>> = Default::default();
+        for i in 0..n {
+            m.insert(
+                SmolStr::new(format!("T{i}")),
+                vec![super::shape::MatchShape {
+                    pats: vec![
+                        super::PatternDetail::Any(empty_span(SmolStr::new("_0")), None, Icit::Expl),
+                        super::PatternDetail::Bind(empty_span(SmolStr::new("_0"))),
+                    ],
+                    env_len: 0,
+                    source: super::shape::ShapeSource::FromValue,
+                    type_level: true,
+                }],
+            );
+        }
+        // 直接对扫描本身计时：模拟一条命中/未命中的查找
+        let probe: rustc_hash::FxHashMap<SmolStr, Vec<super::shape::MatchShape>> = m.clone();
+        let per = per_call(2000, || {
+            let mut hits = 0usize;
+            for (_k, v) in probe.iter() {
+                for s in v.iter() {
+                    if s.type_level && s.pats.len() == 2 { hits += 1; }
+                }
+            }
+            std::hint::black_box(hits);
+        });
+        println!("shapes={n:<4} full_scan={per:>8.2}µs  per_entry={:>8.3}µs", per / n as f64);
+    }
+}
+
+/// 复杂度探针 D：**旧路径 vs 源码路径**的直接对照。
+///
+/// 旧路径 = `nf(quote_vtyp)`（`pretty_tm` 之前的那一步），对 `Val::Nat(k)` 会走
+/// `quote_nat` 建 k 层 `SumCase` 链；源码路径 = `raw_pretty::def_type_from_source`（纯拼串）。
+#[test]
+#[ignore = "复杂度探针：只打印不断言，需 --ignored 显式跑"]
+fn complexity_probe_old_vs_source() {
+    fn per_call<F: FnMut()>(n: usize, mut f: F) -> f64 {
+        f();
+        let t = std::time::Instant::now();
+        for _ in 0..n { f(); }
+        t.elapsed().as_secs_f64() * 1e6 / n as f64
+    }
+    println!("--- D: 注解 `Box K`（K 个字面量）的渲染成本 ---");
+    for k in [10u64, 100, 1000, 10000] {
+        let src = format!("def Box(n: Nat): Type 0 = Nat\ndef big(n: Nat): Box {k} = n\n");
+        // 源码路径：只拼串（不碰 Infer）
+        let raw_src = parser::parser_with_macros(&preprocess(&src), 24, &Default::default())
+            .map(|(d, _, _, _)| d).unwrap();
+        // 从 AST 里取 big 的签名
+        let mut params: Vec<(Span<SmolStr>, parser::syntax::Raw, Icit)> = Vec::new();
+        let mut ret: Option<parser::syntax::Raw> = None;
+        for d in raw_src.iter() {
+            if let parser::syntax::Decl::Def { name, params: p, ret_type, .. } = d {
+                if name.data.as_str() == "big" {
+                    params = p.clone();
+                    ret = Some(ret_type.clone());
+                }
+            }
+        }
+        let (params, ret) = (params, ret.expect("big"));
+        let source_us = per_call(200, || {
+            let _ = std::hint::black_box(super::raw_pretty::def_type_from_source(&params, &ret));
+        });
+        // 旧路径：真做一次 nf+quote（用 elaborate_infer 里同样的 Infer）
+        let infer = elaborate_infer(&src);
+        let cxt = { elaborate_infer_pair(&src) };
+        let mut old_us = f64::NAN;
+        if let Some((_inf, c)) = cxt {
+            if let Some(e) = c.decl.get("big") {
+                let typ_tm = e.3.clone();
+                old_us = per_call(50, || {
+                    let _ = std::hint::black_box(infer.nf(&c.decl, &c.env, &typ_tm));
+                });
+            }
+        }
+        println!("K={k:<6} source={source_us:>8.2}µs  old(nf+quote)={old_us:>12.1}µs");
+    }
 }
