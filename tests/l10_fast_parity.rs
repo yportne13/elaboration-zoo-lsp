@@ -1,3 +1,4 @@
+#![cfg(feature = "l10-twin")]
 //! L10_typeclass 双 oracle 互检套件（参考版 `run` ↔ `bump_spine_iter::run_fast`）。
 //!
 //! 2026-11-17 重建：L10 = 新 L09 + trait/typeclass。本套件继承 l09_fast_parity

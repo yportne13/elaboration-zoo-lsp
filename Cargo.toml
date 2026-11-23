@@ -189,6 +189,11 @@ sampler = ["dep:backtrace", "dep:inferno"]
 l07-twin = []
 # L08 孪生封印（2026-11-23，同 L07）：ref↔孪生的逐字节 parity 不再作默认门禁。
 l08-twin = []
+# L09–L12 孪生封印（2026-11-23，同 L07/L08）：ref↔孪生的逐字节 parity 不再作默认门禁。
+l09-twin = []
+l10-twin = []
+l11-twin = []
+l12-twin = []
 
 # The lib tests elaborate the prelude on every test thread (the prelude
 # cache is thread-local since the Arc->Rc migration).  Unoptimized debug

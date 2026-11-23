@@ -1,3 +1,4 @@
+#![cfg(feature = "l11-twin")]
 //! L11_macro 双 oracle 互检套件（参考版 `run` ↔ `bump_spine_iter::run_fast`）。
 //!
 //! 2026-11-17 重建：L11 = 新 L10 + macro_rules。本套件继承 l10_fast_parity

@@ -107,7 +107,11 @@ impl Infer {
                     // 链上是 O(n²)（每层都重建整条 Locals 的 Pi/Let 类型）；
                     // 深 let 探针 n=1000 从 ~168ms 降到 ~2.4ms。
                     let (t_checked, ty) = self.infer_expr(cxt, *t)?;
-                    let a_checked = self.quote(decl, cxt.lvl, ty.clone());
+                    // 无注解 let 的推断类型**不物化为 Tm**（L07/L08 同款，2026-11-23）：
+                    // 该 Tm 只被 `close_ty` 拼进 meta 类型的 `Tm::Let`，`eval(Tm::Let)` 不读它，
+                    // `prune_ty`/`lams` 只在值层 Π 上工作，显示层用名字表的值——是死代码。
+                    // 物化会把 2^n 的类型树写成项。占位 `Tm::U` 永不求值/打印。
+                    let a_checked = Tm::U(0);
                     let vt = self.eval(decl, &cxt.env, &t_checked);
                     (a_checked, ty, t_checked, vt)
                 } else {

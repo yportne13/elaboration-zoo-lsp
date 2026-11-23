@@ -1,3 +1,4 @@
+#![cfg(feature = "l12-twin")]
 //! L12_canonical 双 oracle 互检套件（参考版 `run` ↔ `bump_spine_iter::run_fast`）。
 //!
 //! 2026-11-17 重建：L12 = 新 L11 + Val 级 trait 求解 + Call 节点。本套件继承

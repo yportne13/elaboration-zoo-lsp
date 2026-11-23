@@ -1,3 +1,4 @@
+#![cfg(feature = "l09-twin")]
 //! L09_mltt 双 oracle 互检套件（参考版 `run` ↔ 性能版 `bump_spine_iter::run_fast`）。
 //!
 //! 2026-11-17 重建：L09 以 L08 实现为基线（decl 表 / σ / 逐臂 match / 双引擎）

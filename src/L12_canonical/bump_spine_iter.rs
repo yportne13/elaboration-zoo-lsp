@@ -1,3 +1,9 @@
+//! # ⚠️ 已封印（SEALED，2026-11-23）
+//!
+//! 本孪生不再参与默认门禁与 parity 契约（同 L07/L08）：
+//! `tests/l12_fast_parity.rs` 改为 feature-gated。
+//! 复核：`cargo test --features l12-twin`。
+//!
 //! L12 核心机（eval / quote / unify / force / rename / solve / prune / check /
 //! infer / decl 表 / builtin prim / enum 注册 / 模式编译 / trait 求解）的极致性能版：
 //! 新 L09 冠军配方（`bump_spine_iter`）原样继承，叠加 trait 层：Machine.tstate、

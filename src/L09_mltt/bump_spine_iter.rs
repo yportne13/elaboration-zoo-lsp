@@ -1,3 +1,9 @@
+//! # ⚠️ 已封印（SEALED，2026-11-23）
+//!
+//! 本孪生不再参与默认门禁与 parity 契约（同 L07/L08）：
+//! `tests/l09_fast_parity.rs` 改为 feature-gated。
+//! 复核：`cargo test --features l09-twin`。
+//!
 //! L09 核心机（eval / quote / unify / force / rename / solve / prune / check /
 //! infer / decl 表 / builtin prim / enum 注册 / 模式编译）的极致性能版：
 //! L08 冠军配方（`bump_spine_iter`）原样继承，叠加 `Type N` 宇宙的孪生实现
