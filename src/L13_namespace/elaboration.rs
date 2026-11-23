@@ -2839,6 +2839,30 @@ impl Infer {
     /// pretty，不再需要可 quote 的 live `Infer`——孪生（bump arena）供同一契约的
     /// 前提。quote 是纯函数（&self），与旧「存 Val、查询期 quote」逐字节等价。
 
+    /// 全局名使用处 hover：优先复用 decl 表里登记期算好的 `typ_pretty`（e.6）——
+    /// 那是 def-site 渲染串（与 `lib.rs:811` 的 LSP 消费口径一致），命中时**免去**
+    /// 一次 `quote` + `pretty` 全管线。这也是 `quote_nat` 的规避点：`quote` 对
+    /// `Val::Nat(k)` 要建 k 层 SumCase 链，而登记串是纯文本。
+    /// 回落条件：该键不在 decl 表（前向声明 / 内建 prim）或登记串为空。
+    pub(crate) fn push_hover_decl(
+        &mut self,
+        cxt: &Cxt,
+        t_span: Span<()>,
+        key: &str,
+    ) -> bool {
+        if !self.lsp_collect {
+            return false;
+        }
+        if let Some((def_span, _, _, _, _, _, typ_pretty)) = cxt.decl.get(key) {
+            if !typ_pretty.is_empty() {
+                self.hover_table
+                    .push((t_span, *def_span, typ_pretty.clone()));
+                return true;
+            }
+        }
+        false
+    }
+
     pub(crate) fn push_hover(&mut self, cxt: &Cxt, t_span: Span<()>, def_span: Span<()>, val: &Rc<Val>) {
         if !self.lsp_collect { return; }
         let tm = self.quote(&cxt.decl, cxt.lvl, val);
@@ -2922,7 +2946,10 @@ impl Infer {
                 },
                 None => match cxt.decl.get(&name.data) {
                     Some((def, _, _, _, vty, _, _)) => {
-                        self.push_hover(cxt, t_span, *def, &vty);
+                        // 复用登记期渲染串（免一次 quote+pretty；也是 quote_nat 的规避点）。
+                        if !self.push_hover_decl(cxt, t_span, &name.data) {
+                            self.push_hover(cxt, t_span, *def, &vty);
+                        }
                         Ok((Tm::Decl(name).into(), vty.clone()))
                     },
                     None => {
@@ -2932,7 +2959,9 @@ impl Infer {
                         // > namespace_prefix > suffix fallback.
                         if let Some(full) = self.import_map.get(&name.data).cloned() {
                             if let Some((def, _, _, _, vty, _, _)) = cxt.decl.get(&full) {
-                                self.push_hover(cxt, t_span, *def, vty);
+                                if !self.push_hover_decl(cxt, t_span, &full) {
+                                    self.push_hover(cxt, t_span, *def, vty);
+                                }
                                 return Ok((Tm::Decl(empty_span(full.clone())).into(), vty.clone()));
                             }
                         }
@@ -2984,7 +3013,9 @@ impl Infer {
                             .collect();
                         if matches.len() == 1 {
                             let (full_key, (def_span, _, _, _, vty, _, _)) = &matches[0];
-                            self.push_hover(cxt, t_span, *def_span, &vty);
+                            if !self.push_hover_decl(cxt, t_span, full_key) {
+                                self.push_hover(cxt, t_span, *def_span, &vty);
+                            }
                             return Ok((Tm::Decl(empty_span(full_key.clone())).into(), vty.clone()));
                         } else if matches.len() > 1 {
                             let names = matches.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>().join(", ");
@@ -3070,7 +3101,9 @@ impl Infer {
                         self.push_qualified_hover(cxt, x.as_ref());
                         // Try the path as-is first
                         if let Some((def_span, _, _, _, vty, _, _)) = cxt.decl.get(&qual) {
-                            self.push_hover(cxt, t_span, *def_span, &vty);
+                            if !self.push_hover_decl(cxt, t_span, &qual) {
+                                self.push_hover(cxt, t_span, *def_span, &vty);
+                            }
                             return Ok((Tm::Decl(empty_span(qual)).into(), vty.clone()));
                         }
                         // Try resolving the first path segment through file-local
@@ -3083,7 +3116,9 @@ impl Infer {
                             if let Some(full_head) = self.import_map.get(&head) {
                                 let resolved = SmolStr::new(format!("{}.{}", full_head, rest));
                                 if let Some((def_span, _, _, _, vty, _, _)) = cxt.decl.get(&resolved) {
-                                    self.push_hover(cxt, t_span, *def_span, &vty);
+                                    if !self.push_hover_decl(cxt, t_span, &resolved) {
+                                        self.push_hover(cxt, t_span, *def_span, &vty);
+                                    }
                                     return Ok((Tm::Decl(empty_span(resolved)).into(), vty.clone()));
                                 }
                             }
@@ -3092,7 +3127,9 @@ impl Infer {
                         if let Some(ref prefix) = cxt.namespace_prefix {
                             let prefixed = SmolStr::new(format!("{prefix}.{qual}"));
                             if let Some((def_span, _, _, _, vty, _, _)) = cxt.decl.get(&prefixed) {
-                                self.push_hover(cxt, t_span, *def_span, &vty);
+                                if !self.push_hover_decl(cxt, t_span, &prefixed) {
+                                    self.push_hover(cxt, t_span, *def_span, &vty);
+                                }
                                 return Ok((Tm::Decl(empty_span(prefixed)).into(), vty.clone()));
                             }
                         }

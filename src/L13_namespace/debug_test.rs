@@ -502,3 +502,29 @@ def h(n: Nat) = g n
     let _ = &infer;
     assert!(!e.6.is_empty());
 }
+
+/// 复杂度证据：带大 Nat 字面量的类型注解，源码渲染**不建链**。
+/// 旧路径 `nf → quote → quote_nat` 会为 `Val::Nat(k)` 建 k 层 `SumCase` 节点；
+/// 源码渲染只拼字符串。这里用 k = 100_000（旧路径按 ~100 B/节点 ≈ 10 MB，
+/// 且 O(k) 时间）。
+#[test]
+fn big_nat_literal_in_annotation_does_not_expand() {
+    // Box 不在 prelude 里：用一个 def 参数承载大 Nat 索引。
+    let input = r#"
+def Box(n: Nat): Type 0 = Nat
+def big(n: Nat): Box 100000 = n
+"#;
+    let (_, cxt) = elaborate_infer_ctx(input);
+    let e = cxt.decl.get("big").expect("big 已登记");
+    let typ_pretty = e.6.as_str();
+    // 源码形态：`(n : Nat) → Box 100000`（字面量原样，不展开成 succ 链）
+    assert!(
+        typ_pretty.contains("100000"),
+        "字面量应原样保留: {typ_pretty}"
+    );
+    assert!(
+        typ_pretty.len() < 60,
+        "串长应线性于源码，而非 O(k): len={} {typ_pretty}",
+        typ_pretty.len()
+    );
+}

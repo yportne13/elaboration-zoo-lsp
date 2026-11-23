@@ -1268,6 +1268,10 @@ struct P {
     ///   景推声明 span 形态，属 push 键畸变非串差异）；
     /// - 字段投影 def_span 降级（孪生 (t,t,串) vs 参考 (t,真声明,串)——
     ///   值层不持字段 binder span，接线文档"待评估补"项）。
+    /// 孪生已封印（2026-11-23）：本测试断言 ref↔孪生的观察表逐条一致，而参考版此后
+    /// 允许演进（源码注解渲染 / 登记串复用），两者会**故意**分叉——故只在
+    /// `--features l13-twin` 下跑（届时需把分叉差异并入允许集）。
+    #[cfg(feature = "l13-twin")]
     #[test]
     fn prelude_full_observation_tables_match_reference() {
         with_big_stack(|| {
