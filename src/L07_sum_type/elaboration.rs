@@ -288,8 +288,17 @@ impl Infer {
                         .hover_query
                         .map_or(true, |q| name.to_span().contains(q));
                     if want_def_hover {
+                        // 方案 4（源码注解渲染）：有显式类型注解的 def 直接打**源码文本**——
+                        // 于是 `def g(n: Nat): T n` 显示 `(n: Nat) → T n`，而不是求值后
+                        // 展开的 `match n { … }`。无注解（ret_type 是洞）仍走值渲染。
+                        let src_ty = super::raw_pretty::has_source_type(&ret_type).then(|| {
+                            super::raw_pretty::def_type_from_source(&params, &ret_type)
+                        });
                         let rendered_vtyp = vtyp.clone();
-                        let (s, fin) = self.render_typ_pretty(&cxt, rendered_vtyp);
+                        let (s, fin) = match src_ty {
+                            Some(s) => (s, true),
+                            None => self.render_typ_pretty(&cxt, rendered_vtyp),
+                        };
                         self.decl_pretty.insert(key.clone(), (Rc::new(s.clone()), fin));
                         self.push_hover_rendered(name.to_span(), name.to_span(), &s);
                     }

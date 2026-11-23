@@ -98,6 +98,7 @@ pub mod surface;
 pub(crate) mod parser;
 mod pattern_match;
 mod pretty;
+mod raw_pretty;
 mod syntax;
 mod unification;
 pub(crate) mod bump_spine_iter;
