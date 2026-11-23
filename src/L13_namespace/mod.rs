@@ -18,6 +18,7 @@ mod syntax;
 mod unification;
 mod typeclass;
 pub mod pretty;
+mod raw_pretty;
 mod canonical;
 pub(crate) mod bump_spine_iter;
 

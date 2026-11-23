@@ -412,6 +412,31 @@ def f(p: Point): Nat = p.z
     }
 }
 
+/// 同 [`elaborate_infer`]，但同时返回**最终 Cxt**（读 decl 表里登记期渲染串用）。
+fn elaborate_infer_ctx(input: &str) -> (Infer, super::Cxt) {
+    let (mut infer, mut cxt, global_macros) = {
+        PRELUDE_CACHE.with(|c: &super::PreludeSlot| {
+            let mut guard = c.cell.borrow_mut();
+            if guard.is_none() {
+                *guard = Some(load_prelude_state().unwrap());
+            }
+            let state = guard.as_ref().unwrap();
+            let mut infer = state.infer.clone();
+            infer.mutable_map = Rc::new(std::sync::RwLock::new(
+                state.infer.mutable_map.read().unwrap().clone(),
+            ));
+            (infer, state.cxt.clone(), state.global_macros.clone())
+        })
+    };
+    let ast = parser::parser_with_macros(&preprocess(input), 24, &global_macros)
+        .map(|(d, e, _, _)| (d, e)).unwrap();
+    for tm in ast.0 {
+        let (_, _, new_cxt) = infer.infer(&cxt, tm.clone()).unwrap();
+        cxt = new_cxt;
+    }
+    (infer, cxt)
+}
+
 /// Elaborate `input` (after the prelude) and return the Infer with its
 /// populated hover_table.
 fn elaborate_infer(input: &str) -> Infer {
@@ -438,3 +463,42 @@ fn elaborate_infer(input: &str) -> Infer {
     infer
 }
 
+/// 源码注解渲染（2026-11-23）：有显式类型注解的 def，`typ_pretty` 直接是**源码文本**——
+/// 于是 `def g(n: Nat): T n` 显示 `(n : Nat) → T n`，不会展开成 `match n { … }`，
+/// 也完全绕开 `quote`/`quote_nat`（后者对 `Val::Nat(k)` 要建 k 层 SumCase 链）。
+#[test]
+fn def_with_source_annotation_renders_source_form() {
+    // prelude 已定义 Nat / Bool，这里只加类型函数与有注解的 def。
+    let input = r#"
+def T(n: Nat): Type 0 =
+    match n {
+        case zero => Boolean
+        case succ(m) => Nat
+    }
+def g(n: Nat): T n =
+    match n {
+        case zero => true
+        case succ(m) => zero
+    }
+"#;
+    let (infer, cxt) = elaborate_infer_ctx(input);
+    let e = cxt.decl.get("g").expect("g 已登记");
+    let _ = &infer;
+    // decl 条目是元组：.6 是登记期 `typ_pretty`（与 lib.rs 的 `e.6` 同口径）。
+    let typ_pretty = e.6.as_str();
+    assert_eq!(typ_pretty, "(n : Nat) → T n", "应为源码形态");
+    assert!(!typ_pretty.contains("match"), "不得展开: {typ_pretty}");
+}
+
+/// 无注解的 def 仍走值渲染（源码里没有类型文本可打）——不应崩、应给出类型。
+#[test]
+fn def_without_source_annotation_still_renders() {
+    let input = r#"
+def g(n: Nat): Nat = n
+def h(n: Nat) = g n
+"#;
+    let (infer, cxt) = elaborate_infer_ctx(input);
+    let e = cxt.decl.get("h").expect("h 已登记");
+    let _ = &infer;
+    assert!(!e.6.is_empty());
+}

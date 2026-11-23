@@ -1619,7 +1619,21 @@ impl Infer {
                             ), vec![Box::new(ret)]));
                         }
                     }
-                    let vtyp_pretty = super::pretty_tm(0, ret_cxt.names(), &self.nf(&ret_cxt.decl, &ret_cxt.env, &typ_tm));
+                    // 源码注解渲染（L13 版，2026-11-23）：有显式返回类型注解的 def，
+                    // 直接用**源码文本**作为 typ_pretty —— 绕开 nf/quote（后者对 `Val::Nat(k)`
+                    // 要建 k 层 SumCase 链），且显示保真（`(n: Nat) → T n` 不会展开成 match）。
+                    // 无注解（ret_type 是洞）或有 pre-checked 节点时回落原值渲染。
+                    let src_ty = super::raw_pretty::has_source_type(&ret_type).then(|| {
+                        super::raw_pretty::def_type_from_source(&params, &ret_type)
+                    });
+                    let vtyp_pretty = match src_ty {
+                        Some(s) => s,
+                        None => super::pretty_tm(
+                            0,
+                            ret_cxt.names(),
+                            &self.nf(&ret_cxt.decl, &ret_cxt.env, &typ_tm),
+                        ),
+                    };
                     let vt_pretty = String::new();//super::pretty_tm(0, fake_cxt.names(), &t_tm_nf);
                     //println!("begin vt {}", "------".green());
                     let vt = {
@@ -2824,6 +2838,7 @@ impl Infer {
     /// 上下文把类型 quote 成 owned `Rc<Tm>`、连同 binder names 入表；查询端只
     /// pretty，不再需要可 quote 的 live `Infer`——孪生（bump arena）供同一契约的
     /// 前提。quote 是纯函数（&self），与旧「存 Val、查询期 quote」逐字节等价。
+
     pub(crate) fn push_hover(&mut self, cxt: &Cxt, t_span: Span<()>, def_span: Span<()>, val: &Rc<Val>) {
         if !self.lsp_collect { return; }
         let tm = self.quote(&cxt.decl, cxt.lvl, val);
