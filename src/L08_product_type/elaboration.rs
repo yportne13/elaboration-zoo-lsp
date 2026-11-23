@@ -137,7 +137,42 @@ impl Infer {
                 ))
             }
             // 洞
-            (Raw::Hole, a) => Ok(self.fresh_meta(decl, cxt, a)),
+            (Raw::Hole, a) => {
+                // 观察面：洞的期望类型已知（无未解 meta）时补一条 inlay。洞没有源码 span，
+                // 锚点退到当前最内层 binder 尾（顶层 def 体 ⇒ 0）。
+                if self.lsp_collect {
+                    let pos = if cxt.lvl.0 > 0 {
+                        // Locals 链按层回走取 binder span 的末尾
+                        let mut loc = cxt.locals.clone();
+                        let mut lvl = cxt.lvl.0;
+                        let mut pos = 0u32;
+                        while lvl > 1 {
+                            match loc {
+                                super::syntax::Locals::Bind(m, _, _)
+                                | super::syntax::Locals::Define(m, _, _, _) => {
+                                    loc = m.as_ref().clone();
+                                    lvl -= 1;
+                                }
+                                super::syntax::Locals::Here => break,
+                            }
+                        }
+                        match loc {
+                            super::syntax::Locals::Bind(_, x, _)
+                            | super::syntax::Locals::Define(_, x, _, _) => pos = x.end_offset,
+                            super::syntax::Locals::Here => {}
+                        }
+                        pos
+                    } else {
+                        0
+                    };
+                    let rendered = pretty_tm(0, cxt.names(), &self.quote(decl, cxt.lvl, a.clone()));
+                    if !rendered.contains('?') {
+                        self.inlay_hint
+                            .push((pos, super::surface::inlay_label(&rendered)));
+                    }
+                }
+                Ok(self.fresh_meta(decl, cxt, a))
+            }
             // match：编译 + 逐分支检查
             (Raw::Match(expr, clauses), expected) => {
                 let (tm, typ) = self.infer_expr(cxt, *expr)?;

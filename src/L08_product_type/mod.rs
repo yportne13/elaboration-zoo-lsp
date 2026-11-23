@@ -49,7 +49,8 @@ pub(crate) mod parser;
 mod pattern_match;
 mod pretty;
 mod raw_pretty;
-mod shape;
+pub mod shape;
+pub mod surface;
 mod syntax;
 mod unification;
 pub(crate) mod bump_spine_iter;
@@ -700,6 +701,10 @@ pub struct Infer {
     pub(crate) decl_pretty: FxHashMap<SmolStr, (Rc<String>, bool)>,
     /// 形状登记（方案 3）：def 名 → 其 match 形状（显示层认回用）。
     pub(crate) decl_shapes: RefCell<FxHashMap<SmolStr, Vec<shape::MatchShape>>>,
+    /// println 输出通道：(println 体 span, 渲染串)。
+    pub(crate) println_spans: Vec<(Span<()>, String)>,
+    /// inlay hint (插入点偏移, ": <type>")。
+    pub(crate) inlay_hint: Vec<(u32, String)>,
 }
 
 const UNIFY_FUEL: u32 = 4096;
@@ -755,6 +760,8 @@ impl Infer {
             decl_spans: FxHashMap::default(),
             decl_pretty: FxHashMap::default(),
             decl_shapes: RefCell::new(FxHashMap::default()),
+            println_spans: Vec::new(),
+            inlay_hint: Vec::new(),
         }
     }
 
@@ -2084,7 +2091,7 @@ static L08_DEBUG_ON: std::sync::LazyLock<bool> =
 pub fn run_with_surface(
     input: &str,
     path_id: u32,
-) -> Result<(String, Vec<(Span<()>, Span<()>, String)>), Error> {
+) -> Result<(String, surface::LspSurface), Error> {
     let mut infer = Infer::new();
     infer.lsp_collect = true;
     let ast = parser::parser_with_span(&preprocess(input), path_id).map_err(|(msg, span)| {
@@ -2096,14 +2103,27 @@ pub fn run_with_surface(
     let mut cxt = Cxt::new(&infer);
     let mut ret = String::new();
     for tm in ast {
+        // println 的 span 要在推断**之前**取（推断会 move 掉 tm）
+        let println_span = match &tm {
+            parser::syntax::Decl::Println(r) => Some(surface::raw_span(r)),
+            _ => None,
+        };
         let (x, _, new_cxt) = infer.infer_owned(cxt, tm)?;
         cxt = new_cxt;
         if let DeclTm::Println(x) = x {
-            ret += &pretty_tm(0, cxt.names(), &infer.nf(cxt.decl(), &cxt.env, x));
+            let rendered = pretty_tm(0, cxt.names(), &infer.nf(cxt.decl(), &cxt.env, x));
+            ret += &rendered;
             ret += "\n";
+            if let Some(span) = println_span {
+                infer.println_spans.push((span, rendered));
+            }
         }
     }
-    Ok((ret, infer.hover_table))
+    let mut s = surface::LspSurface::default();
+    s.hover = infer.hover_table;
+    s.println_spans = infer.println_spans;
+    s.inlay_hint = infer.inlay_hint;
+    Ok((ret, s))
 }
 
 pub fn run(input: &str, path_id: u32) -> Result<String, Error> {

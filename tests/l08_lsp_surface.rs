@@ -10,13 +10,8 @@ mod parser_lib_resilient;
 mod L08_product_type;
 
 fn hover_at(src: &str, off: usize) -> Option<String> {
-    let (_, hover) = L08_product_type::run_with_surface(src, 0).expect("surface");
-    hover
-        .iter()
-        .find(|(use_sp, _, _)| {
-            use_sp.start_offset as usize <= off && off < use_sp.end_offset as usize
-        })
-        .map(|(_, _, t)| t.clone())
+    let (_, s) = L08_product_type::run_with_surface(src, 0).expect("surface");
+    s.hover_text_at(0, off).map(|t| t.to_owned())
 }
 
 fn with_stack<T: Send + 'static>(f: fn() -> T) -> T {
@@ -66,5 +61,35 @@ fn surface_does_not_change_run_output() {
         let a = L08_product_type::run(&src, 0).expect("run");
         let (b, _) = L08_product_type::run_with_surface(&src, 0).expect("surface");
         assert_eq!(a, b);
+    });
+}
+
+/// println 通道：每个 println 体都有 span + 渲染串。
+#[test]
+fn println_spans_are_collected() {
+    with_stack(|| {
+        let src = concat!(
+            "enum Nat {\n    zero\n    succ(x: Nat)\n}\n",
+            "def two = succ (succ zero)\n",
+            "println two\n",
+        );
+        let (out, s) = L08_product_type::run_with_surface(src, 0).expect("surface");
+        assert_eq!(s.println_spans.len(), 1, "应有一条 println 通道");
+        assert_eq!(s.println_spans[0].1, out.trim_end(), "渲染串应与输出一致");
+        assert!(s.println_spans[0].0.end_offset > s.println_spans[0].0.start_offset);
+    });
+}
+
+/// inlay 通道：洞（已知期望类型）补 `: <type>`。
+#[test]
+fn hole_inlay_is_collected() {
+    with_stack(|| {
+        let src = "enum Nat {\n    zero\n    succ(x: Nat)\n}\ndef f : Nat = _\n";
+        let (_, s) = L08_product_type::run_with_surface(src, 0).expect("surface");
+        assert!(
+            s.inlay_hint.iter().any(|(_, t)| t == ": Nat"),
+            "洞的期望类型已知时应推 inlay: {:?}",
+            s.inlay_hint
+        );
     });
 }
