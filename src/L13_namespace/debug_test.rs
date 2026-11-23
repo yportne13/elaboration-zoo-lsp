@@ -528,3 +528,38 @@ def big(n: Nat): Box 100000 = n
         typ_pretty.len()
     );
 }
+
+/// 形状认回（方案 3）：无注解 def 的类型也能打回 `T n`（不是展开的 match）。
+#[test]
+fn unannotated_def_recovers_type_level_name() {
+    let input = r#"
+def T(n: Nat): Type 0 =
+    match n {
+        case zero => Boolean
+        case succ(m) => Nat
+    }
+def g(n: Nat): T n =
+    match n {
+        case zero => true
+        case succ(m) => zero
+    }
+def h(n: Nat) = g n
+"#;
+    let infer = elaborate_infer(input);
+    // `h` 的 hover 条目（使用处 = def 名，同 span）
+    let entries: Vec<_> = infer.hover_table.iter()
+        .filter(|(s, _, _)| {
+            // h 的定义处：源码里 "def h(" 之后的名字
+            let off = input.find("def h(").unwrap() + 4;
+            s.start_offset as usize == off
+        })
+        .collect();
+    assert!(!entries.is_empty(), "h 应有 hover 条目");
+    let text = &entries[0].2;
+    assert!(
+        text.contains("T n"),
+        "应认回类型级 def 名 `T n`，而不是展开的 match: {text}"
+    );
+    assert!(!text.contains("match"), "不得展开: {text}");
+}
+

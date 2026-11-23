@@ -19,6 +19,7 @@ mod unification;
 mod typeclass;
 pub mod pretty;
 mod raw_pretty;
+pub mod shape;
 mod canonical;
 pub(crate) mod bump_spine_iter;
 
@@ -1564,6 +1565,8 @@ pub struct Infer {
     /// 缓存串会把 `?N` 冻进使用处悬浮——LSP 快照克隆此表随 hover_table
     /// 一起留空，prelude 缓存态收尾清空）。
     ctor_hover_memo: rustc_hash::FxHashMap<SmolStr, std::rc::Rc<str>>,
+    /// 形状登记（方案 3）：def 名 → 其 match 形状（显示层认回用）。
+    pub(crate) decl_shapes: std::cell::RefCell<rustc_hash::FxHashMap<SmolStr, Vec<shape::MatchShape>>>,
 }
 
 impl Clone for Infer {
@@ -1600,6 +1603,8 @@ impl Clone for Infer {
             accumulated_errors: Vec::new(),
             // 同上：failed_decls 是本轮检查的临时态（A2），快照从零开始。
             failed_decls: std::collections::HashSet::new(),
+            // 形状登记同为观察面旁表：快照不继承（与 hover_table 同纪律）。
+            decl_shapes: Default::default(),
         }
     }
 }
@@ -2287,6 +2292,7 @@ impl Infer {
             match_cmp_budget: std::cell::Cell::new(MATCH_CMP_BUDGET),
             unify_kind: std::cell::Cell::new(UnifyKind::Absurd),
             ctor_hover_memo: Default::default(),
+            decl_shapes: Default::default(),
         }
     }
 

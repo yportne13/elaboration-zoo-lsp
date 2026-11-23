@@ -1669,6 +1669,21 @@ impl Infer {
                             self.eval(&fake_cxt.decl, &fake_cxt.env, &t_tm)
                         }
                     };
+                    // 形状登记（方案 3）：把 def 的 match 形状记下来，供显示层在展开出的
+                    // `Val::Match` 上认回这个名字（无注解 def 也能保真）。
+                    if self.lsp_collect {
+                        let shapes = super::shape::shapes_for(
+                            self,
+                            &ret_cxt.decl,
+                            &vtyp,
+                            &vt,
+                        );
+                        if !shapes.is_empty() {
+                            self.decl_shapes
+                                .borrow_mut()
+                                .insert(name.data.clone(), shapes);
+                        }
+                    }
                     self.push_hover(ret_cxt, name.to_span(), name.to_span(), &vtyp);
                     // Release the fake table's Rc before registering the real
                     // entry: with another holder alive `Rc::make_mut` would
@@ -2865,9 +2880,59 @@ impl Infer {
 
     pub(crate) fn push_hover(&mut self, cxt: &Cxt, t_span: Span<()>, def_span: Span<()>, val: &Rc<Val>) {
         if !self.lsp_collect { return; }
+        // 形状认回（方案 3）：类型里的卡住 match 若能按形状认回某个 def，就打回
+        // `g n` 而不是 `match n { … }`（无注解 def 也因此保真）。
+        if let Some(rendered) = self.render_by_shape(cxt, val) {
+            self.hover_table.push((t_span, def_span, rendered));
+            return;
+        }
         let tm = self.quote(&cxt.decl, cxt.lvl, val);
         let rendered = super::pretty_tm(0, cxt.names(), &tm);
         self.hover_table.push((t_span, def_span, rendered));
+    }
+
+    /// 形状认回（方案 3，L07/L08 移植）：逐层剥 Π，若余定义域是能认回 def 的
+    /// `Val::Match`，就合成 `head 实参` 形态并 pretty。纯显示路径，不进语义。
+    fn render_by_shape(&self, cxt: &Cxt, vtyp: &Rc<Val>) -> Option<String> {
+        if self.decl_shapes.borrow().is_empty() {
+            return None;
+        }
+        let decl = &cxt.decl;
+        let mut t = self.force(decl, vtyp);
+        let mut l = cxt.lvl;
+        let mut binders: Vec<(SmolStr, Rc<Val>)> = Vec::new();
+        loop {
+            match t.as_ref() {
+                Val::Pi(name, _, dom, cod) => {
+                    binders.push((name.data.clone(), dom.clone()));
+                    t = self.force(decl, &self.closure_apply(decl, cod, Val::vvar(l).into()));
+                    l = l + 1;
+                }
+                Val::Match(scrut, _, _) => {
+                    let head = super::shape::match_to_decl(self, t.as_ref())?;
+                    // `head` 的实参：scrutinee + 卡住期间累积的 pending 实参。
+                    let mut tm: Rc<Tm> = Tm::App(
+                        Tm::Decl(empty_span(SmolStr::new(&head))).into(),
+                        self.quote(decl, l, scrut).into(),
+                        Icit::Expl,
+                    )
+                    .into();
+                    for (bname, dom) in binders.iter().rev() {
+                        let mut sp: Span<SmolStr> = empty_span(SmolStr::new(""));
+                        sp.data = bname.clone();
+                        tm = Tm::Pi(
+                            sp,
+                            Icit::Expl,
+                            self.quote(decl, l, dom).into(),
+                            tm.into(),
+                        )
+                        .into();
+                    }
+                    return Some(super::pretty_tm(0, cxt.names(), &tm));
+                }
+                _ => return None,
+            }
+        }
     }
 
     /// 构造子使用处 hover（match 编译器 walk_pat Con 臂专用）：hover 值是
