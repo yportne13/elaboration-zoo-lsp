@@ -1,3 +1,8 @@
+//! # ⚠️ 已封印（SEALED，2026-11-23）
+//!
+//! 本孪生**不再参与默认门禁与 parity 契约**（同 L07 的处理）：`tests/l08_fast_parity.rs`
+//! 改为 `#[cfg(feature = "l08-twin")]`。复核：`cargo test --features l08-twin`。
+//!
 //! L08 核心机（eval / quote / unify / force / rename / solve / prune / check /
 //! infer / decl 表 / builtin prim / enum 注册 / 模式编译）的极致性能版：
 //! L07 冠军配方（`bump_spine_iter`）向 product-type 层的移植。继承 L05/L06/L07

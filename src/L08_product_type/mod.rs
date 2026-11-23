@@ -48,6 +48,8 @@ mod elaboration;
 pub(crate) mod parser;
 mod pattern_match;
 mod pretty;
+mod raw_pretty;
+mod shape;
 mod syntax;
 mod unification;
 pub(crate) mod bump_spine_iter;
@@ -687,6 +689,17 @@ pub struct Infer {
     /// 同一 meta 在栈上再次出现即判定环，返回卡住的 Flex，不再递归烧 fuel。
     /// RefCell 让 &self 的 force 路径可用；展开完成后显式弹栈。
     meta_expanding: RefCell<Vec<MetaVar>>,
+    // ── 观察面（L07 移植，2026-11-23）───────────────────────────────────────
+    /// 采集总闸（默认关：run/bench 口径不带渲染）。
+    pub(crate) lsp_collect: bool,
+    /// 悬停表：(使用处 span, 定义处 span, 渲染串)。
+    pub(crate) hover_table: Vec<(Span<()>, Span<()>, String)>,
+    /// 登记面旁表：全局名 → 定义处 span。
+    pub(crate) decl_spans: FxHashMap<SmolStr, Span<()>>,
+    /// 登记面旁表：全局名 → 登记期渲染串 + final 标记。
+    pub(crate) decl_pretty: FxHashMap<SmolStr, (Rc<String>, bool)>,
+    /// 形状登记（方案 3）：def 名 → 其 match 形状（显示层认回用）。
+    pub(crate) decl_shapes: RefCell<FxHashMap<SmolStr, Vec<shape::MatchShape>>>,
 }
 
 const UNIFY_FUEL: u32 = 4096;
@@ -737,6 +750,11 @@ impl Infer {
             match_cmp_budget: std::cell::Cell::new(MATCH_CMP_BUDGET),
             unify_kind: std::cell::Cell::new(UnifyKind::Absurd),
             meta_expanding: RefCell::new(Vec::new()),
+            lsp_collect: false,
+            hover_table: Vec::new(),
+            decl_spans: FxHashMap::default(),
+            decl_pretty: FxHashMap::default(),
+            decl_shapes: RefCell::new(FxHashMap::default()),
         }
     }
 
@@ -2059,6 +2077,34 @@ pub static FILE_IO_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// 会锁进程环境（Windows 上 ~µs/次），而这里每条声明都要判一次。
 static L08_DEBUG_ON: std::sync::LazyLock<bool> =
     std::sync::LazyLock::new(|| std::env::var_os("L08_DEBUG").is_some());
+
+/// 带观察面的 run（L07 移植）：Ok 输出与 `run` 逐字节一致，另返回 hover 表快照。
+/// 无 LSP 表结构时用最简形态：`(使用处 span, 定义处 span, 渲染串)`。
+#[doc(hidden)]
+pub fn run_with_surface(
+    input: &str,
+    path_id: u32,
+) -> Result<(String, Vec<(Span<()>, Span<()>, String)>), Error> {
+    let mut infer = Infer::new();
+    infer.lsp_collect = true;
+    let ast = parser::parser_with_span(&preprocess(input), path_id).map_err(|(msg, span)| {
+        match span {
+            Some(s) => Error::at(msg, s),
+            None => Error::new(msg),
+        }
+    })?;
+    let mut cxt = Cxt::new(&infer);
+    let mut ret = String::new();
+    for tm in ast {
+        let (x, _, new_cxt) = infer.infer_owned(cxt, tm)?;
+        cxt = new_cxt;
+        if let DeclTm::Println(x) = x {
+            ret += &pretty_tm(0, cxt.names(), &infer.nf(cxt.decl(), &cxt.env, x));
+            ret += "\n";
+        }
+    }
+    Ok((ret, infer.hover_table))
+}
 
 pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
     let mut infer = Infer::new();

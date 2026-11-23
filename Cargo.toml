@@ -187,6 +187,8 @@ sampler = ["dep:backtrace", "dep:inferno"]
 # 逐字节 parity（含错误文案里的 binder 名）曾把参考版的解形状钉死，阻塞 smalltt
 # 对齐；封印后 ref 可独立演进。复核孪生时 `cargo test --features l07-twin`。
 l07-twin = []
+# L08 孪生封印（2026-11-23，同 L07）：ref↔孪生的逐字节 parity 不再作默认门禁。
+l08-twin = []
 
 # The lib tests elaborate the prelude on every test thread (the prelude
 # cache is thread-local since the Arc->Rc migration).  Unoptimized debug
