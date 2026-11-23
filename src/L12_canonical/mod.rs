@@ -40,6 +40,9 @@ mod elaboration;
 pub(crate) mod parser;
 mod pattern_match;
 pub(crate) mod pretty;
+mod raw_pretty;
+pub mod shape;
+pub mod surface;
 mod syntax;
 mod typeclass;
 mod unification;
@@ -714,6 +717,12 @@ pub struct Infer {
     /// 最近一次 trait 求解失败的原因（UnifyError 为无字段 unit，原因旁存；
     /// Def 臂把它转成 Error 文案）。
     pub(crate) trait_error: RefCell<Option<String>>,
+    // ── 观察面（L07/L08 移植，2026-11-23）───────────────────────────────────
+    pub(crate) lsp_collect: bool,
+    pub(crate) hover_table: Vec<(Span<()>, Span<()>, String)>,
+    pub(crate) decl_spans: FxHashMap<SmolStr, Span<()>>,
+    pub(crate) decl_pretty: FxHashMap<SmolStr, (Rc<String>, bool)>,
+    pub(crate) decl_shapes: RefCell<FxHashMap<SmolStr, Vec<shape::MatchShape>>>,
 }
 
 const UNIFY_FUEL: u32 = 4096;
@@ -768,6 +777,11 @@ impl Infer {
             trait_definition: FxHashMap::default(),
             trait_out_param: FxHashMap::default(),
             trait_error: RefCell::new(None),
+            lsp_collect: false,
+            hover_table: Vec::new(),
+            decl_spans: FxHashMap::default(),
+            decl_pretty: FxHashMap::default(),
+            decl_shapes: RefCell::new(FxHashMap::default()),
         }
     }
 
@@ -2176,6 +2190,36 @@ pub static FILE_IO_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// 会锁进程环境（Windows 上 ~µs/次），而这里每条声明都要判一次。
 static L12_DEBUG_ON: std::sync::LazyLock<bool> =
     std::sync::LazyLock::new(|| std::env::var_os("L12_DEBUG").is_some());
+
+/// 带观察面的 run（L07/L08 移植）：Ok 输出与 `run` 逐字节一致，另返回 hover 表。
+/// 表项 = (使用处 span, 定义处 span, 渲染串)；契约细节见 `surface.rs`。
+#[doc(hidden)]
+pub fn run_with_surface(
+    input: &str,
+    path_id: u32,
+) -> Result<(String, surface::LspSurface), Error> {
+    let mut infer = Infer::new();
+    infer.lsp_collect = true;
+    let ast = parser::parser_with_span(&preprocess(input), path_id).map_err(|(msg, span)| {
+        match span {
+            Some(s) => Error::at(msg, s),
+            None => Error::new(msg),
+        }
+    })?;
+    let mut cxt = Cxt::new(&infer);
+    let mut ret = String::new();
+    for tm in ast {
+        let (x, _, new_cxt) = infer.infer_owned(cxt, tm)?;
+        cxt = new_cxt;
+        if let DeclTm::Println(x) = x {
+            ret += &pretty_tm(0, cxt.names(), &infer.nf(cxt.decl(), &cxt.env, x));
+            ret += "\n";
+        }
+    }
+    let mut s = surface::LspSurface::default();
+    s.hover = infer.hover_table;
+    Ok((ret, s))
+}
 
 pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
     let mut infer = Infer::new();

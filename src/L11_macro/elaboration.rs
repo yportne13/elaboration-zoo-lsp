@@ -1,6 +1,9 @@
 use std::rc::Rc;
 
-use crate::{list::List, parser_lib::Span};
+use crate::{
+    list::List,
+    parser_lib::{Span, ToSpan},
+};
 use smol_str::SmolStr;
 
 use super::{
@@ -232,6 +235,50 @@ impl Infer {
     /// `make_mut`（强计数恒 2 ⇒ 深拷），在 strchain/global 的 2^(k+1) 个
     /// 顶层 def 上是 O(D²)；改为所有权传递后降至 O(D)（见
     /// `docs/optimal-design/L07-upgrade-bench-2026-11-09.md`）。
+    /// 形状认回（方案 3，L07/L08 移植）：逐层剥 Π，若余定义域是能认回 def 的 `Val::Match`，
+    /// 就合成 `head 实参` 形态并 pretty。纯显示路径，不进语义。
+    pub(crate) fn render_by_shape(&self, cxt: &Cxt, vtyp: Val) -> Option<String> {
+        if self.decl_shapes.borrow().is_empty() {
+            return None;
+        }
+        let decl = cxt.decl();
+        let mut t = self.force(decl, vtyp);
+        let mut l = cxt.lvl;
+        let mut binders: Vec<(String, Val)> = Vec::new();
+        loop {
+            match t {
+                Val::Pi(name, _, dom, cod) => {
+                    binders.push((name.data.clone(), (*dom).clone()));
+                    let u = Val::vvar(l);
+                    t = self.force(decl, self.closure_apply(decl, &cod, u));
+                    l = l + 1;
+                }
+                ref m @ Val::Match(..) => {
+                    let head = super::shape::match_to_decl(self, m)?;
+                    let Val::Match(scrut, _, _, pending) = m else {
+                        return None;
+                    };
+                    let mut tail = Tm::App(
+                        Box::new(Tm::Decl(SmolStr::new(&head))),
+                        Box::new(self.quote(decl, l, (**scrut).clone())),
+                        Icit::Expl,
+                    );
+                    for (u, i) in pending.iter() {
+                        tail = Tm::App(Box::new(tail), Box::new(self.quote(decl, l, u.clone())), *i);
+                    }
+                    let mut tm = tail;
+                    for (bname, dom) in binders.iter().rev() {
+                        let mut sp: Span<String> = empty_span(String::new());
+                        sp.data = bname.clone();
+                        tm = Tm::Pi(sp, Icit::Expl, Rc::new(self.quote(decl, l, dom.clone())), Rc::new(tm));
+                    }
+                    return Some(pretty_tm(0, cxt.names(), &tm));
+                }
+                _ => return None,
+            }
+        }
+    }
+
     pub fn infer_owned(&mut self, mut cxt: Cxt, t: Decl) -> Result<(DeclTm, Val, Cxt), Error> {
         match t {
             Decl::Def {
@@ -279,6 +326,29 @@ impl Infer {
                 // change_mutable 等只在别处 force 到它时才生效）。递归
                 // 自引用由 force 的占位守卫兜住，不会展开。
                 let vt = self.force(cxt.decl(), self.eval(cxt.decl(), &cxt.env, &t_tm));
+                // 观察面（L07/L08 移植，2026-11-23）：登记 span + 渲染串 + 形状。
+                // 有显式返回类型注解时用**源码注解渲染**（`(n : Nat) → T n`）。
+                if self.lsp_collect {
+                    let key = SmolStr::new(&name.data);
+                    self.decl_spans.insert(key.clone(), name.to_span());
+                    let shapes = super::shape::shapes_for(self, cxt.decl(), vtyp.clone(), vt.clone());
+                    if !shapes.is_empty() {
+                        self.decl_shapes.borrow_mut().insert(key.clone(), shapes);
+                    }
+                    let rendered = super::raw_pretty::has_source_type(&ret_type).then(|| {
+                        super::raw_pretty::def_type_from_source(&params, &ret_type)
+                    });
+                    let s = match rendered {
+                        Some(s) => s,
+                        None => self
+                            .render_by_shape(&cxt, vtyp.clone())
+                            .unwrap_or_else(|| {
+                                pretty_tm(0, cxt.names(), &self.quote(cxt.decl(), cxt.lvl, vtyp.clone()))
+                            }),
+                    };
+                    self.decl_pretty.insert(key.clone(), (Rc::new(s.clone()), true));
+                    self.hover_table.push((name.to_span(), name.to_span(), s));
+                }
                 cxt.decl_insert_mut(
                     name.data.clone(),
                     DeclEntry { prim: None, eta: None, prim_names: None,
@@ -815,6 +885,22 @@ impl Infer {
         match t {
             // 变量：先局部（名字表），再全局（decl 表）
             Raw::Var(x) => {
+                // 观察面：使用处 hover（全局名取登记期串，局部名现渲染）。
+                if self.lsp_collect {
+                    let key = SmolStr::new(&x.data);
+                    let ty = cxt
+                        .lookup_src(&x.data)
+                        .map(|e| e.1.clone())
+                        .or_else(|| cxt.decl_get(&x.data).map(|e| e.ty.clone()));
+                    if let Some(ty) = ty {
+                        let s = match self.decl_pretty.get(&key) {
+                            Some((s, _)) => (**s).clone(),
+                            None => pretty_tm(0, cxt.names(), &self.quote(cxt.decl(), cxt.lvl, ty)),
+                        };
+                        let def = self.decl_spans.get(&key).copied().unwrap_or_else(|| empty_span(()));
+                        self.hover_table.push((x.to_span(), def, s));
+                    }
+                }
                 if let Some(e) = cxt.lookup_src(&x.data) {
                     let (lvl, ty) = e.as_ref();
                     Ok((Tm::Var(lvl2ix(cxt.lvl, *lvl)), ty.clone()))
