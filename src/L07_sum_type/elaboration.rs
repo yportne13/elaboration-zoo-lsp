@@ -110,7 +110,12 @@ impl Infer {
                     // 链上是 O(n²)（每层都重建整条 Locals 的 Pi/Let 类型）；
                     // 深 let 探针 n=1000 从 ~168ms 降到 ~2.4ms。
                     let (t_checked, ty) = self.infer_expr(cxt, *t)?;
-                    let a_checked = self.quote(decl, cxt.lvl, ty.clone());
+                    // 无注解 let 的推断类型**不物化为 Tm**：`Locals::Define` 的类型槽
+                    // 只会被 `close_ty` 拼进 meta 类型的 `Tm::Let`，而 `eval(Tm::Let)
+                    // 不读类型槽，`prune_ty`/`lams` 只在值层 Π 上工作，显示层用值——
+                    // 该 Tm 是死代码。物化它会把 2^n 的类型树写成项（pairtest 的 2^n
+                    // 有一半在这里）。占位用 `Tm::U`（永不被求值/打印）。
+                    let a_checked = Tm::U;
                     let vt = self.eval(decl, &cxt.env, &t_checked);
                     (a_checked, ty, t_checked, vt)
                 } else {
@@ -276,6 +281,17 @@ impl Infer {
                 let vt = self.force(cxt.decl(), self.eval(cxt.decl(), &cxt.env, &t_tm));
                 // 观察面（def 登记处）：span 旁表 + 登记期渲染串 + def-site hover；
                 // 无显式返回类型注解时补一条 inlay（锚点 = 最后参数结束 +1）。
+                // 形状登记（方案 3）：把 def 返回类型里的 match 形状记下来，供显示层
+                // 在展开出的 `Val::Match` 上认回这个名字（无类型注解的 def 也能保真）。
+                // 只在 lsp_collect 时做（纯显示用途，cost 可忽）。
+                if self.lsp_collect {
+                    let shapes = super::shape::shapes_for(self, cxt.decl(), vtyp.clone(), vt.clone());
+                    if !shapes.is_empty() {
+                        self.decl_shapes
+                            .borrow_mut()
+                            .insert(SmolStr::new(&name.data), shapes);
+                    }
+                }
                 if self.lsp_collect {
                     let key = SmolStr::new(&name.data);
                     self.decl_spans.insert(key.clone(), name.to_span());
@@ -283,8 +299,17 @@ impl Infer {
                         .hover_query
                         .map_or(true, |q| name.to_span().contains(q));
                     if want_def_hover {
+                        // 方案 4（源码注解渲染）：有显式类型注解的 def 直接打**源码文本**——
+                        // 于是 `def g(n: Nat): T n` 显示 `(n: Nat) → T n`，而不是求值后
+                        // 展开的 `match n { … }`。无注解（ret_type 是洞）仍走值渲染。
+                        let src_ty = super::raw_pretty::has_source_type(&ret_type).then(|| {
+                            super::raw_pretty::def_type_from_source(&params, &ret_type)
+                        });
                         let rendered_vtyp = vtyp.clone();
-                        let (s, fin) = self.render_typ_pretty(&cxt, rendered_vtyp);
+                        let (s, fin) = match src_ty {
+                            Some(s) => (s, true),
+                            None => self.render_typ_pretty(&cxt, rendered_vtyp),
+                        };
                         self.decl_pretty.insert(key.clone(), (Rc::new(s.clone()), fin));
                         self.push_hover_rendered(name.to_span(), name.to_span(), &s);
                     }

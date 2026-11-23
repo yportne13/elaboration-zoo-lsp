@@ -1010,6 +1010,7 @@ mod parser_lib_resilient;
 #[path = "../src/L07_sum_type/mod.rs"]
 mod L07_sum_type;
 
+#[cfg(feature = "l07-twin")]
 use L07_sum_type::bump_spine_iter as fast;
 
 /// 在大栈线程里跑参考版 `run`。
@@ -1024,6 +1025,7 @@ fn run_basic(src: &str) -> Result<String, L07_sum_type::Error> {
 }
 
 /// 在大栈线程里跑快版 `run_fast`。
+#[cfg(feature = "l07-twin")]
 fn run_fast(src: &str) -> Result<String, L07_sum_type::Error> {
     let input = src.to_owned();
     std::thread::Builder::new()
@@ -1035,6 +1037,7 @@ fn run_fast(src: &str) -> Result<String, L07_sum_type::Error> {
 }
 
 /// Oracle：Ok 输出逐字节一致 / Err 判定一致（l07_fast_parity 同款）。
+#[cfg(feature = "l07-twin")]
 fn assert_parity(src: &str) {
     let b = run_basic(src);
     let f = run_fast(src);
@@ -1053,6 +1056,7 @@ fn assert_parity(src: &str) {
 }
 
 /// Ok 用例 parity：v3 新攻击面的全部成功路径。
+#[cfg(feature = "l07-twin")]
 #[test]
 fn v3_parity_ok_suite() {
     // T n 族：返回类型依赖已匹配构造子
@@ -1226,6 +1230,7 @@ println g
 }
 
 /// Err 用例 parity：判定一致（错误文案的 span 偏移是文档化偏差，不比内容）。
+#[cfg(feature = "l07-twin")]
 #[test]
 fn v3_parity_err_suite() {
     // 荒谬嵌套模式（不可达 + 缺构造子）
@@ -1399,6 +1404,7 @@ def the(A : U)(x: A): A = x
 ";
 
 /// Ok 输出 / Err 文案全文逐字节 parity（比 F 节加严：Err 也比全文）。
+#[cfg(feature = "l07-twin")]
 fn assert_full_parity(src: &str) {
     let b = run_basic(src);
     let f = run_fast(src);
@@ -1417,6 +1423,7 @@ fn assert_full_parity(src: &str) {
 }
 
 /// 看门狗 + 全文 parity（家族批量扫描用；超时/恐慌让测试失败，套件不挂死）。
+#[cfg(feature = "l07-twin")]
 fn assert_terminates_full_parity(src: &str, secs: u64) {
     let input = src.to_owned();
     let (tx, rx) = std::sync::mpsc::channel::<()>();
@@ -1450,9 +1457,12 @@ fn redex_regression_eq_swapped_args() {
     // 参考版：干净形态（无重拼红ex），golden 钉死
     let b = run_basic(&src).unwrap_err();
     assert_eq!(format!("{b:?}"), golden);
-    // 快版：修复后与参考版逐字节同形
-    let f = run_fast(&src).unwrap_err();
-    assert_eq!(format!("{f:?}"), golden);
+    // 快版：修复后与参考版逐字节同形（孪生已封印，默认不跑）
+    #[cfg(feature = "l07-twin")]
+    {
+        let f = run_fast(&src).unwrap_err();
+        assert_eq!(format!("{f:?}"), golden);
+    }
 }
 
 /// 同族镜像：实参顺序互换（`m1 a` vs `m1 b`），失败方向镜像。
@@ -1464,8 +1474,11 @@ fn redex_regression_eq_args_order_mirror() {
     let golden = r#"Error("can't unify (P: U → U) → P (?0 (?5 a b) a) → P (?0 (?5 a b) b) == (P: U → U) → P (?0 (?5 a b) a) → P (?0 (?5 a b) a)")"#;
     let b = run_basic(&src).unwrap_err();
     assert_eq!(format!("{b:?}"), golden);
-    let f = run_fast(&src).unwrap_err();
-    assert_eq!(format!("{f:?}"), golden);
+    #[cfg(feature = "l07-twin")]
+    {
+        let f = run_fast(&src).unwrap_err();
+        assert_eq!(format!("{f:?}"), golden);
+    }
 }
 
 /// 同族：`m1` 多一个显式域（P 的定义域带箭头），转发解照旧、红ex 照旧。
@@ -1477,12 +1490,16 @@ fn redex_regression_extra_domain() {
     let golden = r#"Error("can't unify (P: (U → U) → U) → P (?0 (?5 a b) b) → P (?0 (?5 a b) a) == (P: (U → U) → U) → P (?0 (?5 a b) b) → P (?0 (?5 a b) b)")"#;
     let b = run_basic(&src).unwrap_err();
     assert_eq!(format!("{b:?}"), golden);
-    let f = run_fast(&src).unwrap_err();
-    assert_eq!(format!("{f:?}"), golden);
+    #[cfg(feature = "l07-twin")]
+    {
+        let f = run_fast(&src).unwrap_err();
+        assert_eq!(format!("{f:?}"), golden);
+    }
 }
 
 /// 家族批量全文 parity（L05 同款形状网格：6 体 × 3 声明），带看门狗。
 /// 覆盖转发解（红ex 位点）、可解 η-intersect、icit 失配、双版本 Ok 等形态。
+#[cfg(feature = "l07-twin")]
 #[test]
 fn redex_family_full_parity_scan() {
     let bodies = [
@@ -1513,6 +1530,7 @@ fn redex_family_solvable_ok() {
         "{CHURCH}def m1 : U -> U -> U = _\ndef t = a => b => the (Eq (m1 a) (z => m1 b z)) refl\nprintln U\n"
     );
     assert_lines(&src, &["U"]);
+    #[cfg(feature = "l07-twin")]
     assert_full_parity(&src);
 }
 

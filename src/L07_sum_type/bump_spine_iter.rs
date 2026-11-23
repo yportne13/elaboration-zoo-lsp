@@ -1,3 +1,13 @@
+//! # ⚠️ 已封印（SEALED，2026-11-22）
+//!
+//! 本孪生**不再参与门禁与 parity 契约**：`tests/l07_fast_parity.rs` 与
+//! `tests/l07_blackbox_v3.rs` 的 parity/redex 家族测试改为 `#[cfg(feature = "l07-twin")]`
+//! （默认关闭）。原因：ref ↔ 孪生的**逐字节**比对（含错误文案里的 binder 名）曾把参考版
+//! 的解形状钉死，阻塞 smalltt 对齐（见 `docs/l07-vunfold-research-2026-11-21.md` §6.12）。
+//!
+//! 代码保留作对照/取证：需要复核时 `cargo test --features l07-twin`。基准入口
+//! （`l07bench --only fast_ss` 等）仍可显式使用，但不作为默认口径。
+//!
 //! L07 核心机（eval / quote / unify / force / rename / solve / prune / check /
 //! infer / decl 表 / builtin prim / enum 注册 / 模式编译）的极致性能版：
 //! L06 冠军配方（`bump_spine_iter`）向 sum-type 层的移植。继承 L05/L06 的

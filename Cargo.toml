@@ -183,6 +183,10 @@ dhat-heap = ["mem-profile"]
 mem-profile = ["dep:dhat"]
 stdio-monitor = []
 sampler = ["dep:backtrace", "dep:inferno"]
+# L07 孪生（bump_spine_iter）封印开关（2026-11-22）：默认**关闭**——ref↔孪生的
+# 逐字节 parity（含错误文案里的 binder 名）曾把参考版的解形状钉死，阻塞 smalltt
+# 对齐；封印后 ref 可独立演进。复核孪生时 `cargo test --features l07-twin`。
+l07-twin = []
 
 # The lib tests elaborate the prelude on every test thread (the prelude
 # cache is thread-local since the Arc->Rc migration).  Unoptimized debug

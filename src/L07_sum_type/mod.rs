@@ -98,6 +98,8 @@ pub mod surface;
 pub(crate) mod parser;
 mod pattern_match;
 mod pretty;
+mod raw_pretty;
+mod shape;
 mod syntax;
 mod unification;
 pub(crate) mod bump_spine_iter;
@@ -762,6 +764,9 @@ pub struct Infer {
     pub(crate) decl_spans: FxHashMap<SmolStr, Span<()>>,
     /// 登记面旁表：全局名 → 登记期渲染串 + final 标记（使用处可直取）。
     pub(crate) decl_pretty: FxHashMap<SmolStr, (Rc<String>, bool)>,
+    /// 形状登记（方案 3）：def 名 → 其返回类型里的 match 形状。显示层用它在展开出的
+    /// `Val::Match` 上认回 def 名，打出 `g n` 而不是 `match n { … }`（无类型注解的 def 也能保真）。
+    pub(crate) decl_shapes: std::cell::RefCell<FxHashMap<SmolStr, Vec<shape::MatchShape>>>,
     /// 构造子 hover 的渲染记忆化（限定键 → 串）。
     pub(crate) ctor_pretty: FxHashMap<SmolStr, Rc<String>>,
 }
@@ -826,6 +831,7 @@ impl Infer {
             inlay_query: None,
             decl_spans: FxHashMap::default(),
             decl_pretty: FxHashMap::default(),
+            decl_shapes: std::cell::RefCell::new(FxHashMap::default()),
             ctor_pretty: FxHashMap::default(),
         }
     }
