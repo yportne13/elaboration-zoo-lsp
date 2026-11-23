@@ -808,3 +808,73 @@ fn complexity_probe_old_vs_source() {
         println!("K={k:<6} source={source_us:>8.2}µs  old(nf+quote)={old_us:>12.1}µs");
     }
 }
+
+/// 复杂度探针 E：`lsp_surface()` 里**非 hover** 通道的拷贝成本（hover 只是其中之一）。
+///
+/// 关键：`lsp_surface()` 每次都给六个通道各做一次 clone。LSP 每按一个键都会调它
+/// （hover/completion/inlay 三个请求各一次），所以要看清**每个通道**的量级。
+#[test]
+#[ignore = "复杂度探针：只打印不断言"]
+fn complexity_probe_channels() {
+    fn per_call<F: FnMut()>(n: usize, mut f: F) -> f64 {
+        f();
+        let t = std::time::Instant::now();
+        for _ in 0..n { f(); }
+        t.elapsed().as_secs_f64() * 1e6 / n as f64
+    }
+    println!("--- E: lsp_surface() 各通道拷贝成本 ---");
+    for d in [20usize, 100, 400] {
+        let mut src = String::from("def T(n: Nat): Type 0 =\n    match n {\n        case zero => Boolean\n        case succ(m) => Nat\n    }\n");
+        for i in 0..d {
+            src.push_str(&format!("def f{i}(n: Nat): Nat = n\n"));
+        }
+        let infer = elaborate_infer(&src);
+        let full = per_call(200, || { let _ = infer.lsp_surface(); });
+        let hover_only = per_call(200, || { let _: Vec<_> = infer.hover_table.clone(); });
+        let comp_only = per_call(200, || { let _: Vec<_> = infer.completion_table.clone(); });
+        let inlay_only = per_call(200, || { let _: Vec<_> = infer.inlay_hint_table.clone(); });
+        // println_spans 是**迭代 + 分配**（不是 clone）
+        let pl_only = per_call(200, || { let _ = infer.println_spans(); });
+        println!(
+            "D={d:<4} hover={:<5} comp={:<5} | full={full:>7.2}  hover={hover_only:>7.2} comp={comp_only:>7.2} inlay={inlay_only:>7.2} println={pl_only:>7.2}µs",
+            infer.hover_table.len(),
+            infer.completion_table.len(),
+        );
+    }
+}
+
+/// 复杂度探针 F：**我引入的一个真实回退** —— `lsp_surface()` 六通道全克隆。
+///
+/// 原 `hover_entries_owned` 只 clone hover 一张表；改成 `lsp_surface().hover` 后，
+/// 每次请求都会连带克隆 completion / inlay / 迭代 println_jobs / errors / failed_decls。
+/// 本探针把 completion 与 inlay 表填满，量化这个额外开销。
+#[test]
+#[ignore = "复杂度探针：只打印不断言"]
+fn complexity_probe_full_vs_channel() {
+    fn per_call<F: FnMut()>(n: usize, mut f: F) -> f64 {
+        f();
+        let t = std::time::Instant::now();
+        for _ in 0..n { f(); }
+        t.elapsed().as_secs_f64() * 1e6 / n as f64
+    }
+    println!("--- F: 单通道 clone vs lsp_surface() 全通道 ---");
+    for d in [100usize, 400] {
+        let mut src = String::from("def T(n: Nat): Type 0 =\n    match n {\n        case zero => Boolean\n        case succ(m) => Nat\n    }\n");
+        for i in 0..d {
+            src.push_str(&format!("def f{i}(n: Nat): Nat = n\n"));
+        }
+        let mut infer = elaborate_infer(&src);
+        // 人为把 completion / inlay 填到与 hover 同量级（模拟真实 LSP 满载）
+        for i in 0..infer.hover_table.len() {
+            infer.completion_table.push((empty_span(()), SmolStr::new(format!("member{i}"))));
+            infer.inlay_hint_table.push((i as u32, format!(": Nat{0}", i)));
+        }
+        let full = per_call(100, || { let _ = infer.lsp_surface(); });
+        let ch = per_call(100, || { let _: Vec<_> = infer.hover_table.clone(); });
+        println!(
+            "D={d:<4} hover={:<5} comp={:<5} inlay={:<5} | lsp_surface={full:>8.2}  hover.clone={ch:>8.2}µs  ratio={:.2}x",
+            infer.hover_table.len(), infer.completion_table.len(), infer.inlay_hint_table.len(),
+            full / ch
+        );
+    }
+}

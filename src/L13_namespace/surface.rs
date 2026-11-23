@@ -80,6 +80,29 @@ impl SurfaceQuery {
 }
 
 impl Infer {
+    /// **单通道**克隆（LSP 单请求用）：只付一张表的代价。
+    ///
+    /// 为什么需要它：`lsp_surface()` 会克隆全部六张表，而 hover / completion /
+    /// inlay 各自只需要一张。三张表同量级时全量快照比额外一张表慢 2.0–2.2×（实测
+    /// D=400：123 µs vs 56 µs），所以单请求路径必须走这三个入口。
+    /// `lsp_surface()` 保留给需要多通道的调用方（goto / references 扫全表）。
+    #[inline]
+    pub fn lsp_hover(&self) -> Vec<HoverEntry> {
+        self.hover_table.clone()
+    }
+
+    /// 见 [`Self::lsp_hover`]。
+    #[inline]
+    pub fn lsp_completion(&self) -> Vec<(Span<()>, smol_str::SmolStr)> {
+        self.completion_table.clone()
+    }
+
+    /// 见 [`Self::lsp_hover`]。
+    #[inline]
+    pub fn lsp_inlay(&self) -> Vec<(u32, String)> {
+        self.inlay_hint_table.clone()
+    }
+
     /// 悬停条目是否要采：采集总闸 + 可选的按偏移采集过滤。
     #[inline]
     pub(crate) fn hover_wanted(&self, span: Span<()>) -> bool {
@@ -124,14 +147,20 @@ impl Infer {
             .collect()
     }
 
-    /// 清空观察面六张表（prelude 装载收尾 / 逐文件重置用）。
+    /// 清空**显示类**观察表（prelude 装载收尾 / 逐文件重置用）。
+    ///
+    /// 刻意**不动** `accumulated_errors` 与 `failed_decls`：
+    /// - `accumulated_errors` 由消费方逐 decl `drain`（不是整表清）；
+    /// - `failed_decls` 携带 A2 根因抑制语义（prelude 里失败的声明必须留到用户轮的
+    ///   "引用了上方失败的声明"降级里用，清了会让下游退化成二阶 not-in-scope）。
+    ///
+    /// 原 `src/lib.rs` 的两处清表点也只清 hover/completion/inlay 三张表，
+    /// 本函数保持同一范围（外加方案 3 的 `decl_shapes`，它同属显示旁表）。
     pub fn clear_observation_tables(&mut self) {
         self.hover_table.clear();
         self.hover_table.shrink_to_fit();
         self.completion_table.clear();
         self.inlay_hint_table.clear();
-        self.accumulated_errors.clear();
-        self.failed_decls.clear();
         self.decl_shapes.borrow_mut().clear();
     }
 }

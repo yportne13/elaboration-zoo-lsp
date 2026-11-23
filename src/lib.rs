@@ -668,7 +668,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         }
         // 参考版走统一观察面契约（`Infer::lsp_surface`）——调用方拿到 owned 值，
         // 不再逐字段读六张表。
-        self.hover_table.get(uri).map(|x| x.lsp_surface().hover)
+        self.hover_table.get(uri).map(|x| x.lsp_hover())
     }
 
     /// Engine-appropriate completion table for `uri` (owned).  `None` when no
@@ -680,7 +680,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                 return Some(s.completion.clone());
             }
         }
-        self.hover_table.get(uri).map(|x| x.lsp_surface().completion)
+        self.hover_table.get(uri).map(|x| x.lsp_completion())
     }
 
     /// Engine-appropriate inlay table for `uri` (owned).
@@ -690,7 +690,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                 return Some(s.inlay.clone());
             }
         }
-        self.hover_table.get(uri).map(|x| x.lsp_surface().inlay_hint)
+        self.hover_table.get(uri).map(|x| x.lsp_inlay())
     }
 
     /// Engine-routed hover entry at `offset` (rendered type string), the same

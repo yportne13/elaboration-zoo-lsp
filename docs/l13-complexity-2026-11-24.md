@@ -116,3 +116,77 @@ cargo test --release --lib L13_namespace::debug_test::complexity_probe_old_vs_so
 
 两个探针都 `#[ignore]`（只打印不断言、~10 s），不进默认门禁。
 
+## 8. 复核（2026-11-24 第二轮）：发现并修掉了两个真实问题
+
+第一轮只测了「我新增的东西」，没测「我改坏了什么」。用 baseline worktree（`2ad6b1b4` =
+观察面改动之前）逐例对照后，发现两个问题：
+
+### 8.1 问题 1（**正确性**）：`clear_observation_tables` 多清了表
+
+我合并两处 prelude 清表点时，把 `accumulated_errors` 与 `failed_decls` 也清了。但原代码
+**只清 3 张显示表**：
+
+| 表 | 原代码 | 我（错） | 为什么不能清 |
+|---|---|---|---|
+| `hover` / `completion` / `inlay` | clear | clear | — |
+| `accumulated_errors` | **不清** | clear | 消费方逐 decl `drain`，整表清会丢诊断 |
+| `failed_decls` | **不清** | clear | 携带 A2 根因抑制语义；清了会让下游退化成二阶 not-in-scope |
+
+已修正：`clear_observation_tables` 只清 3 张显示表 + `decl_shapes`（方案 3 的显示旁表）。
+
+### 8.2 问题 2（**性能**）：`lsp_surface()` 让单请求克隆全部六通道
+
+原 `hover_entries_owned` 只 clone **一张**表；改成 `lsp_surface().hover` 后，每次请求连带
+克隆 completion / inlay / 迭代 `println_jobs` / 复制 errors 与 failed_decls。
+把三张表填到同量级后实测：
+
+| 每表条目 | `lsp_surface()` | 单通道 clone | 比值 |
+|---|---|---|---|
+| 410 | 29.2 µs | 13.6 µs | **2.15×** |
+| 1610 | 124.7 µs | 56.0 µs | **2.22×** |
+
+修法：新增三个**单通道**入口 `lsp_hover()` / `lsp_completion()` / `lsp_inlay()`（都是 `clone`，
+零额外逻辑），`src/lib.rs` 的三个单请求路径改走它们；`lsp_surface()` 保留给需要多通道的
+调用方（goto / references 扫全表）。
+
+## 9. example 实测（baseline vs 现在）
+
+### 9.1 `l13bench --file`（bench 口径，core prelude，7 轮 × 3 次取最小）
+
+| example | baseline | 现在 | 变化 |
+|---|---|---|---|
+| typeclass_complex | 48.8 ms | **47.5 ms** | −2.7% |
+| theorem_proving | 51.5 ms | **49.8 ms** | −3.2% |
+
+（`alu` / `hdl_ops` 需要 HDL prelude，core 口径下 prelude 阶段就失败，不参与对比。）
+
+### 9.2 HDL prelude（`--with-prelude hdl`）
+
+| example | baseline | 现在 | 变化 |
+|---|---|---|---|
+| alu | 4574.0 ms | 4619.8 ms | +1.0% |
+| hdl_ops | 4721.2 ms | 4724.8 ms | +0.1% |
+
+（HDL prelude 的 ~4.6 s 是**固定成本**（1396 decls），不是观察面引入的；见
+`docs/l13-hdl-prelude-cost-2026-11-20.md`。）
+
+### 9.3 LSP 路径（`typort check` 的 infer 相位，3 次取最小）
+
+| example | baseline | 现在 | 变化 |
+|---|---|---|---|
+| alu | 116.5 ms | **114.7 ms** | −1.5% |
+| typeclass_complex | 44.4 ms | 44.6 ms | +0.5% |
+| theorem_proving | 28.7 ms | 29.9 ms | +4.2% |
+| adder_proof | 345.7 ms | 346.9 ms | +0.3% |
+| hdl_ops | 606.1 ms | 607.3 ms | +0.2% |
+
+全部在 ±4% 内，且这是**含进程启动 + prelude 装载**的端到端口径。
+
+## 10. 结论（第二轮）
+
+| 项 | 判定 |
+|---|---|
+| 源码注解渲染 | **O(k) → O(1)**（K=10000 时 7000×），各 example 均有小幅**提升** |
+| 单通道 API | 修掉 2.15–2.22× 的回退，回到「只付一张表」 |
+| `clear_observation_tables` | 范围修正为 3 张显示表 + `decl_shapes`（正确性） |
+| 端到端 | **±4% 内**，无系统性回退 |
