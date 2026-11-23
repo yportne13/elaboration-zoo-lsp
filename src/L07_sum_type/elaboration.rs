@@ -281,6 +281,17 @@ impl Infer {
                 let vt = self.force(cxt.decl(), self.eval(cxt.decl(), &cxt.env, &t_tm));
                 // 观察面（def 登记处）：span 旁表 + 登记期渲染串 + def-site hover；
                 // 无显式返回类型注解时补一条 inlay（锚点 = 最后参数结束 +1）。
+                // 形状登记（方案 3）：把 def 返回类型里的 match 形状记下来，供显示层
+                // 在展开出的 `Val::Match` 上认回这个名字（无类型注解的 def 也能保真）。
+                // 只在 lsp_collect 时做（纯显示用途，cost 可忽）。
+                if self.lsp_collect {
+                    let shapes = super::shape::shapes_for(self, cxt.decl(), vtyp.clone(), vt.clone());
+                    if !shapes.is_empty() {
+                        self.decl_shapes
+                            .borrow_mut()
+                            .insert(SmolStr::new(&name.data), shapes);
+                    }
+                }
                 if self.lsp_collect {
                     let key = SmolStr::new(&name.data);
                     self.decl_spans.insert(key.clone(), name.to_span());

@@ -69,3 +69,28 @@
 
 口径：`CARGO_PROFILE_TEST_DEBUG=0`（本机 MSVC 的 `LNK2019 anon.llvm.*` 规避）。
 
+## 3b. 方案 3：形状认回 decl（无注解 def 的保真）
+
+新增 `src/L07_sum_type/shape.rs`（~140 行）+ `observe.rs` 的 `render_by_shape`：
+
+1. def 登记处记录其 **match 形状**（`Val::Match` 的 pattern 骨架 + 捕获 env 槽数），两种来源：
+   - `FromValue`：def 的**注册值**剥 λ 后是 match（`def T(n : Nat) : U = match n { … }`）——它是
+     该 match 的**定义者**；
+   - `FromType`：def 的**返回类型**剥 Π 后是 match（`def g(n : Nat) : T n = …`）。
+2. 再加一个 `type_level` 判别（声明返回类型剥 Π 后是 `U`）；
+3. 渲染时（`render_val` / `render_typ_pretty`）先试形状认回，命中就打回 `head 实参`。
+
+优先级（`match_to_decl`）：**类型级 FromValue > 值级 FromValue > 类型级 FromType > 值级 FromType**。
+这条优先级是必要的：`def T(n): U = match n {…}` 与 `def g(n): T n = match n {…}` 的 match **形状
+完全相同**，若按登记顺序认就会打出 `g n`（错），按"类型级优先"才对。
+
+效果：
+
+| 场景 | 旧 | **新** |
+|---|---|---|
+| `def h(n : Nat) = g n`（无注解） | `(n: Nat) → (match n { case zero => Bool; case succ(m) => Nat })` | **`(n: Nat) → T n`** |
+| 同上，若同形状有值级 def `g` | — | 仍认 `T n`（不认 `g n`） |
+
+风险：纯显示启发式（只在 `lsp_collect` 时登记、只在渲染路径里查表），不进任何语义/性能路径。
+局限：同形状的多个候选里只能靠"类型级/值级 + 登记顺序"猜；形状不含实参，故不同实参的同一
+函数会认成同一名字（对显示是可接受的近似）。

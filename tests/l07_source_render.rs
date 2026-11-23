@@ -83,3 +83,32 @@ fn unannotated_def_still_renders_from_value() {
         assert!(!t.is_empty());
     });
 }
+
+/// 方案 3：形状认回 —— 无注解 def 的类型也能打回 `T n`（不是展开的 match）。
+#[test]
+fn unannotated_def_recovers_type_level_name() {
+    with_stack(|| {
+        let src = format!("{TY_FAMILY}def h(n : Nat) = g n\n");
+        let off = src.find("def h(").expect("def h") + 4;
+        let (_, s) = L07_sum_type::run_with_surface(&src, 0).expect("surface");
+        let t = s.hover_text_at(0, off).expect("h 的悬停条目").to_owned();
+        assert_eq!(t, "(n: Nat) → T n", "应认回类型级 def 名");
+        assert!(!t.contains("match"), "不得展开成 match: {t}");
+    });
+}
+
+/// 方案 3 的优先级：同形状的值级 def（`g`）不得冒充类型级 def（`T`）。
+#[test]
+fn shape_recovery_prefers_type_level_def() {
+    with_stack(|| {
+        let src = format!("{TY_FAMILY}def h2(n : Nat) = g n\n");
+        let off = src.find("def h2(").expect("def h2") + 4;
+        let (_, s) = L07_sum_type::run_with_surface(&src, 0).expect("surface");
+        let t = s.hover_text_at(0, off).expect("h2 的悬停条目").to_owned();
+        assert!(
+            t.contains("T n"),
+            "应为 `T n`（类型级定义者），而不是 `g n`: {t}"
+        );
+        assert!(!t.contains("g n"), "不应认成值级 def: {t}");
+    });
+}

@@ -18,6 +18,13 @@ use smol_str::SmolStr;
 
 use crate::parser_lib::{Span, ToSpan};
 
+/// 从名字造一个零 span（显示用途：pretty 只需要 `data`）。
+fn span_from_name(name: &str) -> Span<String> {
+    let mut s: Span<String> = crate::L07_sum_type::empty_span(String::new());
+    s.data = name.to_owned();
+    s
+}
+
 use super::parser::syntax::Decl;
 use super::syntax::Locals;
 use super::surface::{inlay_label, split_issue_lines, HoverEntry, LspSurface};
@@ -38,13 +45,78 @@ impl Infer {
 
     /// push 期渲染：站点上下文引读 + pretty（与 run 的 println 同管线）。
     pub(crate) fn render_val(&self, cxt: &Cxt, v: Val) -> String {
+        // 方案 3（形状认回 decl）：类型里的卡住 match 若能按形状认回某个 def，
+        // 就打回 `g n` 而不是 `match n { … }`——无类型注解的 def 也因此保真。
+        if let Some(s) = self.render_by_shape(cxt, v.clone()) {
+            return s;
+        }
         let q = self.quote(cxt.decl(), cxt.lvl, v);
         pretty_tm(0, cxt.names(), &q)
+    }
+
+    /// 形状认回：逐层剥离 Π，若余定义域是能认回 def 的 `Val::Match`，就合成
+    /// `head args` 形态的项；否则返回 None（调用方回落到普通引读）。
+    fn render_by_shape(&self, cxt: &Cxt, vtyp: Val) -> Option<String> {
+        if self.decl_shapes.borrow().is_empty() {
+            return None;
+        }
+        let decl = cxt.decl();
+        // 剥 Π：收集 binder 名与域（显示用）
+        let mut t = self.force(decl, vtyp);
+        let mut l = cxt.lvl;
+        let mut binders: Vec<(String, Val)> = Vec::new();
+        loop {
+            match t {
+                Val::Pi(name, _, dom, cod) => {
+                    binders.push((name.data.clone(), (*dom).clone()));
+                    let u = Val::vvar(l);
+                    t = self.force(decl, self.closure_apply(decl, &cod, u));
+                    l = l + 1;
+                }
+                ref m @ Val::Match(..) => {
+                    let head = super::shape::match_to_decl(self, m)?;
+                    let Val::Match(scrut, _, _, pending) = m else { return None };
+                    // 尾部：`head scrut args…`
+                    let mut tail = Tm::App(
+                        Box::new(Tm::Decl(SmolStr::new(&head)),
+                        ),
+                        Box::new(self.quote(decl, l, (**scrut).clone())),
+                        super::parser::syntax::Icit::Expl,
+                    );
+                    for (u, i) in pending.iter() {
+                        tail = Tm::App(
+                            Box::new(tail),
+                            Box::new(self.quote(decl, l, u.clone())),
+                            *i,
+                        );
+                    }
+                    // 重新套上 Π（域用 normal quote）
+                    let mut names = cxt.names();
+                    let mut tm = tail;
+                    for (bname, dom) in binders.iter().rev() {
+                        tm = Tm::Pi(
+                            span_from_name(bname),
+                            super::parser::syntax::Icit::Expl,
+                            Rc::new(self.quote(decl, l, dom.clone())),
+                            Rc::new(tm),
+                        );
+                        names = names.prepend(bname.clone());
+                    }
+                    let _ = names;
+                    return Some(pretty_tm(0, cxt.names(), &tm));
+                }
+                _ => return None,
+            }
+        }
     }
 
     /// 登记处类型渲染 + final 判定（引出项无未解 meta 时，串与使用处实时渲染
     /// 一致，可直接复用）。
     pub(crate) fn render_typ_pretty(&self, cxt: &Cxt, v: Val) -> (String, bool) {
+        // 方案 3：先试形状认回（无类型注解的 def 也走这里）。
+        if let Some(s) = self.render_by_shape(cxt, v.clone()) {
+            return (s, true);
+        }
         let q = self.quote(cxt.decl(), cxt.lvl, v);
         let fin = !self.tm_has_unsolved_meta(&q);
         (pretty_tm(0, cxt.names(), &q), fin)
