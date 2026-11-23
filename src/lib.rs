@@ -666,7 +666,9 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                 return Some(s.hover.clone());
             }
         }
-        self.hover_table.get(uri).map(|x| x.hover_table.clone())
+        // 参考版走统一观察面契约（`Infer::lsp_surface`）——调用方拿到 owned 值，
+        // 不再逐字段读六张表。
+        self.hover_table.get(uri).map(|x| x.lsp_surface().hover)
     }
 
     /// Engine-appropriate completion table for `uri` (owned).  `None` when no
@@ -678,7 +680,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                 return Some(s.completion.clone());
             }
         }
-        self.hover_table.get(uri).map(|x| x.completion_table.clone())
+        self.hover_table.get(uri).map(|x| x.lsp_surface().completion)
     }
 
     /// Engine-appropriate inlay table for `uri` (owned).
@@ -688,7 +690,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                 return Some(s.inlay.clone());
             }
         }
-        self.hover_table.get(uri).map(|x| x.inlay_hint_table.clone())
+        self.hover_table.get(uri).map(|x| x.lsp_surface().inlay_hint)
     }
 
     /// Engine-routed hover entry at `offset` (rendered type string), the same
@@ -725,7 +727,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         }
         for e in self.hover_table.iter() {
             if !seen.contains(e.key().as_str()) {
-                out.push((e.key().clone(), e.value().hover_table.clone()));
+                out.push((e.key().clone(), e.value().lsp_surface().hover));
             }
         }
         out
@@ -1384,12 +1386,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         // The cached state is never queried for hover/completion; drop the
         // accumulated tables and the mutable global map so per-file clones
         // stay cheap.
-        infer.hover_table.clear();
-        infer.hover_table.shrink_to_fit();
-        infer.completion_table.clear();
-        infer.completion_table.shrink_to_fit();
-        infer.inlay_hint_table.clear();
-        infer.inlay_hint_table.shrink_to_fit();
+        infer.clear_observation_tables();
         infer.shrink();
         infer.mutable_map.write().unwrap().clear();
         *self.infer.lock().unwrap() = infer;
@@ -2057,12 +2054,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                 // Prelude load path: drop the per-file tables accumulated in
                 // the global infer.  Hover/inlay/completion requests read the
                 // per-file snapshots stored below, never the global state.
-                infer.hover_table.clear();
-                infer.hover_table.shrink_to_fit();
-                infer.completion_table.clear();
-                infer.completion_table.shrink_to_fit();
-                infer.inlay_hint_table.clear();
-                infer.inlay_hint_table.shrink_to_fit();
+                infer.clear_observation_tables();
                 infer.shrink();
             }
             infer.mutable_map.write().unwrap().clear();

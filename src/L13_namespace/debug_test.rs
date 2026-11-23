@@ -464,7 +464,7 @@ fn elaborate_infer(input: &str) -> Infer {
 }
 
 /// 源码注解渲染（2026-11-23）：有显式类型注解的 def，`typ_pretty` 直接是**源码文本**——
-/// 于是 `def g(n: Nat): T n` 显示 `(n : Nat) → T n`，不会展开成 `match n { … }`，
+/// 于是 `def g(n: Nat): T n` 显示 `(n: Nat) → T n`，不会展开成 `match n { … }`，
 /// 也完全绕开 `quote`/`quote_nat`（后者对 `Val::Nat(k)` 要建 k 层 SumCase 链）。
 #[test]
 fn def_with_source_annotation_renders_source_form() {
@@ -486,7 +486,8 @@ def g(n: Nat): T n =
     let _ = &infer;
     // decl 条目是元组：.6 是登记期 `typ_pretty`（与 lib.rs 的 `e.6` 同口径）。
     let typ_pretty = e.6.as_str();
-    assert_eq!(typ_pretty, "(n : Nat) → T n", "应为源码形态");
+    // L13 的显示口径：冒号前无空格（与 pretty_tm 的 `(x: A, y: B) → C` 一致）。
+    assert_eq!(typ_pretty, "(n: Nat) → T n", "应为源码形态");
     assert!(!typ_pretty.contains("match"), "不得展开: {typ_pretty}");
 }
 

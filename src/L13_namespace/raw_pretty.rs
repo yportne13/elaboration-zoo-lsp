@@ -206,25 +206,90 @@ fn pattern(p: &Pattern) -> String {
     }
 }
 
+/// `Raw` 里是否引用了**本组已收集的** binder（按 De Bruijn 深度粗判）。
+///
+/// `depth` = 已收集的 binder 数；`Raw::Var` 命中名字表里最近的同名 binder ⇒ 引用本组。
+fn mentions_group(t: &Raw, group: &[smol_str::SmolStr], depth: usize) -> bool {
+    match t {
+        Raw::Var(x) => group.iter().any(|g| g.as_str() == x.data.as_str()),
+        Raw::Obj(x, _) => mentions_group(x, group, depth),
+        Raw::Lam(_, _, b) => mentions_group(b, group, depth),
+        Raw::App(f, a, _) => mentions_group(f, group, depth) || mentions_group(a, group, depth),
+        Raw::Pi(_, _, a, b) => mentions_group(a, group, depth) || mentions_group(b, group, depth),
+        Raw::Let(_, a, x, u) => {
+            mentions_group(a, group, depth)
+                || mentions_group(x, group, depth)
+                || mentions_group(u, group, depth)
+        }
+        Raw::Match(s, arms) => {
+            mentions_group(s, group, depth) || arms.iter().any(|(_, b)| mentions_group(b, group, depth))
+        }
+        Raw::Sum(_, params, _, _, _) => params.iter().any(|(_, _, ty)| mentions_group(ty, group, depth)),
+        Raw::SumCase { typ, datas, .. } => {
+            mentions_group(typ, group, depth) || datas.iter().any(|(_, r, _)| mentions_group(r, group, depth))
+        }
+        Raw::Tm(..) => true, // 保守：pre-checked 节点一律视为依赖
+        _ => false,
+    }
+}
 /// 从 def 的签名（params + ret_type）拼出源码形态的类型串。
-pub fn def_type_from_source(params: &[(Span<smol_str::SmolStr>, Raw, Icit)], ret: &Raw) -> String {
+pub fn def_type_from_source(
+    params: &[(Span<smol_str::SmolStr>, Raw, Icit)],
+    ret: &Raw,
+) -> String {
+    // 与 `pretty_tm` 的 Pi 折叠口径一致：域不依赖本组已收集 binder 的相邻参数
+    // 合并成一组（`(x: A, y: B) → C`），依赖的另起一组。隐式参数用方括号。
     let mut out = String::new();
-    for (name, ty, icit) in params.iter() {
-        match icit {
-            Icit::Impl => {
-                out.push('[');
-                out.push_str(name.data.as_str());
-                out.push_str(" : ");
-                go(LETP, ty, &mut out);
-                out.push_str("] → ");
-            }
-            Icit::Expl => {
+    let mut group: Vec<(smol_str::SmolStr, &Raw, Icit)> = Vec::new();
+    let mut names: Vec<smol_str::SmolStr> = Vec::new();
+
+    let flush = |group: &mut Vec<(smol_str::SmolStr, &Raw, Icit)>,
+                 names: &mut Vec<smol_str::SmolStr>,
+                 out: &mut String| {
+        if group.is_empty() {
+            return;
+        }
+        let mut cur_icit = group[0].2;
+        out.push(if cur_icit == Icit::Impl { '[' } else { '(' });
+        for (idx, (n, ty, icit)) in group.iter().enumerate() {
+            if icit != &cur_icit {
+                out.push(']');
                 out.push('(');
-                out.push_str(name.data.as_str());
-                out.push_str(" : ");
-                go(LETP, ty, &mut out);
-                out.push_str(") → ");
+                cur_icit = *icit;
+            } else if idx > 0 {
+                out.push_str(", ");
             }
+            out.push_str(n.as_str());
+            // L13 既有显示口径：冒号前**无空格**（`(a: Nat, b: Boolean)`）。
+            out.push_str(": ");
+            go(LETP, ty, out);
+            names.push(n.clone());
+        }
+        out.push(if cur_icit == Icit::Impl { ']' } else { ')' });
+        out.push_str(" → ");
+        group.clear();
+        names.clear();
+    };
+
+    for (name, ty, icit) in params.iter() {
+        if !group.is_empty() {
+            // 新参数的域若引用了本组已收集的 binder，就另起一组。
+            let cur_names: Vec<smol_str::SmolStr> = group.iter().map(|(n, _, _)| n.clone()).collect();
+            if mentions_group(ty, &cur_names, 0) {
+                flush(&mut group, &mut names, &mut out);
+            }
+        }
+        group.push((name.data.clone(), ty, *icit));
+    }
+    if !group.is_empty() {
+        // 最后一组之后是返回类型：组内合并，但组间靠 `→` 分开。
+        let cur_names: Vec<smol_str::SmolStr> = group.iter().map(|(n, _, _)| n.clone()).collect();
+        if !mentions_group(ret, &cur_names, 0) {
+            // 返回类型独立 ⇒ 全部参数合并成一组（`(x: A, y: B) → C`）。
+            // 已经在 group 里，直接 flush 即可。
+            flush(&mut group, &mut names, &mut out);
+        } else {
+            flush(&mut group, &mut names, &mut out);
         }
     }
     go(LETP, ret, &mut out);
