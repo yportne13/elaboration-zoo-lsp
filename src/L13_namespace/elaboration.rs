@@ -479,7 +479,8 @@ impl Infer {
     /// Record an inlay hint `: <type>` at `offset`, skipping types that still
     /// contain unsolved metas and truncating over-long labels.
     fn push_inlay_hint(&mut self, cxt: &Cxt, offset: u32, val: &Rc<Val>) {
-        if !self.lsp_collect { return; }
+        // 惰性采集：可见区外的 inlay 不渲染（L07–L12 同口径）。
+        if !self.inlay_wanted(offset) { return; }
         let lvl = cxt.lvl;
         let tm = self.quote(&cxt.decl, lvl, val);
         if tm.no_metas(self, &cxt.decl, lvl).is_some() {
@@ -1684,6 +1685,13 @@ impl Infer {
                                 .insert(name.data.clone(), shapes);
                         }
                     }
+                    // 注意：def-site hover **不能**直接用 `vtyp_pretty`（源码注解渲染的串）。
+                    // L13 的 def-site 渲染有既有的「独立参数折叠」约定
+                    // （`(x: Nat, y: Bool) → Bool`，见 debug_test.rs 的
+                    // `hover_type_folds_independent_params`），而源码渲染逐参数分开
+                    // （`(x : Nat) → (y : Bool) → Bool`）。两者各有消费方：
+                    // - `typ_pretty`（e.6）→ `lib.rs` 的 `hover_def_block`（源码形态）；
+                    // - `hover_table` 的 def-site 条目 → 走 `push_hover`（折叠形态）。
                     self.push_hover(ret_cxt, name.to_span(), name.to_span(), &vtyp);
                     // Release the fake table's Rc before registering the real
                     // entry: with another holder alive `Rc::make_mut` would
@@ -2879,7 +2887,8 @@ impl Infer {
     }
 
     pub(crate) fn push_hover(&mut self, cxt: &Cxt, t_span: Span<()>, def_span: Span<()>, val: &Rc<Val>) {
-        if !self.lsp_collect { return; }
+        // 惰性采集：光标不在该 span 上时连渲染都不做（L07–L12 同口径）。
+        if !self.hover_wanted(t_span) { return; }
         // 形状认回（方案 3）：类型里的卡住 match 若能按形状认回某个 def，就打回
         // `g n` 而不是 `match n { … }`（无注解 def 也因此保真）。
         if let Some(rendered) = self.render_by_shape(cxt, val) {
@@ -2941,7 +2950,7 @@ impl Infer {
     /// （meta 可能在首见之后才被求解，缓存串会把 `?N` 冻进使用处悬浮；
     /// 快照克隆与 prelude 缓存态收尾都不继承此表）。
     pub(crate) fn push_ctor_hover(&mut self, cxt: &Cxt, t_span: Span<()>, def_span: Span<()>, val: &Rc<Val>, key: &str) {
-        if !self.lsp_collect { return; }
+        if !self.hover_wanted(t_span) { return; }
         if let Some(s) = self.ctor_hover_memo.get(key) {
             self.hover_table.push((t_span, def_span, s.as_ref().to_owned()));
             return;

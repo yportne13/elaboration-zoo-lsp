@@ -563,3 +563,81 @@ def h(n: Nat) = g n
     assert!(!text.contains("match"), "不得展开: {text}");
 }
 
+/// L13 `LspSurface` 快照：六通道从 `Infer` 的散表收敛成 owned 值。
+#[test]
+fn lsp_surface_snapshot_has_hover_entries() {
+    let input = r#"
+def g(n: Nat): Nat = n
+def h(n: Nat) = g n
+"#;
+    let infer = elaborate_infer(input);
+    let s = infer.lsp_surface();
+    assert!(s.is_empty() == false, "应有 hover 条目");
+    // 同一张表：快照与 live Infer 逐条一致
+    assert_eq!(s.hover.len(), infer.hover_table.len());
+    // 查询口径：按偏移取最窄条目
+    let off = input.find("def g(").unwrap() + 4;
+    let t = s.hover_text_at(24, off).expect("g 的条目");
+    // 注意：def-site hover 走 L13 的「独立参数折叠」约定（单参数时无差异）。
+    assert_eq!(t, "(n: Nat) → Nat", "源码注解渲染: {t}");
+}
+
+/// 快照是 owned 值：拿到后原 `Infer` 可以释放（这里用 drop 语义验证不再引用）。
+#[test]
+fn lsp_surface_is_owned() {
+    let input = "def g(n: Nat): Nat = n\n";
+    let s = {
+        let infer = elaborate_infer(input);
+        infer.lsp_surface()
+    };
+    let off = input.find("def g(").unwrap() + 4;
+    assert_eq!(s.hover_text_at(24, off).expect("条目"), "(n: Nat) → Nat");
+}
+
+/// 查询口径（`SurfaceQuery`）：只采光标处的 hover。
+#[test]
+fn surface_query_filters_hover_collection() {
+    let input = r#"
+def f(n: Nat): Nat = n
+def g(m: Nat): Nat = m
+"#;
+    let probe = input.find("def g(").unwrap() + 4;
+    let (mut infer, cxt, macros) = {
+        PRELUDE_CACHE.with(|c: &super::PreludeSlot| {
+            let mut guard = c.cell.borrow_mut();
+            if guard.is_none() {
+                *guard = Some(load_prelude_state().unwrap());
+            }
+            let state = guard.as_ref().unwrap();
+            let mut infer = state.infer.clone();
+            infer.mutable_map = Rc::new(std::sync::RwLock::new(
+                state.infer.mutable_map.read().unwrap().clone(),
+            ));
+            (infer, state.cxt.clone(), state.global_macros.clone())
+        })
+    };
+    infer.set_surface_query(super::surface::SurfaceQuery::hover_only(probe));
+    let ast = parser::parser_with_macros(&preprocess(input), 24, &macros)
+        .map(|(d, e, _, _)| (d, e)).unwrap();
+    let mut c = cxt;
+    for tm in ast.0 {
+        let (_, _, nc) = infer.infer(&c, tm.clone()).unwrap();
+        c = nc;
+    }
+    let s = infer.lsp_surface();
+    // 只采到光标覆盖的那个 def 名
+    let hits: Vec<_> = s.hover.iter().filter(|(sp, _, _)| sp.contains(probe)).collect();
+    assert_eq!(hits.len(), 1, "只应采到光标处一条: {}", s.hover.len());
+}
+
+#[test]
+fn dbg_probe() {
+    let input = "def foo(x: Nat, y: Bool): Bool = y";
+    let infer = elaborate_infer(input);
+    println!("lsp_collect={} hover_len={} hq={:?}", infer.lsp_collect, infer.hover_table.len(), infer.hover_query);
+    for (s, d, t) in infer.hover_table.iter().take(6) {
+        println!("H {}..{} :: {t}", s.start_offset, s.end_offset);
+    }
+    let pos = input.find("foo").unwrap();
+    println!("pos={pos} entry={:?}", infer.hover_entry_at(24, pos).map(|x| x.2.clone()));
+}

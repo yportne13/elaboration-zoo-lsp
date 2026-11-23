@@ -20,6 +20,7 @@ mod typeclass;
 pub mod pretty;
 mod raw_pretty;
 pub mod shape;
+pub mod surface;
 mod canonical;
 pub(crate) mod bump_spine_iter;
 
@@ -1567,6 +1568,10 @@ pub struct Infer {
     ctor_hover_memo: rustc_hash::FxHashMap<SmolStr, std::rc::Rc<str>>,
     /// 形状登记（方案 3）：def 名 → 其 match 形状（显示层认回用）。
     pub(crate) decl_shapes: std::cell::RefCell<rustc_hash::FxHashMap<SmolStr, Vec<shape::MatchShape>>>,
+    /// 惰性采集口径：hover 光标偏移（None = 全量）。
+    pub(crate) hover_query: Option<usize>,
+    /// 惰性采集口径：inlay 可见区（None = 全量）。
+    pub(crate) inlay_query: Option<(u32, u32)>,
 }
 
 impl Clone for Infer {
@@ -1605,6 +1610,9 @@ impl Clone for Infer {
             failed_decls: std::collections::HashSet::new(),
             // 形状登记同为观察面旁表：快照不继承（与 hover_table 同纪律）。
             decl_shapes: Default::default(),
+            // 查询口径随快照复制（只读口径，不是状态）。
+            hover_query: self.hover_query,
+            inlay_query: self.inlay_query,
         }
     }
 }
@@ -2293,6 +2301,8 @@ impl Infer {
             unify_kind: std::cell::Cell::new(UnifyKind::Absurd),
             ctor_hover_memo: Default::default(),
             decl_shapes: Default::default(),
+            hover_query: None,
+            inlay_query: None,
         }
     }
 
