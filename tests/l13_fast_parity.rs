@@ -1,3 +1,4 @@
+#![cfg(feature = "l13-twin")]
 //! L13_namespace 双 oracle 互检套件（参考版 `run` ↔ 性能版 `bump_spine_iter::
 //! run_fast`）。`#[path]` 只编 list.rs / bimap.rs / parser_lib.rs /
 //! parser_lib_resilient.rs / L13_namespace/mod.rs（不含 LSP / L02-L12），

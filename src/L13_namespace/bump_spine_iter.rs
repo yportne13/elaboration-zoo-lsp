@@ -1,3 +1,8 @@
+//! # ⚠️ 已封印（SEALED，2026-11-23）
+//!
+//! 本孪生不再参与默认门禁与 parity 契约（与 L07–L12 一致）：`tests/l13_fast_parity.rs`
+//! 改为 `#[cfg(feature = "l13-twin")]`。复核：`cargo test --features l13-twin`。
+//!
 //! L13 核心机（eval / quote / unify / rename / solve / prune / check /
 //! infer / check_universe / 模式编译 / trait 求解）的极致性能版：L12
 //! 冠军配方（`bump_spine_iter`）向 namespace 层的移植。继承 L05-L12 的
