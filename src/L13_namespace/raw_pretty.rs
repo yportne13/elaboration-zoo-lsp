@@ -30,15 +30,12 @@ fn go(prec: u8, t: &Raw, out: &mut String) {
                 out.push(')');
             }
         }
-        // `U(u32, Span)`：只打层级（`U` = 0）。
+        // `U(u32, Span)`：打 `Type N`（2026-11-25）。本层 lexer 里 `U` **不是关键字**
+        // （只有 `Type`，见 parser/lex.rs 的 KEYWORD 表），所以旧的 `U` / `U(n)`
+        // 两种形态都回灌不了自解析；改成与 `pretty.rs` 的 `Tm::U(uni)` → `Type {uni}` 一致。
         Raw::U(n, _) => {
-            if *n == 0 {
-                out.push('U');
-            } else {
-                out.push_str("U(");
-                out.push_str(&n.to_string());
-                out.push(')');
-            }
+            out.push_str("Type ");
+            out.push_str(&n.to_string());
         }
         // `Nat(Span<u64>)`：源码里的十进制字面量，原样打印（不建链）。
         Raw::Nat(n) => out.push_str(&n.data.to_string()),

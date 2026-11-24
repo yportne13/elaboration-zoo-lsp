@@ -26,7 +26,14 @@ fn go(prec: u8, t: &Raw, out: &mut String) {
                 out.push(')');
             }
         }
-        Raw::U(_) => out.push('U'),
+// TYPE_UNI_ARM（2026-11-25）：本层起 `U` **不是关键字**（lexer 只认 `Type`，
+        // 见 parser/lex.rs 的 KEYWORD 表），所以源码注解渲染必须打 `Type N` 才能回灌
+        // 自解析；层级也必须保留——此前一律打成裸 `U`，`Type 1` 与 `Type 0` 无法区分。
+        // 与同层 `pretty.rs` 的 `Tm::U(uni)` → `Type {uni}` 对齐。
+        Raw::U(n) => {
+            out.push_str("Type ");
+            out.push_str(&n.to_string());
+        }
         Raw::Hole => out.push('_'),
         Raw::LiteralIntro(s) => out.push_str(&s.data),
         Raw::App(f, a, i) => {
