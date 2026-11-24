@@ -34,6 +34,58 @@ use rustc_hash::FxHashMap;
 pub(crate) static LOOP_DEBUG: LazyLock<AtomicBool> =
     LazyLock::new(|| AtomicBool::new(std::env::var("L08_LOOP").is_ok()));
 
+/// 逐函数探针（L07 的 `prof` 模块平移继承）：回答"一次 elaborate 里
+/// force/eval/quote/unify 各被调多少次"——表示层重构之前必须先有这张账。
+/// 总闸是普通 relaxed 原子（不是 `LazyLock`：状态机开销会吃掉 2–3% 热路径），
+/// 默认全关、零行为变化；入口 `prof::enable()` 或 bench 的 `--prof` 置位。
+pub mod prof {
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+    pub static ON: AtomicBool = AtomicBool::new(false);
+
+    /// 打开探针（入口调用一次；热路径只读 [`ON`]）。
+    pub fn enable() {
+        ON.store(true, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn on() -> bool {
+        ON.load(Ordering::Relaxed)
+    }
+
+    macro_rules! counters {
+        ($($name:ident),* $(,)?) => {
+            $(pub static $name: AtomicU64 = AtomicU64::new(0);)*
+            /// 全部计数器的名字（`report` 的列序）。
+            pub const NAMES: &[(&str, &AtomicU64)] = &[$((stringify!($name), &$name)),*];
+        };
+    }
+
+    counters!(FORCE, EVAL, QUOTE, VAPP, UNIFY, UNIFY_SP, MATCH_RUN, DECL_FORCE);
+
+    #[inline]
+    pub fn bump(c: &AtomicU64) {
+        if on() {
+            c.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// 清零（一次计时/一次 decl 之前调用）。
+    pub fn reset() {
+        for (_, c) in NAMES {
+            c.store(0, Ordering::Relaxed);
+        }
+    }
+
+    /// `k=v k=v ...` 单行报告（bench 直接打印）。
+    pub fn report() -> String {
+        let mut s = String::new();
+        for (n, c) in NAMES {
+            s.push_str(&format!("{}={} ", n.to_lowercase(), c.load(Ordering::Relaxed)));
+        }
+        s.trim_end().to_owned()
+    }
+}
 
 use cxt::{Cxt, DeclEntry, Decls};
 use pretty::pretty_tm;
@@ -45,6 +97,7 @@ use smol_str::SmolStr;
 mod cxt;
 mod struct_eq;
 mod elaboration;
+mod observe;
 pub(crate) mod parser;
 mod pattern_match;
 mod pretty;
@@ -692,21 +745,36 @@ pub struct Infer {
     /// 同一 meta 在栈上再次出现即判定环，返回卡住的 Flex，不再递归烧 fuel。
     /// RefCell 让 &self 的 force 路径可用；展开完成后显式弹栈。
     meta_expanding: RefCell<Vec<MetaVar>>,
-    // ── 观察面（L07 移植，2026-11-23）───────────────────────────────────────
-    /// 采集总闸（默认关：run/bench 口径不带渲染）。
+    // ── 观察面（LSP 引擎侧接线；L07 平移继承，docs/l07-lsp-port-2026-11-21.md）──
+    /// 采集总闸（默认 false：run/bench 口径不带渲染）。
     pub(crate) lsp_collect: bool,
-    /// 悬停表：(使用处 span, 定义处 span, 渲染串)。
-    pub(crate) hover_table: Vec<(Span<()>, Span<()>, String)>,
-    /// 登记面旁表：全局名 → 定义处 span。
-    pub(crate) decl_spans: FxHashMap<SmolStr, Span<()>>,
-    /// 登记面旁表：全局名 → 登记期渲染串 + final 标记。
-    pub(crate) decl_pretty: FxHashMap<SmolStr, (Rc<String>, bool)>,
-    /// 形状登记（方案 3）：def 名 → 其 match 形状（显示层认回用）。
-    pub(crate) decl_shapes: RefCell<FxHashMap<SmolStr, Vec<shape::MatchShape>>>,
-    /// println 输出通道：(println 体 span, 渲染串)。
+    /// 悬浮表：(使用处 span, 定义处 span, 渲染串)。owned 快照，轮界清空。
+    pub(crate) hover_table: Vec<surface::HoverEntry>,
+    /// 补全表（当前恒空，契约字段保留）。
+    pub(crate) completion_table: Vec<(Span<()>, String)>,
+    /// inlay 表：(插入点偏移, ": <type>")。
+    pub(crate) inlay_hint_table: Vec<(u32, String)>,
+    /// println 通道：(println 体 span, 渲染串)。
     pub(crate) println_spans: Vec<(Span<()>, String)>,
-    /// inlay hint (插入点偏移, ": <type>")。
-    pub(crate) inlay_hint: Vec<(u32, String)>,
+    /// 自检行通道：(decl 下标, "code|module|signal|message")。
+    pub(crate) check_issue_lines: Vec<(usize, String)>,
+    /// CheckIssues 全局的已排水字节游标（只读排水）。
+    issue_drained: usize,
+    /// 本轮失败的 decl 名字（opt-in 继续驱动填充）。
+    pub(crate) failed_decls: Vec<String>,
+    /// 按偏移采集：Some(off) 时只渲染命中该偏移的悬停条目。
+    pub(crate) hover_query: Option<usize>,
+    /// inlay 可见区：Some((lo,hi)) 时只渲染锚点落在区间内的 inlay。
+    pub(crate) inlay_query: Option<(u32, u32)>,
+    /// 登记面旁表：全局名 → 定义处 span（def / enum / 构造子限定键）。
+    pub(crate) decl_spans: FxHashMap<SmolStr, Span<()>>,
+    /// 登记面旁表：全局名 → 登记期渲染串 + final 标记（使用处可直取）。
+    pub(crate) decl_pretty: FxHashMap<SmolStr, (Rc<String>, bool)>,
+    /// 形状登记（方案 3）：def 名 → 其返回类型里的 match 形状。显示层用它在展开出的
+    /// `Val::Match` 上认回 def 名，打出 `g n` 而不是 `match n { … }`（无类型注解的 def 也能保真）。
+    pub(crate) decl_shapes: RefCell<FxHashMap<SmolStr, Vec<shape::MatchShape>>>,
+    /// 构造子 hover 的渲染记忆化（限定键 → 串）。
+    pub(crate) ctor_pretty: FxHashMap<SmolStr, Rc<String>>,
 }
 
 const UNIFY_FUEL: u32 = 4096;
@@ -759,11 +827,18 @@ impl Infer {
             meta_expanding: RefCell::new(Vec::new()),
             lsp_collect: false,
             hover_table: Vec::new(),
+            completion_table: Vec::new(),
+            inlay_hint_table: Vec::new(),
+            println_spans: Vec::new(),
+            check_issue_lines: Vec::new(),
+            issue_drained: 0,
+            failed_decls: Vec::new(),
+            hover_query: None,
+            inlay_query: None,
             decl_spans: FxHashMap::default(),
             decl_pretty: FxHashMap::default(),
             decl_shapes: RefCell::new(FxHashMap::default()),
-            println_spans: Vec::new(),
-            inlay_hint: Vec::new(),
+            ctor_pretty: FxHashMap::default(),
         }
     }
 
@@ -893,6 +968,7 @@ impl Infer {
     /// **展开递归**时消耗 fuel（高频直通路径不消耗），fuel 耗尽时停止
     /// 展开，把值当作未解处理。
     pub fn force(&self, decl: &Decls, t: Val) -> Val {
+        prof::bump(&prof::FORCE);
         match t {
             Val::Flex(m, sp) => {
                 let solved = match self.lookup_meta(m) {
@@ -1394,6 +1470,7 @@ impl Infer {
     /// 项层 splice 需要把实参 quote 成项，而实参的自由变量层级可能超出
     /// 捕获 env，无法引到正确上下文。
     fn v_app(&self, decl: &Decls, t: Val, u: Val, i: Icit) -> Val {
+        prof::bump(&prof::VAPP);
         match t {
             // 精化包裹的值先推开再分发（eval(App) 等不经 force 的调用点
             // 会把 VSub 头送进来——如臂上下文里 Var 引用了被解槽）
@@ -1450,6 +1527,7 @@ impl Infer {
     /// - Match 臂把 cases move 进值变为卡住时 `cases.clone()`（选中分支
     ///   的 Some 路径不克隆）。
     fn eval(&self, decl: &Decls, env: &Env, tm: &Tm) -> Val {
+        prof::bump(&prof::EVAL);
         match tm {
             Tm::Var(x) => match env.iter().nth(x.0 as usize) {
                 Some(v) => v.clone(),
@@ -1574,6 +1652,7 @@ impl Infer {
     }
 
     fn quote(&self, decl: &Decls, l: Lvl, t: Val) -> Tm {
+        prof::bump(&prof::QUOTE);
         let t = self.force(decl, t);
         match t {
             // 深链形态（Sum/SumCase/Obj 可按值深度自嵌，如 `succ^N zero`）
@@ -2087,47 +2166,6 @@ pub static FILE_IO_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 static L08_DEBUG_ON: std::sync::LazyLock<bool> =
     std::sync::LazyLock::new(|| std::env::var_os("L08_DEBUG").is_some());
 
-/// 带观察面的 run（L07 移植）：Ok 输出与 `run` 逐字节一致，另返回 hover 表快照。
-/// 无 LSP 表结构时用最简形态：`(使用处 span, 定义处 span, 渲染串)`。
-#[doc(hidden)]
-pub fn run_with_surface(
-    input: &str,
-    path_id: u32,
-) -> Result<(String, surface::LspSurface), Error> {
-    let mut infer = Infer::new();
-    infer.lsp_collect = true;
-    let ast = parser::parser_with_span(&preprocess(input), path_id).map_err(|(msg, span)| {
-        match span {
-            Some(s) => Error::at(msg, s),
-            None => Error::new(msg),
-        }
-    })?;
-    let mut cxt = Cxt::new(&infer);
-    let mut ret = String::new();
-    for tm in ast {
-        // println 的 span 要在推断**之前**取（推断会 move 掉 tm）
-        let println_span = match &tm {
-            parser::syntax::Decl::Println(r) => Some(surface::raw_span(r)),
-            _ => None,
-        };
-        let (x, _, new_cxt) = infer.infer_owned(cxt, tm)?;
-        cxt = new_cxt;
-        if let DeclTm::Println(x) = x {
-            let rendered = pretty_tm(0, cxt.names(), &infer.nf(cxt.decl(), &cxt.env, x));
-            ret += &rendered;
-            ret += "\n";
-            if let Some(span) = println_span {
-                infer.println_spans.push((span, rendered));
-            }
-        }
-    }
-    let mut s = surface::LspSurface::default();
-    s.hover = infer.hover_table;
-    s.println_spans = infer.println_spans;
-    s.inlay_hint = infer.inlay_hint;
-    Ok((ret, s))
-}
-
 pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
     let mut infer = Infer::new();
     // P10 第二步：解析错误也带位置（文案契约不变：`parse error` / 残余 token）
@@ -2152,6 +2190,115 @@ pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
     }
     Ok(ret)
 }
+
+// ── LSP 引擎侧入口（观察面；docs/l07-lsp-port-2026-11-21.md，L07 平移继承）──────
+
+/// 带观察面的 run：Ok 输出与 run 逐字节一致，另返回 owned 快照。
+pub fn run_with_surface(input: &str, path_id: u32) -> Result<(String, surface::LspSurface), Error> {
+    run_with_surface_query(input, path_id, surface::SurfaceQuery::default())
+}
+
+/// 按光标偏移采集（惰性 hover）：只有使用处 span 含 offset 的悬停条目被渲染。
+pub fn run_with_surface_at(
+    input: &str,
+    path_id: u32,
+    offset: usize,
+) -> Result<(String, surface::LspSurface), Error> {
+    run_with_surface_query(input, path_id, surface::SurfaceQuery::hover_only(offset))
+}
+
+/// 按查询口径采集（惰性 hover + inlay 可见区）。
+pub fn run_with_surface_query(
+    input: &str,
+    path_id: u32,
+    q: surface::SurfaceQuery,
+) -> Result<(String, surface::LspSurface), Error> {
+    run_surface_impl(input, path_id, true, q)
+}
+
+/// 带观察面的继续型检查驱动：遇错记失败 decl 名字后继续（错误文案不变）。
+pub fn check_with_surface(input: &str, path_id: u32) -> (Option<Error>, surface::LspSurface) {
+    let ast = match parser::parser_with_span(&preprocess(input), path_id) {
+        Ok(a) => a,
+        Err((msg, span)) => {
+            let e = match span {
+                Some(s) => Error::at(msg, s),
+                None => Error::new(msg),
+            };
+            return (Some(e), surface::LspSurface::default());
+        }
+    };
+    let mut infer = Infer::new();
+    infer.lsp_collect = true;
+    let mut cxt = Cxt::new(&infer);
+    let mut first_err: Option<Error> = None;
+    for (idx, d) in ast.iter().enumerate() {
+        match infer.infer_owned(cxt.clone(), d.clone()) {
+            Ok((x, _, new_cxt)) => {
+                cxt = new_cxt;
+                if let DeclTm::Println(t) = x {
+                    let rendered = pretty_tm(0, cxt.names(), &infer.nf(cxt.decl(), &cxt.env, t));
+                    let span = match d {
+                        parser::syntax::Decl::Println(r) => surface::raw_span(r),
+                        _ => empty_span(()),
+                    };
+                    infer.push_println_span(span, &rendered);
+                }
+            }
+            Err(e) => {
+                infer.note_failed_decl(d);
+                if first_err.is_none() {
+                    first_err = Some(e);
+                }
+            }
+        }
+        infer.drain_check_issues(idx);
+    }
+    (first_err, infer.surface())
+}
+
+/// 观察面驱动的公共实现（Ok 输出与 run 同管线）。
+fn run_surface_impl(
+    input: &str,
+    path_id: u32,
+    collect: bool,
+    q: surface::SurfaceQuery,
+) -> Result<(String, surface::LspSurface), Error> {
+    let ast = parser::parser_with_span(&preprocess(input), path_id).map_err(|(msg, span)| {
+        match span {
+            Some(s) => Error::at(msg, s),
+            None => Error::new(msg),
+        }
+    })?;
+    let mut infer = Infer::new();
+    infer.lsp_collect = collect;
+    infer.hover_query = q.hover;
+    infer.inlay_query = q.inlay;
+    let mut cxt = Cxt::new(&infer);
+    let mut ret = String::new();
+    for (idx, d) in ast.into_iter().enumerate() {
+        let println_span = match &d {
+            parser::syntax::Decl::Println(r) => Some(surface::raw_span(r)),
+            _ => None,
+        };
+        if *L08_DEBUG_ON {
+            eprintln!("> {}", parser::syntax::Decl::name(&d));
+        }
+        let (x, _, new_cxt) = infer.infer_owned(cxt, d)?;
+        cxt = new_cxt;
+        if let DeclTm::Println(t) = x {
+            let rendered = pretty_tm(0, cxt.names(), &infer.nf(cxt.decl(), &cxt.env, t));
+            ret += &rendered;
+            ret += "\n";
+            if let Some(span) = println_span {
+                infer.push_println_span(span, &rendered);
+            }
+        }
+        infer.drain_check_issues(idx);
+    }
+    Ok((ret, infer.surface()))
+}
+
 
 /// 内嵌 `test` 与性能版互检共用的演示源：enum + 依赖 match + String
 /// 字面量 + builtin 注册表（str_eq / str_indent2 / 文件 IO）+ decl 表
@@ -2307,7 +2454,27 @@ fn tm_size_ref(t: &Tm) -> u64 {
 /// 登记的值，空层级引读并数节点（深 Box 树的递归析构会爆栈，基准里
 /// `mem::forget`——L03/L04/L05/L06 同款处理）。
 pub(crate) fn bench_check_nf(decls: &[parser::syntax::Decl]) -> u64 {
+    bench_check_nf_impl(decls, false, surface::SurfaceQuery::default())
+}
+
+/// 基准口径 + 观察面采集（与 [`bench_check_nf`] 同一工作量，只是打开采集闸；
+/// `q` 走查询口径：hover 按光标、inlay 按可见区）。
+pub(crate) fn bench_check_nf_observe(
+    decls: &[parser::syntax::Decl],
+    q: surface::SurfaceQuery,
+) -> u64 {
+    bench_check_nf_impl(decls, true, q)
+}
+
+fn bench_check_nf_impl(
+    decls: &[parser::syntax::Decl],
+    collect: bool,
+    q: surface::SurfaceQuery,
+) -> u64 {
     let mut infer = Infer::new();
+    infer.lsp_collect = collect;
+    infer.hover_query = q.hover;
+    infer.inlay_query = q.inlay;
     let mut cxt = Cxt::new(&infer);
     let mut last: Option<String> = None;
     for d in decls {

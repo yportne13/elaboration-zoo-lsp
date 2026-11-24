@@ -411,3 +411,21 @@ Sum 头+参数+cases / SumCase 名+datas）改为 `VSpan(Rc<Span<String>>)`
 测试 116/57+1 ignored/81 全绿。
 
 跨层对比：`docs/bench-crosslayer-vspan-2026-11-13.md`（L07–L10）。
+## 增补（2026-11-25）：继承 L07 观察面（`observe.rs` 回落）
+
+L07 于 11-21~23 长出的 LSP 观察面（`observe.rs` + `mod.rs` 的查询/继续型入口 + `prof` 探针）
+本层此前只回填了渲染层，其余缺席。本轮按"上一章完整继承"口径补齐（`docs/inheritance/L08-triage.md`）：
+
+- **新增 `observe.rs`**（L07 平移）：`hover_wanted`/`inlay_wanted` 惰性闸、`render_val`/`render_typ_pretty`、
+  `push_hover`/`push_ctor_hover`/`push_inlay_hint`/`push_println_span`、`drain_check_issues`、
+  `note_failed_decl`、`local_binder_span`、`peel_pi_collect`、`tm_has_unsolved_meta`、`surface()`；
+- **入口补齐**：`run_with_surface_at` / `run_with_surface_query` / `check_with_surface`（继续型）/
+  `bench_check_nf_observe`；`LspSurface` 六通道（hover / completion / inlay / println / check_issues / failed_decls）
+  全部由 `Infer` 侧快照产出；
+- **`pub mod prof`**：force/eval/quote/vapp/unify/unify_sp 计数器（默认全关，零行为变化）；
+- **`elaboration` 接线**改走观察面方法：洞 inlay、def 登记（源码注解渲染 + 形状认回 + 惰性 hover）、
+  enum/构造子 decl_spans、投影补全候选、字面量 hover、构造子 hover。
+
+继承账本：条目 808，identical 672→**713**，非孪生 missing 37→**0**，line_keep 0.914→**0.949**
+（余下 23 missing / 54 changed 全在已封印的孪生 `bump_spine_iter`）。
+门禁：lib 83、blackbox 57+1 ignored、blackbox_v2 51+2 ignored、lsp_surface 88，全绿。
