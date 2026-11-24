@@ -1,3 +1,4 @@
+#![cfg(feature = "twins")]
 //! L07_sum_type 黑盒测试套件 v3（第三轮独立攻击面）。
 //!
 //! 与 `tests/l07_blackbox.rs`（49 例）和 `tests/l07_blackbox_v2.rs`（53 例）

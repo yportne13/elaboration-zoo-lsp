@@ -1,8 +1,13 @@
 //! # ⚠️ 已封印（SEALED，2026-11-22）
 //!
-//! 本孪生**不再参与门禁与 parity 契约**：`tests/l07_fast_parity.rs` 与
-//! `tests/l07_blackbox_v3.rs` 的 parity/redex 家族测试改为 `#[cfg(feature = "l07-twin")]`
-//! （默认关闭）。原因：ref ↔ 孪生的**逐字节**比对（含错误文案里的 binder 名）曾把参考版
+//! **2026-11-24 升级为硬封印**：`mod bump_spine_iter` 在 `src/L07_sum_type/mod.rs` 里已挂
+//! `#[cfg(feature = "l07-twin")]`，默认构建（`cargo build` / `cargo test`）**不再编译本模块**。
+//! 复核须显式开 feature：`cargo test --features l07-twin --test l07_fast_parity`；
+//! 跨层黑盒与双 oracle 套件统一挂 umbrella `twins`（`cargo test --features twins`）。
+//!
+//! 本孪生**不再参与门禁与 parity 契约**：`tests/l07_fast_parity.rs` 改为
+//! `#[cfg(feature = "l07-twin")]`；`tests/l07_blackbox_v3.rs` 改为 `#[cfg(feature = "twins")]`
+//! （umbrella，2026-11-24 硬封印时统一）。两者均默认关闭。原因：ref ↔ 孪生的**逐字节**比对（含错误文案里的 binder 名）曾把参考版
 //! 的解形状钉死，阻塞 smalltt 对齐（见 `docs/l07-vunfold-research-2026-11-21.md` §6.12）。
 //!
 //! 代码保留作对照/取证：需要复核时 `cargo test --features l07-twin`。基准入口

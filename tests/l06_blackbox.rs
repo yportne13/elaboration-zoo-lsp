@@ -1,3 +1,4 @@
+#![cfg(feature = "twins")]
 //! L06_string 黑盒测试套件。
 //!
 //! 被测对象：`src/L06_string`（elaboration-zoo `06-string` 风格的 Rust 移植：

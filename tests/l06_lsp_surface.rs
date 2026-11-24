@@ -1,3 +1,4 @@
+#![cfg(feature = "twins")]
 //! L06 的 LSP 引擎侧观察面测试（`docs/l06-lsp-port-2026-11-20.md`）。
 //!
 //! 被测对象：`src/L06_string/surface.rs`（owned 快照契约）、参考版

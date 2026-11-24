@@ -67,13 +67,33 @@ mkdir -p "$LOGDIR"
 fail=0
 t_all=$SECONDS
 
+# 每套件例数下限（与 tools/gate_l13.ps1 的 -MinLib/-MinParity/-MinTwin/
+# -MinHdl042 对齐）。被 feature 门关掉的套件会编译成**空 crate**，此时
+# `test result: ok. 0 passed` 依旧 exit 0 —— 2026-11-24 孪生硬封印
+# （Cargo.toml 的 l06-twin..l13-twin，默认全关）之后这一点尤其致命：
+# l13_fast_parity 首行是 `#![cfg(feature = "l13-twin")]`，不带 feature 就是空跑。
+MIN_LIB="${GATE_MIN_LIB:-500}"
+MIN_PARITY="${GATE_MIN_PARITY:-15}"
+MIN_TWIN="${GATE_MIN_TWIN:-27}"
+MIN_HDL042="${GATE_MIN_HDL042:-2}"
+
 run_suite() {
-    local name="$1" t0; shift
+    local name="$1" min="$2" t0 line passed; shift 2
     t0=$SECONDS
     echo "==> [$name] $*"
     if "$@" >"$LOGDIR/$name.log" 2>&1; then
-        grep "^test result" "$LOGDIR/$name.log" | sed 's/^/    /'
-        echo "    [$name ok: $((SECONDS - t0))s]"
+        line=$(grep "^test result" "$LOGDIR/$name.log" | head -1)
+        echo "    $line"
+        passed=$(printf '%s' "$line" | sed -n 's/.* \([0-9][0-9]*\) passed.*/\1/p')
+        if [ -z "$passed" ]; then
+            echo "    [$name FAILED — 日志里找不到 'test result' 行: $LOGDIR/$name.log]"
+            fail=1
+        elif [ "$passed" -lt "$min" ]; then
+            echo "    [$name TOO FEW — $passed < $min（套件被 feature 门关成空 crate 了？）]"
+            fail=1
+        else
+            echo "    [$name ok: $((SECONDS - t0))s]"
+        fi
     else
         echo "    [$name FAILED — 完整输出: $LOGDIR/$name.log]"
         grep -E "^error|FAILED|panicked at" "$LOGDIR/$name.log" | head -20 | sed 's/^/    /'
@@ -81,13 +101,16 @@ run_suite() {
     fi
 }
 
-run_suite lib        cargo test --lib L13_namespace:: "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
-run_suite parity     cargo test --test l13_fast_parity "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}" -- "${SKIP_ARGS[@]+"${SKIP_ARGS[@]}"}"
+run_suite lib        "$MIN_LIB"    cargo test --lib L13_namespace:: "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
+# parity 必须显式带 --features l13-twin：该 target 首行是
+# `#![cfg(feature = "l13-twin")]`，不带 feature 会编译成空 crate 而依旧
+# "ok. 0 passed"（封印后曾长期"绿而空"）。
+run_suite parity     "$MIN_PARITY"  cargo test --test l13_fast_parity --features l13-twin "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}" -- "${SKIP_ARGS[@]+"${SKIP_ARGS[@]}"}"
 # 第三件不带 --skip：twin_engine_tests 没有 #[path] 再编译 L13，不存在重复面。
 if [ "${GATE_NO_TWIN_LSP:-0}" = "1" ]; then
     echo "== GATE_NO_TWIN_LSP=1: 跳过 twin_lsp 件套（孪生 LSP 接线本次无保障）"
 else
-    run_suite twin_lsp   cargo test --test twin_engine_tests "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
+    run_suite twin_lsp   "$MIN_TWIN"   cargo test --test twin_engine_tests "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
 fi
 # 第四件（2026-09-30 评审补）：HDL042 的**双引擎**钉子。它必须放集成 target：
 # `src/L13_namespace/**` 下的测试文件会被上面 parity 件的
@@ -95,7 +118,7 @@ fi
 # 没有 `Backend`/`Engine`/`client`（源码侧的参考版口径测试仍在 `--lib` 的
 # `hdl_check_graph_tests.rs` 里跑）。放在这里是因为 auto-discovery 只保证全量
 # `cargo test` 会跑到它，而本门禁只显式列件套。
-run_suite hdl042     cargo test --test hdl042_engine_tests "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
+run_suite hdl042     "$MIN_HDL042" cargo test --test hdl042_engine_tests "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
 
 echo "== gate_l13: total $((SECONDS - t_all))s, fail=$fail, logs: $LOGDIR"
 exit "$fail"

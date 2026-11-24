@@ -46,6 +46,8 @@ pub mod surface;
 mod syntax;
 mod typeclass;
 mod unification;
+// 硬封印（2026-11-24）：孪生引擎默认不编译，见 Cargo.toml `twins`。
+#[cfg(feature = "l12-twin")]
 pub(crate) mod bump_spine_iter;
 
 #[derive(Debug, Clone, Copy, PartialEq)]

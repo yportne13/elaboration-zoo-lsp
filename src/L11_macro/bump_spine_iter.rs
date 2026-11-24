@@ -1,5 +1,10 @@
 //! # ⚠️ 已封印（SEALED，2026-11-23）
 //!
+//! **2026-11-24 升级为硬封印**：`mod bump_spine_iter` 在 `src/L11_macro/mod.rs` 里已挂
+//! `#[cfg(feature = "l11-twin")]`，默认构建（`cargo build` / `cargo test`）**不再编译本模块**。
+//! 复核须显式开 feature：`cargo test --features l11-twin --test l11_fast_parity`；
+//! 跨层黑盒与双 oracle 套件统一挂 umbrella `twins`（`cargo test --features twins`）。
+//!
 //! 本孪生不再参与默认门禁与 parity 契约（同 L07/L08）：
 //! `tests/l11_fast_parity.rs` 改为 feature-gated。
 //! 复核：`cargo test --features l11-twin`。

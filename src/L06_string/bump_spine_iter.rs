@@ -1,4 +1,9 @@
 //! L06 核心机（eval / quote / unify / force / rename / solve / prune / check /
+//!
+//! **2026-11-24 升级为硬封印**：`mod bump_spine_iter` 在 `src/L06_string/mod.rs` 里已挂
+//! `#[cfg(feature = "l06-twin")]`，默认构建（`cargo build` / `cargo test`）**不再编译本模块**。
+//! 复核须显式开 feature：`cargo test --features l06-twin --test l06_fast_parity`；
+//! 跨层黑盒与双 oracle 套件统一挂 umbrella `twins`（`cargo test --features twins`）。
 //! infer / decl 表 / builtin prim）的极致性能版：L05 冠军配方
 //! （`bump_spine_iter`）向 string 层的移植。继承 L05 的全部机制（见其模块
 //! 注释与 readme）：

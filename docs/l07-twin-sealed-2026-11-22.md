@@ -31,7 +31,9 @@
 # 默认（封印）：fast_parity 0 测试；v3 111 例
 cargo test --test l07_fast_parity --test l07_blackbox_v3
 # 打开封印（复核孪生）：fast_parity 99 例；v3 118 例
-cargo test --features l07-twin --test l07_fast_parity --test l07_blackbox_v3
+cargo test --features l07-twin --test l07_fast_parity
+# ^ l07_blackbox_v3 在 2026-11-24 硬封印时改挂 umbrella `twins`（不再吃 l07-twin）：
+cargo test --features twins --test l07_blackbox_v3
 ```
 
 ## 影响面

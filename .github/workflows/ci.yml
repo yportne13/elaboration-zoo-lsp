@@ -104,6 +104,41 @@ jobs:
       - name: Run the full test suite
         run: cargo test --no-fail-fast
 
+  # 孪生面（2026-11-24 孪生硬封印后新增）：L06–L12 的 `bump_spine_iter` 默认不编译，
+  # 它们的单测 / parity / blackbox 只在 `--features twins` 下存在；L13 孪生仍是 LSP
+  # 默认引擎，由 `l13-twin` 的 parity 套件守着。缺了本 job，上面那些 target 会长期
+  # "绿而空"——编译成空 crate 后 `test result: ok. 0 passed` 依旧 exit 0。
+  test-twins:
+    name: Sealed twin surface (--features twins + l13-twin)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      RUST_MIN_STACK: "67108864"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.1
+
+      # Same layout as the other two jobs; a distinct key suffix keeps the
+      # feature-enabled artifact set from evicting the default-profile cache.
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-twins-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Run the sealed twin surface
+        run: cargo test --no-fail-fast --features twins,l13-twin
+
   dependencies:
     name: Build dependencies
     runs-on: ubuntu-latest

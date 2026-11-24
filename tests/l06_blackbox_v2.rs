@@ -1,3 +1,4 @@
+#![cfg(feature = "twins")]
 //! L06_string 黑盒测试套件 · 第二卷（v2）。
 //!
 //! Round-1 评审补盖的语义角落，第一卷（`l06_blackbox.rs`）没有覆盖的：

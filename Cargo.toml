@@ -48,36 +48,43 @@ test = false
 [[bin]]
 name = "l06bench"
 path = "src/bin/l06bench.rs"
+required-features = ["twins"]
 test = false
 
 [[bin]]
 name = "l07bench"
 path = "src/bin/l07bench.rs"
+required-features = ["twins"]
 test = false
 
 [[bin]]
 name = "l08bench"
 path = "src/bin/l08bench.rs"
+required-features = ["twins"]
 test = false
 
 [[bin]]
 name = "l09bench"
 path = "src/bin/l09bench.rs"
+required-features = ["twins"]
 test = false
 
 [[bin]]
 name = "l10bench"
 path = "src/bin/l10bench.rs"
+required-features = ["twins"]
 test = false
 
 [[bin]]
 name = "l11bench"
 path = "src/bin/l11bench.rs"
+required-features = ["twins"]
 test = false
 
 [[bin]]
 name = "l12bench"
 path = "src/bin/l12bench.rs"
+required-features = ["twins"]
 test = false
 
 [[bin]]
@@ -90,6 +97,7 @@ test = false
 [[bin]]
 name = "realbench"
 path = "src/bin/realbench.rs"
+required-features = ["twins"]
 test = false
 
 # smalltt 基准迁移驱动：把 smalltt bench/ 的 conv_eval / asymptotics / stlc
@@ -98,6 +106,7 @@ test = false
 [[bin]]
 name = "smallttbench"
 path = "src/bin/smallttbench.rs"
+required-features = ["twins"]
 test = false
 
 # LSP-kick 采样归因口（只依赖库，故 `--features sampler` 下可单独构建——
@@ -134,6 +143,7 @@ test = false
 [[bin]]
 name = "l11repro"
 path = "src/bin/l11repro.rs"
+required-features = ["twins"]
 test = false
 
 # 内存分析工具：L02–L05 性能版分配计数/字节/直方图（确定性口径，l07alloc 同族）
@@ -146,6 +156,7 @@ test = false
 [[bin]]
 name = "l06l13mem"
 path = "src/bin/l06l13mem.rs"
+required-features = ["twins"]
 test = false
 
 
@@ -186,6 +197,9 @@ sampler = ["dep:backtrace", "dep:inferno"]
 # L07 孪生（bump_spine_iter）封印开关（2026-11-22）：默认**关闭**——ref↔孪生的
 # 逐字节 parity（含错误文案里的 binder 名）曾把参考版的解形状钉死，阻塞 smalltt
 # 对齐；封印后 ref 可独立演进。复核孪生时 `cargo test --features l07-twin`。
+# L06 孪生封印（2026-11-24，硬封印）：与 L07–L12 一致，`l06-twin` 同时是模块开关
+# 与 parity 开关——**默认不编译** `L06_string::bump_spine_iter`。
+l06-twin = []
 l07-twin = []
 # L08 孪生封印（2026-11-23，同 L07）：ref↔孪生的逐字节 parity 不再作默认门禁。
 l08-twin = []
@@ -196,6 +210,13 @@ l11-twin = []
 l12-twin = []
 # L13 孪生封印（2026-11-23，与 L07-L12 一致）：ref↔孪生逐字节 parity 不再作默认门禁。
 l13-twin = []
+
+# Umbrella for the hard-sealed twin engines (L06–L12).  Twins are **not compiled**
+# unless the matching `lNN-twin` is on; every twin-dependent bin/test declares
+# `required-features = ["twins"]`.  L13 is deliberately NOT in this set: the LSP
+# runs on `L13_namespace::bump_spine_iter` by default (src/lib.rs `lsp_default`),
+# so it stays compiled until the LSP engine is migrated to the reference elaborator.
+twins = ["l06-twin", "l07-twin", "l08-twin", "l09-twin", "l10-twin", "l11-twin", "l12-twin"]
 
 # The lib tests elaborate the prelude on every test thread (the prelude
 # cache is thread-local since the Arc->Rc migration).  Unoptimized debug

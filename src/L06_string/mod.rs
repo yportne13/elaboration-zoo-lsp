@@ -20,6 +20,8 @@ mod pretty;
 mod observe;
 pub(crate) mod eval_budget;
 pub mod surface;
+// 硬封印（2026-11-24）：孪生引擎默认不编译，见 Cargo.toml `twins`。
+#[cfg(feature = "l06-twin")]
 pub(crate) mod bump_spine_iter;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
