@@ -661,14 +661,51 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
     /// references, which need to scan every entry rather than a single
     /// winner; hover itself uses [`Self::hover_entry_owned`].
     fn hover_entries_owned(&self, uri: &str) -> Option<Vec<(Span<()>, Span<()>, String)>> {
+        self.with_hover_entries(uri, |t| t.to_vec())
+    }
+
+    /// **借用式**访问整张 hover 表：只做一次 `DashMap` 读锁，不克隆任何条目。
+    ///
+    /// 为什么需要它：goto / references / inlay 都要扫全表，而克隆整表的成本是
+    /// 纯拷贝（实测 1599 条 57.5 µs vs 借用扫 0.77 µs，**74×**；25609 条 1084.8 µs
+    /// vs 13.9 µs）。让调用方在闭包里扫完再走，就只付扫描的钱。
+    ///
+    /// 闭包内部**不得**调用会写 `hover_table` 的方法（`DashMap` 读锁重入会死锁）。
+    fn with_hover_entries<R>(
+        &self,
+        uri: &str,
+        f: impl FnOnce(&[(Span<()>, Span<()>, String)]) -> R,
+    ) -> Option<R> {
         if self.engine == Engine::Twin {
             if let Some(s) = self.twin_tables.get(uri) {
-                return Some(s.hover.clone());
+                return Some(f(&s.hover));
             }
         }
-        // 参考版走统一观察面契约（`Infer::lsp_surface`）——调用方拿到 owned 值，
-        // 不再逐字段读六张表。
-        self.hover_table.get(uri).map(|x| x.lsp_hover())
+        self.hover_table.get(uri).map(|x| f(&x.hover_table))
+    }
+
+    /// 借用式 inlay 表（同 [`Self::with_hover_entries`]）。
+    fn with_inlay_entries<R>(&self, uri: &str, f: impl FnOnce(&[(u32, String)]) -> R) -> Option<R> {
+        if self.engine == Engine::Twin {
+            if let Some(s) = self.twin_tables.get(uri) {
+                return Some(f(&s.inlay));
+            }
+        }
+        self.hover_table.get(uri).map(|x| f(&x.inlay_hint_table))
+    }
+
+    /// 借用式 completion 表（同 [`Self::with_hover_entries`]）。
+    fn with_completion_entries<R>(
+        &self,
+        uri: &str,
+        f: impl FnOnce(&[(Span<()>, SmolStr)]) -> R,
+    ) -> Option<R> {
+        if self.engine == Engine::Twin {
+            if let Some(s) = self.twin_tables.get(uri) {
+                return Some(f(&s.completion));
+            }
+        }
+        self.hover_table.get(uri).map(|x| f(&x.completion_table))
     }
 
     /// Engine-appropriate completion table for `uri` (owned).  `None` when no
@@ -3043,15 +3080,24 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             return Some(def);
         }
         // 2. Semantic resolution (most specific entry wins, like hover).
-        let hover_entries = self.hover_entries_owned(uri.as_str())?;
+        //    借用扫描：只取**赢家**的一份 owned 副本（原先先克隆整表再扫，
+        //    实测 1599 条慢 74×、25609 条慢 78×）。
         let file_id = self.document_id.get(uri.as_str())?;
-        let interval = hover_entries
-            .iter()
-            .filter(|x| x.0.path_id == *file_id)
-            .filter(|x| x.0.contains(offset))
-            .min_by_key(|x| x.0.end_offset - x.0.start_offset)
-            .and_then(|x| {
-                let def_span = &x.1;
+        let winner = self.with_hover_entries(uri.as_str(), |entries| {
+            entries
+                .iter()
+                .filter(|x| x.0.path_id == *file_id)
+                .filter(|x| x.0.contains(offset))
+                .min_by_key(|x| x.0.end_offset - x.0.start_offset)
+                .map(|x| (x.0, x.1))
+        })?;
+        // 无赢家（光标不在任何条目上）要**继续**走第 3 步宏回退，不能提前返回。
+        let Some(winner) = winner else {
+            return self.goto_macro_definition(uri, offset);
+        };
+        let winner = winner.1;
+        let interval = {
+            let def_span = &winner;
                 // Look up the source file URI for the definition span's path_id
                 let def_uri = self.document_id.iter()
                     .find(|e| *e.value() == def_span.path_id)
@@ -3065,15 +3111,14 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                 };
                 let start_position = offset_to_position(def_span.start_offset as usize, &def_rope)?;
                 let end_position = offset_to_position(def_span.end_offset as usize, &def_rope)?;
-                Some(GotoDefinitionResponse::Scalar(
-                    Location::new(
-                        def_uri,
-                        Range::new(start_position, end_position),
-                    )
-                ))
-            });
-        if interval.is_some() {
-            return interval;
+                Some(GotoDefinitionResponse::Scalar(Location::new(
+                    def_uri,
+                    Range::new(start_position, end_position),
+                )))
+        };
+
+        if let Some(g) = interval {
+            return Some(g);
         }
         // 3. Full-invocation fallback → macro definition.
         self.goto_macro_definition(uri, offset)
@@ -3128,7 +3173,8 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             let mut items = self.import_context_completions(&rope, offset, &line);
             let mut seen: HashSet<String> = items.iter().map(|i| i.label.clone()).collect();
             // Member-access completions need a successful analysis.
-            if let Some(completion_table) = self.completion_entries_owned(uri.as_str()) {
+            // 借用扫描：成员补全要遍历全表，但不克隆（同 goto/inlay 的理由）。
+            let completion_scan = self.with_completion_entries(uri.as_str(), |completion_table| {
                 // Member-access entries are keyed to the RECEIVER's span (not
                 // the whole `x.y` access).  The cursor's member prefix starts
                 // one byte past the last `.` on the line; a candidate matches
@@ -3181,7 +3227,9 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                         })
                     })
                     .for_each(|i| items.push(i));
-            }
+                true
+            });
+            let _ = completion_scan;
             Some(items)
         }();
         Ok(completions.map(CompletionResponse::Array))
@@ -3191,27 +3239,31 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
     /// exercise the real engine-routing path (the LSP trait impl forwards).
     pub fn inlay_hint_at(&self, raw_uri: &Url) -> Option<Vec<InlayHint>> {
         let uri = normalize_builtin_uri(raw_uri);
-        let inlay = self.inlay_entries_owned(uri.as_str())?;
+        // 借用扫描：inlay 要遍历全表，但只需要每条的 owned 副本（不克隆整表——
+        // 实测克隆是纯拷贝，25609 条时 1084.8 µs vs 借用 13.9 µs）。
         let rope = self.document_map.get(uri.as_str())?;
-        let mut ret = Vec::new();
-        for (offset, label) in &inlay {
+        let ret = self.with_inlay_entries(uri.as_str(), |inlay| {
+            let mut ret = Vec::new();
+            for (offset, label) in inlay.iter() {
             // 单条越界（陈旧表）只跳过该条：旧实现 `?` 会让整个文件的
             // inlay 全部消失。
             let Some(position) = offset_to_position(*offset as usize, &rope) else {
                 continue;
             };
-            ret.push(InlayHint {
-                position,
-                label: InlayHintLabel::String(label.clone()),
-                kind: Some(InlayHintKind::TYPE),
-                text_edits: None,
-                tooltip: None,
-                padding_left: Some(true),
-                padding_right: None,
-                data: None,
-            });
-        }
-        Some(ret)
+                ret.push(InlayHint {
+                    position,
+                    label: InlayHintLabel::String(label.clone()),
+                    kind: Some(InlayHintKind::TYPE),
+                    text_edits: None,
+                    tooltip: None,
+                    padding_left: Some(true),
+                    padding_right: None,
+                    data: None,
+                });
+            }
+            ret
+        });
+        ret
     }
 
     /// Seed the process-wide formatter options from

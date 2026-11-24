@@ -878,3 +878,104 @@ fn complexity_probe_full_vs_channel() {
         );
     }
 }
+
+/// 复杂度探针 G：`hover_entry_at` 的**线性扫描**成本（表大时的真实热点）。
+///
+/// `src/lib.rs` 的 hover 请求走 `hover_entry_owned` → `Infer::hover_entry_at`，
+/// 它对全表做 `filter(contains)` + `min_by_key(span 宽度)`。表越大越慢。
+/// 本探针对同一张表在不同大小下测 N 次查询。
+#[test]
+#[ignore = "复杂度探针：只打印不断言"]
+fn complexity_probe_hover_scan() {
+    fn per_call<F: FnMut()>(n: usize, mut f: F) -> f64 {
+        f();
+        let t = std::time::Instant::now();
+        for _ in 0..n { f(); }
+        t.elapsed().as_secs_f64() * 1e6 / n as f64
+    }
+    println!("--- G: hover_entry_at 线性扫描 ---");
+    for d in [100usize, 400, 1600, 6400] {
+        let mut src = String::from("def T(n: Nat): Type 0 =\n    match n {\n        case zero => Boolean\n        case succ(m) => Nat\n    }\n");
+        for i in 0..d {
+            src.push_str(&format!("def f{i}(n: Nat): Nat = n\n"));
+        }
+        let infer = elaborate_infer(&src);
+        let n = infer.hover_table.len();
+        // 光标打在中段某个条目上（最坏情形：扫描一半）
+        let mid = n / 2;
+        let off = infer.hover_table[mid].0.start_offset as usize;
+        let t = per_call(200, || {
+            let _ = infer.hover_entry_at(24, off);
+        });
+        println!("entries={n:<6} per_query={t:>8.2}µs  per_entry={:>7.3}ns", t * 1000.0 / n as f64);
+    }
+}
+
+/// 复杂度探针 H：**整表克隆**的真实成本（goto / inlay / completion 的现状）。
+///
+/// `goto_definition_at` 与 `inlay_hint_at` 都要先 `hover_entries_owned()` /
+/// `inlay_entries_owned()` 拿到**整表**（含全部 String），再自己扫。表大时这部分
+/// 是纯拷贝开销。本探针量化它。
+#[test]
+#[ignore = "复杂度探针：只打印不断言"]
+fn complexity_probe_table_clone_cost() {
+    fn per_call<F: FnMut()>(n: usize, mut f: F) -> f64 {
+        f();
+        let t = std::time::Instant::now();
+        for _ in 0..n { f(); }
+        t.elapsed().as_secs_f64() * 1e6 / n as f64
+    }
+    println!("--- H: 整表克隆 vs 借用迭代（goto/inlay 的现状 vs 目标）---");
+    for d in [400usize, 1600, 6400] {
+        let mut src = String::from("def T(n: Nat): Type 0 =\n    match n {\n        case zero => Boolean\n        case succ(m) => Nat\n    }\n");
+        for i in 0..d {
+            src.push_str(&format!("def f{i}(n: Nat): Nat = n\n"));
+        }
+        let infer = elaborate_infer(&src);
+        let n = infer.hover_table.len();
+        let mid = n / 2;
+        let off = infer.hover_table[mid].0.start_offset as usize;
+        // 现状：克隆整表后再扫
+        let clone_then_scan = per_call(200, || {
+            let table = infer.lsp_hover();
+            let r = table.iter().filter(|x| x.0.contains(off)).min_by_key(|x| x.0.end_offset - x.0.start_offset);
+            std::hint::black_box(r.map(|x| x.2.len()));
+        });
+        // 目标：借用表直接扫（零拷贝）
+        let borrow_scan = per_call(200, || {
+            let r = infer.hover_table.iter().filter(|x| x.0.contains(off)).min_by_key(|x| x.0.end_offset - x.0.start_offset);
+            std::hint::black_box(r.map(|x| x.2.len()));
+        });
+        println!(
+            "entries={n:<6} clone+scan={clone_then_scan:>9.2}µs  borrow={borrow_scan:>6.2}µs  ratio={:.1}x",
+            clone_then_scan / borrow_scan.max(0.001)
+        );
+    }
+}
+
+
+/// 复杂度探针 I：真实 example 规模下的 hover 查询成本（core prelude 可跑的例子）。
+#[test]
+#[ignore = "复杂度探针：只打印不断言"]
+fn complexity_probe_real_sizes() {
+    fn per_call<F: FnMut()>(n: usize, mut f: F) -> f64 {
+        f();
+        let t = std::time::Instant::now();
+        for _ in 0..n { f(); }
+        t.elapsed().as_secs_f64() * 1e6 / n as f64
+    }
+    println!("--- I: 真实 example 的表规模与查询成本 ---");
+    for name in ["typeclass_complex.typort", "theorem_proving.typort", "alu.typort", "hdl_ops.typort"] {
+        let p = format!("examples/{name}");
+        let src = match std::fs::read_to_string(&p) { Ok(s) => s, Err(_) => continue };
+        let infer = match std::panic::catch_unwind(|| elaborate_infer(&src)) {
+            Ok(i) => i,
+            Err(_) => { println!("{name:<24} <load failed (needs hdl prelude)>"); continue; }
+        };
+        let n = infer.hover_table.len();
+        let off = if n > 0 { infer.hover_table[n / 2].0.start_offset as usize } else { 0 };
+        let query = per_call(200, || { let _ = infer.hover_entry_at(24, off); });
+        let clone = per_call(200, || { let _ = infer.lsp_hover(); });
+        println!("{name:<24} hover={n:<6} query={query:>7.2}µs  clone={clone:>7.2}µs");
+    }
+}

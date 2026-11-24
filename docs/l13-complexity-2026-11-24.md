@@ -190,3 +190,92 @@ cargo test --release --lib L13_namespace::debug_test::complexity_probe_old_vs_so
 | 单通道 API | 修掉 2.15–2.22× 的回退，回到「只付一张表」 |
 | `clear_observation_tables` | 范围修正为 3 张显示表 + `decl_shapes`（正确性） |
 | 端到端 | **±4% 内**，无系统性回退 |
+
+## 11. 第三轮：整表克隆 → 借用扫描
+
+### 11.1 先量清楚「谁在克隆」
+
+| 路径 | 原先做什么 | 是否真的需要整表 |
+|---|---|---|
+| hover | `hover_entry_owned` → `hover_entry_at`（**只取赢家**） | 否，早已是单条目 |
+| goto | `hover_entries_owned()` 克隆整表 → 自己扫 | **否** |
+| inlay | `inlay_entries_owned()` 克隆整表 → 自己遍历 | **否** |
+| completion | `completion_entries_owned()` 克隆整表 → 自己过滤 | **否** |
+
+先验证 hover 的扫描成本（探针 G）：
+
+| 表条目 | `hover_entry_at` 每次查询 |
+|---|---|
+| 410 | 0.00 µs |
+| 1,610 | 0.00 µs |
+| 6,410 | 0.01 µs |
+| 25,610 | 0.04 µs |
+
+**≈ 0**（`contains` 是两次整数比较，`min_by_key` 只维护一个槽）。所以 hover 不需要改。
+
+再量真实 example 的表规模（探针 I）：
+
+| example | hover 条目 | 查询 | **克隆整表** |
+|---|---|---|---|
+| alu | 320 | 0.00 µs | **13.2 µs** |
+| typeclass_complex | 927 | 0.01 µs | **36.2 µs** |
+| theorem_proving | 1,156 | 0.00 µs | **43.4 µs** |
+| hdl_ops | 1,807 | 0.01 µs | **74.8 µs** |
+
+克隆比扫描贵 **3–4 个数量级**。合成放大后（探针 H）：
+
+| 表条目 | 克隆+扫 | 借用扫 | 倍数 |
+|---|---|---|---|
+| 1,610 | 57.5 µs | 0.77 µs | **74×** |
+| 6,410 | 223.9 µs | 3.58 µs | **63×** |
+| 25,610 | 1,084.8 µs | 13.9 µs | **78×** |
+
+### 11.2 修法：借用式访问器
+
+新增三个闭包式入口（`src/lib.rs`）：
+
+```rust
+fn with_hover_entries<R>(&self, uri: &str, f: impl FnOnce(&[(Span, Span, String)]) -> R) -> Option<R>
+fn with_inlay_entries<R>(&self, uri: &str, f: impl FnOnce(&[(u32, String)]) -> R) -> Option<R>
+fn with_completion_entries<R>(&self, uri: &str, f: impl FnOnce(&[(Span, SmolStr)]) -> R) -> Option<R>
+```
+
+三者都只取一次 `DashMap` 读锁、把借用交给闭包，**不克隆任何条目**。goto / inlay / completion
+三条路径改为在闭包里扫完、只带出真正需要的结果（goto 只带出赢家的两个 span，inlay 只带出
+逐条的 `InlayHint`，completion 只 push 命中的项）。
+
+`hover_entries_owned()`（公开 + 测试用）保留：内部改为 `with_hover_entries(uri, |t| t.to_vec())`，
+语义不变。
+
+### 11.3 过程中踩到的语义坑
+
+goto 的原始逻辑是：
+
+```rust
+let hover_entries = self.hover_entries_owned(uri)?;   // 表缺失 → 整体返回 None
+let interval = hover_entries.iter()....and_then(...);  // 无赢家 → interval = None
+if interval.is_some() { return interval; }
+self.goto_macro_definition(uri, offset)                 // → 宏回退
+```
+
+我第一版写成 `self.with_hover_entries(...)??`，**把「无赢家」也当成「整体失败」提前返回了**，
+于是 `goto_module_macro_full_path_keeps_fallbacks` 挂了（光标落在宏调用里、语义表无条目时应
+走第 3 步宏回退）。修正为：
+
+```rust
+let winner = self.with_hover_entries(uri.as_str(), |entries| { ... })?;  // 只让「表缺失」短路
+let Some(winner) = winner else { return self.goto_macro_definition(uri, offset); };
+```
+
+区分了「表不存在」与「表里没有命中」这两种 `None`。
+
+### 11.4 门禁
+
+| 套件 | 结果 |
+|---|---|
+| `hover_tests` / `hover_stress` | 20 / 1 |
+| `lsp_protocol_robustness` / `r9_lsp_probes` | 11 / 30 |
+| `macro_goto_tests` | **10**（修正语义坑后） |
+| `twin_engine_tests` | 28 |
+| `lib L13_namespace` | 622 |
+| `l07_source_render` / `l08` / `l12` surface | 77 / 88 / 91 |
