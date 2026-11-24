@@ -85,3 +85,47 @@ L07 的原始注释（`src/L07_sum_type/elaboration.rs:190-195`）明写"走 pre
 失败）。已删除该目录与 6 个历史 `target_*` 目录，回收 **73.9 GB**。
 增量缓存是纯加速物，删除无副作用；但**这个仓的 `target/debug` 长期在 100 GB 量级，建议定期
 `cargo clean -p` 或把 `CARGO_INCREMENTAL=0` 用在验证轮**。
+
+## 6 补充（2026-11-25 凌晨）：P1-7 的渲染修正 + `namespace_tests` 根因
+
+### 6.1 `raw_pretty` 的宇宙打印恢复为 `Type N`（L09–L13）
+
+**问题**：`U` 只在 **L07/L08** 是关键字；从 **L09 起 lexer 只认 `Type`**
+（`parser/lex.rs` 的 KEYWORD 表）。但 `raw_pretty.rs` 一直打裸 `U`：
+
+| 层 | 旧渲染 | 问题 |
+|---|---|---|
+| L07/L08 | `Raw::U` → `U` | 正确（本层 `U` 就是关键字） |
+| L09–L12 | `Raw::U(_)` → `U` | **既不可回灌解析，又丢掉层级**（`Type 1` 与 `Type 0` 不可区分） |
+| L13 | `Raw::U(n,_)` → `U` / `U(n)` | 层级保住了，但 `U` 同样不是本层关键字 |
+
+**修法**：L09–L13 统一打 `Type N`，与同层 `pretty.rs` 的 `Tm::U(uni)` → `Type {uni}` 对齐
+（`L12_canonical/pretty.rs:138`）。源码注解渲染的结果现在能回灌给同一层的解析器。
+
+**验证**：`cargo test --lib` 1269 passed；`cargo test --tests` 除下列既有失败外全绿；
+`cargo test --features twins --tests` 全绿。
+
+### 6.2 `namespace_tests` 那 2 例失败的根因（既存 bug，非本轮引入）
+
+```
+cross_file_inherent_method_dispatches / closing_and_reopening_inherent_provider_keeps_dispatch
+panicked at src/L13_namespace/mod.rs:2756:  index out of bounds: the len is 2869 but the index is 2874
+```
+
+**根因线索**：L13 的 `solve_multi_trait`（`mod.rs:655` 起）里有一段**显式的越界防护**：
+
+> 幸存条目的 `mv < meta.len()` 由 retain 在入口保证，此后 meta 只增、或经嵌套求解截断
+> ——后者旧代码也是 visit 期 bounds 检查跳过…
+
+也就是说 `trait_metas` 里**确实会残留指向已截断 meta 表的 MetaVar**，作者对此是有自觉的，
+并在那条路径上用 `(mv.0 as usize) < ml` 过滤掉了。但 `lookup_meta`：
+
+```rust
+fn lookup_meta(&self, m: MetaVar) -> &MetaEntry { &self.meta[m.0 as usize] }   // :2755-2757
+```
+
+**没有这个检查**。同一类陈旧索引走到 `lookup_meta` 就直接 panic。
+
+**判定**：既有 bug，与本轮改动无关（两种配置下都复现：「有 L13 WIP 无我的改动」与
+「无 WIP 有我的改动」）。**建议**：给 `lookup_meta` 加与 `solve_multi_trait` 同款的
+bounds 检查并返回可诊断的错误，而不是 panic；根治则要查清 `trait_metas` 的截断点。
