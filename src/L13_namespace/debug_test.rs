@@ -132,7 +132,11 @@ println(test)
         Ok(_) => panic!("expected error for refutable pattern, but got Ok"),
         Err(e) => {
             println!("expected error (refutable pattern): {}", e.0.data);
-            assert!(e.0.data.contains("non-exhaustive") || e.0.data.contains("not covered"),
+            // 2026-11-24: top-level missing-pattern text changed from the L10-L12
+            // legacy form to L12/L07 wording "match bu wan zheng: que shao gou zao zi {ctor}"
+            // (see UPGRADE-L13-PLAN.md P1). Accept both so the pin keeps its intent.
+            assert!(e.0.data.contains("match 不完整") || e.0.data.contains("non-exhaustive")
+                    || e.0.data.contains("not covered"),
                 "expected non-exhaustive error, got: {}", e.0.data);
         }
     }

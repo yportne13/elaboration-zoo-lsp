@@ -20,7 +20,7 @@
 //! # 覆盖
 //! - multiline 枚举（**标准声明形态**）：构造子子模式匹配 + 求值、递归
 //!   def + match（natadd / match_src 形态）、非穷尽报错（单臂 match 的
-//!   文案逐字节一致：`non-exhaustive pattern: ... not covered`）。
+//!   文案逐字节一致：`match 不完整：缺少构造子 ...`）。
 //! - 单行枚举形态的行为钉子（两版同错，防分叉回归）。
 //! - Err 判定 + 归一化正文：name-not-in-scope、universe 报错。
 //! - 稳态复用（trait/可变全局跨轮清空）。
@@ -188,7 +188,7 @@ fn parity_errors() {
     // 期望宇宙（`: Nat` 无 prelude 时不解析——两版一致报 name not in scope）
     assert_parity("def bad : Nat = Type 0\n");
     // 单臂 match 的非穷尽（multiline 枚举：`succ` 真实存在，非穷尽真实可判，
-    // 文案逐字节一致 = "non-exhaustive pattern: `succ` not covered"）
+    // 文案逐字节一致 = "match 不完整：缺少构造子 succ"）
     assert_parity(
         "enum Nat {\n  zero\n  succ(x: Nat)\n}\n\
          def mono(n: Nat): Nat = match n { case zero => zero }\n",

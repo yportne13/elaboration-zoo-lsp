@@ -35,7 +35,12 @@ pub enum Warning {
     /// Err 正文做逐字比对，而孪生侧尚无三档（L12 孪生同款）；文案差异
     /// 留待 S4（孪生三档）一并放行。
     Undecided(Raw),
-    Unmatched(Pattern),
+    /// 顶层覆盖缺失：只带构造子名。历史形态是 `Pattern::Con(ctor, [Any; 999])`
+    /// （L10–L12 遗留的"构造子 + 定长通配"见证），Display 出来是单行 3000+ 字符、
+    /// 约 2005 个 `_` 的诊断——对用户是无意义噪声。改为只打构造子名，
+    /// 文案对齐 L12/L07 的 `match 不完整：缺少构造子 {ctor}`（见
+    /// docs/compare-l07-l13-shared/FINAL.md §4 #7、UPGRADE-L13-PLAN.md P1）。
+    Unmatched(SmolStr),
     /// 嵌套位置覆盖缺失（L07 同文案：`match 不完整：模式位置 {path} 缺少
     /// 构造子 {ctor}`；2026-09-18 评审修复 P0 的 L13 移植）。
     IncompleteNested(String),
@@ -47,7 +52,7 @@ impl std::fmt::Display for Warning {
             Warning::Unreachable(body) | Warning::Undecided(body) => {
                 write!(f, "unreachable pattern: {}", body)
             }
-            Warning::Unmatched(pat) => write!(f, "non-exhaustive pattern: `{}` not covered", pat),
+            Warning::Unmatched(ctor) => write!(f, "match 不完整：缺少构造子 {}", ctor),
             Warning::IncompleteNested(msg) => write!(f, "{msg}"),
         }
     }
@@ -524,11 +529,7 @@ impl Compiler {
                         .iter()
                         .any(|(pat, _)| covers(pat, ctor.data.as_str(), &ctor_names))
                 {
-                    self.warnings.push(Warning::Unmatched(Pattern::Con(
-                        ctor.clone(),
-                        vec![Pattern::Any(empty_span(false), Either::Icit(Icit::Expl)); 999],
-                        Either::Icit(Icit::Expl),
-                    )));
+                    self.warnings.push(Warning::Unmatched(ctor.data.clone()));
                 }
             }
         }        let mut unreachable: Vec<Warning> = Vec::new();

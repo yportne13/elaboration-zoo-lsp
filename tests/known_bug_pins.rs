@@ -177,7 +177,7 @@ println("when-last-survives")
 //
 // 文档 bug：`match (l, x)`（l: Nat, x: Vec[Boolean] l）两臂 (zero,nil)/
 // (succ,cons) 已被 GADT 约束证明完备，旧实现仍报 non-exhaustive
-// （"non-exhaustive pattern: `Tuple2.mk(zero, cons)` not covered" 等——
+// （"match 不完整：缺少构造子 Tuple2.mk" 等——2026-11-24 前的写法是
 // 第一个 head 的索引约束不传播到第二个 head，`filter_accessible_constrs`
 // 看到的仍是未约束的 Vec[Boolean] l）。
 //

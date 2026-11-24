@@ -8,7 +8,7 @@
 #
 # SUITES (same four as the .sh gate)
 #   lib      cargo test --lib L13_namespace::
-#   parity   cargo test --test l13_fast_parity -- --skip L13_namespace::
+#   parity   cargo test --test l13_fast_parity --features l13-twin -- --skip L13_namespace::
 #            The skip is not a coverage loss: tests/l13_fast_parity.rs re-compiles
 #            all of src/L13_namespace/mod.rs via #[path], so the L13 tests would
 #            otherwise run a second time. They already ran in the lib suite.
@@ -77,6 +77,13 @@
 #   already broke a round-1 helper once. Keep every byte of this file ASCII.
 #   Logs are UTF-8 and are read with -Encoding UTF8 for the same reason.
 #
+# KNOWN RED UNDER -Full (2026-11-24)
+#   `-Full` (no L13 skip) has exactly ONE failing case today:
+#     bump_spine_iter::observe::observation_tests::prelude_full_observation_tables_match_reference
+#   It is a real ref<->twin divergence that the seal hid: reference renders the
+#   prelude binder as `(n: Nat) -> Nat`, the twin as `(n': Nat) -> Nat`. Registered in
+#   docs/l07-l13-known-diff.md (#16). The default (skipping) parity run is green.
+#
 # NOTE ON ExitCode (why this file does not use Start-Process)
 #   A PowerShell 5.1 `Start-Process -PassThru` object with redirected streams
 #   does NOT report a usable ExitCode -- it comes back empty even after the
@@ -111,6 +118,8 @@ param(
     [int]$RetryWaitSec = 20,
     [int]$KillStaleSec = 0,
     [int]$MinLib = 500,
+    # 2026-11-24: the twin seal left this target compiled to zero tests; with
+    # --features l13-twin restored (see the suite table) the real count is back.
     [int]$MinParity = 15,
     [int]$MinTwin = 27,
     [int]$MinHdl042 = 2,
@@ -202,9 +211,17 @@ if ($suiteNames.Count -eq 0) { $suiteNames = @("lib", "parity", "twin", "hdl042"
 
 $table = @()
 $table += [pscustomobject]@{ Name = "lib";     Argv = @("test", "--lib", "L13_namespace::") + $CargoArgs }
-$table += [pscustomobject]@{ Name = "parity";  Argv = @("test", "--test", "l13_fast_parity") + $CargoArgs + $skipArgs }
+# 2026-11-24 (docs/compare-l07-l13-shared/UPGRADE-L13-PLAN.md P4): tests/l13_fast_parity.rs
+# starts with `#![cfg(feature = "l13-twin")]`, and the twin seal (7a68abc7 / 80f7cbc1)
+# left that feature OFF by default. Without the flag this target compiles to ZERO
+# tests, and the gate correctly reports NO-TESTS -- i.e. the default gate has been
+# red since 2026-11-23. Parity IS the ref<->twin suite, so it must always turn the
+# feature on.
+$table += [pscustomobject]@{ Name = "parity";  Argv = @("test", "--test", "l13_fast_parity", "--features", "l13-twin") + $CargoArgs + $skipArgs }
 $table += [pscustomobject]@{ Name = "twin";    Argv = @("test", "--test", "twin_engine_tests") + $CargoArgs }
 $table += [pscustomobject]@{ Name = "hdl042";  Argv = @("test", "--test", "hdl042_engine_tests") + $CargoArgs }
+# P4 (2026-11-24, docs/compare-l07-l13-shared/UPGRADE-L13-PLAN.md): the ref<->twin
+# default gate therefore certifies a suite that ran nothing. This suite restores
 
 $selected = @()
 foreach ($s in $table) {

@@ -218,7 +218,24 @@ fn is_nat_typ(typ: &Tm) -> bool {
     }
 }
 
+/// 显示层递归深度上限（与 L07–L12 的 `MAX_DEPTH = 1_024` 同口径）。
+///
+/// L13 的 `pretty_tm_indent` 是纯函数（递归 `format!` + 返回 `String`），没有
+/// L07–L12 那样的 `out: &mut String` 单缓冲 + `thread_local` 守卫；但它的
+/// `indent` 参数已经在每一层递归里单调递增（`indent + 1`），可以直接当深度
+/// 计数器用——不需要 thread_local，也因此不会有"提前 return 忘记回退"的坑。
+///
+/// 为什么要这个上限：quote 出来的深值（`succ^N zero` 的 10^5 层 `Tm::SumCase`、
+/// 深 Pi / 深 Match）在默认栈下递归显示会爆栈。显示层不需要完整性：超过上限
+/// 输出 `…` 截断即可（不 panic、不改变类型检查结果）。取 1_024 与 L07–L12
+/// 一致，正常教学/HDL 程序远低于此。
+const MAX_DEPTH: usize = 1_024;
+
 fn pretty_tm_indent(prec: i32, indent: usize, ns: List<SmolStr>, tm: &Tm) -> String {
+    // 显示层定深截断（`MAX_DEPTH`）：深值不爆栈。
+    if indent >= MAX_DEPTH {
+        return "…".to_string();
+    }
     match tm {
         Tm::Var(ix) => go_ix(ns, ix.0),
         Tm::Decl(x) => x.data.to_string(),

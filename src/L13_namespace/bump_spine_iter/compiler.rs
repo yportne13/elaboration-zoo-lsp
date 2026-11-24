@@ -26,7 +26,9 @@ use super::{cover_at, empty_span, fmt_path, Error, PatternDetail, PosCover};
 #[derive(Debug, Clone)]
 pub(crate) enum Warning {
     Unreachable(Raw),
-    Unmatched(Pattern),
+    /// 顶层覆盖缺失：只带构造子名（历史形态是 `Pattern::Con(ctor, [Any; 999])`，
+    /// Display 出来单行 3000+ 字符；本层对齐参考版改为只打构造子名）。
+    Unmatched(SmolStr),
     /// 嵌套位置覆盖缺失（L07 同文案：`match 不完整：模式位置 {path} 缺少
     /// 构造子 {ctor}`；2026-09-18 评审修复 P0 的 L13 移植）。
     IncompleteNested(String),
@@ -38,7 +40,7 @@ impl std::fmt::Display for Warning {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Warning::Unreachable(body) => write!(f, "unreachable pattern: {}", body),
-            Warning::Unmatched(pat) => write!(f, "non-exhaustive pattern: `{}` not covered", pat),
+            Warning::Unmatched(ctor) => write!(f, "match 不完整：缺少构造子 {}", ctor),
             Warning::IncompleteNested(msg) => write!(f, "{msg}"),
         }
     }
@@ -566,11 +568,7 @@ impl<'a> Compiler<'a> {
                     .any(|(pat, _)| covers(pat, ctor.data.as_str(), &ctor_names)),
             };
             if !cov {
-                self.warnings.push(Warning::Unmatched(Pattern::Con(
-                    ctor.clone(),
-                    vec![Pattern::Any(empty_span(false), Either::Icit(Icit::Expl)); 999],
-                    Either::Icit(Icit::Expl),
-                )));
+                self.warnings.push(Warning::Unmatched(ctor.data.clone()));
             }
         }
         let mut unreachable: Vec<Warning> = Vec::new();

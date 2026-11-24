@@ -1467,11 +1467,30 @@ pub type HoverEntry = (Span<()>, Span<()>, String);
 /// 深度防护（solve 无跨 meta occurs check，解链成环时防无界递归栈溢出）。
 const UNIFY_FUEL: u32 = 4096;
 
+/// 基准专用燃料覆盖：环境变量 `TYPORT_UNIFY_FUEL`（缺省 = [`UNIFY_FUEL`]）。
+///
+/// 与 L07/L08/L09 同口径（L07 §7.2 的"基准放大逃生门"）：smalltt 级负载
+/// （NatConv / TreeConv 的 1e6 级 β 步转换检查）远超 4096；显式设置该变量
+/// 可放大单次合一池。**未设置时行为与原来逐位一致**（`OnceLock` 只读一次，
+/// 不进入热路径）。L13 此前缺这一项，见 docs/compare-l07-l13-shared/FINAL.md §4 #9。
+fn unify_fuel_budget() -> u32 {
+    static BUDGET: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *BUDGET.get_or_init(|| {
+        std::env::var("TYPORT_UNIFY_FUEL")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(UNIFY_FUEL)
+    })
+}
+
 /// 卡住 match 相等性比较的**总次数**上限（每个顶层合一入口一份，L12 同口径
 /// `MATCH_CMP_BUDGET = 64`）。`(Match, Match)` 臂逐分支在 fresh rigid 下重求值；
 /// 递归 def 的分支体每层再产生新的卡住 match，层级递增、永不结构收敛（L12 实测
 /// 4 个 def 的 `Eq (add x zero) (add y zero)` 要 256s 才靠 fuel 停下）。次数预算
-/// 把慢路径变成"有界失败"，超出按"无法判定为相等"保守失败（`Undecided`）。
+/// 把慢路径变成"有界失败"，超出按"无法判定为相等"保守失败。**L13 的档位记
+/// `UnifyKind::Fuel`（不是 L12 的 `Undecided`）**：预算耗尽必须与"语义上判不出"
+/// 分档，覆盖探测只对预算档做"按可达处理"的保守兜底（见 `unification.rs` 的
+/// `(Match, Match)` 臂与 `pattern_match.rs` 的 `Walk`）。
 pub(crate) const MATCH_CMP_BUDGET: u32 = 64;
 
 pub struct Infer {
@@ -2296,7 +2315,7 @@ impl Infer {
             defer_println: false,
             println_jobs: vec![],
             def_replay_memo: Default::default(),
-            unify_fuel: std::cell::Cell::new(UNIFY_FUEL),
+            unify_fuel: std::cell::Cell::new(unify_fuel_budget()),
             match_cmp_budget: std::cell::Cell::new(MATCH_CMP_BUDGET),
             unify_kind: std::cell::Cell::new(UnifyKind::Absurd),
             ctor_hover_memo: Default::default(),
