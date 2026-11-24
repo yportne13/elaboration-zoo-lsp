@@ -991,7 +991,18 @@ impl Infer {
                     //Err(Error(format!("when check universe, get pren {}", pren.dom.0)))
                 }
             }
-            _ => Err(Error(t_span.map(|_| format!("expected universe, got {:?}", inferred_type)), vec![])),
+            // 尾注走 pretty 而非 Val 的 Debug 转储（大值树会印出巨量结构且不可读）。
+            // 与 L12/elaboration.rs 的 `check_universe` 同款，也与本文件 :1216 的
+            // 既有写法一致；前缀 "expected universe, got" 被 blackbox 钉住，只改尾部。
+            _ => Err(Error(
+                t_span.map(|_| {
+                    format!(
+                        "expected universe, got {}",
+                        super::pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, &inferred_type))
+                    )
+                }),
+                vec![],
+            )),
         }
     }
     fn check_app_obj_direct<const CANONICAL: bool>(

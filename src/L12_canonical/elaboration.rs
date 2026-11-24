@@ -211,10 +211,16 @@ impl Infer {
                     Ok((t_inferred, 0))
                 }
             }
-            _ => Err(Error::new(format!(
-                "expected universe, got {:?}",
-                inferred_type
-            ))),
+            _ => {
+                // 错误尾注走 pretty 而非 Val 的 Debug 转储——大值树会印出巨量
+                // 结构且不可读（这是 L07 elaboration.rs:190-192 写明的原始理由，
+                // L09 重写 check_universe 时把机制和理由一起丢了）。前缀
+                // "expected universe, got" 被 blackbox 钉住，只改尾部。
+                Err(Error::new(format!(
+                    "expected universe, got {}",
+                    pretty_tm(0, cxt.names(), &self.quote(cxt.decl(), cxt.lvl, inferred_type))
+                )))
+            }
         }
     }
 
