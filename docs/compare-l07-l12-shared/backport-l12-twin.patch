@@ -1,0 +1,1083 @@
+﻿diff --git a/src/L12_canonical/bump_spine_iter/entry.rs b/src/L12_canonical/bump_spine_iter/entry.rs
+index 87ad2321..cf75bd28 100644
+--- a/src/L12_canonical/bump_spine_iter/entry.rs
++++ b/src/L12_canonical/bump_spine_iter/entry.rs
+@@ -365,3 +365,64 @@ pub(crate) fn parse(input: &str, path_id: u32) -> Result<Vec<Decl>, String> {
+ 
+ /// 解析产出的 decl AST 类型别名（测试/基准用；Decl 本身的 use 是私有的）。
+ pub(crate) type SourceDecl = Decl;
++
++#[cfg(test)]
++mod deep_value_tests {
++    use super::*;
++    // 拆分后按路径补引（原单文件内同模块直接可见的跨子系统项）：
++    use super::super::force::val_mentions_lvl;
++    use super::super::spine::Spine;
++    use super::super::struct_eq::struct_val_eq;
++    use super::super::subst::{mentions_level, SubstV};
++    use super::super::syntax::{SumDataV, V, v_xcell, XCell};
++
++    /// README §7.6 回归钉（孪生）：深值（succ^N 链）上的浅扫描（occurs /
++    /// mentions）与结构比较在默认测试栈（约 2 MB）下迭代化（旧递归版
++    /// 万级深度爆栈）。bump 内值随 Bump 释放，无深 Drop 之虞。
++    ///
++    /// 回灌自 L07 孪生 `entry.rs:363-417`（2026-11-24）：L12 孪生重建时
++    /// 没有带上这条钉，导致 `mentions_level` / `val_mentions_lvl` 退回原生
++    /// 递归后无人报警。本轮已把两个浅扫描改回迭代（`InlineStack` 工作栈），
++    /// 这条钉钉住它们。
++    #[test]
++    fn deep_value_iterative_under_default_stack() {
++        fn succ_chain(bump: &Bump, n: usize) -> V {
++            let nat = v_xcell(bump.alloc(XCell::Sum {
++                name: "Nat",
++                params: &[],
++                cases: &["zero", "succ"],
++            }));
++            let mut v = v_xcell(bump.alloc(XCell::SumCase {
++                typ: nat,
++                case_name: "zero",
++                datas: &[],
++            }));
++            for _ in 0..n {
++                v = v_xcell(bump.alloc(XCell::SumCase {
++                    typ: nat,
++                    case_name: "succ",
++                    datas: bump.alloc_slice_fill_iter([SumDataV {
++                        name: "x",
++                        val: v,
++                        icit: Icit::Expl,
++                    }]),
++                }));
++            }
++            v
++        }
++
++        let bump = Bump::new();
++        let spine = Spine { stack: Vec::new() };
++        let defs: Vec<V> = Vec::new();
++        // ① occurs / mentions：10 万层（无预算遍历，不爆栈）
++        let deep = succ_chain(&bump, 100_000);
++        assert!(!val_mentions_lvl(&spine, &defs, deep, 1));
++        assert!(!mentions_level(&spine, &defs, deep, &SubstV::default()));
++        // ② 结构比较：位相等捷径对 tag 7 关闭，逐结构燃烧——2 千层约 6 千
++        // spend < EQ_BUDGET（2 万）判等；10 万层超预算有界降级 false——两者
++        // 都不爆栈（旧递归版在 10 万层这条上会吃满 native 栈）。
++        let small = succ_chain(&bump, 2_000);
++        assert!(struct_val_eq(&spine, &defs, small, small));
++        assert!(!struct_val_eq(&spine, &defs, deep, deep));
++    }
++}
+diff --git a/src/L12_canonical/bump_spine_iter/force.rs b/src/L12_canonical/bump_spine_iter/force.rs
+index d6b646ea..e1424d03 100644
+--- a/src/L12_canonical/bump_spine_iter/force.rs
++++ b/src/L12_canonical/bump_spine_iter/force.rs
+@@ -13,7 +13,7 @@ use super::env::{CloCell, Env, env_ext, env_len, env_nth, EnvCons, PiCell};
+ use super::eval::{eval_aux, eval_iter, W};
+ use super::prim::{burn, DeclEntryF, Fuel, is_selfref_val, MutableMap, prim_reduce};
+ use super::spine::{HK_DECL, HK_OBJ, HK_PRIM, MetaEntry, Spine, xcell_head_name};
+-use super::subst::{SubstV, wrap_sub};
++use super::subst::{InlineStack, SubstV, wrap_sub};
+ use super::syntax::{SumDataV, SumParamV, V, v_clo, v_clo_of, v_lvl, v_lvl_of, v_meta_of, v_pi, v_pi_of, v_spine_of, v_tag, v_xcell, v_xcell_of, XCell};
+ 
+ /// 独立应用（eval_iter 之外的 v_app：force 的解值/pending 应用、prim 的
+@@ -73,6 +73,29 @@ pub(super) fn vapp1<'a>(
+             // 顶层不再产出 VSub，递归必终止）
+             XCell::VSub { .. } => {
+                 let ff = force(bump, spine, defs, metas, decls, mmap, fuel, f);
++                if v_tag(ff) == 1 {
++                    // frcs 可把 VSub 头推成**闭包**（let 绑定的 λ 槽被精化包裹
++                    // 后经 Tm::Var 进应用位）。此时上方闭包臂的 eval_iter 会
++                    // 在入口 clear 调用方的 work/vals——而 W::Apply /
++                    // ChainWrap / AppPrunOne 正是带着**本循环在飞的栈**调进
++                    // 来的（它们的 tag-1 守卫只拦得住进入时已是闭包的值，
++                    // 拦不住“VSub 经 force 变闭包”这条路径），外层任务会被
++                    // 静默截断。β 用本次私有的草稿栈做（force 同款纪律；
++                    // Vec::new 不分配，早退零成本）。
++                    //
++                    // 回灌自 L07 孪生 force.rs:79-113（2026-11-24）：L12 孪生
++                    // 此前缺少这条守卫，会把 VSub→闭包的 β 交给带调用方栈的
++                    // vapp1，导致外层 eval 任务被 eval_iter 入口 clear 掉。
++                    let c = v_clo_of(ff);
++                    let env = env_ext(bump, c.env, a);
++                    let mut work2: Vec<W<'a>> = Vec::new();
++                    let mut vals2: Vec<V> = Vec::new();
++                    let mut icits2: Vec<Icit> = Vec::new();
++                    return eval_iter(
++                        bump, spine, &mut work2, &mut vals2, &mut icits2, defs, metas, decls,
++                        mmap, fuel, env, c.body,
++                    );
++                }
+                 return vapp1(
+                     bump, spine, work, vals, icits, defs, metas, decls, mmap, fuel, ff, a, i,
+                 );
+@@ -136,88 +159,89 @@ pub(super) fn project<'a>(v: V, name: &str) -> Option<V> {
+ /// fuel 兜底）。特化解的环守卫（`pm_solve`）用。（参考版
+ /// `val_mentions_lvl` 同款遍历面。）
+ pub(crate) fn val_mentions_lvl(spine: &Spine, defs: &[V], v: V, x: u32) -> bool {
+-    match v_tag(v) {
+-        // Rigid 裸头
+-        0 => v_lvl_of(v) == x,
+-        2 => {
+-            // 链形态也要查链头：Rigid 头链查头层级、Obj 头链查被投影者
+-            // （参考版 `Val::Rigid(y, sp) => *y == x || spine(sp, x)`、
+-            // `Val::Obj(o, _, sp) => val_mentions_lvl(o, x) || spine(sp, x)`）
+-            let h = v_spine_of(v);
+-            let hd = spine.spine_head(h);
+-            let head_hit = match v_tag(hd) {
+-                0 => v_lvl_of(hd) == x,
+-                7 => match v_xcell_of(hd) {
+-                    XCell::Obj { val, .. } => val_mentions_lvl(spine, defs, *val, x),
+-                    _ => false,
+-                },
+-                _ => false,
+-            };
+-            let mut args: Vec<(V, Icit)> = Vec::new();
+-            spine.collect_args(h, &mut args);
+-            head_hit || args.iter().any(|(a, _)| val_mentions_lvl(spine, defs, *a, x))
++    // 迭代实现（回灌自 L07 孪生 force.rs:172-259，2026-11-24）：深值 occurs
++    // 守卫按值深度递归会在万级深度爆栈（常规栈 1–8 MB）。工作栈展开与旧递归
++    // 同一遍历面，存在性判定对访问顺序不敏感。
++    fn push_env(defs: &[V], stack: &mut InlineStack<V, 16>, env: Env<'_>) {
++        // 槽序与 env_nth 一致：链段（头 = 最内层）先走，平坦区倒序
++        let mut n = env.binds;
++        while let Some(e) = n {
++            stack.push(e.val);
++            n = e.next;
+         }
+-        // Flex 裸头（链在 tag 2）
+-        5 => false,
+-        1 | 4 => false, // Lam/Pi 闭包跳过（参考版同）
+-        3 | 6 => false,
+-        7 => match v_xcell_of(v) {
+-            XCell::Lit(_) => false,
+-            XCell::Decl(_) | XCell::Prim(_) => false, // 空实参（链在 tag 2）
+-            // VSub：只扫解值自身的结构，**不扫 σ 的映射值**——σ 的其它条目
+-            // （如头部精化的构造子值）合法引用别的模式变量，扫进来会把无害
+-            // 的解误判成环。σ 槽位若真引用 x，解包后的结构里自会以裸
+-            // Rigid(x) 出现（对齐旧世界"occurs 只看解的裸值"的语义；更深
+-            // 的间接环仍由 force 的 fuel 兜底）。
+-            XCell::VSub { val, .. } => val_mentions_lvl(spine, defs, *val, x),
+-            XCell::Obj { val, .. } => val_mentions_lvl(spine, defs, *val, x),
+-            XCell::Sum { params, .. } => params
+-                .iter()
+-                .any(|p| val_mentions_lvl(spine, defs, p.val, x) || val_mentions_lvl(spine, defs, p.ty, x)),
+-            XCell::SumCase { typ, datas, .. } => {
+-                val_mentions_lvl(spine, defs, *typ, x)
+-                    || datas.iter().any(|d| val_mentions_lvl(spine, defs, d.val, x))
++        for k in 0..env.flat_len {
++            stack.push(defs[(env.flat_base + env.flat_len - 1 - k) as usize]);
++        }
++    }
++    let mut stack = InlineStack::<V, 16>::with_first(v);
++    let mut args: Vec<(V, Icit)> = Vec::new();
++    while let Some(v) = stack.pop() {
++        match v_tag(v) {
++            // Rigid 裸头
++            0 => {
++                if v_lvl_of(v) == x {
++                    return true;
++                }
+             }
+-            XCell::Match {
+-                scrutinee,
+-                env,
+-                pending,
+-                ..
+-            } => {
+-                // env 槽序与 env_nth 一致：链段（头 = 最内层）先走，平坦区
+-                // 倒序——单趟遍历替代 (0..env_len).any(env_nth) 的 O(d²)
+-                let env_hit = {
+-                    let mut hit = false;
+-                    let mut n = env.binds;
+-                    while let Some(e) = n {
+-                        if val_mentions_lvl(spine, defs, e.val, x) {
+-                            hit = true;
+-                            break;
++            2 => {
++                // 链形态也要查链头：Rigid 头链查头层级、Obj 头链查被投影者
++                // （参考版 `Val::Rigid(y, sp) => *y == x || spine(sp, x)`、
++                // `Val::Obj(o, _, sp) => val_mentions_lvl(o, x) || spine(sp, x)`）
++                let h = v_spine_of(v);
++                let hd = spine.spine_head(h);
++                match v_tag(hd) {
++                    0 => {
++                        if v_lvl_of(hd) == x {
++                            return true;
+                         }
+-                        n = e.next;
+                     }
+-                    if !hit {
+-                        for k in 0..env.flat_len {
+-                            if val_mentions_lvl(
+-                                spine,
+-                                defs,
+-                                defs[(env.flat_base + env.flat_len - 1 - k) as usize],
+-                                x,
+-                            ) {
+-                                hit = true;
+-                                break;
+-                            }
++                    7 => {
++                        if let XCell::Obj { val, .. } = v_xcell_of(hd) {
++                            stack.push(*val);
+                         }
+                     }
+-                    hit
+-                };
+-                val_mentions_lvl(spine, defs, *scrutinee, x)
+-                    || env_hit
+-                    || pending.iter().any(|(u, _)| val_mentions_lvl(spine, defs, *u, x))
++                    _ => {}
++                }
++                args.clear();
++                spine.collect_args(h, &mut args);
++                stack.extend(args.iter().map(|(a, _)| *a));
+             }
+-        },
+-        _ => false,
++            // Flex 裸头（链在 tag 2）；Lam/Pi 闭包跳过（参考版同）；
++            // U / LiteralType / 裸 Decl/Prim 空实参
++            5 | 1 | 4 | 3 | 6 => {}
++            7 => match v_xcell_of(v) {
++                XCell::Lit(_) | XCell::Decl(_) | XCell::Prim(_) => {}
++                // VSub：只扫解值自身的结构，**不扫 σ 的映射值**——σ 的其它条目
++                // （如头部精化的构造子值）合法引用别的模式变量，扫进来会把无害
++                // 的解误判成环。σ 槽位若真引用 x，解包后的结构里自会以裸
++                // Rigid(x) 出现（对齐旧世界“occurs 只看解的裸值”的语义；更深
++                // 的间接环仍由 force 的 fuel 兜底）。
++                XCell::VSub { val, .. } => stack.push(*val),
++                XCell::Obj { val, .. } => stack.push(*val),
++                XCell::Sum { params, .. } => {
++                    stack.extend(params.iter().flat_map(|p| [p.val, p.ty]))
++                }
++                XCell::SumCase { typ, datas, .. } => {
++                    stack.push(*typ);
++                    stack.extend(datas.iter().map(|d| d.val));
++                }
++                XCell::Match {
++                    scrutinee,
++                    env,
++                    pending,
++                    ..
++                } => {
++                    stack.push(*scrutinee);
++                    push_env(defs, &mut stack, *env);
++                    // pending 在 L12 孪生仍是切片（L07 的 cons 链化未回灌）：
++                    // 存在性扫描与遍历序无关，直接整段压栈。
++                    stack.extend(pending.iter().map(|(v, _)| *v));
++                }
++            },
++            _ => {}
++        }
+     }
++    false
+ }
+ // force（迭代）
+ // --------------------------------------------------------------------------------
+diff --git a/src/L12_canonical/bump_spine_iter/struct_eq.rs b/src/L12_canonical/bump_spine_iter/struct_eq.rs
+index 2670807c..a64a449d 100644
+--- a/src/L12_canonical/bump_spine_iter/struct_eq.rs
++++ b/src/L12_canonical/bump_spine_iter/struct_eq.rs
+@@ -6,6 +6,7 @@ use super::parser::syntax::Icit;
+ 
+ use super::env::{Env, env_len};
+ use super::spine::Spine;
++use super::subst::InlineStack;
+ use super::syntax::{PrCons, Tm, V, v_clo_of, v_lvl_of, v_meta_of, v_pi_of, v_spine_of, v_tag, v_u_of, v_xcell_of, XCell};
+ 
+ // 结构相等（快路径专用）：不 force、不展开、不求值，忽略 span 名。
+@@ -40,35 +41,44 @@ fn pr_slots(p: &Option<&PrCons<'_>>) -> Vec<Option<Icit>> {
+ }
+ 
+ pub(super) fn struct_tm_eq(a: &Tm<'_>, b: &Tm<'_>) -> bool {
+-    struct_tm_eq_go(&mut EqBudget(EQ_BUDGET), a, b)
++    // 迭代实现（回灌自 L07 孪生 struct_eq.rs:46-59，2026-11-24）：深 Tm 树
++    // （succ^N 的 quote 产物）按树深递归会在万级深度爆栈。Tm 树不含值引用
++    // ——T-only 任务栈即可，燃烧面 = 每 T 任务烧 1（对齐旧 struct_tm_eq_go 入口）。
++    let mut budget = EqBudget(EQ_BUDGET);
++    let mut stack = InlineStack::<SEqTask<'_>, 16>::with_first(SEqTask::T(a, b));
++    while let Some(t) = stack.pop() {
++        let SEqTask::T(x, y) = t else { unreachable!() };
++        if !seq_step_t(&mut stack, &mut budget, x, y) {
++            return false;
++        }
++    }
++    true
+ }
+ 
+ pub(super) fn struct_val_eq(spine: &Spine, defs: &[V], a: V, b: V) -> bool {
+-    struct_val_eq_go(&mut EqBudget(EQ_BUDGET), spine, defs, a, b)
++    seq_run(spine, defs, SEqTask::V(a, b))
+ }
+ 
+ pub(super) fn struct_env_eq(spine: &Spine, defs: &[V], a: Env<'_>, b: Env<'_>) -> bool {
+-    struct_env_eq_go(&mut EqBudget(EQ_BUDGET), spine, defs, a, b)
++    seq_run(spine, defs, SEqTask::Env(a, b))
+ }
+ 
+-fn struct_spine_eq_go(budget: &mut EqBudget, spine: &Spine, defs: &[V], h1: usize, h2: usize) -> bool {
+-    if spine.spine_len(h1) != spine.spine_len(h2) {
+-        return false;
+-    }
+-    let mut a1: Vec<(V, Icit)> = Vec::new();
+-    spine.collect_args(h1, &mut a1);
+-    let mut a2: Vec<(V, Icit)> = Vec::new();
+-    spine.collect_args(h2, &mut a2);
+-    // 头也要同（bit-equal 或同名 Decl/Prim/同 Obj 结构）
+-    if !struct_val_eq_go(budget, spine, defs, spine.spine_head(h1), spine.spine_head(h2)) {
+-        return false;
+-    }
+-    a1.iter()
+-        .zip(a2.iter())
+-        .all(|((x, i), (y, j))| i == j && struct_val_eq_go(budget, spine, defs, *x, *y))
++#[derive(Clone, Copy)]
++enum SEqTask<'a> {
++    V(V, V),
++    T(&'a Tm<'a>, &'a Tm<'a>),
++    Spine(usize, usize),
++    Env(Env<'a>, Env<'a>),
+ }
+ 
+-fn struct_tm_eq_go(budget: &mut EqBudget, a: &Tm<'_>, b: &Tm<'_>) -> bool {
++/// 一对 Tm 的展开（值主循环与 T-only 入口共用）：子任务压栈（逆序，pop 序
++/// = 旧递归访问序），零成本判定失败返回 false。
++fn seq_step_t<'a>(
++    stack: &mut InlineStack<SEqTask<'a>, 16>,
++    budget: &mut EqBudget,
++    a: &'a Tm<'a>,
++    b: &'a Tm<'a>,
++) -> bool {
+     if !budget.spend() {
+         return false;
+     }
+@@ -76,37 +86,63 @@ fn struct_tm_eq_go(budget: &mut EqBudget, a: &Tm<'_>, b: &Tm<'_>) -> bool {
+         (Tm::Var(x), Tm::Var(y)) => x == y,
+         (Tm::Decl(x), Tm::Decl(y)) => x == y,
+         (Tm::Prim(x), Tm::Prim(y)) => x == y,
+-        (Tm::Obj(x, n), Tm::Obj(y, m)) => n == m && struct_tm_eq_go(budget, x, y),
++        (Tm::Obj(x, n), Tm::Obj(y, m)) => {
++            n == m && {
++                stack.push(SEqTask::T(x, y));
++                true
++            }
++        }
+         (Tm::App(x, xu, i), Tm::App(y, yu, j)) => {
+-            i == j && struct_tm_eq_go(budget, x, y) && struct_tm_eq_go(budget, xu, yu)
++            i == j && {
++                stack.push(SEqTask::T(xu, yu));
++                stack.push(SEqTask::T(x, y));
++                true
++            }
+         }
+-        (Tm::Lam(_, i, x), Tm::Lam(_, j, y)) => i == j && struct_tm_eq_go(budget, x, y),
++        (Tm::Lam(_, i, x), Tm::Lam(_, j, y)) => {
++            i == j && {
++                stack.push(SEqTask::T(x, y));
++                true
++            }
++        }
++        // L12：宇宙层级带载荷（L09 起 `Tm::U(n)`），与 L07 的无载荷 `Tm::U` 不同
+         (Tm::U(x), Tm::U(y)) => x == y,
+         (Tm::Pi(_, i, xa, xb), Tm::Pi(_, j, ya, yb)) => {
+-            i == j && struct_tm_eq_go(budget, xa, ya) && struct_tm_eq_go(budget, xb, yb)
++            i == j && {
++                stack.push(SEqTask::T(xb, yb));
++                stack.push(SEqTask::T(xa, ya));
++                true
++            }
+         }
+         (Tm::Let(_, xa, xb, xc), Tm::Let(_, ya, yb, yc)) => {
+-            struct_tm_eq_go(budget, xa, ya)
+-                && struct_tm_eq_go(budget, xb, yb)
+-                && struct_tm_eq_go(budget, xc, yc)
++            stack.push(SEqTask::T(xc, yc));
++            stack.push(SEqTask::T(xb, yb));
++            stack.push(SEqTask::T(xa, ya));
++            true
+         }
+         (Tm::Meta(x), Tm::Meta(y)) => x == y,
+         (Tm::AppPruning(x, p), Tm::AppPruning(y, q)) => {
+             let (sp, sq) = (pr_slots(p), pr_slots(q));
+             sp.len() == sq.len()
+                 && sp.iter().zip(sq.iter()).all(|(a, b)| a == b)
+-                && struct_tm_eq_go(budget, x, y)
++                && {
++                    stack.push(SEqTask::T(x, y));
++                    true
++                }
+         }
+         (Tm::LiteralType, Tm::LiteralType) => true,
+         (Tm::LiteralIntro(x), Tm::LiteralIntro(y)) => x == y,
+         (Tm::Sum(xn, xp, _), Tm::Sum(yn, yp, _)) => {
+             xn == yn
+                 && xp.len() == yp.len()
+-                && xp.iter().zip(yp.iter()).all(|(a, b)| {
+-                    a.icit == b.icit
+-                        && struct_tm_eq_go(budget, a.val, b.val)
+-                        && struct_tm_eq_go(budget, a.ty, b.ty)
+-                })
++                && xp.iter().zip(yp.iter()).all(|(a, b)| a.icit == b.icit)
++                && {
++                    for (a, b) in xp.iter().zip(yp.iter()).rev() {
++                        stack.push(SEqTask::T(a.ty, b.ty));
++                        stack.push(SEqTask::T(a.val, b.val));
++                    }
++                    true
++                }
+         }
+         (
+             Tm::SumCase {
+@@ -121,178 +157,275 @@ fn struct_tm_eq_go(budget: &mut EqBudget, a: &Tm<'_>, b: &Tm<'_>) -> bool {
+             },
+         ) => {
+             xn == yn
+-                && struct_tm_eq_go(budget, xt, yt)
+                 && xd.len() == yd.len()
+-                && xd.iter().zip(yd.iter()).all(|(a, b)| {
+-                    a.icit == b.icit && struct_tm_eq_go(budget, a.val, b.val)
+-                })
++                && xd.iter().zip(yd.iter()).all(|(a, b)| a.icit == b.icit)
++                && {
++                    for (a, b) in xd.iter().zip(yd.iter()).rev() {
++                        stack.push(SEqTask::T(a.val, b.val));
++                    }
++                    stack.push(SEqTask::T(xt, yt));
++                    true
++                }
+         }
+         (Tm::Match(xs, xc), Tm::Match(ys, yc)) => {
+-            struct_tm_eq_go(budget, xs, ys)
+-                && xc.len() == yc.len()
+-                && xc
+-                    .iter()
+-                    .zip(yc.iter())
+-                    .all(|((p, xb), (q, yb))| p == q && struct_tm_eq_go(budget, xb, yb))
+-        }
+-        _ => false,
+-    }
+-}
+-
+-fn struct_val_eq_go(budget: &mut EqBudget, spine: &Spine, defs: &[V], x: V, y: V) -> bool {
+-    if !budget.spend() {
+-        return false;
+-    }
+-    match (v_tag(x), v_tag(y)) {
+-        (0, 0) => v_lvl_of(x) == v_lvl_of(y),
+-        (5, 5) => v_meta_of(x) == v_meta_of(y),
+-        (3, 3) => v_u_of(x) == v_u_of(y),
+-        (6, 6) => true,
+-        (1, 1) => {
+-            let c1 = v_clo_of(x);
+-            let c2 = v_clo_of(y);
+-            c1.icit == c2.icit
+-                && struct_env_eq_go(budget, spine, defs, c1.env, c2.env)
+-                && struct_tm_eq_go(budget, c1.body, c2.body)
+-        }
+-        (4, 4) => {
+-            let p1 = v_pi_of(x);
+-            let p2 = v_pi_of(y);
+-            p1.icit == p2.icit
+-                && struct_val_eq_go(budget, spine, defs, p1.dom, p2.dom)
+-                && struct_env_eq_go(budget, spine, defs, p1.env, p2.env)
+-                && struct_tm_eq_go(budget, p1.body, p2.body)
++            xc.len() == yc.len()
++                && xc.iter().zip(yc.iter()).all(|((p, _), (q, _))| p == q)
++                && {
++                    for ((_, xb), (_, yb)) in xc.iter().zip(yc.iter()).rev() {
++                        stack.push(SEqTask::T(xb, yb));
++                    }
++                    stack.push(SEqTask::T(xs, ys));
++                    true
++                }
+         }
+-        (2, 2) => struct_spine_eq_go(budget, spine, defs, v_spine_of(x), v_spine_of(y)),
+-        (7, 7) => match (v_xcell_of(x), v_xcell_of(y)) {
+-            // 精化包裹：仅同一替换实例（同 Rc）且内层结构相等才短路；异实例
+-            // 一律回落慢路径（慢路径的 force 会推开 VSub，正确性不受影响）
+-            (XCell::VSub { val: a, sub: sa }, XCell::VSub { val: b, sub: sb }) => {
+-                std::rc::Rc::ptr_eq(sa, sb) && struct_val_eq_go(budget, spine, defs, *a, *b)
+-            }
+-            (XCell::VSub { .. }, _) | (_, XCell::VSub { .. }) => false,
+-            (XCell::Lit(a), XCell::Lit(b)) => a == b,
+-            (XCell::Decl(a), XCell::Decl(b)) => a == b,
+-            (XCell::Prim(a), XCell::Prim(b)) => a == b,
+-            (XCell::Obj { val: a, name: an }, XCell::Obj { val: b, name: bn }) => {
+-                an == bn && struct_val_eq_go(budget, spine, defs, *a, *b)
+-            }
+-            (
+-                XCell::Sum {
+-                    name: xn,
+-                    params: xp,
+-                    ..
+-                },
+-                XCell::Sum {
+-                    name: yn,
+-                    params: yp,
+-                    ..
+-                },
+-            ) => {
+-                xn == yn
+-                    && xp.len() == yp.len()
+-                    && xp.iter().zip(yp.iter()).all(|(a, b)| {
+-                        a.icit == b.icit
+-                            && struct_val_eq_go(budget, spine, defs, a.val, b.val)
+-                            && struct_val_eq_go(budget, spine, defs, a.ty, b.ty)
+-                    })
+-            }
+-            (
+-                XCell::SumCase {
+-                    typ: xt,
+-                    case_name: xn,
+-                    datas: xd,
+-                },
+-                XCell::SumCase {
+-                    typ: yt,
+-                    case_name: yn,
+-                    datas: yd,
+-                },
+-            ) => {
+-                xn == yn
+-                    && struct_val_eq_go(budget, spine, defs, *xt, *yt)
+-                    && xd.len() == yd.len()
+-                    && xd.iter().zip(yd.iter()).all(|(a, b)| {
+-                        a.icit == b.icit && struct_val_eq_go(budget, spine, defs, a.val, b.val)
+-                    })
+-            }
+-            (
+-                XCell::Match {
+-                    scrutinee: xs,
+-                    env: xe,
+-                    cases: xc,
+-                    pending: xp,
+-                },
+-                XCell::Match {
+-                    scrutinee: ys,
+-                    env: ye,
+-                    cases: yc,
+-                    pending: yp,
+-                },
+-            ) => {
+-                struct_val_eq_go(budget, spine, defs, *xs, *ys)
+-                    && struct_env_eq_go(budget, spine, defs, *xe, *ye)
+-                    && xc.len() == yc.len()
+-                    && xc
+-                        .iter()
+-                        .zip(yc.iter())
+-                        .all(|((p, xb), (q, yb))| p == q && struct_tm_eq_go(budget, xb, yb))
+-                    && xp.len() == yp.len()
+-                    && xp.iter().zip(yp.iter()).all(|((xv, xi), (yv, yi))| {
+-                        xi == yi && struct_val_eq_go(budget, spine, defs, *xv, *yv)
+-                    })
+-            }
+-            _ => false,
+-        },
+         _ => false,
+     }
+ }
+ 
+-fn struct_env_eq_go(
+-    budget: &mut EqBudget,
+-    spine: &Spine,
+-    defs: &[V],
+-    a: Env<'_>,
+-    b: Env<'_>,
+-) -> bool {
+-    let la = env_len(a);
+-    if la != env_len(b) {
+-        return false;
+-    }
+-    // 单趟双链迭代（原 (0..la).all(env_nth) 对链段是 O(d²)）：槽序与
+-    // env_nth 一致——各自链段先走（头 = 最内层），链尽后平坦区按
+-    // `flat_base + flat_len - 1 - k` 倒序读。两侧链/平坦划分可以不同，
+-    // 各自独立切换即可（env_nth 同款优先序）。
+-    let mut na = a.binds;
+-    let mut nb = b.binds;
+-    let mut fa = a.flat_base + a.flat_len;
+-    let mut fb = b.flat_base + b.flat_len;
+-    for _ in 0..la {
+-        let va = match na {
+-            Some(e) => {
+-                let v = e.val;
+-                na = e.next;
+-                v
++/// 结构比较主循环（迭代实现，回灌自 L07 孪生 struct_eq.rs:186-... 2026-11-24）：
++/// 与旧递归（struct_val_eq_go / struct_env_eq_go / struct_spine_eq_go）同一
++/// 遍历面、同一燃烧面（V/T 任务各烧 1；Env/Spine 展开不烧），子任务逆序压
++/// 栈保持短路访问序。深值（succ^N 链）不再按值深度吃 native 栈。
++fn seq_run(spine: &Spine, defs: &[V], first: SEqTask<'_>) -> bool {
++    let mut budget = EqBudget(EQ_BUDGET);
++    let mut stack = InlineStack::<SEqTask<'_>, 16>::with_first(first);
++    let mut a1: Vec<(V, Icit)> = Vec::new();
++    let mut a2: Vec<(V, Icit)> = Vec::new();
++    let mut vbuf: Vec<(V, V)> = Vec::new();
++    while let Some(t) = stack.pop() {
++        match t {
++            SEqTask::T(x, y) => {
++                if !seq_step_t(&mut stack, &mut budget, x, y) {
++                    return false;
++                }
+             }
+-            None => {
+-                fa -= 1;
+-                defs[fa as usize]
++            SEqTask::V(x, y) => {
++                if !budget.spend() {
++                    return false;
++                }
++                match (v_tag(x), v_tag(y)) {
++                    (0, 0) => {
++                        if v_lvl_of(x) != v_lvl_of(y) {
++                            return false;
++                        }
++                    }
++                    (5, 5) => {
++                        if v_meta_of(x) != v_meta_of(y) {
++                            return false;
++                        }
++                    }
++                    // L12：`U` 带层级载荷（L09 起），与 L07 的 `(3,3) | (6,6) => {}` 不同
++                    (3, 3) => {
++                        if v_u_of(x) != v_u_of(y) {
++                            return false;
++                        }
++                    }
++                    (6, 6) => {}
++                    (1, 1) => {
++                        let (c1, c2) = (v_clo_of(x), v_clo_of(y));
++                        if c1.icit != c2.icit {
++                            return false;
++                        }
++                        stack.push(SEqTask::T(c1.body, c2.body));
++                        stack.push(SEqTask::Env(c1.env, c2.env));
++                    }
++                    (4, 4) => {
++                        let (p1, p2) = (v_pi_of(x), v_pi_of(y));
++                        if p1.icit != p2.icit {
++                            return false;
++                        }
++                        stack.push(SEqTask::T(p1.body, p2.body));
++                        stack.push(SEqTask::Env(p1.env, p2.env));
++                        stack.push(SEqTask::V(p1.dom, p2.dom));
++                    }
++                    (2, 2) => stack.push(SEqTask::Spine(v_spine_of(x), v_spine_of(y))),
++                    (7, 7) => match (v_xcell_of(x), v_xcell_of(y)) {
++                        // 精化包裹：仅同一替换实例（同 Rc）且内层结构相等才短路；
++                        // 异实例一律回落慢路径（慢路径的 force 会推开 VSub）
++                        (XCell::VSub { val: a, sub: sa }, XCell::VSub { val: b, sub: sb }) => {
++                            if !std::rc::Rc::ptr_eq(sa, sb) {
++                                return false;
++                            }
++                            stack.push(SEqTask::V(*a, *b));
++                        }
++                        (XCell::VSub { .. }, _) | (_, XCell::VSub { .. }) => return false,
++                        (XCell::Lit(a), XCell::Lit(b)) => {
++                            if a != b {
++                                return false;
++                            }
++                        }
++                        (XCell::Decl(a), XCell::Decl(b)) => {
++                            if a != b {
++                                return false;
++                            }
++                        }
++                        (XCell::Prim(a), XCell::Prim(b)) => {
++                            if a != b {
++                                return false;
++                            }
++                        }
++                        (XCell::Obj { val: a, name: an }, XCell::Obj { val: b, name: bn }) => {
++                            if an != bn {
++                                return false;
++                            }
++                            stack.push(SEqTask::V(*a, *b));
++                        }
++                        (
++                            XCell::Sum {
++                                name: xn,
++                                params: xp,
++                                ..
++                            },
++                            XCell::Sum {
++                                name: yn,
++                                params: yp,
++                                ..
++                            },
++                        ) => {
++                            if xn != yn || xp.len() != yp.len() {
++                                return false;
++                            }
++                            for (a, b) in xp.iter().zip(yp.iter()) {
++                                if a.icit != b.icit {
++                                    return false;
++                                }
++                            }
++                            for (a, b) in xp.iter().zip(yp.iter()).rev() {
++                                stack.push(SEqTask::V(a.ty, b.ty));
++                                stack.push(SEqTask::V(a.val, b.val));
++                            }
++                        }
++                        (
++                            XCell::SumCase {
++                                typ: xt,
++                                case_name: xn,
++                                datas: xd,
++                            },
++                            XCell::SumCase {
++                                typ: yt,
++                                case_name: yn,
++                                datas: yd,
++                            },
++                        ) => {
++                            if xn != yn || xd.len() != yd.len() {
++                                return false;
++                            }
++                            for (a, b) in xd.iter().zip(yd.iter()) {
++                                if a.icit != b.icit {
++                                    return false;
++                                }
++                            }
++                            for (a, b) in xd.iter().zip(yd.iter()).rev() {
++                                stack.push(SEqTask::V(a.val, b.val));
++                            }
++                            stack.push(SEqTask::V(*xt, *yt));
++                        }
++                        (
++                            XCell::Match {
++                                scrutinee: xs,
++                                env: xe,
++                                cases: xc,
++                                pending: xp,
++                            },
++                            XCell::Match {
++                                scrutinee: ys,
++                                env: ye,
++                                cases: yc,
++                                pending: yp,
++                            },
++                        ) => {
++                            if xc.len() != yc.len() || xp.len() != yp.len() {
++                                return false;
++                            }
++                            for ((p, _), (q, _)) in xc.iter().zip(yc.iter()) {
++                                if p != q {
++                                    return false;
++                                }
++                            }
++                            for ((_, xi), (_, yi)) in xp.iter().zip(yp.iter()) {
++                                if xi != yi {
++                                    return false;
++                                }
++                            }
++                            // pending 在 L12 孪生仍是切片（L07 的 cons 链化未回灌）：
++                            // 逆序压栈，LIFO 弹出恢复应用序（与 L07 沿链头压同序）
++                            for ((xv, _), (yv, _)) in xp.iter().zip(yp.iter()).rev() {
++                                stack.push(SEqTask::V(*xv, *yv));
++                            }
++                            // 访问序（旧递归）：scrutinee → env → 分支体
++                            for ((_, xb), (_, yb)) in xc.iter().zip(yc.iter()).rev() {
++                                stack.push(SEqTask::T(xb, yb));
++                            }
++                            stack.push(SEqTask::Env(*xe, *ye));
++                            stack.push(SEqTask::V(*xs, *ys));
++                        }
++                        _ => return false,
++                    },
++                    _ => return false,
++                }
+             }
+-        };
+-        let vb = match nb {
+-            Some(e) => {
+-                let v = e.val;
+-                nb = e.next;
+-                v
++            SEqTask::Spine(h1, h2) => {
++                // 头也要同（bit-equal 或同名 Decl/Prim/同 Obj 结构）；
++                // 展开不烧（对齐旧 struct_spine_eq_go）
++                if spine.spine_len(h1) != spine.spine_len(h2) {
++                    return false;
++                }
++                a1.clear();
++                spine.collect_args(h1, &mut a1);
++                a2.clear();
++                spine.collect_args(h2, &mut a2);
++                for ((_, i), (_, j)) in a1.iter().zip(a2.iter()) {
++                    if i != j {
++                        return false;
++                    }
++                }
++                for ((x, _), (y, _)) in a1.iter().zip(a2.iter()).rev() {
++                    stack.push(SEqTask::V(*x, *y));
++                }
++                stack.push(SEqTask::V(spine.spine_head(h1), spine.spine_head(h2)));
+             }
+-            None => {
+-                fb -= 1;
+-                defs[fb as usize]
++            SEqTask::Env(a, b) => {
++                // 单趟双链（槽序与 env_nth 一致）；展开不烧（对齐旧
++                // struct_env_eq_go）。逆序压栈保持槽序短路。
++                let la = env_len(a);
++                if la != env_len(b) {
++                    return false;
++                }
++                let mut na = a.binds;
++                let mut nb = b.binds;
++                let mut fa = a.flat_base + a.flat_len;
++                let mut fb = b.flat_base + b.flat_len;
++                vbuf.clear();
++                for _ in 0..la {
++                    let va = match na {
++                        Some(e) => {
++                            let v = e.val;
++                            na = e.next;
++                            v
++                        }
++                        None => {
++                            fa -= 1;
++                            defs[fa as usize]
++                        }
++                    };
++                    let vb = match nb {
++                        Some(e) => {
++                            let v = e.val;
++                            nb = e.next;
++                            v
++                        }
++                        None => {
++                            fb -= 1;
++                            defs[fb as usize]
++                        }
++                    };
++                    vbuf.push((va, vb));
++                }
++                for (va, vb) in vbuf.drain(..).rev() {
++                    stack.push(SEqTask::V(va, vb));
++                }
+             }
+-        };
+-        if !struct_val_eq_go(budget, spine, defs, va, vb) {
+-            return false;
+         }
+     }
+     true
+-}
++}
+\ No newline at end of file
+diff --git a/src/L12_canonical/bump_spine_iter/subst.rs b/src/L12_canonical/bump_spine_iter/subst.rs
+index e7744722..dc622805 100644
+--- a/src/L12_canonical/bump_spine_iter/subst.rs
++++ b/src/L12_canonical/bump_spine_iter/subst.rs
+@@ -161,87 +161,148 @@ impl SubstV {
+     }
+ }
+ 
++/// 内联容量 N 的小栈（热路径零分配；溢出转 Vec）——参考版 `InlineStack`
++/// 同构。深值遍历/结构比较的任务栈在浅结构（绝大多数调用）下完全不碰堆；
++/// 溢出（宽 spine / 深链）只多一次 Vec 分配。
++///
++/// 回灌自 L07 孪生 `subst.rs:156-203`（2026-11-24）：L12 孪生的
++/// `mentions_level` / `val_mentions_lvl` 原先按值深度原生递归，万级深度
++/// 值（`succ^N` 链、深 Obj）会爆栈；改为工作栈展开后与旧递归同一遍历面，
++/// 存在性判定对访问顺序不敏感。
++pub(super) struct InlineStack<T: Copy, const N: usize> {
++    buf: [T; N],
++    len: usize,
++    spill: Vec<T>,
++}
++
++impl<T: Copy, const N: usize> InlineStack<T, N> {
++    pub(super) fn with_first(seed: T) -> Self {
++        let mut s = InlineStack {
++            buf: [seed; N],
++            len: 0,
++            spill: Vec::new(),
++        };
++        s.push(seed);
++        s
++    }
++    #[inline]
++    pub(super) fn push(&mut self, v: T) {
++        if self.len < N {
++            self.buf[self.len] = v;
++            self.len += 1;
++        } else {
++            self.spill.push(v);
++        }
++    }
++    #[inline]
++    pub(super) fn pop(&mut self) -> Option<T> {
++        if let Some(v) = self.spill.pop() {
++            return Some(v);
++        }
++        if self.len == 0 {
++            return None;
++        }
++        self.len -= 1;
++        Some(self.buf[self.len])
++    }
++    #[inline]
++    pub(super) fn extend<I: IntoIterator<Item = T>>(&mut self, it: I) {
++        for v in it {
++            self.push(v);
++        }
++    }
++}
++
+ /// 解值的浅结构是否引用 σ 的某个已解层级（参考版 `Subst::mentions_level`
+ /// 同款遍历面）。含闭包 **env 槽**（它们是值，读点会流出）与 Match 的
+ /// scrutinee/captured env/pending；不含闭包体 / Match 分支体（Tm，求值时
+ /// 才经 env 读到槽值）。VSub 保守记为引用（已包过 σ 的值再包一层无害）。
+ /// Flex 只扫 spine。误报只多一次包裹，漏报才会丢精化——宁宽勿窄。
+ pub(super) fn mentions_level(spine: &Spine, defs: &[V], v: V, sub: &SubstV) -> bool {
+-    fn env_slots(spine: &Spine, defs: &[V], env: Env<'_>, sub: &SubstV) -> bool {
++    // 迭代实现（回灌自 L07 孪生 subst.rs:195-260，2026-11-24）：原先按值深度
++    // 原生递归，深值（`succ^N` 链、深 Obj）在万级深度会爆栈。工作栈展开与
++    // 旧递归同一遍历面，存在性判定对访问顺序不敏感。
++    fn push_env(defs: &[V], stack: &mut InlineStack<V, 16>, env: Env<'_>) {
++        // 槽序与 env_nth 一致：链段（头 = 最内层）先走，平坦区倒序
+         let mut n = env.binds;
+         while let Some(e) = n {
+-            if mentions_level(spine, defs, e.val, sub) {
+-                return true;
+-            }
++            stack.push(e.val);
+             n = e.next;
+         }
+         for k in 0..env.flat_len {
+-            let v = defs[(env.flat_base + env.flat_len - 1 - k) as usize];
+-            if mentions_level(spine, defs, v, sub) {
+-                return true;
+-            }
++            stack.push(defs[(env.flat_base + env.flat_len - 1 - k) as usize]);
+         }
+-        false
+     }
+-    match v_tag(v) {
+-        // Rigid 裸头：该层级已被 σ 解出即引用
+-        0 => sub.has(v_lvl_of(v)),
+-        2 => {
+-            let h = v_spine_of(v);
+-            let hd = spine.spine_head(h);
+-            let head_hit = match v_tag(hd) {
+-                0 => sub.has(v_lvl_of(hd)),
+-                7 => match v_xcell_of(hd) {
+-                    XCell::Obj { val, .. } => mentions_level(spine, defs, *val, sub),
+-                    XCell::VSub { .. } => true,
+-                    _ => false,
+-                },
+-                _ => false,
+-            };
+-            if head_hit {
+-                return true;
++    let mut stack = InlineStack::<V, 16>::with_first(v);
++    let mut args: Vec<(V, Icit)> = Vec::new();
++    while let Some(v) = stack.pop() {
++        match v_tag(v) {
++            // Rigid 裸头：该层级已被 σ 解出即引用
++            0 => {
++                if sub.has(v_lvl_of(v)) {
++                    return true;
++                }
+             }
+-            let mut args: Vec<(V, Icit)> = Vec::new();
+-            spine.collect_args(h, &mut args);
+-            args.iter().any(|(a, _)| mentions_level(spine, defs, *a, sub))
+-        }
+-        // Flex 裸头 / U / LiteralType：无引用
+-        5 | 3 | 6 => false,
+-        1 => {
+-            let c = v_clo_of(v);
+-            env_slots(spine, defs, c.env, sub)
+-        }
+-        4 => {
+-            let p = v_pi_of(v);
+-            mentions_level(spine, defs, p.dom, sub) || env_slots(spine, defs, p.env, sub)
+-        }
+-        7 => match v_xcell_of(v) {
+-            // 已被包裹的值保守视为引用（内层结构不再探查）
+-            XCell::VSub { .. } => true,
+-            XCell::Lit(_) | XCell::Decl(_) | XCell::Prim(_) => false,
+-            XCell::Obj { val, .. } => mentions_level(spine, defs, *val, sub),
+-            XCell::Sum { params, .. } => params.iter().any(|p| {
+-                mentions_level(spine, defs, p.val, sub) || mentions_level(spine, defs, p.ty, sub)
+-            }),
+-            XCell::SumCase { typ, datas, .. } => {
+-                mentions_level(spine, defs, *typ, sub)
+-                    || datas.iter().any(|d| mentions_level(spine, defs, d.val, sub))
++            2 => {
++                let h = v_spine_of(v);
++                let hd = spine.spine_head(h);
++                match v_tag(hd) {
++                    0 => {
++                        if sub.has(v_lvl_of(hd)) {
++                            return true;
++                        }
++                    }
++                    7 => match v_xcell_of(hd) {
++                        XCell::Obj { val, .. } => stack.push(*val),
++                        // VSub 保守记为引用（已包过 σ 的值再包一层无害）
++                        XCell::VSub { .. } => return true,
++                        _ => {}
++                    },
++                    _ => {}
++                }
++                args.clear();
++                spine.collect_args(h, &mut args);
++                stack.extend(args.iter().map(|(a, _)| *a));
++            }
++            // Flex 裸头 / U / LiteralType：无引用
++            5 | 3 | 6 => {}
++            1 => {
++                let c = v_clo_of(v);
++                push_env(defs, &mut stack, c.env);
+             }
+-            XCell::Match {
+-                scrutinee,
+-                env,
+-                pending,
+-                ..
+-            } => {
+-                mentions_level(spine, defs, *scrutinee, sub)
+-                    || env_slots(spine, defs, *env, sub)
+-                    || pending
+-                        .iter()
+-                        .any(|(u, _)| mentions_level(spine, defs, *u, sub))
++            4 => {
++                let p = v_pi_of(v);
++                stack.push(p.dom);
++                push_env(defs, &mut stack, p.env);
+             }
+-        },
+-        _ => false,
++            7 => match v_xcell_of(v) {
++                // 已被包裹的值保守视为引用（内层结构不再探查）
++                XCell::VSub { .. } => return true,
++                XCell::Lit(_) | XCell::Decl(_) | XCell::Prim(_) => {}
++                XCell::Obj { val, .. } => stack.push(*val),
++                XCell::Sum { params, .. } => {
++                    stack.extend(params.iter().flat_map(|p| [p.val, p.ty]))
++                }
++                XCell::SumCase { typ, datas, .. } => {
++                    stack.push(*typ);
++                    stack.extend(datas.iter().map(|d| d.val));
++                }
++                XCell::Match {
++                    scrutinee,
++                    env,
++                    pending,
++                    ..
++                } => {
++                    stack.push(*scrutinee);
++                    push_env(defs, &mut stack, *env);
++                    // pending 在 L12 孪生仍是切片（L07 的 cons 链化未回灌）
++                    stack.extend(pending.iter().map(|(u, _)| *u));
++                }
++            },
++            _ => {}
++        }
+     }
++    false
+ }
+ 
+ /// 传递 occurs：`v` 在 σ 之下是否**经已解层级**提到 `target`（参考版
