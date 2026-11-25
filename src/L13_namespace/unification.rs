@@ -42,6 +42,18 @@ fn is_prim_application(decl: &Decl, v: &Val) -> bool {
     }
 }
 
+
+/// 特化合一的进行时状态（dpm-nbe `unifyS` 的 Γ-shrinking + ɑ-accumulation 的
+/// Rust 形态，布局与 L12 `SpecSolve` 同构）。
+///
+/// `solvable` = 本子句可解的 rigid 层级（模式槽 + 外层 bind 槽基线）；
+/// `acc` = 已解出的替换——模式编译器的 σ 作种子，方程途中叠加，调用方在
+/// 方程结束后取走 `acc` 作为新 σ（臂边界回滚 = 恢复快照指针）。
+pub(crate) struct SpecSolve<'a> {
+    pub(crate) solvable: &'a [Lvl],
+    pub(crate) acc: Rc<super::Subst>,
+}
+
 #[derive(Debug, Clone)]
 pub struct PartialRenaming {
     pub occ: Option<MetaVar>,

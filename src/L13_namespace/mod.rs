@@ -1149,6 +1149,140 @@ impl Subst {
         }
         false
     }
+
+
+    /// 解值 `v` 是否**直接**引用层级 `x`（单步 occurs 守卫）。
+    /// 迭代走查，不依赖 σ——用于「x := v」入链前的自引用检查。
+    pub(crate) fn mentions_lvl(v: &Val, x: Lvl) -> bool {
+        let mut stack: Vec<&Val> = vec![v];
+        while let Some(y) = stack.pop() {
+            match y {
+                Val::Rigid(l, sp) => {
+                    if *l == x {
+                        return true;
+                    }
+                    for (u, _) in sp.iter() {
+                        stack.push(u);
+                    }
+                }
+                Val::Flex(_, sp) | Val::Decl(_, sp) => {
+                    for (u, _) in sp.iter() {
+                        stack.push(u);
+                    }
+                }
+                Val::Obj(o, _, sp) => {
+                    stack.push(o);
+                    for (u, _) in sp.iter() {
+                        stack.push(u);
+                    }
+                }
+                Val::Lam(_, _, Closure(env, _)) | Val::Pi(_, _, _, Closure(env, _)) => {
+                    for u in env.iter() {
+                        stack.push(u);
+                    }
+                }
+                Val::Pi(_, _, a, _) => stack.push(a),
+                Val::U(_) | Val::LiteralType | Val::LiteralIntro(_) | Val::Nat(_) => {},
+                Val::Sum(_, params, _, _) => {
+                    for (_, a, t, _) in params.iter() {
+                        stack.push(a);
+                        stack.push(t);
+                    }
+                }
+                Val::SumCase { typ, datas, .. } => {
+                    stack.push(typ);
+                    for (_, d, _) in datas.iter() {
+                        stack.push(d);
+                    }
+                }
+                Val::Match(scru, env, _) => {
+                    stack.push(scru);
+                    for u in env.iter() {
+                        stack.push(u);
+                    }
+                }
+                Val::Call(_, args, body) => {
+                    for (a, _) in args.iter() {
+                        stack.push(a);
+                    }
+                    stack.push(body);
+                }
+                Val::VSub(v, _) => stack.push(v),
+            }
+        }
+        false
+    }
+
+    /// 传递 occurs（对齐 L12 `occurs_transitive`）：把 `v` 置于本 σ 之下
+    /// 展开，若**经由已解链**仍会引用 `x`，则「x := v」入链即成环。
+    /// 带 visited 集（层级 visited 即可终止：链只增不改）。
+    pub(crate) fn occurs_transitive(self: &Rc<Self>, v: &Val, x: Lvl) -> bool {
+        let mut visited: Vec<Lvl> = Vec::new();
+        let mut stack: Vec<Rc<Val>> = vec![Rc::new(v.clone())];
+        while let Some(y) = stack.pop() {
+            match y.as_ref() {
+                Val::Rigid(l, sp) => {
+                    if *l == x {
+                        return true;
+                    }
+                    // 已解层级：继续展开其解值（visited 防环）
+                    if !visited.contains(l) {
+                        visited.push(*l);
+                        if let Some(sol) = self.lookup(*l) {
+                            stack.push(sol);
+                        }
+                    }
+                    for (u, _) in sp.iter() {
+                        stack.push(u.clone());
+                    }
+                }
+                Val::Flex(_, sp) | Val::Decl(_, sp) => {
+                    for (u, _) in sp.iter() {
+                        stack.push(u.clone());
+                    }
+                }
+                Val::Obj(o, _, sp) => {
+                    stack.push(o.clone());
+                    for (u, _) in sp.iter() {
+                        stack.push(u.clone());
+                    }
+                }
+                Val::Lam(_, _, Closure(env, _)) | Val::Pi(_, _, _, Closure(env, _)) => {
+                    for u in env.iter() {
+                        stack.push(u.clone());
+                    }
+                }
+                Val::Pi(_, _, a, _) => stack.push(a.clone()),
+                Val::U(_) | Val::LiteralType | Val::LiteralIntro(_) | Val::Nat(_) => {},
+                Val::Sum(_, params, _, _) => {
+                    for (_, a, t, _) in params.iter() {
+                        stack.push(a.clone());
+                        stack.push(t.clone());
+                    }
+                }
+                Val::SumCase { typ, datas, .. } => {
+                    stack.push(typ.clone());
+                    for (_, d, _) in datas.iter() {
+                        stack.push(d.clone());
+                    }
+                }
+                Val::Match(scru, env, _) => {
+                    stack.push(scru.clone());
+                    for u in env.iter() {
+                        stack.push(u.clone());
+                    }
+                }
+                Val::Call(_, args, body) => {
+                    for (a, _) in args.iter() {
+                        stack.push(a.clone());
+                    }
+                    stack.push(body.clone());
+                }
+                Val::VSub(v, _) => stack.push(v.clone()),
+            }
+        }
+        false
+    }
 }
 
 
