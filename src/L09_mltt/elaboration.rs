@@ -13,6 +13,7 @@ use super::{
     parser::syntax::{Decl, Either, Icit, Raw},
     pattern_match::Compiler,
     pretty::pretty_tm,
+    surface,
     unification::PartialRenaming,
 };
 impl Infer {
@@ -137,7 +138,19 @@ impl Infer {
                 ))
             }
             // 洞
-            (Raw::Hole, a) => Ok(self.fresh_meta(decl, cxt, a)),
+            (Raw::Hole, a) => {
+                // 观察面：期望类型已知（无未解 meta）时补一条 inlay；洞没有源码
+                // span，锚点退到当前最内层 binder 尾（顶层 def 体 ⇒ 0）。
+                if self.lsp_collect {
+                    let pos = if cxt.lvl.0 > 0 {
+                        self.local_binder_span(cxt, cxt.lvl - 1).end_offset
+                    } else {
+                        0
+                    };
+                    self.push_inlay_hint(cxt, pos, a.clone());
+                }
+                Ok(self.fresh_meta(decl, cxt, a))
+            }
             // match：编译 + 逐分支检查
             (Raw::Match(expr, clauses), expected) => {
                 let (tm, typ) = self.infer_expr(cxt, *expr)?;
@@ -234,50 +247,6 @@ impl Infer {
     /// `make_mut`（强计数恒 2 ⇒ 深拷），在 strchain/global 的 2^(k+1) 个
     /// 顶层 def 上是 O(D²)；改为所有权传递后降至 O(D)（见
     /// `docs/optimal-design/L07-upgrade-bench-2026-11-09.md`）。
-    /// 形状认回（方案 3，L07/L08 移植）：逐层剥 Π，若余定义域是能认回 def 的 `Val::Match`，
-    /// 就合成 `head 实参` 形态并 pretty。纯显示路径，不进语义。
-    pub(crate) fn render_by_shape(&self, cxt: &Cxt, vtyp: Val) -> Option<String> {
-        if self.decl_shapes.borrow().is_empty() {
-            return None;
-        }
-        let decl = cxt.decl();
-        let mut t = self.force(decl, vtyp);
-        let mut l = cxt.lvl;
-        let mut binders: Vec<(String, Val)> = Vec::new();
-        loop {
-            match t {
-                Val::Pi(name, _, dom, cod) => {
-                    binders.push((name.data.clone(), (*dom).clone()));
-                    let u = Val::vvar(l);
-                    t = self.force(decl, self.closure_apply(decl, &cod, u));
-                    l = l + 1;
-                }
-                ref m @ Val::Match(..) => {
-                    let head = super::shape::match_to_decl(self, m)?;
-                    let Val::Match(scrut, _, _, pending) = m else {
-                        return None;
-                    };
-                    let mut tail = Tm::App(
-                        Box::new(Tm::Decl(SmolStr::new(&head))),
-                        Box::new(self.quote(decl, l, (**scrut).clone())),
-                        Icit::Expl,
-                    );
-                    for (u, i) in pending.iter() {
-                        tail = Tm::App(Box::new(tail), Box::new(self.quote(decl, l, u.clone())), *i);
-                    }
-                    let mut tm = tail;
-                    for (bname, dom) in binders.iter().rev() {
-                        let mut sp: Span<String> = empty_span(String::new());
-                        sp.data = bname.clone();
-                        tm = Tm::Pi(sp, Icit::Expl, Rc::new(self.quote(decl, l, dom.clone())), Rc::new(tm));
-                    }
-                    return Some(pretty_tm(0, cxt.names(), &tm));
-                }
-                _ => return None,
-            }
-        }
-    }
-
     pub fn infer_owned(&mut self, mut cxt: Cxt, t: Decl) -> Result<(DeclTm, Val, Cxt), Error> {
         match t {
             Decl::Def {
@@ -318,28 +287,58 @@ impl Infer {
                 // change_mutable 等只在别处 force 到它时才生效）。递归
                 // 自引用由 force 的占位守卫兜住，不会展开。
                 let vt = self.force(cxt.decl(), self.eval(cxt.decl(), &cxt.env, &t_tm));
-                // 观察面（L07/L08 移植，2026-11-23）：登记 span + 渲染串 + 形状。
-                // 有显式返回类型注解时用**源码注解渲染**（`(n : Nat) → T n`）。
+                // 观察面（def 登记处）：span 旁表 + 登记期渲染串 + def-site hover；
+                // 无显式返回类型注解时补一条 inlay（锚点 = 最后参数结束 +1）。
+                // 形状登记（方案 3）：把 def 返回类型里的 match 形状记下来，供显示层
+                // 在展开出的 `Val::Match` 上认回这个名字（无类型注解的 def 也能保真）。
+                // 只在 lsp_collect 时做（纯显示用途，cost 可忽）。
+                if self.lsp_collect {
+                    let shapes = super::shape::shapes_for(self, cxt.decl(), vtyp.clone(), vt.clone());
+                    if !shapes.is_empty() {
+                        self.decl_shapes
+                            .borrow_mut()
+                            .insert(SmolStr::new(&name.data), shapes);
+                    }
+                }
                 if self.lsp_collect {
                     let key = SmolStr::new(&name.data);
                     self.decl_spans.insert(key.clone(), name.to_span());
-                    let shapes = super::shape::shapes_for(self, cxt.decl(), vtyp.clone(), vt.clone());
-                    if !shapes.is_empty() {
-                        self.decl_shapes.borrow_mut().insert(key.clone(), shapes);
+                    let want_def_hover = self
+                        .hover_query
+                        .map_or(true, |q| name.to_span().contains(q));
+                    if want_def_hover {
+                        // 方案 4（源码注解渲染）：有显式类型注解的 def 直接打**源码文本**——
+                        // 于是 `def g(n: Nat): T n` 显示 `(n: Nat) → T n`，而不是求值后
+                        // 展开的 `match n { … }`。无注解（ret_type 是洞）仍走值渲染。
+                        let src_ty = super::raw_pretty::has_source_type(&ret_type).then(|| {
+                            super::raw_pretty::def_type_from_source(&params, &ret_type)
+                        });
+                        let rendered_vtyp = vtyp.clone();
+                        let (s, fin) = match src_ty {
+                            Some(s) => (s, true),
+                            None => self.render_typ_pretty(&cxt, rendered_vtyp),
+                        };
+                        self.decl_pretty.insert(key.clone(), (Rc::new(s.clone()), fin));
+                        self.push_hover_rendered(name.to_span(), name.to_span(), &s);
                     }
-                    let rendered = super::raw_pretty::has_source_type(&ret_type).then(|| {
-                        super::raw_pretty::def_type_from_source(&params, &ret_type)
-                    });
-                    let s = match rendered {
-                        Some(s) => s,
-                        None => self
-                            .render_by_shape(&cxt, vtyp.clone())
-                            .unwrap_or_else(|| {
-                                pretty_tm(0, cxt.names(), &self.quote(cxt.decl(), cxt.lvl, vtyp.clone()))
-                            }),
-                    };
-                    self.decl_pretty.insert(key.clone(), (Rc::new(s.clone()), true));
-                    self.hover_table.push((name.to_span(), name.to_span(), s));
+                    if matches!(ret_type, Raw::Hole) {
+                        let pos = params
+                            .last()
+                            .map(|p| surface::raw_span(&p.1).end_offset + 1)
+                            .unwrap_or_else(|| name.to_span().end_offset);
+                        if self.inlay_wanted(pos) {
+                            let (ret_val, ret_lvl, peeled) = self.peel_pi_collect(&cxt, vtyp.clone());
+                            let q = self.quote(cxt.decl(), ret_lvl, ret_val);
+                            if !self.tm_has_unsolved_meta(&q) {
+                                let mut names = cxt.names();
+                                for pn in peeled.iter().rev() {
+                                    names = names.prepend(pn.clone());
+                                }
+                                let label = surface::inlay_label(&pretty_tm(0, names, &q));
+                                self.push_inlay_label(pos, label);
+                            }
+                        }
+                    }
                 }
                 cxt.decl_insert_mut(
                     name.data.clone(),
@@ -501,6 +500,18 @@ impl Infer {
                         ty: vtyp,
                         val: vt,
                     };
+                    // 观察面：登记 enum 与构造子的定义处 span（限定键 E.c 与
+                    // 裸名都记，def_span 统一指向源码 name token）。
+                    if self.lsp_collect {
+                        self.decl_spans.insert(SmolStr::new(&name.data), name.to_span());
+                        // 限定键 + 裸名别名都记（裸名引用走 Raw::Var → push_hover_decl）
+                        self.decl_spans.insert(
+                            SmolStr::new(format!("{}.{}", name.data, ctor_name.data)),
+                            ctor_name.to_span(),
+                        );
+                        self.decl_spans
+                            .insert(SmolStr::new(&ctor_name.data), ctor_name.to_span());
+                    }
                     // 限定名 `Enum.case` + 裸名别名（后注册者覆盖同名裸名）
                     cxt.decl_insert_mut(
                         SmolStr::new(format!("{}.{}", name.data, ctor_name.data)),
@@ -580,26 +591,20 @@ impl Infer {
         match t {
             // 变量：先局部（名字表），再全局（decl 表）
             Raw::Var(x) => {
-                // 观察面：使用处 hover（全局名取登记期串，局部名现渲染）。
-                if self.lsp_collect {
-                    let key = SmolStr::new(&x.data);
-                    let ty = cxt
-                        .lookup_src(&x.data)
-                        .map(|e| e.1.clone())
-                        .or_else(|| cxt.decl_get(&x.data).map(|e| e.ty.clone()));
-                    if let Some(ty) = ty {
-                        let s = match self.decl_pretty.get(&key) {
-                            Some((s, _)) => (**s).clone(),
-                            None => pretty_tm(0, cxt.names(), &self.quote(cxt.decl(), cxt.lvl, ty)),
-                        };
-                        let def = self.decl_spans.get(&key).copied().unwrap_or_else(|| empty_span(()));
-                        self.hover_table.push((x.to_span(), def, s));
-                    }
-                }
                 if let Some(e) = cxt.lookup_src(&x.data) {
                     let (lvl, ty) = e.as_ref();
+                    // 观察面：局部名使用处 hover（def_span 从 Locals 轨迹取）
+                    if self.lsp_collect {
+                        let def_span = self.local_binder_span(cxt, *lvl);
+                        self.push_hover(cxt, x.to_span(), def_span, ty.clone());
+                    }
                     Ok((Tm::Var(lvl2ix(cxt.lvl, *lvl)), ty.clone()))
                 } else if let Some(e) = cxt.decl_get(&x.data) {
+                    // 观察面：全局名使用处 hover（登记期串 final 时直取）
+                    if self.lsp_collect {
+                        let ty = e.ty.clone();
+                        self.push_hover_decl(cxt, x.to_span(), &x.data, ty);
+                    }
                     Ok((Tm::Decl(SmolStr::new(&x.data)), e.ty.clone()))
                 } else {
                     Err(Error::new(format!("name not in scope: {}", x.data)))
@@ -614,21 +619,46 @@ impl Infer {
                 // b66f5e4（L08 评审修复）回合：L07 同码潜伏。
                 if let Raw::Var(n) = &*x {
                     if !cxt.has_src(&n.data) {
+                        // 观察面：限定投影 `E.c` 的补全候选 = 该枚举的构造子名
+                        // （receiver span = 枚举名 token）。
+                        if self.lsp_collect {
+                            let enum_val = cxt.decl_get(&n.data).map(|e| e.val.clone());
+                            if let Some(v) = enum_val {
+                                if let Val::Sum(_, _, cases) = self.force(decl, v) {
+                                    for c in cases.iter() {
+                                        self.completion_table.push((n.to_span(), c.data.clone()));
+                                    }
+                                }
+                            }
+                        }
                         let key = format!("{}.{}", n.data, f.data);
                         if let Some(e) = cxt.decl_get(&key) {
                             return Ok((Tm::Decl(SmolStr::new(key)), e.ty.clone()));
                         }
                     }
                 }
+                let recv_span = surface::raw_span(&x);
                 let (tm, ty) = self.infer_expr(cxt, *x)?;
-                match self.force(decl, ty) {
-                    // 接收者类型是 Sum：索引/参数槽优先取类型槽；未命中且是
-                    // **struct**（单构造子、名字形如 `{Name}.mk`，L08 语法糖的
-                    // 脱糖产物）时剥 `mk` 的构造子类型链取字段类型——积类型上
-                    // `p.x` 的接收者只有类型信息（`Val::Sum`），没有实例 datas
-                    // 可查。隐式参数用头部 Sum 实参实例化；显式字段 binder 用
-                    // 接收者的**卡住投影值**实例化（`eval(Obj(接收者项, 字段名))`），
-                    // 依赖在前字段的在后字段因此拿到精确类型。
+                let ty_forced = self.force(decl, ty);
+                // 观察面：投影的补全候选 = 接收者类型上的字段名（Sum 的索引参数 /
+                // 构造子值的字段）；receiver span 取表达式折叠出的源码区间。
+                if self.lsp_collect {
+                    match &ty_forced {
+                        Val::Sum(_, params, _) => {
+                            for (n, ..) in params.iter() {
+                                self.completion_table.push((recv_span, n.data.clone()));
+                            }
+                        }
+                        Val::SumCase { datas, .. } => {
+                            for (n, _, _) in datas.iter() {
+                                self.completion_table.push((recv_span, n.data.clone()));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                match ty_forced {
+                    // 接收者类型是 Sum：字段=索引参数，类型取参数的**类型槽**
                     Val::Sum(sname, params, cases) => {
                         if let Some((_, _, fty, _)) = params.iter().find(|(n, ..)| n == &f) {
                             return Ok((
@@ -865,7 +895,14 @@ impl Infer {
                 Ok((t, a))
             }
 
-            Raw::LiteralIntro(literal) => Ok((Tm::LiteralIntro(literal), Val::LiteralType)),
+            Raw::LiteralIntro(literal) => {
+                // 观察面：字面量自身的类型
+                if self.hover_wanted(literal.to_span()) {
+                    self.hover_table
+                        .push((literal.to_span(), literal.to_span(), "String".to_owned()));
+                }
+                Ok((Tm::LiteralIntro(literal), Val::LiteralType))
+            }
 
             // match 只能在检查模式下使用（期望类型决定分支体怎么查）
             Raw::Match(..) => Err(Error::new(
@@ -898,6 +935,17 @@ impl Infer {
                         Ok((n, tm, i))
                     })
                     .collect::<Result<Vec<_>, Error>>()?;
+                // 观察面：构造子使用处 hover（键 = 枚举名.构造子名，与 decl 表键一致；
+                // 类型从 decl 表取，按限定键记忆化渲染串）。
+                if self.lsp_collect {
+                    if let Val::Sum(sname, _, _) = &self.force(decl, typ_val.clone()) {
+                        let key = format!("{}.{}", sname.data, case_name.data);
+                        if let Some(e) = cxt.decl_get(&key) {
+                            let ty = e.ty.clone();
+                            self.push_ctor_hover(cxt, case_name.to_span(), &key, ty);
+                        }
+                    }
+                }
                 Ok((
                     Tm::SumCase {
                         typ: Box::new(typ_checked),
