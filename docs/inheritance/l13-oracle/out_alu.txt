@@ -1,0 +1,40 @@
+Analyzing: file:///F:/projects/hermes/elaboration-zoo-lsp/examples/alu.typort (719 bytes)
+[LOG log] change: file:///F:/projects/hermes/elaboration-zoo-lsp/examples/alu.typort
+[LOG log] parser 0.0012356
+[LOG log] infer 0.1150272
+note: === Simple ALU (UInt + UInt) ===
+   ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/alu.typort:15:10
+   │
+15 │ println("=== Simple ALU (UInt + UInt) ===")
+   │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+note: module simpleALU (
+  input wire [7:0] a,
+  input wire [7:0] b,
+  output wire [7:0] result
+);
+  assign result = (a + b);
+endmodule
+   ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/alu.typort:16:9
+   │
+16 │ println(moduleTreeVL(mod1.tree))
+   │         ^^^^^^^^^^^^^^^^^^^^^^
+
+note: === UInt + Nat (via Into) ===
+   ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/alu.typort:28:10
+   │
+28 │ println("=== UInt + Nat (via Into) ===")
+   │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+note: module adderNat (
+  input wire [7:0] a,
+  output wire [7:0] result
+);
+  assign result = (a + 42);
+endmodule
+   ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/alu.typort:29:9
+   │
+29 │ println(moduleTreeVL(mod2.tree))
+   │         ^^^^^^^^^^^^^^^^^^^^^^
+
+[LOG log] change 0.1198094

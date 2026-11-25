@@ -1,0 +1,23 @@
+Analyzing: file:///F:/projects/hermes/elaboration-zoo-lsp/examples/adder_proof.typort (20991 bytes)
+[LOG log] change: file:///F:/projects/hermes/elaboration-zoo-lsp/examples/adder_proof.typort
+[LOG log] parser 0.0036443
+[LOG log] infer 0.3372522
+note: Eq[Nat]::refl(1)
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/adder_proof.typort:365:9
+    │
+365 │ println(vec_adder_correct(true, nil, nil))
+    │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+note: Eq[Nat]::refl(4)
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/adder_proof.typort:369:9
+    │
+369 │ println(vec_add_correct(cons(true, cons(false, nil)), cons(true, cons(true, nil))))
+    │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+note: === adder_proof.typort loaded ===
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/adder_proof.typort:371:10
+    │
+371 │ println("=== adder_proof.typort loaded ===")
+    │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+[LOG log] change 0.34547228

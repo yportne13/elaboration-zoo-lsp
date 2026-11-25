@@ -1,0 +1,190 @@
+Analyzing: file:///F:/projects/hermes/elaboration-zoo-lsp/examples/hdl_ops.typort (4710 bytes)
+[LOG log] change: file:///F:/projects/hermes/elaboration-zoo-lsp/examples/hdl_ops.typort
+[LOG log] parser 0.0061253
+[LOG log] infer 0.61986893
+note: === Example 1: Bit extraction via apply[N] ===
+   ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/hdl_ops.typort:17:10
+   │
+17 │ println("=== Example 1: Bit extraction via apply[N] ===")
+   │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+note: module bitExtract (
+  input wire [7:0] a,
+  output wire bit0,
+  output wire bit7
+);
+  assign bit0 = a[0];
+  assign bit7 = a[7];
+endmodule
+   ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/hdl_ops.typort:18:9
+   │
+18 │ println(moduleTreeVL(bitExtract.create.tree))
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+note: === Example 2: Bracket sugar a[N] ===
+   ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/hdl_ops.typort:30:10
+   │
+30 │ println("=== Example 2: Bracket sugar a[N] ===")
+   │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+note: module bracketSugar (
+  input wire [7:0] a,
+  output wire lsb,
+  output wire msb
+);
+  assign lsb = a[0];
+  assign msb = a[7];
+endmodule
+   ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/hdl_ops.typort:31:9
+   │
+31 │ println(moduleTreeVL(bracketSugar.create.tree))
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+note: === Example 3: Range extraction via slice[hi, lo] ===
+   ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/hdl_ops.typort:44:10
+   │
+44 │ println("=== Example 3: Range extraction via slice[hi, lo] ===")
+   │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+note: module sliceExample (
+  input wire [7:0] a,
+  output wire [3:0] low_nibble,
+  output wire [3:0] high_nibble
+);
+  assign low_nibble = a[3:0];
+  assign high_nibble = a[7:4];
+endmodule
+   ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/hdl_ops.typort:45:9
+   │
+45 │ println(moduleTreeVL(sliceExample.create.tree))
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+note: === Example 4: Bool operators (&&, ||, !, ^) ===
+   ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/hdl_ops.typort:62:10
+   │
+62 │ println("=== Example 4: Bool operators (&&, ||, !, ^) ===")
+   │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+note: module boolOps (
+  input wire a,
+  input wire b,
+  output wire and_result,
+  output wire or_result,
+  output wire not_result,
+  output wire xor_result
+);
+  assign and_result = (a && b);
+  assign or_result = (a || b);
+  assign not_result = !a;
+  assign xor_result = (a ^ b);
+endmodule
+   ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/hdl_ops.typort:63:9
+   │
+63 │ println(moduleTreeVL(boolOps.create.tree))
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+note: === Example 5: LHS bit selection t[N] := x ===
+   ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/hdl_ops.typort:75:10
+   │
+75 │ println("=== Example 5: LHS bit selection t[N] := x ===")
+   │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+note: module lhsBitsel (
+  output wire [7:0] t,
+  input wire x
+);
+  assign t[0] = x;
+  assign t[7] = x;
+endmodule
+   ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/hdl_ops.typort:76:9
+   │
+76 │ println(moduleTreeVL(lhsBitsel.create.tree))
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+note: === Example 6: Comparator with bit extraction ===
+   ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/hdl_ops.typort:91:10
+   │
+91 │ println("=== Example 6: Comparator with bit extraction ===")
+   │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+note: module comparator (
+  input wire [7:0] a,
+  input wire [7:0] b,
+  output wire msb_a,
+  output wire msb_b,
+  output wire eq
+);
+  assign msb_a = a[7];
+  assign msb_b = b[7];
+  assign eq = (a == b);
+endmodule
+   ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/hdl_ops.typort:92:9
+   │
+92 │ println(moduleTreeVL(comparator.create.tree))
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: [hdl][warning] HDL022 [topWithAdder] u_adder.a: instance port left unconnected
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/hdl_ops.typort:116:28
+    │
+116 │     let inst = mkInstance("u_adder", "myAdder")
+    │                            ^^^^^^^
+
+warning: [hdl][warning] HDL022 [topWithAdder] u_adder.b: instance port left unconnected
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/hdl_ops.typort:116:28
+    │
+116 │     let inst = mkInstance("u_adder", "myAdder")
+    │                            ^^^^^^^
+
+warning: [hdl][warning] HDL022 [topWithAdder] u_adder.sum: instance port left unconnected
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/hdl_ops.typort:116:28
+    │
+116 │     let inst = mkInstance("u_adder", "myAdder")
+    │                            ^^^^^^^
+
+note: === Example 7: Sub-module instantiation ===
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/hdl_ops.typort:121:10
+    │
+121 │ println("=== Example 7: Sub-module instantiation ===")
+    │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+note: module topWithAdder (
+  input wire [7:0] a,
+  input wire [7:0] b,
+  output wire [8:0] sum
+);
+  myAdder _adder (.a(a), .b(b), .sum(sum));
+  myAdder u_adder ();
+endmodule
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/hdl_ops.typort:122:9
+    │
+122 │ println(moduleTreeVL(topWithAdder.create.tree))
+    │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+note: === Example 8: Bit concatenation (##) ===
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/hdl_ops.typort:142:10
+    │
+142 │ println("=== Example 8: Bit concatenation (##) ===")
+    │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+note: module concatExample (
+  input wire [3:0] a,
+  input wire [3:0] b,
+  output wire [7:0] cat_bb,
+  input wire flag,
+  output wire [4:0] cat_flag,
+  input wire [7:0] x,
+  input wire [7:0] y,
+  output wire [15:0] cat_uu,
+  output wire [11:0] cat_ub
+);
+  assign cat_bb = {a, b};
+  assign cat_flag = {flag, a};
+  assign cat_uu = {x, y};
+  assign cat_ub = {x, b};
+endmodule
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/hdl_ops.typort:143:9
+    │
+143 │ println(moduleTreeVL(concatExample.create.tree))
+    │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+[LOG log] change 0.63684994

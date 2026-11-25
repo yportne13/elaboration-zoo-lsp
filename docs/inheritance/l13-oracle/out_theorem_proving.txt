@@ -1,0 +1,125 @@
+Analyzing: file:///F:/projects/hermes/elaboration-zoo-lsp/examples/theorem_proving.typort (10582 bytes)
+[LOG log] change: file:///F:/projects/hermes/elaboration-zoo-lsp/examples/theorem_proving.typort
+[LOG log] parser 0.0014163
+[LOG log] infer 0.0366378
+note: Eq[Nat]::refl(5)
+   ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/theorem_proving.typort:17:9
+   │
+17 │ println(zero_add_comm(5))
+   │         ^^^^^^^^^^^^^^^
+
+note: Eq[Nat]::refl(5)
+   ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/theorem_proving.typort:36:9
+   │
+36 │ println(zero_add_comm_calc(5))
+   │         ^^^^^^^^^^^^^^^^^^^^
+
+note: Eq[Nat]::refl(3)
+   ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/theorem_proving.typort:40:9
+   │
+40 │ println(identity_right(3))
+   │         ^^^^^^^^^^^^^^^^
+
+note: Eq[Nat]::refl(3)
+   ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/theorem_proving.typort:55:9
+   │
+55 │ println(succ_inj_eg)
+   │         ^^^^^^^^^^^
+
+note: Eq[Nat]::refl(4)
+   ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/theorem_proving.typort:69:9
+   │
+69 │ println(add_one_succ(3))
+   │         ^^^^^^^^^^^^^^
+
+note: Eq[Nat]::refl(4)
+   ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/theorem_proving.typort:80:9
+   │
+80 │ println(add_one_succ_calc(3))
+   │         ^^^^^^^^^^^^^^^^^^^
+
+note: Eq[Nat]::refl(8)
+   ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/theorem_proving.typort:88:9
+   │
+88 │ println(double_eq_add_self(4))
+   │         ^^^^^^^^^^^^^^^^^^^^
+
+note: Eq[Nat]::refl(7)
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/theorem_proving.typort:109:9
+    │
+109 │ println(chain_eg)
+    │         ^^^^^^^^
+
+note: Eq[Nat]::refl(7)
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/theorem_proving.typort:120:9
+    │
+120 │ println(chain_eg_calc)
+    │         ^^^^^^^^^^^^^
+
+note: Eq[Nat]::refl(8)
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/theorem_proving.typort:143:9
+    │
+143 │ println(add_cong_eg)
+    │         ^^^^^^^^^^^
+
+note: Eq[Nat]::refl(12)
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/theorem_proving.typort:156:9
+    │
+156 │ println(add_cong_complex)
+    │         ^^^^^^^^^^^^^^^^
+
+note: Eq[Nat]::refl(12)
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/theorem_proving.typort:168:9
+    │
+168 │ println(add_cong_complex_calc)
+    │         ^^^^^^^^^^^^^^^^^^^^^
+
+note: Eq[Nat]::refl(6)
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/theorem_proving.typort:179:9
+    │
+179 │ println(add_succ_left_eg(2, 3))
+    │         ^^^^^^^^^^^^^^^^^^^^^
+
+note: Eq[Nat]::refl(6)
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/theorem_proving.typort:204:9
+    │
+204 │ println(add_permute(1, 2, 3))
+    │         ^^^^^^^^^^^^^^^^^^^
+
+note: Eq[Nat]::refl(6)
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/theorem_proving.typort:217:9
+    │
+217 │ println(add_permute_calc(1, 2, 3))
+    │         ^^^^^^^^^^^^^^^^^^^^^^^^
+
+note: Eq[Boolean]::refl(Boolean::true)
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/theorem_proving.typort:230:9
+    │
+230 │ println(not_not(true))
+    │         ^^^^^^^^^^^^
+
+note: Eq[Boolean]::refl(Boolean::false)
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/theorem_proving.typort:231:9
+    │
+231 │ println(not_not(false))
+    │         ^^^^^^^^^^^^^
+
+note: Eq[Nat]::refl(5)
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/theorem_proving.typort:250:9
+    │
+250 │ println(subst_eg)
+    │         ^^^^^^^^
+
+note: Eq[Nat]::refl(5)
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/theorem_proving.typort:262:9
+    │
+262 │ println(subst_eg_calc)
+    │         ^^^^^^^^^^^^^
+
+note: Eq[Nat]::refl(5)
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/theorem_proving.typort:272:9
+    │
+272 │ println(subst_eg)
+    │         ^^^^^^^^
+
+[LOG log] change 0.0458864
