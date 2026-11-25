@@ -1430,3 +1430,48 @@ let new_cxt = match self.unify_pm(&cxt, &ori, &tmv, Some(&mut spec), t_span) {
 | 独立判据（L12 vs L13 判定对照） | ✅ | `e64a4923` |
 
 不可达成：`check_pm_final` 返回 `Rc<Subst>`、删除 `update_cxt`/`refresh`。
+
+## 36 第 22 轮：把「不能删」固化成红绿对照测试
+
+### 36.1 本轮产出
+
+新增 `tests/l13_pm_final_necessity.rs`，锁定 §35 的结论。
+
+**绿态**：11 个证明类语料必须 Ok——`L07` 的 `ex_proof_add_assoc` / `ex_proof_add_comm` /
+`ex_proof_add_succ_right` / `ex_proof_add_zero_right` / `ex_proof_mul_one_right` /
+`ex_proof_mul_zero_right` / `hw_proof_suite`，`L08` 的 `ex_proof_add_assoc` /
+`ex_proof_add_zero_right`，`L09` 的 `extract_07` / `proj_container_lib`。
+
+**红态**（实测）：把那次合一换成 `cxt.clone()`，本用例 **11 个全部翻红**。
+
+### 36.2 为什么这件事值得做
+
+§35 的结论（「`check_pm_final` 的第二次合一必需」）此前只写在计划书里。
+这类「某个看着冗余的代码其实是必需的」的判断，如果没有可复跑的对照，
+过几个月就会有人（很可能是我自己）再次提出「它永不报错、也许能删」。
+
+第 21 轮我正是这么假设的，实测才发现净差 +8。把那次实验变成常驻测试，
+等于把「已经付出过的试错成本」转化为资产。
+
+### 36.3 差异的结构（也是有用的信息）
+
+丢弃那次合一后：
+
+| 方向 | 数量 | 语料特征 |
+|---|---|---:|
+| Ok → Err（新增错误） | 11 | L07/L08/L09 的**证明类**（`ex_proof_*`、`hw_proof_suite`、`extract_07`、`proj_container_lib`） |
+| Err → Ok（错误消失） | 3 | L11 的 `scn_dependent_proofs` / `scn_macro_dsl_project` / `scn_proof_library_large` |
+
+净差 +8。**失败集中在证明类**——它们依赖臂上下文里被精化过的类型才能通过体检查，
+这从侧面印证了 §35.4 的语义判断（精化必须在臂体检查之前完成）。
+
+### 36.4 B3' 状态（第 22 轮）
+
+| 目标项 | 状态 |
+|---|---|
+| `unify_pm` 穿 `SpecSolve`、acc 包两侧、两级 occurs | ✅ |
+| `Subst`/`frcs`/`subst_cxt`/`bind_slots`、probe/ctor 读 σ | ✅ |
+| `check_pm` 返回 `Rc<Subst>` | ✅ |
+| 独立判据 `l12_l13_verdict_parity` | ✅ |
+| `check_pm_final` 返回 `Rc<Subst>` | ❌ 三条路实测否决（§31/§34/§35） |
+| 删除 `update_cxt`/`refresh` | ❌ 与语义结构冲突，已用红绿对照锁定 |
