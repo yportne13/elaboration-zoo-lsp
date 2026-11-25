@@ -604,3 +604,55 @@ B3' 要做完整，必须同时换**读点**：把所有 `cxt.env.iter().nth(...
 3. `check_pm`/`check_pm_final` 返回 `(Tm, Rc<Subst>)`；
 4. `pattern_match.rs:584` 改为 `cxt_walk.subst_cxt(&σ)`；
 5. 最后删 `update_cxt`/`refresh` 的 env 槽改写。
+
+## 19 `check_pm_final` 启用 σ 第一次尝试失败（2026-11-26）
+
+### 19.1 改了什么
+
+按 §18.4 第 1 步，把 `check_pm_final` 也切到 σ 通道（内部用 `subst_cxt` 桥接回 Cxt，保持调用方契约）：
+
+```rust
+let solvable = cxt.bind_slots();
+let mut spec = SpecSolve { solvable: &solvable, acc: Rc::new(Subst::default()) };
+let ok = self.unify_pm(&cxt, &ori, &tmv, Some(&mut spec), t_span).is_ok();
+let new_cxt = if ok { cxt.clone().subst_cxt(&spec.acc) } else { cxt };
+```
+
+### 19.2 结果：prelude 崩
+
+```
+prelude elaboration failed: Error("can't unify for unsolved meta
+  expected: Eq[Nat]\u{200b}(?260 t + 1 t, ?261 t + 1 t)
+      find: Eq[Nat]\u{200b}(0 + t, t)" @ 2422,2437)
+```
+
+注意这与 §18.2 的修复**不是同一类问题**：
+
+- 第 7 步（check_pm）失败时是 `Vec[U]0 vs Vec[?m T U 0 f]0` —— 修 pruning 后就好了；
+- 本步是 `Eq[Nat](?260 t+1 t, ...) vs Eq[Nat](0 + t, t)` —— 两侧**都带未解 meta**，且形态是「应用了 t 的表达式 vs 未应用的 `0 + t`」。
+
+### 19.3 为什么 check_pm 能过、check_pm_final 不能
+
+两者的输入差异：
+
+| | `check_pm` | `check_pm_final` |
+|---|---|---|
+| 方程 | `a`（期望类型） ≐ `inferred_type`（推断出的类型） | `ori`（构造子的返回类型） ≐ `tmv`（`eval(t_inferred)`） |
+| 一侧的来源 | 都是类型层面的值 | **一侧是 eval 出来的项值** |
+| 触发时机 | 臂体检查时 | 臂特化时（`pattern_match.rs:584`） |
+
+`check_pm_final` 的 `tmv = eval(t_inferred)` 会把项里的变量**应用状态**带出来（`t + 1` 带 spine）。
+σ 的 `acc` 在 solve 时会把解值原样存进去、`frcs` 在读点按 spine 展开。但 `ori` 这一侧是「未被 σ 包裹的」
+构造子返回类型——两侧的 spine 状态在同一方程里不同步，就出现「一侧已应用 t、一侧还没应用」。
+
+### 19.4 结论
+
+§18.3 说「σ 与 env 槽可以共存」在 **check_pm 这一入口上成立**，在 `check_pm_final` 上**不成立**——
+因为后者的方程一侧是 eval 出的项值，spine 状态与另一侧不匹配。
+
+⇒ `check_pm_final` 的正确做法不是「也走 σ」，而是**保持 update_cxt**（它是急切载体，会 refresh 全槽、
+把 spine 状态重锚定到一致）；或者按 L12 的完整做法：`pattern_match` 侧维护 `self.sub`（σ 链）、
+`check_pm_final` 接收并以它为种子（L12 `pattern_match.rs:712-718` 就是这么做的）。
+
+后者才是 B3' 的正解，但需要 `pattern_match` 的 `Compiler` 持有 σ 状态（L12 有 `sub: Rc<Subst>` 字段），
+这是比改 `check_pm_final` 大一圈的改造。
