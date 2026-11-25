@@ -1222,3 +1222,50 @@ B3' 的目标（本次 goal 的 objective）写的是：
 这与 §29.4 的方向修正一致：不该动 `check_pm_final`，该动的是**`check_pm` 之后臂上下文如何生成**
 ——即 `pattern_match::compile` 里 `cxt_arm` 的构造方式。L12 在 `cxt_arm = cxt_arm.subst_cxt(&self.sub)`
 之后直接用，而 L13 目前用 `check_pm_final` 返回的 Cxt。
+
+## 32 第 18 轮：探针实测——`check_pm_final` 的方程**大部分**在无 σ 下进行
+
+### 32.1 探针与结果
+
+在 `check_pm_final` 里对 `cxt.sub` 计数（原子计数，因为每个语料跑在独立线程上——
+首版用 `thread_local` 读出恒为 0，是探针本身的 bug，不是被测对象的行为）。
+
+跑全部 170 个语料：
+
+```
+sigma probe over 170 files: empty=679 nonempty=70
+```
+
+**`check_pm_final` 的方程 90.7%（679/749）在 σ 为空时进行，只有 9.3% 带 σ。**
+
+### 32.2 这个数字意味着什么
+
+第 17 轮的结论是「σ 在 `check_pm_final` 上生效过早」。探针给出了**机制解释**：
+
+- `check_pm_final` 的 `cxt` 来自 `check_pm`，而 `check_pm` 内部的 `unify_pm` 用的是
+  `Rc::new(Subst::default())`（**每次新建空 σ**，见 `elaboration.rs:795`）；
+- 所以 `cxt.sub` 几乎总是空——只有极少数路径（9.3%）走到带 σ 的情形；
+- **`check_pm` 的 σ 根本没有流到 `check_pm_final`**：它在 `check_pm` 内部就被 `subst_cxt` 消费掉了，
+  没返回给调用方。
+
+这解释了第 17 轮两个实验为何都失败：我在 `check_pm_final` 里新建的 σ（或从别处取的 σ）
+与 `check_pm` 内部实际用的 σ 不是同一个——`check_pm` 的解已经通过 `subst_cxt` 写进 `cxt` 的 env，
+但那个 σ 本身已经丢了。
+
+### 32.3 结论
+
+要让 σ 在 `check_pm_final` 可用，**必须让 `check_pm` 把它的 σ 返回出来**（第 17 轮已做过这一步，
+但那轮同时改了 `check_pm_final` 的方程，两个改动叠在一起无法归因）。
+
+正确的做法是**分两步**：
+
+1. 先让 `check_pm` 返回 σ，但 `check_pm_final` **完全不用它**（只看基线是否保持）；
+2. 确认基线不变后，再单独实验「用 σ 包裹 `ori`」。
+
+第 17 轮把这两步合并成一步，所以两个实验的差异无法区分——本轮探针提供了分开做的依据。
+
+### 32.4 探针的清理
+
+探针已移除（`git checkout` 恢复三个文件）。首版用 `thread_local` 是错的（worker 线程各自持有计数器，
+主线程读出恒 0）；改原子后得到真实数字。这个坑值得记录：**跨线程的探针计数不能用 `thread_local`**，
+而 `tests/` 里为了跑深链语料必然是每文件一个 worker 线程。
