@@ -784,7 +784,10 @@ impl Infer {
         let (t_inferred, inferred_type, refined_cxt) = self.infer_expr_pm(cxt, t)?;
         let (t_inferred, inferred_type) = self.insert(&refined_cxt, Ok((t_inferred, inferred_type)), t_span)?;
 		// B3 step: enable the sigma channel for this entry point.
-		let new_cxt = self.unify_pm(&refined_cxt, &a, &inferred_type, None, t_span)?;
+		let solvable = refined_cxt.bind_slots();
+		let mut spec = super::unification::SpecSolve { solvable: &solvable, acc: Rc::new(super::Subst::default()) };
+		let new_cxt = self.unify_pm(&refined_cxt, &a, &inferred_type, Some(&mut spec), t_span)?;
+		let new_cxt = new_cxt.subst_cxt(&spec.acc);
         Ok((t_inferred, new_cxt))
     }
     pub(super) fn unify_pm<'a>(
@@ -872,7 +875,13 @@ impl Infer {
                             return Err(Error(t_span.map(|_| "occurs check: transitive".to_owned()), vec![]));
                         }
                         s.acc = super::Subst::extend(&s.acc, *x, t_prime.clone());
-                        Ok(cxt.clone())
+                        // update_cxt has TWO jobs: rewrite the env slot AND clear pruning at it.
+                        // sigma replaces the first, not the second. Leaving pruning stale means
+                        // metas created later still prune that slot away at application time,
+                        // which shows up as Vec[U]0 vs Vec[?m T U 0 f]0 (addition: 2026-11-26).
+                        let mut c = cxt.clone();
+                        c.pruning = cxt.pruning.change_n(lvl2ix(cxt.lvl, *x).0 as usize, |_| None);
+                        Ok(c)
                     } else {
                         Ok(cxt.update_cxt(self, *x, t_prime, true))
                     }
