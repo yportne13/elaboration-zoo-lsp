@@ -471,6 +471,7 @@ mod prim_safety_tests;
 
 #[cfg(test)]
 mod cong_projection_tests;
+mod deep_chain_tests;
 
 #[cfg(test)]
 mod termination_check_tests;

@@ -396,6 +396,207 @@ impl Infer {
     pub fn rename(&mut self, decl: &Decl, pren: &PartialRenaming, t: &Rc<Val>) -> Result<Rc<Tm>, UnifyError> {
         let t = self.force(decl, t);
         match t.as_ref() {
+            // 深链载体（Sum / SumCase / Obj）交给帧式收集器：树高与 native
+            // 栈解耦（B1 栈安全化）。语义与逐点递归**逐项等价**——子件顺序、
+            // spine 应用序、同一 pren 无 lift 三点都对位；Lam/Pi/Match/spine
+            // 头结构嵌套浅，仍走普通递归臂。
+            Val::Sum(..) | Val::SumCase { .. } | Val::Obj(..) => {
+                self.rename_deep(decl, pren, &t)
+            }
+            _ => self.rename_arm(decl, pren, &t),
+        }
+    }
+
+    /// rename 的深链帧式收集器（移植自 L12 rename_deep）。
+    ///
+    /// 语义不变式（B1 只换执行形态，不改判定）：
+    /// - Sum 的 pending = 每个参数的 [实参值, 类型] 交替（L13 的参数是
+    ///   (名, Rc<Val>, Rc<Ty>, Icit)，类型本身也是 Val——两者都不 lift）；
+    /// - SumCase 的 pending = [typ] ++ datas（datas 都不 lift）；
+    /// - Obj 的 pending = [被投影者] ++ spine 实参，实参按 List 头→尾入列，
+    ///   组装时逆序折叠 = rename_sp 的应用序（尾的实参最先应用）；
+    /// - 子件回落 [Self::rename_arm]（同 pren，无 lift）；帧不持有 renaming。
+    fn rename_deep(
+        &mut self,
+        decl: &Decl,
+        pren: &PartialRenaming,
+        root: &Rc<Val>,
+    ) -> Result<Rc<Tm>, UnifyError> {
+        enum FrameKind {
+            Sum {
+                name: Span<SmolStr>,
+                cases: super::TmSumCases,
+                is_trait: bool,
+                metas: Vec<(Span<SmolStr>, Icit)>,
+            },
+            SumCase {
+                is_trait: bool,
+                index: u32,
+                datas_metas: Vec<(Span<SmolStr>, Icit)>,
+            },
+            Obj {
+                name: Span<SmolStr>,
+            },
+        }
+        struct Frame {
+            pending: Vec<Rc<Val>>,
+            icits: Vec<Icit>,
+            kind: FrameKind,
+            done: Vec<Rc<Tm>>,
+            idx: usize,
+        }
+        fn frame_new(v: &Rc<Val>) -> Frame {
+            match v.as_ref() {
+                Val::Sum(name, params, cases, is_trait) => {
+                    let mut pending = Vec::with_capacity(params.len() * 2);
+                    let mut metas = Vec::with_capacity(params.len());
+                    for (n, val, ty, i) in params.iter() {
+                        pending.push(val.clone());
+                        pending.push(ty.clone());
+                        metas.push((n.clone(), *i));
+                    }
+                    let n_all = pending.len();
+                    Frame {
+                        pending,
+                        icits: Vec::new(),
+                        kind: FrameKind::Sum {
+                            name: name.clone(),
+                            cases: cases.clone(),
+                            is_trait: *is_trait,
+                            metas,
+                        },
+                        done: Vec::with_capacity(n_all),
+                        idx: 0,
+                    }
+                }
+                Val::SumCase {
+                    is_trait,
+                    typ,
+                    index,
+                    datas,
+                } => {
+                    let mut pending = Vec::with_capacity(datas.len() + 1);
+                    pending.push(typ.clone());
+                    let mut datas_metas = Vec::with_capacity(datas.len());
+                    for (n, val, i) in datas.iter() {
+                        pending.push(val.clone());
+                        datas_metas.push((n.clone(), *i));
+                    }
+                    let n_all = pending.len();
+                    Frame {
+                        pending,
+                        icits: Vec::new(),
+                        kind: FrameKind::SumCase {
+                            is_trait: *is_trait,
+                            index: *index,
+                            datas_metas,
+                        },
+                        done: Vec::with_capacity(n_all),
+                        idx: 0,
+                    }
+                }
+                Val::Obj(x, name, sp) => {
+                    let mut pending = vec![x.clone()];
+                    let mut icits = Vec::new();
+                    for (u, i) in sp.iter() {
+                        pending.push(u.clone());
+                        icits.push(*i);
+                    }
+                    let n_all = pending.len();
+                    Frame {
+                        pending,
+                        icits,
+                        kind: FrameKind::Obj { name: name.clone() },
+                        done: Vec::with_capacity(n_all),
+                        idx: 0,
+                    }
+                }
+                _ => unreachable!("rename_deep 只接 Sum/SumCase/Obj"),
+            }
+        }
+        fn frame_assemble(frame: Frame) -> Rc<Tm> {
+            match frame.kind {
+                FrameKind::Sum {
+                    name,
+                    cases,
+                    is_trait,
+                    metas,
+                } => {
+                    let mut it = frame.done.into_iter();
+                    let params = metas
+                        .into_iter()
+                        .map(|(n, i)| {
+                            let v = it.next().unwrap();
+                            let t = it.next().unwrap();
+                            (n, v, t, i)
+                        })
+                        .collect::<Vec<_>>();
+                    Tm::Sum(name, Rc::new(params), cases, is_trait).into()
+                }
+                FrameKind::SumCase {
+                    is_trait,
+                    index,
+                    datas_metas,
+                } => {
+                    let mut it = frame.done.into_iter();
+                    let typ = it.next().unwrap();
+                    let datas = datas_metas
+                        .into_iter()
+                        .map(|(n, i)| (n, it.next().unwrap(), i))
+                        .collect::<Vec<_>>();
+                    Tm::SumCase {
+                        is_trait,
+                        typ,
+                        index,
+                        datas: Rc::new(datas),
+                    }
+                    .into()
+                }
+                FrameKind::Obj { name } => {
+                    let mut it = frame.done.into_iter();
+                    let head: Rc<Tm> = Tm::Obj(it.next().unwrap(), name).into();
+                    let args: Vec<Rc<Tm>> = it.collect();
+                    let mut acc = head;
+                    for (u, i) in args.into_iter().zip(frame.icits).rev() {
+                        acc = Tm::App(acc, u, i).into();
+                    }
+                    acc
+                }
+            }
+        }
+        let mut frames: Vec<Frame> = vec![frame_new(root)];
+        let mut result: Option<Rc<Tm>> = None;
+        while let Some(frame) = frames.last_mut() {
+            if frame.idx == frame.pending.len() {
+                let frame = frames.pop().unwrap();
+                let tm = frame_assemble(frame);
+                match frames.last_mut() {
+                    Some(parent) => {
+                        parent.done.push(tm);
+                        parent.idx += 1;
+                    }
+                    None => result = Some(tm),
+                }
+                continue;
+            }
+            let w = self.force(decl, &frame.pending[frame.idx].clone());
+            match w.as_ref() {
+                Val::Sum(..) | Val::SumCase { .. } | Val::Obj(..) => {
+                    frames.push(frame_new(&w));
+                }
+                _ => {
+                    let tm = self.rename_arm(decl, pren, &w)?;
+                    let frame = frames.last_mut().unwrap();
+                    frame.done.push(tm);
+                    frame.idx += 1;
+                }
+            }
+        }
+        Ok(result.expect("rename_deep 至少产生一个 Tm"))
+    }
+
+    fn rename_arm(&mut self, decl: &Decl, pren: &PartialRenaming, t: &Rc<Val>) -> Result<Rc<Tm>, UnifyError> {
+        match t.as_ref() {
             Val::Flex(m_prime, sp) => match pren.occ {
                 Some(m) if m == *m_prime => {
                     // 要 rename 的值提到正在求解的 meta 本身（rename 视角的

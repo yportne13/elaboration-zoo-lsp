@@ -130,3 +130,33 @@ round4 的失败现象"2k 深 quote 栈溢出"**不是 σ 引起的**——σ �
 | 新增 | 一个"深链不爆栈"的回归测试（default stack 2MB 下跑 2k 深 Sum/SumCase） |
 
 基线已冻结在 `target/b-l13/baseline/`（635 个测试名 + 5 份完整输出）。
+
+## 8 B1 完成记录（2026-11-25）
+
+### 8.1 改了什么
+
+L13 `unification.rs` 的 `rename` 拆成两段：`rename`（入口，按值形态分流）+ `rename_deep`（Sum/SumCase/Obj 帧式收集器）+ `rename_arm`（浅结构递归臂，原 `rename` 的 match 体原样搬入，只把 `t` 的引用/所有权形态改成 `&Rc<Val>`）。
+
+新增 `src/L13_namespace/deep_chain_tests.rs`：两个栈安全回归测试。
+
+### 8.2 语义等价的证据（三层）
+
+| 判据 | 结果 |
+|---|---|
+| L13 lib | **624 passed / 13 ignored**（622 + 新增 2），零失败 |
+| examples 5/5 | 输出与 B0 基线**逐字节相同**（剥掉计时行后） |
+| 测试有牙 | 把 `rename` 回退成旧的逐点递归实现，`deep_sumcase_rename` **在 2 MB 默认栈上爆栈**（`thread ... has overflowed its stack`，exit `0xC0000409`）；换回帧式实现即通过 |
+
+第三条是关键：没有它，"栈安全化"就只是个说法。现在它是**可复现的红/绿对比**。
+
+### 8.3 与 L12 的差异（移植时纠正的两处）
+
+| 项 | L12 `rename_deep` | L13 实现 | 原因 |
+|---|---|---|---|
+| `Sum` 参数 pending | `[实参值, 类型]` 交替，都 `rc_take` 成 owned | 同样交替，但保留 `Rc<Val>` | L13 全机 `Rc<Val>`，不做 owned 降级 |
+| `SumCase` 组装 | 需 `case_name` 字段（L12 的 `Val::SumCase` 带 `case_name`） | **不需要**——L13 的 `SumCase` 只有 `is_trait/typ/index/datas`，构造子名在 `datas[0].0` | 载体形态不同，照抄会多一个语义上不存在的字段 |
+
+### 8.4 遗留
+
+- `quote` 的 **Sum 参数** 与 **SumCase 多字段** 仍递归——但实测这两条路径在 5 万深链下**没有爆栈**（`deep_sumcase_quote` 通过）。真正需要帧式化的是 rename，不是 quote。
+- 因此 B1 的代码量比预想小：**只动了 `rename` 一条路径**（+213/−120 行），不是计划里写的三条。
