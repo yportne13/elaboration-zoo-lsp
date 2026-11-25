@@ -365,3 +365,44 @@ adder_proof 与 alu 在真实负载下爆栈，而 lib 的 624 个用例全过�
 `already_refined` 判定问题。
 
 ⇒ **B3 第二段需要重做**：在干净的 Drop 实现上重新验证 σ 存值策略，才可能分清"Drop 爆栈"与"语义递归"。
+
+## 14 第 12 轮：B3 第二段重做（干净 Drop + 新鲜二进制）
+
+### 14.1 实验平台问题（先说清楚）
+
+本轮发现真正的构建阻塞：栈溢出后残留的 `typort` 僵尸进程（**0 线程、Access denied**）
+会锁住 `target/release/typort.exe`，让 `cargo build` 静默失败（`拒绝访问 os error 5`）。
+这些僵尸的父进程是 `cmd.exe`，`taskkill /F /T` 也杀不掉。
+
+**对策**：改用独立 target 目录 `target_b13` 构建验证。本轮所有 examples 结果都来自
+`target_b13/release/typort.exe`（时间戳已验证晚于源码）。
+
+### 14.2 三次实验结论
+
+| 实验 | lib | examples | 坍缩点 |
+|---|---|---|---|
+| 阶段1：只换判定（`cxt.sub.has`） | — | **栈溢出** | σ 说已精化，但 env 槽仍是 self-reference，取到 `Rigid(x)` 自身 → 无限递归 |
+| 阶段2：判定 + 取值换源 + 存原始值 | — | **栈溢出** | 同上（取值虽优先 σ，但 σ 里存的就是原始解值，仍可能是 `Rigid(x)`） |
+| 阶段2+自引用守卫 | — | **不溢出，但 prelude 语义错** | `prelude elaboration failed: can't unify Fin(t+1) vs Fin(_n1)` |
+
+### 14.3 决定性的第三行
+
+加自引用守卫（`if cur 仍是 Rigid(x) 本身 { return Ok(cxt.clone()) }`）后**栈溢出消失了**，
+但 examples 输出变成 prelude 检查失败 + 大片 `name not in scope`（因为 prelude 没加载成功）。
+
+两条硬事实：
+
+1. 栈溢出的直接机制**确认**是「`already_refined` 为真但取到自引用值 → 递归」；
+2. 加守卫能挡住递归，但**σ 的生效时机与 env 槽不同**——σ 一旦叠上就立刻对所有读点可见，
+   而 env 槽要等 `refresh` 才生效。这个时序差导致 prelude 的 GADT 精化提前发生，类型检查就错了。
+
+### 14.4 结论（这次证据是干净的）
+
+**路线 2 确实不可行，但理由与第 9/10 轮说的不同**：
+
+- 第 9/10 轮的「栈溢出」有两种成因混在一起（Drop 缺陷 + 自引用递归），归因不清；
+- 本轮分离后：Drop 缺陷已由 `f6ced3d1` 修掉；剩下的真问题是**载体时序**——σ 即时生效、
+  env 槽延迟生效，两者不能并存。
+
+⇒ 要在 L13 上用 σ，必须**整体替换** env 槽载体（不是并行），即路线 B3'（`unify_pm` 穿 `SpecSolve`，
+`refresh` 删除）。这是 L12 的形状，也是唯一自洽的形状。
