@@ -1354,7 +1354,6 @@ impl Cxt {
                     pretty_tm(0, self.names(), &infer.quote(self.lvl, v.clone()))
                 );*/
                 //let locals = self.locals.update_at(x_prime, infer.quote(&self.decl, self.lvl, &v));
-                let v_for_sub = v.clone();
                 let env = self.env.change_n(x_prime, |_| v);
                 let mut new_src_names = self.src_names.clone();
                 let env_t = self.refresh(infer, &self.env, Rc::make_mut(&mut new_src_names), env, self.lvl.0 as usize - update_from);
@@ -1373,7 +1372,11 @@ impl Cxt {
                     namespace_prefix: self.namespace_prefix.clone(),
                     namespaces: self.namespaces.clone(),
                     update_from: Some(update_from),
-                    sub: Subst::extend(&self.sub, x, infer.wrap_sub(&self.sub, &v_for_sub)),
+                    // σ **不随 update_cxt 累积**：2026-11-25 三轮实验证明它与 env 槽
+                    // 的传播时序不可并存（σ 即时生效、env 槽等 refresh，导致 GADT
+                    // 精化提前）。σ 的写入留给 B3' 的整体换载体；此处保持空值，
+                    // 使 `force` 的 VSub 分支与 `frcs` 成为**无调用者**的备用路径。
+                    sub: self.sub.clone(),
                     binding_name: self.binding_name.clone(),
                 }
             }
