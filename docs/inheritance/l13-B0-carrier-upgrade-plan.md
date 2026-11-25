@@ -230,3 +230,50 @@ env 改写），否则 σ 存的是未重锚定的值，拿来当精化值会递
 
 ⇒ 这印证了 §8.4 的判断：B3 第二段真正的工作量在 `refresh`，不在判定。下一步要先把
 「σ 里的值需要什么形态」定清楚（是重锚定后的值，还是原始解值 + 读点 frcs 展开）。
+
+## 11 根因的更深一层：σ 里的值形态（对照 L12 SpecSolve）
+
+读 L12 的 unify 后，σ 存值的口径很清楚（unification.rs:1069-1116）：
+
+```rust
+(Val::Rigid(x, sp), v) if sp.is_empty() && spec.solvable.contains(x) => {
+    if val_mentions_lvl(v, *x) { return Err(...) }        // 单步 occurs
+    if acc.mentions_any_solved(v) && acc.occurs_transitive(v, *x) {
+        return Err(...)                                    // 传递 occurs
+    }
+    s.acc = Subst::extend(&s.acc, *x, v.clone());          // 存原始值
+}
+```
+
+关键三点：
+
+1. 存的是原始值 v（已 force，但未包裹 σ），不是重锚定后的值；
+2. 存之前做两级 occurs 检查（单步 val_mentions_lvl + 传递 occurs_transitive）；
+3. 每步递归入口把 acc 包在两侧再解释（`if !s.acc.is_empty() { t = force(wrap_sub(acc, t)) ... }`）。
+
+### 11.1 L13 的 update_cxt 缺了什么
+
+上一轮的做法是「update_cxt 里 Subst::extend(&self.sub, x, wrap_sub(...))」——三个全错：
+
+| 项 | L12 | 我的做法 | 后果 |
+|---|---|---|---|
+| 存什么值 | 原始值 v | wrap_sub(sub, v) 包裹过的值 | 值里嵌着 σ，lookup 取出后 frcs 又展开，递归 |
+| occurs 检查 | 单步 + 传递两级 | 完全没有 | x := ... x ... 直接进 σ，读点无限展开 |
+| 何时应用 | 每步递归入口包两侧 | 只在 already_refined 取旧值时用 | 后续子方程看不见前面的解 |
+
+第 1 条是栈溢出的直接原因：wrap_sub 把 VSub(v, sub) 存进 σ，下次 lookup(*x) 返回的还是带 VSub 的值，frcs 展开时又命中同一个 x。
+
+### 11.2 正确的做法
+
+σ 必须存原始值，且 update_cxt 里要补两级 occurs 检查。但这只是「存」的正确性；「读」的正确性要求 unify_pm 每步递归入口都按 acc 包两侧——这正是 L13 的 unify_pm 没有的形状（它靠 env 槽被 refresh 改写来实现「后续子方程看见前面的解」）。
+
+⇒ 结论：路线 2 的「双载体并行」在本轮被证伪。σ 与 env 槽不是可以并行的两套信息，而是两种根本不同的传播机制：env 槽靠 refresh 一次性改写全局，σ 靠每步包裹 + 读点展开。折中方案两头不讨好。
+
+### 11.3 下一步的选择
+
+| 路线 | 内容 | 代价 |
+|---|---|---|
+| B3' | 按 L12 原样改 unify_pm：签名穿 SpecSolve，每步入口包两侧，check_pm_final 返回 σ | 3 文件 + 14 调用点，但形状正确 |
+| B4 | 放弃 σ，B 路线缩回到 B1（栈安全化）+ B2 骨架（保留但不启用） | 已完成的 B1 有价值，B2 变成死代码 |
+
+我倾向 B3'：既然已经知道正确形状是什么，就按正确形状做。之前选路线 2 是想避开 14 个调用点，但现在证明那条路走不通。
