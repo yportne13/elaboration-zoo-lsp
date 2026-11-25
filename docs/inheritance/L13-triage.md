@@ -159,3 +159,14 @@ known-diff #5（`分支不可达` 中文文案），逐个核对后确认**没�
 `tests/chain_inheritance.rs` 里 L13 的 keep 下限先定在 **0.51**（现状值），并在
 `allow-L13.tsv` 逐条登记。这不是"放过 L13"，而是**把分叉显式钉住**：任何新漂移都会让
 "未登记条目数"不为零而红灯。等载体分叉一旦收敛（A 或 B 路线），下限应同步抬到与 L10–L12 同级（≥0.99）。
+
+### 7.2 L13 生产路径复核（本轮实测）
+
+载体分叉不影响生产路径：
+
+| 项 | 结果 |
+|---|---|
+| `cargo build --release --bin typort` | 成功 |
+| `examples/*.typort` 全量 `typort check` | **5/5 exit=0**（alu / adder_proof / theorem_proving / typeclass_complex / hdl_ops） |
+| `cargo test --release --lib L13_namespace::` | **622 passed**, 13 ignored |
+| `cargo test --release --test l13_inherited_from_l12` | **22 passed**（§6 回灌的用例） |
