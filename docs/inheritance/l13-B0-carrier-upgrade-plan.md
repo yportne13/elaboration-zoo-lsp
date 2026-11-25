@@ -324,3 +324,44 @@ adder_proof 与 alu 在真实负载下爆栈，而 lib 的 624 个用例全过�
 
 按 §5 的退出条件：「examples 输出逐字节不等且无法解释」→ 已触发（且是崩溃而非输出差异）。
 **B 路线到此为止需要用户决策**：继续做 B3'（完整换载体 + 帧式 frcs）还是缩回 B4（只保留 B1）。
+
+## 13 第 11 轮：σ 链迭代 Drop（已落地）+ 二进制新鲜度纪律
+
+### 13.1 修复：`impl Drop for Subst` 迭代排空
+
+σ 链每次精化 `Subst::extend` 叠一条，真实负载下可达数万深。派生 Drop 逐层递归释放
+`SubEntry.next`，默认 2 MB 栈上 `STATUS_STACK_OVERFLOW`。
+
+改为逐节点摘 `next` 移入待处理表再释放（与 `Val`/`Tm` 的排空式 Drop 同款）。链头仍被别处持有时放回，
+由最后持有者走排空路径。
+
+提交 `f6ced3d1`。新增 `deep_subst_chain_drop_does_not_overflow_default_stack`（10 万深链 + 默认栈），
+**红绿对照已验证**：把 `impl Drop for Subst` 剥掉，同一测试立刻 `STATUS_STACK_OVERFLOW`（exit 0xC00000FD）。
+
+### 13.2 纪律：二进制新鲜度
+
+第 10 轮发现 `typort.exe` 被挂起进程锁住，导致 `cargo build` 静默失败、examples 一直跑的是 17:42 的旧二进制。
+`baseline` 那次"examples 栈溢出"因此**证据不可靠**。
+
+本轮采用三条纪律：
+
+1. 跑 examples 前先 `taskkill` 所有 `typort` / `elaboration_zoo` 残留进程；
+2. 记录 `typort.exe` 的 `LastWriteTime`，确认**晚于**最新源码时间；
+3. 构建失败必须肉眼确认 `build=0`，不能只看"命令返回了"。
+
+### 13.3 本轮实测（全部在干净二进制上）
+
+| 判据 | 结果 |
+|---|---|
+| `cargo build --release --bin typort` | build=0，binary 19:48:14（晚于源码 19:39:58） |
+| examples 5/5 | **逐字节等于 B0 基线** |
+| L13 lib | **625 passed** / 13 ignored（624 + 新增的 drop 测试） |
+| 链继承门禁 | 2 passed |
+
+### 13.4 对 B3 的意义
+
+σ 链 Drop 爆栈是**独立于传播机制**的缺陷，与"σ 还是 env 槽做载体"无关——它属于 B2 引入的
+数据结构本身。修掉它之后，第 9/10 轮观察到的 examples 溢出**很可能是这个 Drop 缺陷**而非
+`already_refined` 判定问题。
+
+⇒ **B3 第二段需要重做**：在干净的 Drop 实现上重新验证 σ 存值策略，才可能分清"Drop 爆栈"与"语义递归"。
