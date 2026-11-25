@@ -58,3 +58,51 @@
 - §3 已能覆盖 252 项里的约 110 项（88 测试 + 20 observe/surface/pretty/lex）；
 - 剩下的 164 项代码缺口**全部**落在载体层，改不改是**产品决策**，不是重构手速问题；
 - 用户原话"严格确保完全继承"在 L13 上会遇到这条分叉线，必须显式确认口径。
+
+## 5 复查补记（2026-11-25 第二轮）
+
+上一版把 L13 的缺口归成"252 项真缺口"，并按文件分组把 `observe.rs`/`surface.rs`/`pretty`/
+`parser/lex` 判成"不冲突、可立即补的继承面"。**这个判断错了一半。**逐项复核后修正如下。
+
+### 5.1 `observe.rs`：L13 的观察面是**另一套实现**，不是缺 8 个函数
+
+`L13/observe.rs` 存在（1180 行），但导出的是 `peel_pi_collect` / `push_ctor_hover` 等**另一组** API；
+`push_hover` / `push_inlay_hint` / `push_hover_decl` **内联在 `elaboration.rs:2881-3216`**，
+函数体自带 80 字符截断与未解 meta 过滤。所以 `tm_has_unsolved_meta` / `drain_check_issues` /
+`local_binder_span` / `render_val` 这 8 项是**形态差异**，不是能力缺失。
+补它们等于把 L12 的 observe 模块在 L13 里再实现一遍——纯增冗余，**不动**。
+
+### 5.2 `surface.rs` / `pretty.rs` / `parser/lex.rs`：同类形态差异
+
+`raw_span` / `inlay_label` / `split_issue_lines` / `span_union` / `pattern_span` 在 L13 无同名函数，
+但对应能力内联在别处；`pretty_tm` 走 `pretty_tm_indent` 签名；`TokenKind: Display` 在 L13 是
+内联 `fn fmt`（`lex.rs:59`）。都是"同名不同形"，不是"被删掉"。
+
+### 5.3 `tests.rs` 88 项：按程序内容复核后的真实数字
+
+按函数名匹配是错的（L13 把用例拆进 23 个 `*_tests.rs`，且**大量改名**）。改成按**程序源码片段**
+（每个用例里的 `def` 行）比对：
+
+| 判定 | 项数 | 含义 |
+|---|---:|---|
+| L13 已有完全相同的程序源码片段 | **51** | 等价用例已在，只是名字不同 |
+| L13 全层找不到这些程序 | **37** | **真缺测试** |
+
+⇒ 唯一**可无风险立即执行**的继承工作是这 37 个用例。
+
+### 5.4 修正后的缺口账
+
+| 类别 | 项数 | 处置 |
+|---|---:|---|
+| 形态差异（同名不同形 / 换文件 / 内联） | 49 RELOCATED + 164 中的绝大部分 | 登记 `MORPHOSIS`，不动代码 |
+| 测试用例（按程序比对后真缺） | **37** | **补测试（零风险）** |
+| 载体分叉（VSpan→Span<SmolStr> / σ→`update_cxt` / prof→`FUNC_PROF`） | 见 §1 | 需上级决策（A/B/C） |
+
+### 5.5 L13 门禁现状（本轮实测）
+
+| 套件 | 结果 |
+|---|---|
+| `cargo test --release --lib L13_namespace::` | **622 passed**, 13 ignored |
+| `cargo test --release --test l13_fast_parity` | 0（`l13-twin` feature 未开，空跑） |
+
+L13 自身是绿的；缺的是"相对 L12 的继承面"，属口径问题而非功能 bug。
