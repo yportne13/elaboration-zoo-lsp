@@ -1269,3 +1269,47 @@ sigma probe over 170 files: empty=679 nonempty=70
 探针已移除（`git checkout` 恢复三个文件）。首版用 `thread_local` 是错的（worker 线程各自持有计数器，
 主线程读出恒 0）；改原子后得到真实数字。这个坑值得记录：**跨线程的探针计数不能用 `thread_local`**，
 而 `tests/` 里为了跑深链语料必然是每文件一个 worker 线程。
+
+## 33 第 19 轮：分两步走的第一步成功——σ 可安全流出（2026-11-26）
+
+### 33.1 本轮做法
+
+按 §32.3 的方法，**只做第一步**：
+
+```rust
+pub fn check_pm(&mut self, cxt: &Cxt, t: Raw, a: Rc<Val>)
+    -> Result<(Rc<Tm>, Cxt, Rc<Subst>), Error>
+```
+
+σ 取自内部 `SpecSolve` 的 `acc`（即 `check_pm` 自己解出的那个 σ）。两个调用点绑成 `_sigma`
+但**完全不使用**。
+
+### 33.2 结果：三项判据全部与基线一致
+
+| 判据 | 基线 | 本步 |
+|---|---|---|
+| `verdict_parity` 差异数 | 23 / 170 | **23 / 170** |
+| oracle examples | PASS | **PASS** |
+| L13 lib | 625 passed | **625 passed** |
+| chain_inheritance / inherited | 2 / 22 | **2 / 22** |
+
+**这建立了「σ 可以安全从 `check_pm` 流出」这一事实**——第 17 轮把「返回 σ」与「消费 σ」合并，
+所以无法判断失败是来自哪一半；本轮把两半分开，前半已证明无害。
+
+### 33.3 与 §32.2 的关系
+
+探针测出 90.7% 的 `check_pm_final` 方程在空 σ 下进行，因为 `check_pm` 用 `Rc::new(Subst::default())`
+新建 σ 且不返回。现在 σ 已经流出了——但探针若再跑，**空/非空比例不会变**，
+因为 `check_pm_final` 仍未消费它（`_sigma` 被丢弃）。
+
+### 33.4 第二步的关键差异（下一轮）
+
+第 17 轮在 `check_pm_final` 里**新建**一个 σ（`Rc::new(Subst::default())` 或从 `cxt.sub` 取），
+而 `cxt.sub` 由 `check_pm` 的 `subst_cxt` 设置、几乎恒空。现在可以直接用 **`_sigma`（`check_pm` 真实解出的那个）**。
+
+这是本质区别：
+
+- 第 17 轮：`spec.acc` = 空 σ，与 `cxt` 里已施加的 σ 不同 → 两侧仍不同帧；
+- 下一步：`spec.acc` = `check_pm` 真实 σ，与 `cxt` 里已施加的是**同一个** → 理论上幂等。
+
+若下一步仍失败，则可确定结论是「σ 不该在这个方程上生效」（§31.4），而非实现问题。
