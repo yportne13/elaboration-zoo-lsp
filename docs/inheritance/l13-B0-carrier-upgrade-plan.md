@@ -699,3 +699,43 @@ prelude elaboration failed: Error("can't unify for unsolved meta
 
 所以「统一改用 σ」这个方向本身对 `check_pm_final` 不成立，必须让 σ **在 `pattern_match` 里累积**
 （L12 的 `self.sub`），使 `ori` 与 `tmv` 都处于同一 σ 之下再比较。
+
+## 21 第 7 轮：`unify_indices` 穿 spec（B3' 第九步）
+
+### 21.1 本轮做了什么
+
+把 `check_pm` 那条 σ 通道往上游接一步：`unify_indices`（构造子可达性探测里的索引方程）
+改成接收 `&mut SpecSolve<'a>`，调用点用 `probe_cxt.bind_slots()` 建可解集。
+
+**零行为变更**：`acc` 仍是空链。原因见 §21.2。
+
+### 21.2 一个必须记录的结构约束
+
+`probe_accessible` 是**关联函数**（`fn probe_accessible(...)`，没有 `self`），
+因此拿不到 `Compiler` 的 `sub`。而 L12 的对应函数是显式接收 `&sub` 的
+（`pattern_match.rs:181`：`probe_accessible(infer, cxt, cxt.lvl, &head_sum, &ctor, &self.sub, &self.solvable)`）。
+
+所以本轮只能把 `spec` 参数就位、`acc` 留空。要让探测期也看到 σ，需要把 `probe_accessible` 改成
+方法（或显式传 `sub`）——这是后续步骤。
+
+### 21.3 验证
+
+| 项 | 结果 |
+|---|---|
+| oracle | PASS（binary 02:38:31 > src 02:34:52、examples 5/5、638 测试名） |
+| L13 lib | **625 passed** / 13 ignored |
+| chain_inheritance | 2 passed |
+| l13_inherited_from_l12 | 22 passed |
+
+### 21.4 B3' 剩余工作（更新）
+
+| 项 | 现状 |
+|---|---|
+| `check_pm` 走 σ | ✅ 全绿 |
+| `unify_indices` 穿 spec | ✅ 参数就位（acc 空） |
+| `probe_accessible` 拿得到 σ | ❌ 关联函数，无 `self` |
+| `check_pm_final` 走 σ | ❌ 需 `Compiler::sub` 作种子 |
+| `Compiler::sub` 被写入 | ❌ 字段就位、无写入者 |
+| `unify_pm` 返回 `()` | ❌ 仍是 `Cxt` |
+| 两入口返回 `Rc<Subst>` | ❌ 仍是 `Cxt` |
+| 删 `update_cxt`/`refresh` | ❌ 未动 |
