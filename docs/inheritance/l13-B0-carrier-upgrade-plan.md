@@ -195,3 +195,38 @@ L13 `unification.rs` 的 `rename` 拆成两段：`rename`（入口，按值形�
 这与 L12 的 σ 语义一致（σ 链天然"取最新"，不需要 already_refined 那套三档判定）。
 
 **所以 B3 第二段的第一步（判定换源）风险可控**：它是"多认 12 次"而不是"改变已有判定"。
+
+## 10 B3 第二段第一次尝试：失败并回退（2026-11-25）
+
+### 10.1 做了什么
+
+按 §9 的探测结论，把 `unify_pm` 两处 `already_refined` 判定从「查 env 槽」换成「查 σ」
+（`cxt.sub.has(*x)`），并把旧值提取优先从 `cxt.sub.lookup(*x)` 取。
+
+### 10.2 结果：栈溢出
+
+```
+lib: exit 0xC00000FD (STATUS_STACK_OVERFLOW)
+test 'L13_namespace::bare_ctor_member_tests::applied_and_concrete_receivers_still_show' has overflowed its stack
+```
+
+### 10.3 根因（已定位）
+
+`cxt.update_cxt` 往 σ 里存的是 `infer.wrap_sub(&self.sub, &v_for_sub)` —— 但 `update_cxt` 的 `v`
+在 `(Rigid, _)` 臂里来自 `t_prime`，而 `t_prime` 可能是**未解/卡住的形态**。更关键的是：
+
+- 旧载体：`env.change_n` 之后由 `refresh` 遍历重锚定，`Rigid(x)` 的槽会被真正替换成解值；
+- 新判定：`sub.has(x)` 立刻为真，下一轮同 `x` 的调用进 `already_refined` 臂，
+- 取 `cxt.sub.lookup(x)` 拿到的是**包裹了 `VSub` 的解值**，再 `unify_pm(cur, t_prime)`，
+- 该值经 `frcs` 展开时又触发 `Rigid(x)` 的 lookup 命中……递归没有终止点。
+
+`env_only = 0` 只证明 σ 覆盖了 env 的**已知条目**，不证明 σ 里的值形态与 env 槽等价——
+env 槽是 `refresh` 之后的**重锚定值**，σ 里是**原始解值**。两者不同构。
+
+### 10.4 结论与下一步
+
+判定换源不能单独做，必须与「`refresh` 的重锚定」一起换（也就是真正删掉 `update_cxt` 的
+env 改写），否则 σ 存的是未重锚定的值，拿来当精化值会递归。
+
+⇒ 这印证了 §8.4 的判断：B3 第二段真正的工作量在 `refresh`，不在判定。下一步要先把
+「σ 里的值需要什么形态」定清楚（是重锚定后的值，还是原始解值 + 读点 frcs 展开）。
