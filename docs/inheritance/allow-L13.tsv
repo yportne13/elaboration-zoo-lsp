@@ -1,0 +1,744 @@
+# 继承门禁白名单（L13_namespace ← L12_canonical）
+# 每行：文件<TAB>条目<TAB>结论<TAB>理由
+# 结论取值：FEATURE(本章新特性) / RENAME(章名重命名) / PATH(路径改名) /
+#           FROZEN(孪生封印) / REPLACED(本章主动替换) / MOTION(合并移位)
+# 由 tools/gen_allow.py 从账本生成；条目消失或变 identical 时本行必须删除。
+bump_spine_iter/unify.rs	unify_iter	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+elaboration.rs	infer_owned	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+observe.rs	Infer	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+struct_eq.rs	eq_run	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/machine.rs	infer_decl	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	infer_expr	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+unification.rs	unify	PATH	crate 路径/模块前缀改名（L0N_sum_type → L13_namespace），逻辑不变
+elaboration.rs	infer_expr	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+pattern_match.rs	walk_con	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/compiler.rs	walk_con	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/force.rs	force	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/force.rs	frcs	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+mod.rs	prim_reduce	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+pattern_match.rs	compile	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/prim.rs	prim_reduce	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+pretty.rs	go	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/compiler.rs	compile	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	check_universe	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/subst.rs	occurs_transitive	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+mod.rs	force	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	frcs	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/machine.rs	trait_wrap	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+elaboration.rs	trait_wrap	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/quote.rs	quote_iter	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/struct_eq.rs	struct_val_eq_go	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+mod.rs	quote_arm	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	eval	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+unification.rs	rename_arm	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_basic	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/machine.rs	prime_round	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+tests.rs	deep_value_iterative_under_default_stack	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	Infer	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/force.rs	val_mentions_lvl	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/subst.rs	SubstV	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/subst.rs	mentions_level	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+cxt.rs	new	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	splice_transcriber	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	Infer	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/machine.rs	Machine	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/struct_eq.rs	struct_tm_eq_go	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/eval.rs	eval_iter	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+mod.rs	DEMO_SRC	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+elaboration.rs	check	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+unification.rs	frame_new	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/machine.rs	solve_trait_ref	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+tests.rs	test_bits_adder	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/quote.rs	shift_tm_bump	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/rename.rs	rename_iter	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+pattern_match.rs	probe_accessible	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/compiler.rs	probe_accessible	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/quote.rs	prim_eta_quote	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+mod.rs	frame_new	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	shift_tm	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+observe.rs	tm_has_unsolved_meta	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_eq_add_comm	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+elaboration.rs	check_universe	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_lambda_calculus_and_strings	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+cxt.rs	Cxt	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_eq_mul_one_right	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_product_dependent	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+unification.rs	deep_rename_collector_under_default_stack	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+observe.rs	render_by_shape	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/eval.rs	eval_aux_case	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+mod.rs	tm_size_ref	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_unify_kind_separates_absurd_from_undecided	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+elaboration.rs	check_ctor_wf	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	p_decl	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_nested_match_pending_cannot_prove_false	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_generic_match	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_index	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/machine.rs	check_ctor_wf	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/struct_eq.rs	struct_env_eq_go	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/force.rs	force_deep	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+mod.rs	preprocess	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_product_generic	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_deep_pattern_fuel_budget_regression	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+unification.rs	Infer	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+unification.rs	frame_assemble	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	val_mentions_lvl	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/typeclass.rs	v_to_val	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+tests.rs	test_hole_in_branch	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_product_basic	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_product_shadow	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	frame_assemble	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+pattern_match.rs	eval_aux_arm	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_eq_mul_zero_right	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_nested_pattern_outer_ref	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_nested_patterns	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+unification.rs	rename_deep	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/machine.rs	has_free_var	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+mod.rs	go	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	Subst	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	quote_deep	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/entry.rs	export	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+tests.rs	test_eq_add_assoc	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_eq_add_succ_right	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_eq_add_zero_right	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	run_surface_impl	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	p_impl	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_index_equality	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_struct_eq_compares_match_pending_values	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+unification.rs	solve_trait	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/machine.rs	fresh_meta	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+parser/mod.rs	parser_with_span	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+pattern_match.rs	Compiler	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_trait_outparam_add	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/force.rs	vapp1	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/unify.rs	flex_flex_bump	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+mod.rs	check_with_surface	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_recursive_defs	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+cxt.rs	add_builtin	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+elaboration.rs	Infer	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	error_carries_pattern_span	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_product_field_err	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_stuck_match_equation_bounded	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	force_deep	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_eq_reasoning	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_product_new_dot_chain	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_stuck_match_unify	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/machine.rs	check	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+pattern_match.rs	unify_indices	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	force_arg_unwraps_nested_vsub	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_occurs_transitive_vsub_nested_is_documented_limitation	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	loose_string_requires_empty_spine	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	parse_error_carries_span	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/compiler.rs	unify_indices	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/force.rs	force_arg	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+mod.rs	Val	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	subst_lookup_conditional_wrap	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_catch_all_mixed	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_stale_solvable_order_independent	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	visibility_boundary_decl_value_is_not_refined	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/machine.rs	solve_multi_trait_ref	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	unify_with	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+mod.rs	new	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+surface.rs	raw_span	PATH	crate 路径/模块前缀改名（L0N_sum_type → L13_namespace），逻辑不变
+tests.rs	test_stuck_match_nonrecursive_still_equal	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_trait_tostring_projection	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/machine.rs	Machine	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+tests.rs	test_empty_type_zero_arm_match_accepts_canonical_conflicts	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_stuck_match_applied_with_outer_binder	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+unification.rs	flex_flex	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+observe.rs	drain_check_issues	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	p_enum	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	p_struct	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+pattern_match.rs	Compiler	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_absurd_nested_pattern_not_missing_coverage	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_dependent_match_nested_eval	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_nested_pattern_refine_two_phase	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_product_dependent_check	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/compiler.rs	<'a> Compiler<'a>	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/compiler.rs	Compiler	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+mod.rs	Tm	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	bench_check_nf_impl	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	mentions_level	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/machine.rs	unify_catch	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/rename.rs	solve_with_pren_bump	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+raw_pretty.rs	go	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_dependent_match	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_fn_typed_index_slot_applied_after_refine	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_nested_coverage_gap3	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_occurs_check_transitive_chain	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_parse_error_span_matches_raw_source_with_unicode_comment	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_product_field_blank_lines	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_projection_typing	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/machine.rs	Cxt	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+mod.rs	project	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+observe.rs	local_binder_span	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_nested_coverage_gap	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_occurs_check_keeps_legit_refinement	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/machine.rs	eval	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/subst.rs	compose	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+mod.rs	run	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	MacroExpansionInfo	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	subst_chain_semantics	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_gadt_unreachable_err	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_trait_blanket_say	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+typeclass.rs	consume	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+unification.rs	rename	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+unification.rs	solve_multi_trait	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/force.rs	project	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	bind_slots	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/subst.rs	lookup_hit	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+mod.rs	unify_catch	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	v_app	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	p_macro_matcher_single	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	p_raw	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_ctor_wf_param_specialized	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_gadt_accessible	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_literal_equality	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_stuck_match_splice	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/force.rs	frcs_env	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/prim.rs	prim_names_static	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/subst.rs	visit_rigid	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+cxt.rs	subst_cxt	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/machine.rs	decl_insert	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	elab_all	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	wrap_types	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+surface.rs	failed_decl_names	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	cross_meta_cycle_force_is_bounded	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_decl_table_and_globals	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_file_io_builtins	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_macro_decl_expansion	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_shadowed_arm_err	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_string_builtins	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/unify.rs	intersect_bump	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+mod.rs	quote	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	simpl_decl	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	many1_sep	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	p_trait_def	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/syntax.rs	Decl	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+pattern_match.rs	walk	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+pretty.rs	pretty_pattern	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_product_vs_plain_enum	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+unification.rs	prune_ty_go	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+unification.rs	prune_vflex	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+unification.rs	solve_with_pren	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/compiler.rs	walk	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/entry.rs	run_decls	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	wrap_names	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/rename.rs	prune_meta_bump	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/struct_eq.rs	struct_spine_eq_go	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/subst.rs	cons_all	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/subst.rs	env_slots	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/unify.rs	UItem	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+parser/syntax.rs	pretty	PATH	crate 路径/模块前缀改名（L0N_sum_type → L13_namespace），逻辑不变
+surface.rs	format_check_warning	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_missing_case_err	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+unification.rs	loose_string	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/quote.rs	quote_arg	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/subst.rs	wrap_sub	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/syntax.rs	XCell	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+mod.rs	fresh_meta	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	lookup_function_by_cases	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	p_let	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+pattern_match.rs	eval_aux	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+raw_pretty.rs	def_type_from_source	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_ctor_wf_external_ret	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_string_to_global_type	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_stuck_prim_not_unconditionally_equal	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+typeclass.rs	vals_eq_ground_impl	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+unification.rs	invert_go	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/machine.rs	bind_prefix_of_telescope	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	quote_memo	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/rename.rs	prune_ty_bump	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+cxt.rs	bind_slots	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+cxt.rs	unwind	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	lookup_hit	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	prof	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	p_def	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+surface.rs	span_union	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_registered_prim_not_loosely_string	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+unification.rs	FrameKind	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+unification.rs	prune_meta	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/machine.rs	subst_cxt	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/subst.rs	simpl_decl	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+cxt.rs	Cxt	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	cons_all	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+observe.rs	push_ctor_hover	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	p_arg	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	p_new	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_parse_error_span_points_at_failing_token	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_stuck_prim_with_literal_arg_reflexive	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+unification.rs	prune_vflex_go	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+unification.rs	unify_sp	PATH	crate 路径/模块前缀改名（L0N_sum_type → L13_namespace），逻辑不变
+bump_spine_iter/bench_src.rs	struct_src	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	empty	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	quote	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/spine.rs	xcell_head_name	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+mod.rs	force_arg	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	v_app_pruning	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	v_applicable	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+observe.rs	peel_pi_collect	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+observe.rs	push_hover_decl	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	p_pattern	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	span_of	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	check_err	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+typeclass.rs	try_resolve	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+unification.rs	rename_sp	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/eval.rs	W	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	str_pi	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/rename.rs	prune_vflex_bump	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+cxt.rs	DeclEntry	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+elaboration.rs	insert_until_go	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	quote_sp	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+observe.rs	push_inlay_hint	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/lex.rs	TokenKind	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	p_atom	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	p_decl_plain	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	splice_push	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/syntax.rs	name	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	chain	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/machine.rs	Machine	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	clear_round	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	types_names_list	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/rename.rs	lams_from_ty	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/spine.rs	push	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/subst.rs	extend	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/subst.rs	has	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/subst.rs	push_env	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/syntax.rs	Tm	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+cxt.rs	bind	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	FrameKind	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+observe.rs	surface	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	p_atom1	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/syntax.rs	Raw	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+pattern_match.rs	pat_span	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	nat_sum	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_demo	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_string_empty_and_escape	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+unification.rs	deep_rename_tests	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+unification.rs	nat_sum	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/machine.rs	unify	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/struct_eq.rs	EqBudget	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/struct_eq.rs	pr_slots	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/subst.rs	vsub_reclaim	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/typeclass.rs	TraitState	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+cxt.rs	define	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+cxt.rs	empty	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	bench_check	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	meta_restore	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	with_first	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+observe.rs	render_typ_pretty	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+observe.rs	render_val	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	p_pi_binder	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	p_top	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+struct_eq.rs	EqBudget	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	check	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	struct_eq_vsub_pointer_identity	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_get_global_missing_stays_stuck	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+unification.rs	lams_go	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/bench_src.rs	natadd_src	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/eval.rs	eval_aux	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/force.rs	vapp_ok	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	eval_fresh	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	reclaim	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	reclaim	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	reclaim	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	unwind_names	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/rename.rs	invert_bump	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/rename.rs	solve_bump	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+cxt.rs	tm_pi	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	extend	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	lvl2ix	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	simpl_decl_cached	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	borrowed_tokens_to_string	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	brace	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	p_match	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	p_pi_impl_binder	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+struct_eq.rs	val_eq	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+surface.rs	LspSurface	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+typeclass.rs	val_match	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+unification.rs	unlift	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/compiler.rs	NestedCheck	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/compiler.rs	covers	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/compiler.rs	is_catch_all	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/entry.rs	Tycker	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/entry.rs	bench_nf_impl	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	DeclOut	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	check_ty	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	st2g_app	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/prim.rs	DeclEntryF	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/prim.rs	unify_fuel_budget	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/quote.rs	QJob	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/struct_eq.rs	spend	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/subst.rs	SubEntryV	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/unify.rs	unify_sp_lockstep	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+cxt.rs	Decls	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+elaboration.rs	insert_go	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	DeclTm	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	Error	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	SubEntry	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	burn_match_cmp_budget	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	has	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	pop	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	run_with_surface_at	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+observe.rs	hover_entry_at	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+observe.rs	note_failed_decl	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+observe.rs	push_hover	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	p_pi_impl_binder_option	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+pattern_match.rs	Walk	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+pretty.rs	go_ix	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+pretty.rs	prepend_pattern_ns	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+pretty.rs	sum_head_name	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+struct_eq.rs	EqTask	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+struct_eq.rs	spend	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+surface.rs	inlay_label	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+surface.rs	pattern_span	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+syntax.rs	close_ty	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	succ_of	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+unification.rs	Frame	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/compiler.rs	sum_case_names	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	<K, T, S> ReclaimOnClear for std::collections::HashMap<K, T, S> where K: std::hash::Hash + Eq, S: std::hash::BuildHasher,	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	<T, S> ReclaimOnClear for std::collections::HashSet<T, S> where T: std::hash::Hash + Eq, S: std::hash::BuildHasher,	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	bind_name	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	define_name	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/prim.rs	burn	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+cxt.rs	NameState	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+cxt.rs	st2g_app	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+cxt.rs	str_pi	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	Frame	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	burn	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	push	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	run_with_surface_query	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	v_app_sp	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+observe.rs	push_hover_rendered	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+observe.rs	push_inlay_label	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+observe.rs	push_println_span	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	p_lam_binder	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	p_raw_plain	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	test_leftover_located	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+pattern_match.rs	matched	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+shape.rs	match_to_decl	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+shape.rs	peel	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/bench_src.rs	strchain_src	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	TCons	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	insert_until_name	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/subst.rs	Drop for SubEntryV	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+cxt.rs	NameState	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+cxt.rs	decl_insert_mut	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	<T: Copy, const N: usize> InlineStack<T, N>	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	InlineStack	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	bench_check_nf_observe	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	meta_snapshot	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	report	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	wrap_sp	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	wrap_sub	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+observe.rs	span_from_name	PATH	crate 路径/模块前缀改名（L0N_sum_type → L13_namespace），逻辑不变
+parser/lex.rs	ident	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	p_print	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	test_whole_file_fail	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+pattern_match.rs	IndexUnify	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+pattern_match.rs	new	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+pretty.rs	pretty_tm	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+typeclass.rs	Synth	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+typeclass.rs	impl_trait_for	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+unification.rs	PartialRenaming	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+unification.rs	intersect	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/bench_src.rs	church_src	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/compiler.rs	new	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/entry.rs	NO_NAME_MAP	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	ConvScratch	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	ReclaimOnClear	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	force_v	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	insert_go	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	new	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	restore_names	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/subst.rs	SpecSolve	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/syntax.rs	v_clo_of	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/syntax.rs	v_xcell_of	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+cxt.rs	new_binder	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+elaboration.rs	insert	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	Infer	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	compose	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	cover_at	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	frcs_env	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	nf	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	note_unify_kind	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	occurs_transitive	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	reset	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	v_meta	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/lex.rs	fmt	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	p_macro_def	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	test_ok	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/syntax.rs	Pattern	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+pattern_match.rs	NestedCheck	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+pattern_match.rs	is_catch_all	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+pattern_match.rs	sum_cases	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+shape.rs	shapes_for	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_macro_stringify_builtin	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+typeclass.rs	new_subgoal	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+unification.rs	intersect_go	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+unification.rs	invert	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+unification.rs	lift_in_place	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+unification.rs	prune_ty	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/bench_src.rs	enum_src	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/bench_src.rs	globals_src	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/compiler.rs	Walk	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/compiler.rs	matched	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/entry.rs	tm_size	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	fuel_exhausted	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	is_flex_v	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	new_binder	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	tm_pi	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/spine.rs	is_objheaded	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/struct_eq.rs	struct_env_eq	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/struct_eq.rs	struct_tm_eq	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/struct_eq.rs	struct_val_eq	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/subst.rs	SubstV	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/subst.rs	drop	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/subst.rs	is_empty	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/syntax.rs	v_pi_of	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/syntax.rs	v_u_of	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/typeclass.rs	span_of	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+cxt.rs	decl_insert	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+cxt.rs	has_src	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+cxt.rs	insert	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+cxt.rs	lookup_src	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+elaboration.rs	insert_until_name	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	MetaSnapshot	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	PatternDetail	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	UnifyKind	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	at	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	bind_count	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	bump	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	closure_apply	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	deref	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	env_slots	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	eq	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	eq	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	eq	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	extend	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	fmt	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	is_empty	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	lookup	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	lookup_meta	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	mentions_any_solved	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	mentions_level	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	meta_refuel	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	new	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	new	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	new_meta	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	overwrite_meta	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	push_blank	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	span	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	std::fmt::Debug for Error	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	tmspan	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	vspan	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+observe.rs	hover_wanted	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+observe.rs	inlay_wanted	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/lex.rs	lex	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/lex.rs	string	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	kw_is	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	p_macro_transcriber_single	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	p_spine	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	parser	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+pretty.rs	drop	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+pretty.rs	fresh	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+shape.rs	MatchShape	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+struct_eq.rs	env_eq	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+struct_eq.rs	tm_eq	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+typeclass.rs	synth	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+unification.rs	SpecSolve	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+unification.rs	drop	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+unification.rs	lift	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+unification.rs	skip	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+unification.rs	unify_no_arm	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter/entry.rs	Tycker	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/entry.rs	drop	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/entry.rs	name	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	<T> ReclaimOnClear for Vec<T>	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	name_mark	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/prim.rs	is_selfref_val	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/prim.rs	lit_of	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/spine.rs	Spine	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/spine.rs	flex_of	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/spine.rs	head_kind	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/subst.rs	VSUB_REGS	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/typeclass.rs	unmatchable	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+cxt.rs	decl	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+cxt.rs	decl_get	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+cxt.rs	deref	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+cxt.rs	deref_mut	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+cxt.rs	fmt	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+cxt.rs	new	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+cxt.rs	next_decl_version	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+cxt.rs	unwind_names	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+elaboration.rs	check_ty	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+elaboration.rs	infer	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+elaboration.rs	insert_t	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	L12_DEBUG_ON	RENAME	章名重命名 L12_* → L13_*（调试开关随层改名）
+mod.rs	LOOP_DEBUG	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	MetaEntry	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	PartialEq for VSpan	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	PartialEq<Span<String>> for VSpan	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	PartialEq<VSpan> for Span<String>	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	Subst	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	VSpan	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	bench_check_nf	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	close_val	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	enable	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	fmt	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	fuel_exhausted	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	on	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	rc_take	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	reset_match_cmp_budget	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	run_with_surface	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	std::fmt::Debug for VSpan	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	std::ops::Deref for VSpan	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	take_trait_error	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	unify_kind	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	vmeta	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	vvar	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	p_bind	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	p_lam	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	p_pi	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/syntax.rs	Decl	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/syntax.rs	Pattern	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/syntax.rs	get_icit	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/syntax.rs	to_impl	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/syntax.rs	to_raw	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+pattern_match.rs	covers	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+pretty.rs	Drop for DepthGuard	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+pretty.rs	go_app_pruning	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+raw_pretty.rs	pattern	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+shape.rs	from_val	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+surface.rs	LspSurface	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+surface.rs	split_issue_lines	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+syntax.rs	Locals	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+typeclass.rs	Assertion	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+typeclass.rs	TableEntry	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+typeclass.rs	new_trait	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+typeclass.rs	vals_eq_ground	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+unification.rs	Drop for G	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+unification.rs	lams	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+unification.rs	solve	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+bump_spine_iter.rs	struct_eq	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter.rs	subst	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter.rs	unify	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/compiler.rs	<'a> Walk<'a>	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/entry.rs	Drop for ReclaimOnExit	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/entry.rs	J	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/entry.rs	ReclaimOnExit	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/entry.rs	parse	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/entry.rs	run_input	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/env.rs	_	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/env.rs	_	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/env.rs	_	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/env.rs	_	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	<'a> Cxt<'a>	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	CACHE_SHRINK_MIN_ENTRIES	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	PI_NAME	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	SPINE_SHRINK_MIN_ENTRIES	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	insert	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/machine.rs	reclaim	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/prim.rs	BUDGET	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/prim.rs	Fuel	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/prim.rs	MutableMap	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/prim.rs	UNIFY_FUEL	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/rename.rs	reset	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/spine.rs	HK_DECL	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/spine.rs	HK_OTHER	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/spine.rs	HK_PRIM	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/spine.rs	MetaEntry	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/spine.rs	is_flex	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/spine.rs	meta_val_of	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/struct_eq.rs	EQ_BUDGET	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/struct_eq.rs	EqBudget	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/subst.rs	BUDGET	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/subst.rs	SUBSTV_ALIVE	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/subst.rs	std	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/typeclass.rs	TraitAssertion	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/typeclass.rs	TraitInstance	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+bump_spine_iter/unify.rs	NO_CONV_MEMO	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+cxt.rs	DECL_VERSION	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+cxt.rs	Decls	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+cxt.rs	PrimFunc	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+cxt.rs	Target	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+cxt.rs	go	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+cxt.rs	names	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+cxt.rs	std::fmt::Debug for PrimFunc	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+cxt.rs	std::ops::Deref for Decls	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+cxt.rs	std::ops::DerefMut for Decls	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	BUDGET	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	Env	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	Error	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	FILE_IO_LOCK	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	Lvl	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	NAMES	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	ON	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	Spine	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	Target	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	UnifyError	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	VSpan	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	VTy	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	Val	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	bump_spine_iter	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	cxt	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	elaboration	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	empty_span	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	fmt	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	observe	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	parser	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	pattern_match	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	pretty	PATH	crate 路径/模块前缀改名（L0N_sum_type → L13_namespace），逻辑不变
+mod.rs	raw_pretty	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	reset_unify_kind	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	shape	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	std::error::Error for Error	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	std::fmt::Display for Error	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	struct_eq	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	surface	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	syntax	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	tests	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	typeclass	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	unification	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/lex.rs	KEYWORD	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/lex.rs	OP	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/lex.rs	brace	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/lex.rs	op	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/lex.rs	std::fmt::Display for TokenKind	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/lex.rs	test	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/macros.rs	get_used_metavars	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/macros.rs	replace	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/macros.rs	to_parser	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	ErrMsg	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	ErrorProgress for IError	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	MacroState	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	ParseError	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	fun_or_spine	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	kw	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	lex	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	macros	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	owned_tokens_to_string	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	p_macro_group_matcher	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/syntax.rs	Either	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+pattern_match.rs	Val	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+pattern_match.rs	Walk	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+pretty.rs	APPP	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+pretty.rs	ATP	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+pretty.rs	DEPTH	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+pretty.rs	DepthGuard	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+pretty.rs	LETP	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+pretty.rs	MAX_DEPTH	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+pretty.rs	PIP	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+pretty.rs	bracket	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+pretty.rs	paren	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+raw_pretty.rs	has_source_type	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+struct_eq.rs	EQ_BUDGET	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+struct_eq.rs	EqBudget	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+surface.rs	HoverEntry	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+surface.rs	MAX_LEN	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	N_EQ	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	N_OCCURS	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+typeclass.rs	ConsumerNode	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+typeclass.rs	Instance	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+unification.rs	G	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+unification.rs	N	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+unification.rs	REN_DEPTH	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）

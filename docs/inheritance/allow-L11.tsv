@@ -1,0 +1,20 @@
+# 继承门禁白名单（L11_macro ← L10_typeclass）
+# 每行：文件<TAB>条目<TAB>结论<TAB>理由
+# 结论取值：FEATURE(本章新特性) / RENAME(章名重命名) / PATH(路径改名) /
+#           FROZEN(孪生封印) / REPLACED(本章主动替换) / MOTION(合并移位)
+# 由 tools/gen_allow.py 从账本生成；条目消失或变 identical 时本行必须删除。
+parser/mod.rs	parser_with_span	FEATURE	本章新特性：macro_rules（token/元变量/重复、解析期展开、深度护栏）
+tests.rs	test_file_io_builtins	FEATURE	本章新特性：macro_rules（token/元变量/重复、解析期展开、深度护栏）
+mod.rs	L10_DEBUG_ON	RENAME	章名重命名 L10_* → L11_*（调试开关随层改名）
+bump_spine_iter/machine.rs	infer_decl	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+mod.rs	DEMO_SRC	FEATURE	本章新特性：macro_rules（token/元变量/重复、解析期展开、深度护栏）
+mod.rs	LOOP_DEBUG	FEATURE	本章新特性：macro_rules（token/元变量/重复、解析期展开、深度护栏）
+mod.rs	run	FEATURE	本章新特性：macro_rules（token/元变量/重复、解析期展开、深度护栏）
+mod.rs	run_surface_impl	FEATURE	本章新特性：macro_rules（token/元变量/重复、解析期展开、深度护栏）
+observe.rs	span_from_name	PATH	crate 路径/模块前缀改名（L0N_sum_type → L11_macro），逻辑不变
+parser/lex.rs	KEYWORD	FEATURE	本章新特性：macro_rules（token/元变量/重复、解析期展开、深度护栏）
+parser/lex.rs	lex	FEATURE	本章新特性：macro_rules（token/元变量/重复、解析期展开、深度护栏）
+parser/mod.rs	MacroState	FEATURE	本章新特性：macro_rules（token/元变量/重复、解析期展开、深度护栏）
+parser/mod.rs	test_leftover_located	FEATURE	本章新特性：macro_rules（token/元变量/重复、解析期展开、深度护栏）
+unification.rs	unify	PATH	crate 路径/模块前缀改名（L0N_sum_type → L11_macro），逻辑不变
+unification.rs	unify_sp	PATH	crate 路径/模块前缀改名（L0N_sum_type → L11_macro），逻辑不变
