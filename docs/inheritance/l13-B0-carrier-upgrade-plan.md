@@ -784,3 +784,40 @@ fn ctor_accessible(infer, cxt, typ, constrs, memo, i, sub: &Rc<Subst>) -> Walk
 | `unify_pm` 返回 `()` | ❌ 仍是 `Cxt` |
 | 两入口返回 `Rc<Subst>` | ❌ 仍是 `Cxt` |
 | 删 `update_cxt`/`refresh` | ❌ 未动 |
+
+## 23 第 9 轮：`Compiler.sub` 写入路径的两次尝试与回退（2026-11-26）
+
+### 23.1 尝试一：`probe_accessible` 返回 σ
+
+目标：让探测期解出的 σ 回到 `Compiler`（`self.sub = spec.acc`），为 `check_pm_final` 提供种子。
+
+改法：`probe_accessible` 返回 `(Walk, Rc<Subst>)`，调用方写回。
+
+**放弃原因**：函数体内有 5 个返回点——1 个 early `return Walk::Matched`（无参数 Sum 短路）+
+`break match res` 的 4 个臂。其中 4 个臂里的 `spec` 在 `break` 之后**不可见**（`break match` 表达式
+的作用域不含臂外的局部变量），所以不能简单地给每个臂加 `spec.acc.clone()`；需要把 `spec` 提到
+`break` 之前并改写成 `break (walk, spec.acc.clone())` 的形态。机械化改写的风险明显高于收益，已回退。
+
+### 23.2 尝试二：RefCell 旁路
+
+考虑用 `RefCell<Rc<Subst>>` 作为 out-parameter，避开返回类型改造。
+**放弃原因**：`probe_accessible` 是关联函数、可能被多处并发语义调用（探测有 memo），
+旁路会引入生命周期与借用面的不确定性；且它把「函数纯性」破坏了。未落地。
+
+### 23.3 本轮实际落地
+
+只有 `check_pm_final` 的**方程组约束注释**：
+
+- 说明为什么这里必须保持 `update_cxt`（§19 的 spine 不同源），
+- 说明 `solvable` 的域（`cxt.bind_slots()`）已经就位，等 σ 接入时不需要再造。
+
+### 23.4 结论：`Compiler.sub` 的写入需要一个更结构化的改法
+
+两次尝试都撞在同一个地方：**`probe_accessible` 是关联函数 + `break match` 的作用域**。
+要走通，正确的做法是 L12 那样：`Compiler` 有 `walk_pat` 方法（`&mut self`），
+σ 的读写都在方法内完成，不靠返回值搬运。L13 的 `walk_pat` 已经是方法（`&mut self`），
+但它调用的 `probe_accessible`/`ctor_accessible` 还是关联函数——这是需要一并解决的。
+
+⇒ 下一轮的正确方向是把 `probe_accessible` / `ctor_accessible` **也改成方法**（`&mut self`），
+这样 σ 的读写都落在 `self.sub` 上，不需要返回值搬运、也不需要旁路。
+这比本轮尝试的两种改法都更接近 L12 的形状。
