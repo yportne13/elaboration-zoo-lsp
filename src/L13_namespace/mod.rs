@@ -14,6 +14,7 @@ mod elaboration;
 pub mod eval_budget;
 pub mod parser;
 mod pattern_match;
+mod struct_eq;
 mod syntax;
 mod unification;
 mod typeclass;
@@ -23,6 +24,53 @@ pub mod shape;
 pub mod surface;
 mod canonical;
 pub(crate) mod bump_spine_iter;
+
+/// 内联容量 N 的小栈（热路径零分配；溢出转 Vec）。`T: Copy` 让内联数组
+/// 可用 seed 初始化——与 L07/L08/L09 的 `InlineStack` 同款（结构比较与深值
+/// 遍历的任务栈在浅结构下完全不碰堆）。L13 此前没有这个辅助结构。
+pub(crate) struct InlineStack<T: Copy, const N: usize> {
+    buf: [T; N],
+    len: usize,
+    spill: Vec<T>,
+}
+
+impl<T: Copy, const N: usize> InlineStack<T, N> {
+    pub(crate) fn with_first(seed: T) -> Self {
+        let mut s = InlineStack {
+            buf: [seed; N],
+            len: 0,
+            spill: Vec::new(),
+        };
+        s.push(seed);
+        s
+    }
+    #[inline]
+    pub(crate) fn push(&mut self, v: T) {
+        if self.len < N {
+            self.buf[self.len] = v;
+            self.len += 1;
+        } else {
+            self.spill.push(v);
+        }
+    }
+    #[inline]
+    pub(crate) fn pop(&mut self) -> Option<T> {
+        if let Some(v) = self.spill.pop() {
+            return Some(v);
+        }
+        if self.len == 0 {
+            return None;
+        }
+        self.len -= 1;
+        Some(self.buf[self.len])
+    }
+    #[inline]
+    pub(crate) fn extend<I: IntoIterator<Item = T>>(&mut self, it: I) {
+        for v in it {
+            self.push(v);
+        }
+    }
+}
 
 /// 可达性探测次数（孪生与参考版同口径；`l13lspsample` 打印窗口内增量）。
 pub fn probe_count() -> u64 {

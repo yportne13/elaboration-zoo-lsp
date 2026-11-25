@@ -613,6 +613,7 @@ impl Infer {
         };
         self.solve_with_pren(decl, m, pren, prune_non_linear, rhs)
     }
+
     fn solve_with_pren(
         &mut self,
         decl: &Decl,
@@ -1248,10 +1249,32 @@ impl Infer {
                 }
             }
             (Val::Match(s1, env1, cases1), Val::Match(s2, env2, cases2)) => {
+                // **结构快路径**（2026-11-24 回灌，L07/L12 同款）：scrutinee、捕获
+                // env、模式与分支体全部结构相同 ⇒ 两个 match 值在所有实例化下行为
+                // 一致，直接判等。
+                //
+                // 为什么必须有它：下面逐分支重求值会把递归函数的分支体再展开一层
+                // 卡住 match，fresh rigid 层级随深度递增**永不收敛**——同一 decl 值
+                // 在合一两侧各展开一份时正是这种自比较。缺这条快路径时，唯一兜底
+                // 是下面 64 次的 `MATCH_CMP_BUDGET`：L07 能证的等式，L13 只能报
+                // "判不出"（docs/compare-l07-l13-shared/FINAL.md §4 #2）。
+                //
+                // 判据与 L07 一致：先试结构相等，只有在**快路径失效、真要走逐分支
+                // 重求值**时才计入次数预算（见下方 `burn_match_cmp_budget`）。
+                if super::struct_eq::val_eq(s1, s2)
+                    && super::struct_eq::env_eq(env1, env2)
+                    && cases1.len() == cases2.len()
+                    && cases1
+                        .iter()
+                        .zip(cases2.iter())
+                        .all(|((p1, b1), (p2, b2))| p1 == p2 && super::struct_eq::tm_eq(b1, b2))
+                {
+                    return Ok(());
+                }
                 // 卡住 match 自比较的次数预算（对齐 L12 `MATCH_CMP_BUDGET`）：
                 // 递归 def 的分支体每层展开新的卡住 match，层级递增、永不结构
                 // 收敛；原实现只能靠共享 fuel 池兜底（深/宽负载下是长尾）。
-                // L13 无 σ 结构快路径，慢路径一律计数；耗尽按"判不出相等"失败。
+                // 快路径**先试**，只有它失效的慢路径才计数（L07 2026-11-08 口径）。
                 if !self.burn_match_cmp_budget() {
                     // L13 偏差（相对 L12 记 Undecided）：预算耗尽必须与"语义上
                     // 判不出"分档——覆盖探测只对预算档做"按可达处理"的保守

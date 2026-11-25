@@ -170,3 +170,35 @@ known-diff #5（`分支不可达` 中文文案），逐个核对后确认**没�
 | `examples/*.typort` 全量 `typort check` | **5/5 exit=0**（alu / adder_proof / theorem_proving / typeclass_complex / hdl_ops） |
 | `cargo test --release --lib L13_namespace::` | **622 passed**, 13 ignored |
 | `cargo test --release --test l13_inherited_from_l12` | **22 passed**（§6 回灌的用例） |
+
+### 7.3 并入侧分支：L13 的 struct_eq 快路径（`475ea8ce`）
+
+账本里 `struct_eq.rs` 的 13 项（`eq_run` 319 行、`EqBudget`、`val_eq`、`spend`…）正是 L12 的结构相等快路径。
+侧分支 `feat/l13-sigma-carrier` 早就做过架构级移植（+421 行 `struct_eq.rs` + `InlineStack`），
+本轮直接 cherry-pick：
+
+| 项 | 结果 |
+|---|---|
+| `git cherry-pick --no-commit 475ea8ce` | 三文件自动合并（`mod.rs` 已自动合并） |
+| `cargo check --release --lib` | 0 error |
+| `cargo test --release --test l13_struct_eq_fastpath` | **2 passed** |
+| `cargo test --release --lib L13_namespace::` | **622 passed**，13 ignored（无回归） |
+| ARCH-DIVERGED 候选 | 136 → **125** |
+
+`struct_eq.rs` 从此不再是"缺失文件"——L13 也有了自己版本的结构相等快路径
+（`struct_val_eq`/`struct_tm_eq`/`struct_env_eq`/`spine` 族 + `EqBudget` 预算）。
+剩余 `eq_run`/`val_eq` 的 changed 是 L13 载体的适配（`Span<SmolStr>` + `is_trait` 字段），属分叉本身。
+
+### 7.4 剩余缺口（全部为分叉，需决策）
+
+| 文件 | 项数 | 性质 |
+|---|---:|---|
+| `mod.rs` | 59 | `prim_reduce`/`Subst`/`frcs`/`quote_arm`/`quote_deep` — σ 载体缺失 |
+| `cxt.rs` | 19 | `NameState`/`subst_cxt`/`bind_slots` — 精化载体接口差异 |
+| `parser/mod.rs` | 13 | 解析器实现形态（`splice_transcriber`/`ParserExt`） |
+| `unification.rs` | 12 | `rename_deep`/`rename_arm`/`frame_new` 族 |
+| `observe.rs` | 8 | 观察面 API 形态差异（§5.1） |
+| `pattern_match.rs` | 4 | `walk_con` 逐臂下钻的实现形态 |
+| 其余 | 10 | `elaboration.rs`/`pretty.rs`/`surface.rs` 形态差异 |
+
+⇒ **125 项、全部是载体分叉**（除 8 项 observe 是纯 API 命名差异）。**不动生产内核的前提下到此为止。**

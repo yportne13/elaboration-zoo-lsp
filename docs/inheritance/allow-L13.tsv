@@ -5,7 +5,6 @@
 bump_spine_iter/unify.rs	unify_iter	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 elaboration.rs	infer_owned	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 observe.rs	Infer	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
-struct_eq.rs	eq_run	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 bump_spine_iter/machine.rs	infer_decl	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/machine.rs	infer_expr	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 unification.rs	unify	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
@@ -23,11 +22,11 @@ bump_spine_iter/machine.rs	check_universe	FROZEN	孪生引擎已封印（feature
 bump_spine_iter/subst.rs	occurs_transitive	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 mod.rs	force	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	frcs	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	quote_arm	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 bump_spine_iter/machine.rs	trait_wrap	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 elaboration.rs	trait_wrap	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 bump_spine_iter/quote.rs	quote_iter	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/struct_eq.rs	struct_val_eq_go	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-mod.rs	quote_arm	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 mod.rs	eval	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 unification.rs	rename_arm	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 tests.rs	test_basic	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
@@ -38,12 +37,13 @@ bump_spine_iter/force.rs	val_mentions_lvl	FROZEN	孪生引擎已封印（feature
 bump_spine_iter/subst.rs	SubstV	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/subst.rs	mentions_level	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 cxt.rs	new	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
-parser/mod.rs	splice_transcriber	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 mod.rs	Infer	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/mod.rs	splice_transcriber	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 bump_spine_iter/machine.rs	Machine	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/struct_eq.rs	struct_tm_eq_go	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/eval.rs	eval_iter	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 mod.rs	DEMO_SRC	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+struct_eq.rs	eq_run	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 elaboration.rs	check	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 unification.rs	frame_new	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 bump_spine_iter/machine.rs	solve_trait_ref	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
@@ -53,13 +53,13 @@ bump_spine_iter/rename.rs	rename_iter	FROZEN	孪生引擎已封印（feature 默
 pattern_match.rs	probe_accessible	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 bump_spine_iter/compiler.rs	probe_accessible	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/quote.rs	prim_eta_quote	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-mod.rs	frame_new	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 mod.rs	shift_tm	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 observe.rs	tm_has_unsolved_meta	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 tests.rs	test_eq_add_comm	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 elaboration.rs	check_universe	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 tests.rs	test_lambda_calculus_and_strings	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 cxt.rs	Cxt	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	frame_new	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 tests.rs	test_eq_mul_one_right	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 tests.rs	test_product_dependent	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 unification.rs	deep_rename_collector_under_default_stack	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
@@ -77,28 +77,28 @@ bump_spine_iter/struct_eq.rs	struct_env_eq_go	FROZEN	孪生引擎已封印（fea
 bump_spine_iter/force.rs	force_deep	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 mod.rs	preprocess	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 tests.rs	test_product_generic	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+unification.rs	frame_assemble	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 tests.rs	test_deep_pattern_fuel_budget_regression	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 unification.rs	Infer	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
-unification.rs	frame_assemble	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 mod.rs	val_mentions_lvl	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 bump_spine_iter/typeclass.rs	v_to_val	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 tests.rs	test_hole_in_branch	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 tests.rs	test_product_basic	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 tests.rs	test_product_shadow	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
-mod.rs	frame_assemble	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+unification.rs	rename_deep	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 pattern_match.rs	eval_aux_arm	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 tests.rs	test_eq_mul_zero_right	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 tests.rs	test_nested_pattern_outer_ref	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 tests.rs	test_nested_patterns	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
-unification.rs	rename_deep	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 bump_spine_iter/machine.rs	has_free_var	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+mod.rs	frame_assemble	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 mod.rs	go	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
-mod.rs	Subst	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 mod.rs	quote_deep	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 bump_spine_iter/entry.rs	export	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 tests.rs	test_eq_add_assoc	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 tests.rs	test_eq_add_succ_right	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 tests.rs	test_eq_add_zero_right	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+mod.rs	Subst	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 mod.rs	run_surface_impl	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 parser/mod.rs	p_impl	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 tests.rs	test_index_equality	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
@@ -110,6 +110,7 @@ pattern_match.rs	Compiler	MORPHOSIS	同名不同形（能力在 L13 内联于别
 tests.rs	test_trait_outparam_add	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 bump_spine_iter/force.rs	vapp1	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/unify.rs	flex_flex_bump	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+mod.rs	Val	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	check_with_surface	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 tests.rs	test_recursive_defs	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 cxt.rs	add_builtin	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
@@ -117,11 +118,12 @@ elaboration.rs	Infer	MORPHOSIS	同名不同形（能力在 L13 内联于别处/�
 tests.rs	error_carries_pattern_span	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 tests.rs	test_product_field_err	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 tests.rs	test_stuck_match_equation_bounded	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
-mod.rs	force_deep	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	Tm	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 tests.rs	test_eq_reasoning	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 tests.rs	test_product_new_dot_chain	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 tests.rs	test_stuck_match_unify	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 bump_spine_iter/machine.rs	check	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+mod.rs	force_deep	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 pattern_match.rs	unify_indices	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 tests.rs	force_arg_unwraps_nested_vsub	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 tests.rs	test_occurs_transitive_vsub_nested_is_documented_limitation	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
@@ -129,7 +131,6 @@ tests.rs	loose_string_requires_empty_spine	TEST-GAP	L12 的测试用例（22 个
 tests.rs	parse_error_carries_span	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 bump_spine_iter/compiler.rs	unify_indices	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/force.rs	force_arg	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-mod.rs	Val	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 tests.rs	subst_lookup_conditional_wrap	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 tests.rs	test_catch_all_mixed	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 tests.rs	test_stale_solvable_order_independent	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
@@ -154,11 +155,10 @@ tests.rs	test_nested_pattern_refine_two_phase	TEST-GAP	L12 的测试用例（22 
 tests.rs	test_product_dependent_check	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 bump_spine_iter/compiler.rs	<'a> Compiler<'a>	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/compiler.rs	Compiler	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-mod.rs	Tm	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	bench_check_nf_impl	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
-mod.rs	mentions_level	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 bump_spine_iter/machine.rs	unify_catch	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/rename.rs	solve_with_pren_bump	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+mod.rs	mentions_level	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 raw_pretty.rs	go	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 tests.rs	test_dependent_match	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 tests.rs	test_fn_typed_index_slot_applied_after_refine	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
@@ -169,12 +169,14 @@ tests.rs	test_product_field_blank_lines	TEST-GAP	L12 的测试用例（22 个已
 tests.rs	test_projection_typing	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 bump_spine_iter/machine.rs	Cxt	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 mod.rs	project	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	unify_catch	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 observe.rs	local_binder_span	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 tests.rs	test_nested_coverage_gap	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 tests.rs	test_occurs_check_keeps_legit_refinement	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 bump_spine_iter/machine.rs	eval	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/subst.rs	compose	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 mod.rs	run	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	v_app	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 parser/mod.rs	MacroExpansionInfo	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 tests.rs	subst_chain_semantics	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 tests.rs	test_gadt_unreachable_err	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
@@ -185,8 +187,6 @@ unification.rs	solve_multi_trait	MORPHOSIS	同名不同形（能力在 L13 内�
 bump_spine_iter/force.rs	project	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/machine.rs	bind_slots	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/subst.rs	lookup_hit	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-mod.rs	unify_catch	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
-mod.rs	v_app	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 parser/mod.rs	p_macro_matcher_single	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 parser/mod.rs	p_raw	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 tests.rs	test_ctor_wf_param_specialized	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
@@ -236,6 +236,7 @@ bump_spine_iter/subst.rs	wrap_sub	FROZEN	孪生引擎已封印（feature 默认�
 bump_spine_iter/syntax.rs	XCell	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 mod.rs	fresh_meta	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	lookup_function_by_cases	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	prof	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 parser/mod.rs	p_let	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 pattern_match.rs	eval_aux	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 raw_pretty.rs	def_type_from_source	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
@@ -249,8 +250,6 @@ bump_spine_iter/machine.rs	quote_memo	FROZEN	孪生引擎已封印（feature 默
 bump_spine_iter/rename.rs	prune_ty_bump	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 cxt.rs	bind_slots	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 cxt.rs	unwind	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
-mod.rs	lookup_hit	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
-mod.rs	prof	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 parser/mod.rs	p_def	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 surface.rs	span_union	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 tests.rs	test_registered_prim_not_loosely_string	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
@@ -260,6 +259,7 @@ bump_spine_iter/machine.rs	subst_cxt	FROZEN	孪生引擎已封印（feature 默�
 bump_spine_iter/subst.rs	simpl_decl	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 cxt.rs	Cxt	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	cons_all	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	lookup_hit	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 observe.rs	push_ctor_hover	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 parser/mod.rs	p_arg	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 parser/mod.rs	p_new	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
@@ -271,6 +271,7 @@ bump_spine_iter/bench_src.rs	struct_src	FROZEN	孪生引擎已封印（feature �
 bump_spine_iter/machine.rs	empty	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/machine.rs	quote	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/spine.rs	xcell_head_name	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
+mod.rs	cover_at	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	force_arg	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 mod.rs	v_app_pruning	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	v_applicable	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
@@ -280,7 +281,6 @@ parser/mod.rs	p_pattern	MORPHOSIS	同名不同形（能力在 L13 内联于别�
 parser/mod.rs	span_of	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 tests.rs	check_err	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 typeclass.rs	try_resolve	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
-unification.rs	rename_sp	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 bump_spine_iter/eval.rs	W	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/machine.rs	str_pi	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/rename.rs	prune_vflex_bump	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
@@ -323,16 +323,15 @@ cxt.rs	define	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了�
 cxt.rs	empty	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	bench_check	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	meta_restore	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
-mod.rs	with_first	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 observe.rs	render_typ_pretty	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 observe.rs	render_val	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 parser/mod.rs	p_pi_binder	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 parser/mod.rs	p_top	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
-struct_eq.rs	EqBudget	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 tests.rs	check	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 tests.rs	struct_eq_vsub_pointer_identity	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 tests.rs	test_get_global_missing_stays_stuck	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 unification.rs	lams_go	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+unification.rs	rename_sp	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 bump_spine_iter/bench_src.rs	natadd_src	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/eval.rs	eval_aux	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/force.rs	vapp_ok	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
@@ -344,14 +343,15 @@ bump_spine_iter/machine.rs	unwind_names	FROZEN	孪生引擎已封印（feature �
 bump_spine_iter/rename.rs	invert_bump	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/rename.rs	solve_bump	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 cxt.rs	tm_pi	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	DeclTm	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	extend	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	lvl2ix	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	pop	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	simpl_decl_cached	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 parser/mod.rs	borrowed_tokens_to_string	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 parser/mod.rs	brace	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 parser/mod.rs	p_match	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 parser/mod.rs	p_pi_impl_binder	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
-struct_eq.rs	val_eq	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 surface.rs	LspSurface	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 typeclass.rs	val_match	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 unification.rs	unlift	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
@@ -371,13 +371,13 @@ bump_spine_iter/subst.rs	SubEntryV	FROZEN	孪生引擎已封印（feature 默认
 bump_spine_iter/unify.rs	unify_sp_lockstep	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 cxt.rs	Decls	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 elaboration.rs	insert_go	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
-mod.rs	DeclTm	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	Error	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	SubEntry	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	bind_count	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	burn_match_cmp_budget	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	has	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
-mod.rs	pop	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	run_with_surface_at	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	with_first	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 observe.rs	hover_entry_at	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 observe.rs	note_failed_decl	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 observe.rs	push_hover	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
@@ -386,8 +386,6 @@ pattern_match.rs	Walk	MORPHOSIS	同名不同形（能力在 L13 内联于别处/
 pretty.rs	go_ix	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 pretty.rs	prepend_pattern_ns	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 pretty.rs	sum_head_name	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
-struct_eq.rs	EqTask	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
-struct_eq.rs	spend	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 surface.rs	inlay_label	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 surface.rs	pattern_span	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 syntax.rs	close_ty	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
@@ -404,7 +402,6 @@ cxt.rs	st2g_app	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> 
 cxt.rs	str_pi	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 mod.rs	Frame	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	burn	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
-mod.rs	push	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	run_with_surface_query	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 mod.rs	v_app_sp	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 observe.rs	push_hover_rendered	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
@@ -423,9 +420,13 @@ bump_spine_iter/subst.rs	Drop for SubEntryV	FROZEN	孪生引擎已封印（featu
 cxt.rs	NameState	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 cxt.rs	decl_insert_mut	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 mod.rs	<T: Copy, const N: usize> InlineStack<T, N>	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
-mod.rs	InlineStack	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	InlineStack	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	PosCover	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	bench_check_nf_observe	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	fmt_path	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	meta_snapshot	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	nf	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	push	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	report	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	wrap_sp	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 mod.rs	wrap_sub	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
@@ -455,13 +456,11 @@ bump_spine_iter/syntax.rs	v_xcell_of	FROZEN	孪生引擎已封印（feature 默�
 cxt.rs	new_binder	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 elaboration.rs	insert	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	Infer	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	PatternDetail	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	compose	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
-mod.rs	cover_at	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	frcs_env	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
-mod.rs	nf	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	note_unify_kind	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	occurs_transitive	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
-mod.rs	reset	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	v_meta	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 parser/lex.rs	fmt	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 parser/mod.rs	p_macro_def	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
@@ -501,35 +500,29 @@ cxt.rs	has_src	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> /
 cxt.rs	insert	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 cxt.rs	lookup_src	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 elaboration.rs	insert_until_name	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	MetaEntry	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	MetaSnapshot	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
-mod.rs	PatternDetail	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	UnifyKind	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	at	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
-mod.rs	bind_count	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	bump	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	closure_apply	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
-mod.rs	deref	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
-mod.rs	env_slots	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
-mod.rs	eq	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	enable	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	eq	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	eq	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	extend	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	fmt	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	is_empty	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	lookup	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
-mod.rs	lookup_meta	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
-mod.rs	mentions_any_solved	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
-mod.rs	mentions_level	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 mod.rs	meta_refuel	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	new	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
-mod.rs	new	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	new_meta	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	on	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	overwrite_meta	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 mod.rs	push_blank	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	reset	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	span	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	std::fmt::Debug for Error	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
-mod.rs	tmspan	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
-mod.rs	vspan	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	take_trait_error	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 observe.rs	hover_wanted	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 observe.rs	inlay_wanted	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 parser/lex.rs	lex	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
@@ -541,8 +534,6 @@ parser/mod.rs	parser	MORPHOSIS	同名不同形（能力在 L13 内联于别处/�
 pretty.rs	drop	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 pretty.rs	fresh	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 shape.rs	MatchShape	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
-struct_eq.rs	env_eq	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
-struct_eq.rs	tm_eq	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 typeclass.rs	synth	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 unification.rs	SpecSolve	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 unification.rs	drop	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
@@ -574,26 +565,28 @@ elaboration.rs	infer	MORPHOSIS	同名不同形（能力在 L13 内联于别处/�
 elaboration.rs	insert_t	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	L12_DEBUG_ON	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 mod.rs	LOOP_DEBUG	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
-mod.rs	MetaEntry	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
-mod.rs	PartialEq for VSpan	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
-mod.rs	PartialEq<Span<String>> for VSpan	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
-mod.rs	PartialEq<VSpan> for Span<String>	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 mod.rs	Subst	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
-mod.rs	VSpan	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	add	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	bench_check_nf	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	close_val	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
-mod.rs	enable	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	deref	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	env_slots	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	eq	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	fmt	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	fmt	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	fuel_exhausted	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
-mod.rs	on	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	lookup_meta	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	mentions_any_solved	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	mentions_level	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	new	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	rc_take	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 mod.rs	reset_match_cmp_budget	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	run_with_surface	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
-mod.rs	std::fmt::Debug for VSpan	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
-mod.rs	std::ops::Deref for VSpan	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
-mod.rs	take_trait_error	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	sub	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	tmspan	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 mod.rs	unify_kind	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	vmeta	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	vspan	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 mod.rs	vvar	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 parser/mod.rs	p_bind	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 parser/mod.rs	p_lam	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
@@ -665,16 +658,29 @@ cxt.rs	names	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签
 cxt.rs	std::fmt::Debug for PrimFunc	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 cxt.rs	std::ops::Deref for Decls	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 cxt.rs	std::ops::DerefMut for Decls	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	Add<u32> for Lvl	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 mod.rs	BUDGET	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	Closure	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	Env	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	Error	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	FILE_IO_LOCK	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	Ix	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	Lvl	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	MetaVar	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	NAMES	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 mod.rs	ON	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	Output	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	Output	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	PartialEq for VSpan	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	PartialEq<Span<String>> for VSpan	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	PartialEq<VSpan> for Span<String>	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	PatternDetail	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	Spine	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	Sub<u32> for Lvl	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 mod.rs	Target	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	Ty	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	UnifyError	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	VSpan	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 mod.rs	VSpan	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 mod.rs	VTy	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	Val	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
@@ -691,7 +697,10 @@ mod.rs	raw_pretty	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换�
 mod.rs	reset_unify_kind	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	shape	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	std::error::Error for Error	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	std::fmt::Debug for Closure	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	std::fmt::Debug for VSpan	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	std::fmt::Display for Error	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	std::ops::Deref for VSpan	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 mod.rs	struct_eq	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	surface	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 mod.rs	syntax	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
@@ -730,8 +739,7 @@ pretty.rs	PIP	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了�
 pretty.rs	bracket	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 pretty.rs	paren	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 raw_pretty.rs	has_source_type	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
-struct_eq.rs	EQ_BUDGET	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
-struct_eq.rs	EqBudget	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+struct_eq.rs	val_eq	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 surface.rs	HoverEntry	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 surface.rs	MAX_LEN	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 tests.rs	N_EQ	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
