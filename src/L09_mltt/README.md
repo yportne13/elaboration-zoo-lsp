@@ -120,3 +120,20 @@ U 臂按层级比较；`Machine::check_universe` 对应参考版（含 meta 解 
 
 - `../L08_product_type/README.md`：本层核心机的全部出处；
 - 旧 L09（再定基版）文档在 git 历史 `pre-rearch-20261117` 标签可查。
+
+## 增补（2026-11-25）：以新 L08 为基线重定基
+
+重构前的 L09 是从**未继承 L07 观察面的旧 L08** 长出来的，因此缺 `observe.rs`、`prof`、
+`check_with_surface` 等 38 项继承面。本轮按"上一章完整继承"口径，用三方合并
+（base = 旧 L08，ours = 新 L08，theirs = 本层）把继承面补齐、宇宙增量原样保留：
+
+- 新增 `observe.rs`（L08 平移；`Tm::U` → `Tm::U(_)`）；
+- `mod.rs` 的 `Infer` 观察字段、`prof`、`check_with_surface` / `run_with_surface_at/query` /
+  `bench_check_nf_observe` 全部与新 L08 对齐；`L08_DEBUG_ON` → `L09_DEBUG_ON`；
+- `elaboration.rs` 的观察接线取新 L08（observe 方法版），宇宙增量（`check_universe` 取代
+  `ty_precheck`、enum `universe_lvl`、`Type N` 语法）原样保留。
+
+账本：identical 686→**721**，非孪生 missing 3→**2**（`ty_precheck` 记为 Replaced、
+`L08_DEBUG_ON` 记为章名重命名），changed 86→63（主体是 `Val::U`→`Val::U(u32)` 机械替换）。
+门禁：lib 83、l09_blackbox 60+1 ignored、l09_lsp_surface 86，全绿。
+对账见 `docs/inheritance/L09-triage.md`。
