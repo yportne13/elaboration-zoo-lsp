@@ -248,7 +248,7 @@ impl Compiler {
             // 卡住 match 比较次数预算"每方程一份"重置）。
             infer.reset_unify_kind();
             infer.reset_match_cmp_budget();
-            if infer.unify_pm(cxt, a, &b.1, span).is_err() {
+            if infer.unify_pm(cxt, a, &b.1, None, span).is_err() {
                 return Err(infer.unify_kind());
             }
         }

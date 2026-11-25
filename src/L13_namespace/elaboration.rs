@@ -684,7 +684,7 @@ impl Infer {
         };
         let (t_inferred, cxt) = self.check_pm(cxt, t, a)?;
         let tmv = self.eval(&cxt.decl, &cxt.env, &t_inferred);
-        let new_cxt = self.unify_pm(&cxt, &ori, &tmv, t_span).unwrap_or(cxt);
+        let new_cxt = self.unify_pm(&cxt, &ori, &tmv, None, t_span).unwrap_or(cxt);
         Ok((t_inferred, new_cxt))
     }
     /// Pattern-matching version of `infer_expr`.
@@ -783,10 +783,17 @@ impl Infer {
         let t_span = t.to_span();
         let (t_inferred, inferred_type, refined_cxt) = self.infer_expr_pm(cxt, t)?;
         let (t_inferred, inferred_type) = self.insert(&refined_cxt, Ok((t_inferred, inferred_type)), t_span)?;
-		let new_cxt = self.unify_pm(&refined_cxt, &a, &inferred_type, t_span)?;
+		let new_cxt = self.unify_pm(&refined_cxt, &a, &inferred_type, None, t_span)?;
         Ok((t_inferred, new_cxt))
     }
-    pub(super) fn unify_pm(&mut self, cxt: &Cxt, t: &Rc<Val>, t_prime: &Rc<Val>, t_span: Span<()>) -> Result<Cxt, Error> {
+    pub(super) fn unify_pm<'a>(
+        &mut self,
+        cxt: &Cxt,
+        t: &Rc<Val>,
+        t_prime: &Rc<Val>,
+        mut spec: Option<&mut super::unification::SpecSolve<'a>>,
+        t_span: Span<()>,
+    ) -> Result<Cxt, Error> {
         //println!("  {}", self.meta.len());
         let t = self.force(&cxt.decl, t);
         let t_prime = self.force(&cxt.decl, t_prime);
@@ -838,7 +845,7 @@ impl Infer {
                     .unwrap_or(false);
                 if already_refined {
                     let cur = cxt.env.iter().nth(x_prime).unwrap().clone();
-                    self.unify_pm(cxt, &cur, &t_prime, t_span)
+                    self.unify_pm(cxt, &cur, &t_prime, spec.as_deref_mut(), t_span)
                 } else {
                     Ok(cxt.update_cxt(self, *x, t_prime, true))
                 }
@@ -850,7 +857,7 @@ impl Infer {
                     .unwrap_or(false);
                 if already_refined {
                     let cur = cxt.env.iter().nth(x_prime).unwrap().clone();
-                    self.unify_pm(cxt, &t, &cur, t_span)
+                    self.unify_pm(cxt, &t, &cur, spec.as_deref_mut(), t_span)
                 } else {
                     Ok(cxt.update_cxt(self, *x, t, true))
                 }
@@ -873,7 +880,7 @@ impl Infer {
                     }
                     let mut cxt = cxt.clone();
                     for (x, y) in d1.iter().zip(d2.iter()) {
-                        cxt = self.unify_pm(&cxt, &x.1, &y.1, t_span)?;
+                        cxt = self.unify_pm(&cxt, &x.1, &y.1, spec.as_deref_mut(), t_span)?;
                     }
                     Ok(cxt)
                 } else {
@@ -894,7 +901,7 @@ impl Infer {
                         }
                         1 if datas.len() == 1 && *k > 0 => {
                             let prev = Val::Nat(k - 1).into();
-                            self.unify_pm(cxt, &prev, &datas[0].1, t_span)
+                            self.unify_pm(cxt, &prev, &datas[0].1, spec.as_deref_mut(), t_span)
                         }
                         _ => Err(Error(t_span.map(|_| "".to_string()), vec![])),
                     }
@@ -910,7 +917,7 @@ impl Infer {
                         }
                         1 if datas.len() == 1 && *k > 0 => {
                             let prev = Val::Nat(k - 1).into();
-                            self.unify_pm(cxt, &datas[0].1, &prev, t_span)
+                            self.unify_pm(cxt, &datas[0].1, &prev, spec.as_deref_mut(), t_span)
                         }
                         _ => Err(Error(t_span.map(|_| "".to_string()), vec![])),
                     }
@@ -927,7 +934,7 @@ impl Infer {
                 if name1 == name2 {
                     let mut cxt = cxt.clone();
                     for (x, y) in d1.iter().zip(d2.iter()) {
-                        cxt = self.unify_pm(&cxt, &x.1, &y.1, t_span)?;
+                        cxt = self.unify_pm(&cxt, &x.1, &y.1, spec.as_deref_mut(), t_span)?;
                     }
                     Ok(cxt)
                 } else {
