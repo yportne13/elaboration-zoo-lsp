@@ -795,8 +795,16 @@ impl Infer {
         t_span: Span<()>,
     ) -> Result<Cxt, Error> {
         //println!("  {}", self.meta.len());
-        let t = self.force(&cxt.decl, t);
-        let t_prime = self.force(&cxt.decl, t_prime);
+        // L12 口径：方程两侧先置于**当前已积累的解**之下再解释（dpm-nbe
+        // `subst ɑ vs` 的惰性等价物）。每次递归入口按当时的 acc 重新包裹——
+        // 先解出的方程对后到的子方程自动可见。acc 为空时零开销。
+        let (t, t_prime) = match spec.as_deref() {
+            Some(s) if !s.acc.is_empty() => (
+                self.force(&cxt.decl, &self.wrap_sub(&s.acc, t)),
+                self.force(&cxt.decl, &self.wrap_sub(&s.acc, t_prime)),
+            ),
+            _ => (self.force(&cxt.decl, t), self.force(&cxt.decl, t_prime)),
+        };
         match (t.as_ref(), t_prime.as_ref()) {
             (Val::Rigid(x1, sp1), Val::Rigid(x2, sp2)) if sp1.is_empty() && sp2.is_empty() && x1 == x2 => {
                 Ok(cxt.update_cxt(self, *x1, t_prime, false))
@@ -846,6 +854,20 @@ impl Infer {
                 if already_refined {
                     let cur = cxt.env.iter().nth(x_prime).unwrap().clone();
                     self.unify_pm(cxt, &cur, &t_prime, spec.as_deref_mut(), t_span)
+                } else if let Some(s) = spec.as_deref_mut() {
+                    // sigma route (B3 step): solve into acc instead of rewriting env.
+                    // Two-level occurs guard as in L12: single-step (the solution
+                    // mentions x directly) + transitive (x reachable through the
+                    // accumulated chain). Missing either one makes the read point
+                    // unfold forever (root cause of the three failures on 2026-11-25).
+                    if super::Subst::mentions_lvl(t_prime.as_ref(), *x) {
+                        return Err(Error(t_span.map(|_| "occurs check: solution mentions the variable".to_owned()), vec![]));
+                    }
+                    if !s.acc.is_empty() && s.acc.occurs_transitive(t_prime.as_ref(), *x) {
+                        return Err(Error(t_span.map(|_| "occurs check: transitive".to_owned()), vec![]));
+                    }
+                    s.acc = super::Subst::extend(&s.acc, *x, t_prime.clone());
+                    Ok(cxt.clone())
                 } else {
                     Ok(cxt.update_cxt(self, *x, t_prime, true))
                 }
