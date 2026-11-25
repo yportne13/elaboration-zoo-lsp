@@ -3090,6 +3090,9 @@ impl Infer {
             }
         }
         match t.as_ref() {
+            // 显式替换（dpm-nbe frc）：把模式精化的解推进值的结构。入口不烧
+            // fuel——真正的精化传播只发生在被解变量的读点（frcs 的 Rigid 臂）。
+            Val::VSub(v, sub) => self.frcs(decl, sub, v),
             Val::Flex(m, sp) => {
                 // Meta state is memo-tainting (see FORCE_MEMO): solutions
                 // change over time (and the ns-probe machinery rolls them
@@ -3383,6 +3386,12 @@ impl Infer {
         let _g = prof_enter(&FUNC_PROF.v_app.0, &FUNC_PROF.v_app.1);
         //println!("v_app {t:?} {u:?}");
         match t.as_ref() {
+            // 精化包裹的值先推开再分发（eval(App) 等不经 force 的调用点会把
+            // VSub 头送进来——如臂上下文里 Var 引用了被解槽）。
+            Val::VSub(..) => {
+                let t = self.force(decl, t);
+                self.v_app(decl, &t, u, i)
+            }
             Val::Lam(_, _, closure) => self.closure_apply(decl, closure, u),
             Val::Flex(m, sp) => Val::Flex(*m, sp.prepend((u, i))).into(),
             Val::Rigid(x, sp) => Val::Rigid(*x, sp.prepend((u, i))).into(),
@@ -3424,6 +3433,189 @@ impl Infer {
             },
             x => panic!("impossible apply\n  {:?}\nto\n  {:?}", x, u),
         }
+    }
+
+
+    /// 把替换 σ 推进值 `v` 的结构（对齐 L12 `frcs`）。σ 只作用于**被包裹过**
+    /// 的值；推进到中性头为止——spine 逐槽包裹（惰性），槽位命中裸 rigid 且 σ
+    /// 有解时经 `v_app` 应用（λ ⇒ β；中性头 ⇒ 收链），对应 dpm-nbe
+    /// `napp (lookupSub sb v) (frcS sb sp)`。
+    ///
+    /// L13 形态（相对 L12）：
+    /// - `Nat` 无刚性槽（闭值）原样返回；
+    /// - `Sum`/`SumCase` 只包槽不推进（旧 force 不进入这些结构）；
+    /// - `Match` 无 `pending`（L13 的 Match 只有 (scrut, env, cases)），只推进
+    ///   scrutinee 并包裹 env；
+    /// - `Call` 推进体、包裹实参。
+    ///
+    /// 燃料：rigid lookup 命中烧 1（耗尽按未解处理，返回裸 rigid）；none 未命中
+    /// 零成本直通。返回值顶层不会是 VSub。
+    fn frcs(&self, decl: &Decl, sub: &Rc<Subst>, v: &Rc<Val>) -> Rc<Val> {
+        if sub.is_empty() {
+            return self.force(decl, v);
+        }
+        // 读点快筛：值不引用本 σ 任何已解层级时推进是恒等——免掉整趟遍历 +
+        // 逐节点重建。仍过一次 force 保持与各臂一致的 WHNF 契约。
+        if !Subst::mentions_level(v, sub) {
+            return self.force(decl, v);
+        }
+        match v.as_ref() {
+            // 内层先应用、外层后应用：组合后一次推进（frcS (subst sb sb') v）。
+            Val::VSub(v2, sub2) => {
+                let composed = Subst::compose(sub, sub2);
+                self.frcs(decl, &composed, v2)
+            }
+            // 被解变量的读点（真正的精化传播）：lookup 命中烧 1 fuel，耗尽按
+            // 未解处理（有界降级，断掉闭环推进）。
+            Val::Rigid(x, sp) => {
+                let mut head = match sub.lookup_hit(*x) {
+                    Some(hit) => {
+                        if !self.burn_fuel() {
+                            return v.clone();
+                        }
+                        self.force(decl, &hit)
+                    }
+                    None => Val::Rigid(*x, List::new()).into(),
+                };
+                // 头不可应用守卫：比 η 臂的判据多放行 Lam（解值是 λ 且读点
+                // 带实参是良型形态的 β 应用）。
+                let args: Vec<(Rc<Val>, Icit)> = sp.iter().map(|(u, i)| (u.clone(), *i)).collect();
+                if !args.is_empty() && !matches!(head.as_ref(), Val::Lam(..)) && !self.v_app_ok(&head) {
+                    return v.clone();
+                }
+                for (u, i) in args.into_iter().rev() {
+                    head = self.v_app(decl, &head, self.wrap_sub(sub, &u), i);
+                }
+                head
+            }
+            // 中性头的 spine 槽只**包裹**不推进——槽位引用是作用域事实，
+            // 物化会破坏后续 solve 的 invert。包裹后交回 force 重走既有臂。
+            Val::Flex(m, sp) => self.force(decl, &Val::Flex(*m, self.wrap_sp(sub, sp)).into()),
+            Val::Decl(name, sp) => self.force(decl, &Val::Decl(name.clone(), self.wrap_sp(sub, sp)).into()),
+            Val::Obj(o, name, sp) => self.force(
+                decl,
+                &Val::Obj(
+                    self.frcs(decl, sub, o),
+                    name.clone(),
+                    self.wrap_sp(sub, sp),
+                )
+                .into(),
+            ),
+            // 闭包 env 逐槽包裹（惰性形态）。
+            Val::Lam(x, i, Closure(env, body)) => Val::Lam(
+                x.clone(),
+                *i,
+                Closure(self.frcs_env(sub, env), body.clone()),
+            )
+            .into(),
+            Val::Pi(x, i, a, Closure(env, body)) => Val::Pi(
+                x.clone(),
+                *i,
+                self.frcs(decl, sub, a),
+                Closure(self.frcs_env(sub, env), body.clone()),
+            )
+            .into(),
+            // Sum/SumCase 槽位只包裹。
+            Val::Sum(name, params, cases, is_trait) => Val::Sum(
+                name.clone(),
+                Rc::new(
+                    params
+                        .iter()
+                        .map(|(n, val, ty, ic)| {
+                            (
+                                n.clone(),
+                                self.wrap_sub(sub, val),
+                                self.wrap_sub(sub, ty),
+                                *ic,
+                            )
+                        })
+                        .collect::<Vec<_>>(),
+                ),
+                cases.clone(),
+                *is_trait,
+            )
+            .into(),
+            Val::SumCase {
+                is_trait,
+                typ,
+                index,
+                datas,
+            } => Val::SumCase {
+                is_trait: *is_trait,
+                typ: self.wrap_sub(sub, typ),
+                index: *index,
+                datas: Rc::new(
+                    datas
+                        .iter()
+                        .map(|(n, val, ic)| (n.clone(), self.wrap_sub(sub, val), *ic))
+                        .collect::<Vec<_>>(),
+                ),
+            }
+            .into(),
+            // scrutinee **推进**（重选分支需要解出的构造子值）；捕获 env 包裹。
+            Val::Match(scrut, env, cases) => self.force(
+                decl,
+                &Val::Match(
+                    self.frcs(decl, sub, scrut),
+                    self.frcs_env(sub, env),
+                    cases.clone(),
+                )
+                .into(),
+            ),
+            // Call 外衣：σ 只推进体（显示实参是来源项）。
+            Val::Call(name, args, body) => Val::Call(
+                name.clone(),
+                args.map(|(a, i)| (self.wrap_sub(sub, a), *i)),
+                self.frcs(decl, sub, body),
+            )
+            .into(),
+            // Native Nat / 字面量 / 宇宙：无刚性槽。
+            Val::Nat(_)
+            | Val::U(_)
+            | Val::LiteralType
+            | Val::LiteralIntro(_) => self.force(decl, v),
+        }
+    }
+
+    /// 值是否可被应用（η 臂与 frcs 读点共用；比 L12 的 `v_applicable` 少一档
+    /// ——这里只用来挡住 ill-typed 的「对非函数解做应用」。
+    fn v_app_ok(&self, v: &Rc<Val>) -> bool {
+        matches!(
+            v.as_ref(),
+            Val::Lam(..) | Val::Flex(..) | Val::Rigid(..) | Val::Decl(..) | Val::Call(..) | Val::Match(..)
+        )
+    }
+
+    /// `v` 包 σ：σ 空或值不引用已解层级时直通（零分配）。
+    fn wrap_sub(&self, sub: &Rc<Subst>, v: &Rc<Val>) -> Rc<Val> {
+        if sub.is_empty() || !Subst::mentions_level(v, sub) {
+            v.clone()
+        } else {
+            Val::VSub(v.clone(), sub.clone()).into()
+        }
+    }
+
+    /// spine 逐槽包 σ（共享子链复用）。
+    fn wrap_sp(&self, sub: &Rc<Subst>, sp: &Spine) -> Spine {
+        sp.iter()
+            .map(|(v, i)| (self.wrap_sub(sub, v), *i))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .fold(List::new(), |acc, (v, i)| acc.prepend((v, i)))
+    }
+
+    /// 闭包 env 逐槽包 σ。
+    fn frcs_env(&self, sub: &Rc<Subst>, env: &Env) -> Env {
+        if sub.is_empty() {
+            return env.clone();
+        }
+        env.iter()
+            .map(|v| self.wrap_sub(sub, v))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .fold(List::new(), |acc, v| acc.prepend(v))
     }
 
     fn v_app_sp(&self, decl: &Decl, mut t: Rc<Val>, spine: &Spine) -> Rc<Val> {
