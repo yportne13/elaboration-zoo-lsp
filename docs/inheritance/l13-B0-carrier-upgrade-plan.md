@@ -553,3 +553,54 @@ prelude elaboration failed: Error("can't unify for unsolved meta
 
 B3' 要做完整，必须同时换**读点**：把所有 `cxt.env.iter().nth(...)` 的直接读取改成经 σ 展开。
 这是比 `unify_pm` 签名改造大得多的工程量（`env` 在 `cxt.rs`/`elaboration.rs` 里被读了几十处）。
+
+## 18 B3' 突破：σ 通道首次在 L13 上全绿（2026-11-26）
+
+### 18.1 根因：update_cxt 有两个职责，σ 只替代了一个
+
+连续两轮失败（occurs check / unsolved meta）的最终根因是**职责遗漏**，不是语义冲突：
+
+| `update_cxt` 的职责 | σ 分支是否覆盖 |
+|---|---|
+| 改写 env 槽 `env.change_n(x_prime, v)` | ✅ 由 `Subst::extend` 替代 |
+| 清 pruning 在该槽的标记 `pruning.change_n(x_prime, |_| None)` | ❌ **漏了** |
+
+遗漏的后果链条：
+
+1. `fresh_meta`（mod.rs:3133）给每个新 meta 挂 `cxt.pruning`；
+2. 槽位若仍带 pruning，该位置的实参在应用时被剪掉；
+3. 于是「本该被解约束的位置」变成未解 meta —— 报 `Vec[U]0 vs Vec[?m T U 0 f]0`。
+
+### 18.2 修法与验证
+
+σ 分支在 `Subst::extend` 之后补一行清 pruning（`cxt.pruning.change_n(lvl2ix(cxt.lvl, *x).0, |_| None)`），
+然后 check_pm 重新启用 σ（`solvable` 取自 `Cxt::bind_slots()`）。
+
+**全部通过（历史上第一次）**：
+
+| 套件 | 结果 |
+|---|---|
+| oracle（examples 逐字节 + 638 测试名） | **PASS**（binary 01:41:28 > src 01:37:58） |
+| L13 lib | **625 passed** / 13 ignored |
+| chain_inheritance | 2 passed |
+| l13_inherited_from_l12 | 22 passed |
+| gadt_refine_cross_layer | 265 passed |
+
+### 18.3 这改变了什么
+
+§16.3 曾说「σ 与 env 槽时序不可并存」。这句话**需要修正**：
+
+- 不是「时序不可并存」，而是「**换载体时必须把所有职责一起换**」；
+- 前几轮失败都是职责遗漏（门禁漏、pruning 漏），不是机制冲突；
+- 修齐职责后，σ 与现有 env 槽载体在 check_pm 这一入口上**可以共存**（σ 累积、env 槽由 update_cxt 保留）。
+
+### 18.4 下一步（B3' 剩余部分）
+
+当前状态：check_pm 走 σ（solvable = bind_slots），但 `check_pm_final` 仍传 None、仍返回 Cxt。
+要把 B3' 的既定目标做完，还需：
+
+1. `check_pm_final` 也启用 σ；
+2. `unify_pm` 返回类型改为 `Result<(), Error>`（不再产生新 Cxt）；
+3. `check_pm`/`check_pm_final` 返回 `(Tm, Rc<Subst>)`；
+4. `pattern_match.rs:584` 改为 `cxt_walk.subst_cxt(&σ)`；
+5. 最后删 `update_cxt`/`refresh` 的 env 槽改写。
