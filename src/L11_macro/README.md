@@ -87,3 +87,17 @@ println (stringify t123)   // 内建 stringify → 字符串字面量 "t123"
 
 - `../L10_typeclass/README.md`：本层核心机（含 trait/Type N）的全部出处；
 - 旧 L11 文档与完整宏实现细节在 git 标签 `pre-rearch-20261117` 可查。
+
+## 增补（2026-11-25）：继承 L10 观察面（三方合并）
+
+以 "上一章完整继承" 口径，把 L10 已补齐而本层此前仍缺的继承面（`observe.rs` / `prof` /
+`run_surface_impl` 的 println+自检行管线）归位：
+
+- 三方合并（base = 旧链 L10、ours = 新 L10、theirs = 本层），32/34 文件零冲突；
+- 新增 `observe.rs` 并注册 `mod observe;`；
+- 恢复被合并丢掉的 `use cxt::{Cxt, DeclEntry, Decls};`（本层旧 mod.rs 原本没有这行）；
+- `L10_DEBUG_ON`/`L10_LOOP` → `L11_*`；`crate::L10_typeclass` → `crate::L11_macro`。
+
+账本：identical 808→**839**，missing 1→**1**（仅 `L10_DEBUG_ON` 章名重命名），line_keep 0.9990。
+门禁：lib 88、l11_blackbox 67+1 ignored、l11_lsp_surface 91，全绿。
+对账见 `docs/inheritance/L11-triage.md`。

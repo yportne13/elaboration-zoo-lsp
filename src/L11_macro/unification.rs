@@ -823,6 +823,7 @@ impl Infer {
         sp_prime: &Spine,
         mut spec: Option<&mut SpecSolve<'_>>,
     ) -> Result<(), UnifyError> {
+        crate::L11_macro::prof::bump(&crate::L11_macro::prof::UNIFY_SP);
         match (sp, sp_prime) {
             (List { head: None, .. }, List { head: None, .. }) => Ok(()),
             (a, b) if a.head().is_some() && b.head().is_some() => {
@@ -982,6 +983,7 @@ impl Infer {
         u: Val,
         mut spec: Option<&mut SpecSolve<'_>>,
     ) -> Result<(), UnifyError> {
+        crate::L11_macro::prof::bump(&crate::L11_macro::prof::UNIFY);
         // 递归深度防护：索引槽互相嵌入的构造子值比较会无限递归
         let fuel = self.unify_fuel.get();
         if fuel == 0 {
