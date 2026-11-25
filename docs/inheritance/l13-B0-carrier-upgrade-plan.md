@@ -821,3 +821,59 @@ fn ctor_accessible(infer, cxt, typ, constrs, memo, i, sub: &Rc<Subst>) -> Walk
 ⇒ 下一轮的正确方向是把 `probe_accessible` / `ctor_accessible` **也改成方法**（`&mut self`），
 这样 σ 的读写都落在 `self.sub` 上，不需要返回值搬运、也不需要旁路。
 这比本轮尝试的两种改法都更接近 L12 的形状。
+
+## 24 第 10 轮：`probe_accessible` / `ctor_accessible` 方法化（B3' 第十一/十二步）
+
+### 24.1 解决了 §23.4 的结构障碍
+
+两个函数从关联函数改成 `&mut self` 方法，去掉显式 `sub` 参数——**σ 的读写直接落在 `self.sub` 上**。
+这消除了上一轮两次尝试都撞上的两个障碍：
+
+| 障碍 | 方法化之后 |
+|---|---|
+| 关联函数没有 `self` | 有 `self`，直接读 `self.sub` |
+| `break match` 作用域不含臂外局部（无法把 `spec` 带出） | 不需要带出——写入走 `self.sub` |
+
+改动：`fn probe_accessible(&mut self, ...)` / `fn ctor_accessible(&mut self, ...)`，
+4 处调用点从 `Self::xxx(..., &self.sub)` 改成 `self.xxx(...)`。
+
+### 24.2 探测仍是只读（L12 口径）
+
+方法化之后 `probe_accessible` **可以**写回，但它**不应该**写回：
+
+- L12 的 `probe_accessible` 是只读 `&sub`（探测边界丢弃 σ）；
+- 探测的目的是判可达性，解出的精化是「假设」不是「事实」，写回会污染臂上下文；
+- 所以本步只把它从「拿不到 σ」改成「能读 σ」，仍**不写回**。注释已订正，避免后人误以为它该写。
+
+### 24.3 验证
+
+| 项 | 结果 |
+|---|---|
+| oracle | PASS（binary 03:39:19 > src 03:35:40、examples 5/5、638 测试名） |
+| L13 lib | **625 passed** / 13 ignored |
+| chain_inheritance | 2 passed |
+| l13_inherited_from_l12 | 22 passed |
+
+### 24.4 B3' 剩余工作（4 项 → 3 项）
+
+| 项 | 现状 |
+|---|---|
+| `probe_accessible` / `ctor_accessible` 拿得到 σ | ✅ **方法化后可直接读 `self.sub`** |
+| `Compiler::sub` 被写入 | ❌ 仍无写入者（且按 §24.2，探测期不该写） |
+| `check_pm_final` 走 σ | ❌ 需 `Compiler::sub` 作种子 |
+| `unify_pm` 返回 `()` | ❌ 仍是 `Cxt` |
+| 两入口返回 `Rc<Subst>` | ❌ 仍是 `Cxt` |
+| 删 `update_cxt`/`refresh` | ❌ 未动 |
+
+### 24.5 下一个真正的写入点
+
+探测期不该写（§24.2），那 `Compiler::sub` 的**唯一合法写入点**是**臂特化成功之后**——
+即 `pattern_match.rs:590` 的 `check_pm_final` 返回处。那正是 L12 的做法（`self.sub = spec.acc` 在
+`unify_indices` 之后、臂体检查之前）。
+
+所以要推进，必须先让 `check_pm_final` 能返回 σ——这又回到 §19 的 spine 不同源问题。
+两者互相依赖：`check_pm_final` 需要 `Compiler.sub` 作种子，`Compiler.sub` 需要 `check_pm_final` 返回 σ。
+
+**打破这个循环的办法**：先让 `check_pm_final` 返回 `(Tm, Cxt, Rc<Subst>)`（σ 从内部 `unify_pm` 的 `spec.acc` 取），
+调用方写回 `self.sub`，但**暂不使用**这个 σ（臂上下文仍用 `Cxt`）。这样 σ 开始累积、口径可验证，
+再观察它是否让探测期/后续方程的行为改变。
