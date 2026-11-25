@@ -1333,6 +1333,49 @@ impl Cxt {
         infer.eval(&self.decl, to, &quoted)
     }
 
+
+    /// 把精化替换 σ 施加到上下文（L12 `subst_cxt` 同构）：env 槽与名字表
+    /// 类型包 `VSub`；lvl / locals / pruning / decl 不动——**槽位布局不变**，
+    /// 被解变量仍在原槽位，读点经 `force` 展开看到解。σ 为空时零开销直通。
+    ///
+    /// 与 `update_cxt` 的分工：`update_cxt` 是旧的急切载体（改槽 + `refresh`
+    /// 重锚定）；本函数是 σ 的惰性载体，只包一层、不做任何求值。B3' 里两者
+    /// 由调用方二选一，不做混合。
+    pub fn subst_cxt(&self, sub: &Rc<super::Subst>) -> Cxt {
+        if sub.is_empty() {
+            return self.clone();
+        }
+        let wrap = |v: &Rc<super::Val>| -> Rc<super::Val> {
+            if super::Subst::mentions_level(v, sub) {
+                super::Val::VSub(v.clone(), sub.clone()).into()
+            } else {
+                v.clone()
+            }
+        };
+        let env = self
+            .env
+            .iter()
+            .map(wrap)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .fold(List::new(), |acc, v| acc.prepend(v));
+        Cxt {
+            env,
+            lvl: self.lvl,
+            locals: self.locals.clone(),
+            pruning: self.pruning.clone(),
+            src_names: self.src_names.clone(),
+            decl: self.decl.clone(),
+            namespace: self.namespace.clone(),
+            namespace_prefix: self.namespace_prefix.clone(),
+            namespaces: self.namespaces.clone(),
+            update_from: self.update_from,
+            sub: sub.clone(),
+            binding_name: self.binding_name.clone(),
+        }
+    }
+
     pub fn update_cxt(&self, infer: &Infer, x: Lvl, v: Rc<Val>, update_prune: bool) -> Cxt {
         match v.as_ref() {
             Val::Flex(..) => self.clone(),
