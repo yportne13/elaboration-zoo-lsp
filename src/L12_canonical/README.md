@@ -68,3 +68,17 @@ Val 级重写**（去掉 L10/L11 的 `Typ` 桥接）与 **`Tm::Call`/`Val::Call`
 
 - `../L11_macro/README.md`：本层核心机（含宏）的全部出处；
 - 旧 L12 文档在 git 标签 `pre-rearch-20261117` 可查。
+
+## 增补（2026-11-25）：继承 L11 观察面（三方合并 + Call 适配）
+
+以 "上一章完整继承" 口径补齐继承面（`observe.rs` / `prof` / 新 `run_surface_impl` 管线）：
+
+- 三方合并（base = 旧链 L11、ours = 新 L11、theirs = 本层），32/35 文件零冲突；
+- 新增 `observe.rs`，并为本章新特性 `Tm::Call` **补一个走查臂**（`tm_has_unsolved_meta` 必须覆盖新变体）；
+- `use` 去掉 `typeclass::Typ`（本章已用 Val 级求解替换 Typ 桥接）；
+- `L11_DEBUG_ON`/`L11_LOOP` → `L12_*`；crate 路径改 `L12_canonical`。
+
+账本：identical 835→**866**；8 项非孪生 missing 全部是本章**主动替换**的 Typ 桥接设施
+（`to_typ`/`match_typ`/`apply_subst_to_*`/`Typ`/`Subst`/`Val`），按 D1 记为 Replaced。
+门禁：lib 88、l12_blackbox 67+1 ignored、l12_lsp_surface 91，全绿。
+对账见 `docs/inheritance/L12-triage.md`。
