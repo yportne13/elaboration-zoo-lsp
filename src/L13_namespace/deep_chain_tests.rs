@@ -106,3 +106,18 @@ fn deep_sumcase_quote_does_not_overflow_default_stack() {
     let quoted = std::mem::ManuallyDrop::new(infer.quote(&decl, Lvl(0), &deep));
     assert_eq!(chain_depth(&quoted), N_DEEP + 1, "quote 的剥链深度应等于构造层数");
 }
+
+/// σ 链的 Drop 必须栈安全：派生 Drop 逐层递归释放 `SubEntry.next`，
+/// 数万深的 σ 链在默认 2 MB 栈上直接 `STATUS_STACK_OVERFLOW`。
+/// 本用例是红绿对照：移除 `impl Drop for Subst` 的迭代实现即爆栈。
+#[test]
+fn deep_subst_chain_drop_does_not_overflow_default_stack() {
+    const N: usize = 100_000;
+    let mut sub: Rc<Subst> = Rc::new(Subst::default());
+    for i in 0..N {
+        // 解值用最轻的（宇宙值），不参与链——只测链本身的释放
+        sub = Subst::extend(&sub, Lvl(i as u32), Val::U(0).into());
+    }
+    assert_eq!(sub.lookup(Lvl(0)).is_some(), true, "链尾条目应可查");
+    drop(sub);
+}

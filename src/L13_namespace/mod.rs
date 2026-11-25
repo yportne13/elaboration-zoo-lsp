@@ -1152,6 +1152,34 @@ impl Subst {
 }
 
 
+
+/// σ 链的**迭代 Drop**（与 `Val`/`Tm` 的排空式 Drop 同款）。
+///
+/// 派生 Drop 会逐层递归释放 `SubEntry.next`：σ 链在真实负载下可达数万深
+/// （每次精化 `Subst::extend` 叠一条），默认 2 MB 栈上直接 `STATUS_STACK_OVERFLOW`
+/// （2026-11-25 用 10 万深链实测复现，`deep_chain_tests` 的对应用例是红绿对照）。
+/// 这里改成逐节点摘下 `next` 移入待处理表再释放，栈深恒定。
+impl Drop for Subst {
+    fn drop(&mut self) {
+        let Some(head) = self.head.take() else { return };
+        // 链头仍被别处持有（`Rc` 强计数 > 1）时本条 drop 不负责释放链：
+        // 放回去，由最后一个持有者走这条排空路径。避免每个克隆都整链走一趟。
+        if Rc::strong_count(&head) > 1 {
+            self.head = Some(head);
+            return;
+        }
+        let mut stack: Vec<Rc<SubEntry>> = vec![head];
+        while let Some(node) = stack.pop() {
+            // 独占该节点后摘 `next`；`val`（Rc<Val>）由 Val 自己的排空 Drop 处理。
+            if let Some(mut node) = Rc::into_inner(node) {
+                if let Some(next) = node.next.take() {
+                    stack.push(next);
+                }
+            }
+        }
+    }
+}
+
 #[allow(dead_code)]
 impl Drop for Val {
     fn drop(&mut self) {
