@@ -333,6 +333,10 @@ pub struct Cxt {
     pub namespace_prefix: Option<SmolStr>,
     pub namespaces: Rc<HashSet<SmolStr>>,
     update_from: Option<usize>,
+    /// 显式替换 σ（模式精化的解）。与 `update_from` 并存：旧的 env 槽改写仍在，
+    /// σ 是叠加的**第二载体**——`update_cxt` 同时更新两者，使 `frcs` 读点
+    /// 与既有 `env` 语义并行生效。空 σ 时行为与旧实现逐位一致。
+    pub sub: Rc<super::Subst>,
     /// The name of the current let-binding being elaborated.
     /// Used to synthesize implicit `BindingName` arguments.
     pub binding_name: Option<SmolStr>,
@@ -1174,6 +1178,7 @@ impl Cxt {
             namespace_prefix: None,
             namespaces: Rc::new(HashSet::new()),
             update_from: None,
+            sub: Rc::new(Subst::default()),
             binding_name: None,
         }
     }
@@ -1189,6 +1194,7 @@ impl Cxt {
             namespace_prefix: self.namespace_prefix.clone(),
             namespaces: self.namespaces.clone(),
             update_from: self.update_from,
+            sub: self.sub.clone(),
             binding_name: self.binding_name.clone(),
         }
     }
@@ -1219,6 +1225,7 @@ impl Cxt {
             namespace_prefix: self.namespace_prefix.clone(),
             namespaces: self.namespaces.clone(),
             update_from: self.update_from,
+            sub: self.sub.clone(),
             binding_name: None,
         }
     }
@@ -1259,6 +1266,7 @@ impl Cxt {
             namespace_prefix: self.namespace_prefix.clone(),
             namespaces: self.namespaces.clone(),
             update_from: self.update_from,
+            sub: self.sub.clone(),
             binding_name: None,
         }
     }
@@ -1286,6 +1294,7 @@ impl Cxt {
             namespace_prefix: self.namespace_prefix.clone(),
             namespaces: self.namespaces.clone(),
             update_from: self.update_from,
+            sub: self.sub.clone(),
             binding_name: self.binding_name.clone(),
         }
     }
@@ -1345,6 +1354,7 @@ impl Cxt {
                     pretty_tm(0, self.names(), &infer.quote(self.lvl, v.clone()))
                 );*/
                 //let locals = self.locals.update_at(x_prime, infer.quote(&self.decl, self.lvl, &v));
+                let v_for_sub = v.clone();
                 let env = self.env.change_n(x_prime, |_| v);
                 let mut new_src_names = self.src_names.clone();
                 let env_t = self.refresh(infer, &self.env, Rc::make_mut(&mut new_src_names), env, self.lvl.0 as usize - update_from);
@@ -1363,6 +1373,7 @@ impl Cxt {
                     namespace_prefix: self.namespace_prefix.clone(),
                     namespaces: self.namespaces.clone(),
                     update_from: Some(update_from),
+                    sub: Subst::extend(&self.sub, x, infer.wrap_sub(&self.sub, &v_for_sub)),
                     binding_name: self.binding_name.clone(),
                 }
             }
@@ -1419,6 +1430,7 @@ impl Cxt {
             namespace_prefix: self.namespace_prefix.clone(),
             namespaces: self.namespaces.clone(),
             update_from: self.update_from,
+            sub: self.sub.clone(),
             binding_name: Some(name),
         }
     }
