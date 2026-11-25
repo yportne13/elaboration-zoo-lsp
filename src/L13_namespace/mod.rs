@@ -164,6 +164,7 @@ pub fn val_shape_index(v: &Val) -> usize {
         Val::Match(..) => 11,
         Val::Call(..) => 12,
         Val::Nat(..) => 13,
+        Val::VSub(..) => 14,
     }
 }
 
@@ -987,7 +988,169 @@ pub enum Val {
     Match(Rc<Val>, Env, Vec<(PatternDetail, Rc<Tm>)>),
     /// Call(name, args, body) - value inlined from function `name`
     Call(SmolStr, List<(Rc<Val>, Icit)>, Rc<Val>),
+    /// 显式替换下的值（模式精化，dpm-nbe 的 VSub）：特化解不改写既有值，
+    /// 只把解包在外面；`force` 在读点把 σ 推进值的结构（`frcs`）。
+    /// 不变式：`force` 的返回值顶层不会是 VSub。
+    VSub(Rc<Val>, Rc<Subst>),
 }
+/// 显式替换 σ（模式精化的解）：层级 → 值 的持久化单链（与 L12 Subst 同构；
+/// 链头 = 最新的解）。替代旧的 update_cxt/refresh（改写 env 槽 + 全量重引用，
+/// 值过期/槽位错位 bug 族的载体）。
+///
+/// 只由模式编译器经 Subst::extend / 特化合一的 SpecSolve 构建；Rc 共享让
+/// 臂边界回滚 = 指针赋值、VSub 包裹 = O(1)。
+#[derive(Debug, Clone, Default)]
+pub struct Subst {
+    head: Option<Rc<SubEntry>>,
+}
+
+#[derive(Debug)]
+struct SubEntry {
+    lvl: Lvl,
+    /// 解的原始值。不预先包裹更新的解——读取时 lookup_hit 把整条 σ
+    /// 包在外面（条件包裹），由 force 在读点一次性推开。
+    val: Rc<Val>,
+    next: Option<Rc<SubEntry>>,
+}
+
+impl Subst {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.head.is_none()
+    }
+
+    /// 命中返回 Some(展开前形态)：解值不引用任何已解层级时原样返回
+    /// （读点热路径，零分配）；引用时把整条 σ 包在解值外（occurs 守卫），
+    /// 由 force 在读点推开。未命中 None。
+    pub(crate) fn lookup_hit(self: &Rc<Self>, x: Lvl) -> Option<Rc<Val>> {
+        let mut cur = self.head.clone();
+        while let Some(e) = cur {
+            if e.lvl == x {
+                return Some(if !Self::mentions_level(&e.val, self) {
+                    e.val.clone()
+                } else {
+                    Val::VSub(e.val.clone(), self.clone()).into()
+                });
+            }
+            cur = e.next.clone();
+        }
+        None
+    }
+
+    /// x 是否已有解（旧 update_cxt 的已解判定）。
+    pub(crate) fn has(&self, x: Lvl) -> bool {
+        self.lookup(x).is_some()
+    }
+
+    /// x 的当前解（最新条目）。未解 None。
+    pub(crate) fn lookup(&self, x: Lvl) -> Option<Rc<Val>> {
+        let mut cur = self.head.as_ref();
+        while let Some(e) = cur {
+            if e.lvl == x {
+                return Some(e.val.clone());
+            }
+            cur = e.next.as_ref();
+        }
+        None
+    }
+
+    /// 叠加一条解 x := v：O(1) cons 到链头（链头 = 最新；同键旧条目留在链上
+    /// 但永不命中）。
+    pub(crate) fn extend(sub: &Rc<Self>, x: Lvl, val: Rc<Val>) -> Rc<Self> {
+        Rc::new(Subst {
+            head: Some(Rc::new(SubEntry {
+                lvl: x,
+                val,
+                next: sub.head.clone(),
+            })),
+        })
+    }
+
+    /// 组合：内层 inner 先应用、外层 outer 后应用。外层条目接到链头
+    /// （先被查到 = 覆盖同键，取最新语义）。
+    pub(crate) fn compose(outer: &Rc<Self>, inner: &Rc<Self>) -> Rc<Self> {
+        fn cons_all(entry: &Option<Rc<SubEntry>>, onto: Option<Rc<SubEntry>>) -> Option<Rc<SubEntry>> {
+            match entry {
+                None => onto,
+                Some(e) => Some(Rc::new(SubEntry {
+                    lvl: e.lvl,
+                    val: e.val.clone(),
+                    next: cons_all(&e.next, onto),
+                })),
+            }
+        }
+        Rc::new(Subst {
+            head: cons_all(&outer.head, inner.head.clone()),
+        })
+    }
+
+    /// 值是否引用任何已解层级（occurs 守卫）：只有不引用时才能裸返回解值，
+    /// 否则要包 VSub 让 force 逐层推开。迭代走查（深链安全）。
+    pub(crate) fn mentions_level(v: &Val, sub: &Rc<Self>) -> bool {
+        let mut stack: Vec<&Val> = vec![v];
+        while let Some(x) = stack.pop() {
+            match x {
+                Val::Rigid(l, sp) => {
+                    if sub.has(*l) {
+                        return true;
+                    }
+                    for (u, _) in sp.iter() {
+                        stack.push(u);
+                    }
+                }
+                Val::Flex(_, sp) | Val::Decl(_, sp) => {
+                    for (u, _) in sp.iter() {
+                        stack.push(u);
+                    }
+                }
+                Val::Obj(x, _, sp) => {
+                    stack.push(x);
+                    for (u, _) in sp.iter() {
+                        stack.push(u);
+                    }
+                }
+                Val::Lam(_, _, Closure(env, _)) => {
+                    for u in env.iter() {
+                        stack.push(u);
+                    }
+                }
+                Val::Pi(_, _, a, Closure(env, _)) => {
+                    stack.push(a);
+                    for u in env.iter() {
+                        stack.push(u);
+                    }
+                }
+                Val::U(_) | Val::LiteralType | Val::LiteralIntro(_) | Val::Nat(_) => {}
+                Val::Sum(_, params, _, _) => {
+                    for (_, v, t, _) in params.iter() {
+                        stack.push(v);
+                        stack.push(t);
+                    }
+                }
+                Val::SumCase { typ, datas, .. } => {
+                    stack.push(typ);
+                    for (_, d, _) in datas.iter() {
+                        stack.push(d);
+                    }
+                }
+                Val::Match(scru, env, _cases) => {
+                    stack.push(scru);
+                    for u in env.iter() {
+                        stack.push(u);
+                    }
+                }
+                Val::Call(_, args, body) => {
+                    for (a, _) in args.iter() {
+                        stack.push(a);
+                    }
+                    stack.push(body);
+                }
+                Val::VSub(val, _) => stack.push(val),
+            }
+        }
+        false
+    }
+}
+
 
 #[allow(dead_code)]
 impl Drop for Val {
@@ -1189,6 +1352,10 @@ impl Drop for Val {
                     let body = unsafe { std::ptr::read(body) };
                     vals.push(body);
                     release_owned(name);
+                }
+                Val::VSub(val, _) => {
+                    let val = unsafe { std::ptr::read(val) };
+                    vals.push(val);
                 }
             }
             // The drained shell's fields were moved out; the caller
@@ -2159,6 +2326,7 @@ impl DetailCounts {
                 self.walk_spine(args, visited);
                 self.walk_val_id(body, visited);
             }
+            Val::VSub(val, _) => self.walk_val_id(val, visited),
         }
     }
 
@@ -2509,6 +2677,7 @@ impl Infer {
                     Val::Match(_, _, _) => "Match",
                     Val::Call(_, _, _) => "Call",
                     Val::Obj(_, _, _) => "Obj",
+                    Val::VSub(_, _) => "VSub",
                 };
                 *solved_val_kind_hist.entry(kind.to_string()).or_insert(0) += 1;
             }
@@ -2532,6 +2701,7 @@ impl Infer {
                     Val::Match(_, _, _) => "Match",
                     Val::Call(_, _, _) => "Call",
                     Val::Obj(_, _, _) => "Obj",
+                    Val::VSub(_, _) => "VSub",
                 };
                 *unsolved_vty_kind_hist.entry(kind.to_string()).or_insert(0) += 1;
             }
@@ -2850,6 +3020,7 @@ impl Infer {
                 .or_else(|| cases.iter().find_map(|(_, body)| Tm::no_metas_rc(body, self, decl, l, seen))),
             Val::Call(_, args, body) => args.iter().find_map(|(a, _)| self.val_no_metas(decl, l, a, seen))
                 .or_else(|| self.val_no_metas(decl, l, body, seen)),
+            Val::VSub(val, _) => self.val_no_metas(decl, l, val, seen),
         }
     }
     fn closure_no_metas(&self, decl: &Decl, l: Lvl, closure: &Closure, seen: &mut rustc_hash::FxHashSet<usize>) -> Option<(Cxt, Rc<Val>, Span<()>)> {
@@ -3981,6 +4152,7 @@ impl Infer {
                     .collect();
                 Tm::Match(self.quote_inner(decl, l, val, nat_dec), tm_cases).into()
             }
+            Val::VSub(val, _) => self.quote_inner(decl, l, val, nat_dec),
         }
     }
 

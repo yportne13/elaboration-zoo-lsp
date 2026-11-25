@@ -83,6 +83,7 @@ fn val_has_no_flex(v: &Val) -> bool {
         }
         Val::U(_) | Val::LiteralType | Val::LiteralIntro(_) | Val::Nat(_) => true,
         Val::Lam(..) | Val::Pi(..) | Val::Match(..) | Val::Call(..) => false,
+        Val::VSub(..) => false,
     }
 }
 
@@ -712,6 +713,7 @@ impl Infer {
                 let renamed_body = self.rename(decl, pren, body)?;
                 Ok(Tm::Call(name.clone(), args, renamed_body).into())
             },
+            Val::VSub(val, _) => self.rename(decl, pren, val),
         }
     }
     fn lams_go(&self, l: Lvl, decl: &Decl, t: Rc<Tm>, a: &Rc<VTy>, l_prime: Lvl) -> Rc<Tm> {
