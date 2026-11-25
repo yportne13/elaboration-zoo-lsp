@@ -682,7 +682,7 @@ impl Infer {
             Val::SumCase { typ, .. } => typ.clone(),
             _ => a,
         };
-        let (t_inferred, cxt) = self.check_pm(cxt, t, a)?;
+        let (t_inferred, cxt, _sigma) = self.check_pm(cxt, t, a)?;
         let tmv = self.eval(&cxt.decl, &cxt.env, &t_inferred);
         // B3 step: this equation compares `ori` (constructor return type) with
         // `tmv = eval(t_inferred)`. The latter carries spine state, so both sides
@@ -775,7 +775,7 @@ impl Infer {
                     }
                 };
                 // KEY DIFFERENCE: use check_pm instead of check::<false>
-                let (u_checked, cxt) = self.check_pm(cxt, *u, a.clone())?;
+                let (u_checked, cxt, _sigma) = self.check_pm(cxt, *u, a.clone())?;
                 let ret_type = self.closure_apply(&cxt.decl, &b_closure, self.eval(&cxt.decl, &cxt.env, &u_checked));
                 Ok((
                     Tm::App(t, u_checked, i).into(),
@@ -786,7 +786,7 @@ impl Infer {
             _ => self.infer_expr(cxt, t).map(|(tm, ty)| (tm, ty, cxt.clone())),
         }
     }
-    pub fn check_pm(&mut self, cxt: &Cxt, t: Raw, a: Rc<Val>) -> Result<(Rc<Tm>, Cxt), Error> {
+    pub fn check_pm(&mut self, cxt: &Cxt, t: Raw, a: Rc<Val>) -> Result<(Rc<Tm>, Cxt, Rc<super::Subst>), Error> {
         let t_span = t.to_span();
         let (t_inferred, inferred_type, refined_cxt) = self.infer_expr_pm(cxt, t)?;
         let (t_inferred, inferred_type) = self.insert(&refined_cxt, Ok((t_inferred, inferred_type)), t_span)?;
@@ -795,7 +795,7 @@ impl Infer {
 		let mut spec = super::unification::SpecSolve { solvable: &solvable, acc: Rc::new(super::Subst::default()) };
 		let new_cxt = self.unify_pm(&refined_cxt, &a, &inferred_type, Some(&mut spec), t_span)?;
 		let new_cxt = new_cxt.subst_cxt(&spec.acc);
-        Ok((t_inferred, new_cxt))
+        Ok((t_inferred, new_cxt, spec.acc))
     }
     pub(super) fn unify_pm<'a>(
         &mut self,
