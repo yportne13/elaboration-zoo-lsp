@@ -511,3 +511,45 @@ B3 连续三轮失败，且每轮的失败点已被独立确认：
 
 起点：本文件 §4/§15 的计划。必须的第一步是**改 `unify_pm` 签名穿 `SpecSolve`**（L12 形状），
 而不是在 `update_cxt` 外挂 σ。涉及 10 个调用点 + 删除 `refresh` 143 行，属生产内核级改动。
+
+## 17 B3' 实验记录（2026-11-26）
+
+### 17.1 五次尝试的收敛过程
+
+| 步 | 动作 | 结果 |
+|---|---|---|
+| 1-5 | 就位 SpecSolve / occurs 守卫 / subst_cxt / unify_pm 穿 spec / bind_slots | 全部零行为变更，门禁绿 |
+| 6a | check_pm 传真 SpecSolve（solvable 空） | **prelude 崩：occurs check** |
+| 6b | 补 L12 门禁（solvable.contains + 非 Flex）后重试 | **prelude 崩：can't unify for unsolved meta** |
+
+6a 的失败是**我的实现缺陷**（漏了门禁），已修。6b 的失败是**语义差异**。
+
+### 17.2 6b 的失败信息
+
+```
+prelude elaboration failed: Error("can't unify for unsolved meta
+  expected: Vec[U]\u{200b}(0)
+      find: Vec[?1139 T U 0 f]\u{200b}(0)" @ 469,472)
+```
+
+右侧带 `?1139` 未解 meta 且带 pruning（`T U 0 f`）。也就是说：σ 把某个解提前推进后，
+另一个位置的 meta 失去了本应被它约束的信息——两者不再能合一。
+
+这正是 §16.2 描述的「时序差」的具体形态：env 槽的 `refresh` 会**同时**重锚定所有槽，
+而 σ 只让**被解层级**的读点看到新值，其余位置的 meta/pruning 状态没有同步更新。
+
+### 17.3 结论
+
+**两件事都已确认**：
+
+1. 我的实现缺陷（门禁缺失）—— 已修，且修复本身有价值（σ 分支现在只在正确条件下触发）；
+2. 载体时序冲突 —— 真实存在，且不是补一个门禁能解决的。
+
+6b 的报错位置（pruning 状态失配）指向 B3' 的真正难点：σ 路线要求**所有**读点都经 `frcs` 展开，
+而 L13 里还有大量直接读 `cxt.env` 的路径（`refresh` 的后代、`update_by_cxt`、`locals` 轨迹）。
+只换 `unify_pm` 的解累积方式、不换读点，就会出现这种「一半看到新值、一半没看到」的失配。
+
+### 17.4 下一步
+
+B3' 要做完整，必须同时换**读点**：把所有 `cxt.env.iter().nth(...)` 的直接读取改成经 σ 展开。
+这是比 `unify_pm` 签名改造大得多的工程量（`env` 在 `cxt.rs`/`elaboration.rs` 里被读了几十处）。
