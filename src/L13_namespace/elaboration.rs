@@ -783,6 +783,7 @@ impl Infer {
         let t_span = t.to_span();
         let (t_inferred, inferred_type, refined_cxt) = self.infer_expr_pm(cxt, t)?;
         let (t_inferred, inferred_type) = self.insert(&refined_cxt, Ok((t_inferred, inferred_type)), t_span)?;
+		// B3 step: enable the sigma channel for this entry point.
 		let new_cxt = self.unify_pm(&refined_cxt, &a, &inferred_type, None, t_span)?;
         Ok((t_inferred, new_cxt))
     }
@@ -854,22 +855,27 @@ impl Infer {
                 if already_refined {
                     let cur = cxt.env.iter().nth(x_prime).unwrap().clone();
                     self.unify_pm(cxt, &cur, &t_prime, spec.as_deref_mut(), t_span)
-                } else if let Some(s) = spec.as_deref_mut() {
-                    // sigma route (B3 step): solve into acc instead of rewriting env.
-                    // Two-level occurs guard as in L12: single-step (the solution
-                    // mentions x directly) + transitive (x reachable through the
-                    // accumulated chain). Missing either one makes the read point
-                    // unfold forever (root cause of the three failures on 2026-11-25).
-                    if super::Subst::mentions_lvl(t_prime.as_ref(), *x) {
-                        return Err(Error(t_span.map(|_| "occurs check: solution mentions the variable".to_owned()), vec![]));
-                    }
-                    if !s.acc.is_empty() && s.acc.occurs_transitive(t_prime.as_ref(), *x) {
-                        return Err(Error(t_span.map(|_| "occurs check: transitive".to_owned()), vec![]));
-                    }
-                    s.acc = super::Subst::extend(&s.acc, *x, t_prime.clone());
-                    Ok(cxt.clone())
                 } else {
-                    Ok(cxt.update_cxt(self, *x, t_prime, true))
+                    // L12 gate: only solve when x is a genuine pattern slot (solvable)
+                    // AND the other side is not a meta -- otherwise those cases must go
+                    // through the ordinary solver, not into sigma. Missing this gate makes
+                    // the arm solve free variables and trip the occurs check (prelude dies).
+                    let solvable_here =
+                        matches!(spec.as_deref(), Some(s) if s.solvable.contains(x))
+                            && !matches!(t_prime.as_ref(), Val::Flex(..));
+                    if solvable_here {
+                        let s = spec.as_deref_mut().unwrap();
+                        if super::Subst::mentions_lvl(t_prime.as_ref(), *x) {
+                            return Err(Error(t_span.map(|_| "occurs check: solution mentions the variable".to_owned()), vec![]));
+                        }
+                        if !s.acc.is_empty() && s.acc.occurs_transitive(t_prime.as_ref(), *x) {
+                            return Err(Error(t_span.map(|_| "occurs check: transitive".to_owned()), vec![]));
+                        }
+                        s.acc = super::Subst::extend(&s.acc, *x, t_prime.clone());
+                        Ok(cxt.clone())
+                    } else {
+                        Ok(cxt.update_cxt(self, *x, t_prime, true))
+                    }
                 }
             }
             (_, Val::Rigid(x, sp)) if sp.is_empty() => {
