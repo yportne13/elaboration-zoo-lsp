@@ -1341,6 +1341,29 @@ impl Cxt {
     /// 与 `update_cxt` 的分工：`update_cxt` 是旧的急切载体（改槽 + `refresh`
     /// 重锚定）；本函数是 σ 的惰性载体，只包一层、不做任何求值。B3' 里两者
     /// 由调用方二选一，不做混合。
+
+    /// 本上下文里**仍可解**的 rigid 层级集合（L12 `bind_slots` 同构）：env 里
+    /// 仍然是自身 self-reference（`Rigid(l, [])` 且 l 与槽位对应）的那些槽。
+    /// 模式特化只允许解这些——它们才是「模式引入、尚未确定」的变量。
+    /// 已解槽（env 里已是别的值）不在集合内，因此 σ 不会覆盖既有精化。
+    pub fn bind_slots(&self) -> Vec<Lvl> {
+        let n = self.lvl.0;
+        self.env
+            .iter()
+            .enumerate()
+            .filter_map(|(i, v)| {
+                let mut raw: &super::Val = v.as_ref();
+                while let super::Val::VSub(inner, _) = raw {
+                    raw = inner.as_ref();
+                }
+                match raw {
+                    super::Val::Rigid(l, sp) if sp.is_empty() && l.0 + (i as u32) + 1 == n => Some(*l),
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
     pub fn subst_cxt(&self, sub: &Rc<super::Subst>) -> Cxt {
         if sub.is_empty() {
             return self.clone();
