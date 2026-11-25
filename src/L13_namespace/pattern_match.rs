@@ -203,25 +203,38 @@ impl Compiler {
                     probe_cxt = probe_cxt.bind(bname, a_t, dom);
                     ty = infer.closure_apply(&probe_cxt.decl, &closure, u);
                 }
-                _ => break match Self::unify_indices(
-                    infer,
-                    &probe_cxt,
-                    &sum_name,
-                    &head_params,
-                    &tyf,
-                ) {
-                    Ok(()) => Walk::Matched,
-                    // 三档诊断的**消费口径（L13 产品语义优先）**：只有预算
-                    // 耗尽（fuel 池 / 卡住 match 比较次数）才按可达处理（保守
-                    // 要求覆盖，避免深负载下非穷尽 match 被静默接受）。语义上
-                    // "判不出"（Undecided）与"矛盾"（Absurd）保持产品既有判定
-                    // ——update_cxt 精化载体下，臂上下文可能解出探测期判不出的
-                    // 索引方程，L13/twin 一直按不可达过滤（l13_fast_parity 的
-                    // GADT 函数索引用例即此口径；与 L12 的 σ 路线不同，记录为
-                    // 载体约束下的偏差）。第三态只把后者分流给诊断。
-                    Err(UnifyKind::Fuel) => Walk::Matched,
-                    Err(UnifyKind::Absurd) => Walk::Unreachable,
-                    Err(UnifyKind::Undecided) => Walk::Undecided,
+                _ => {
+                    // B3 step: seed a SpecSolve from the compiler's accumulated sigma
+                    // so the equations of this clause see previous ones (L12 shape).
+                    let solvable = probe_cxt.bind_slots();
+                    let mut spec = super::unification::SpecSolve {
+                        solvable: &solvable,
+                        // probe_accessible has no `self`; a fresh empty chain keeps
+                        // today's per-equation behaviour until sigma is threaded.
+                        acc: Rc::new(super::Subst::default()),
+                    };
+                    let res = Self::unify_indices(
+                        infer,
+                        &probe_cxt,
+                        &sum_name,
+                        &head_params,
+                        &tyf,
+                        &mut spec,
+                    );
+                    break match res {
+                        Ok(()) => Walk::Matched,
+                        // 三档诊断的**消费口径（L13 产品语义优先）**：只有预算
+                        // 耗尽（fuel 池 / 卡住 match 比较次数）才按可达处理（保守
+                        // 要求覆盖，避免深负载下非穷尽 match 被静默接受）。语义上
+                        // "判不出"（Undecided）与"矛盾"（Absurd）保持产品既有判定
+                        // ——update_cxt 精化载体下，臂上下文可能解出探测期判不出的
+                        // 索引方程，L13/twin 一直按不可达过滤（l13_fast_parity 的
+                        // GADT 函数索引用例即此口径；与 L12 的 σ 路线不同，记录为
+                        // 载体约束下的偏差）。第三态只把后者分流给诊断。
+                            Err(UnifyKind::Fuel) => Walk::Matched,
+                            Err(UnifyKind::Absurd) => Walk::Unreachable,
+                            Err(UnifyKind::Undecided) => Walk::Undecided,
+                    };
                 },
             }
         };
@@ -232,12 +245,13 @@ impl Compiler {
     /// 索引方程：头部 Sum 的参数（含索引）与构造子返回 Sum 的参数逐槽
     /// **特化**合一，头部一侧在前——两侧都是可解变量时解方向是「头部变量
     /// := 构造子侧值」。探测只问可达性，精化出的上下文弃掉即回滚。
-    fn unify_indices(
+    fn unify_indices<'a>(
         infer: &mut Infer,
         cxt: &Cxt,
         sum_name: &Span<SmolStr>,
         head_params: &[Rc<Val>],
         ret_ty: &Rc<Val>,
+        spec: &mut super::unification::SpecSolve<'a>,
     ) -> Result<(), UnifyKind> {
         let ret_sum = infer.force(&cxt.decl, ret_ty);
         let rp = match ret_sum.as_ref() {
