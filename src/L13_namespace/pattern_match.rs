@@ -79,6 +79,11 @@ pub struct Compiler {
     nested_checks: Vec<NestedCheck>,
     /// 本臂走查中的待提升位置（臂特化成功后结算）。
     pending_pos: Vec<(Vec<(String, usize)>, Rc<Val>)>,
+    /// 当前精化替换（dpm-nbe 的 explicit substitution，L12 Compiler 同构）：
+    /// 特化方程的解在此累积；解前构建、解后消费的值在读点用 wrap_sub 包裹，
+    /// force 惰性推开。臂边界 / 探测边界回滚 = Rc 指针赋值。
+    /// B3 step: 字段已就位，但还没有代码往里写——当前精化仍走 Cxt 的 env 槽。
+    sub: Rc<super::Subst>,
     /// 当前下钻路径（根到当前字段的 ctor 选择链），臂内 push/pop 平衡。
     cur_path: Vec<(String, usize)>,
 }
@@ -113,6 +118,7 @@ impl Compiler {
             implicit_counter: 0,
             nested_checks: Vec::new(),
             pending_pos: Vec::new(),
+            sub: Rc::new(super::Subst::default()),
             cur_path: Vec::new(),
         }
     }
