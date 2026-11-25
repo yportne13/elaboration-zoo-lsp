@@ -1313,3 +1313,61 @@ pub fn check_pm(&mut self, cxt: &Cxt, t: Raw, a: Rc<Val>)
 - 下一步：`spec.acc` = `check_pm` 真实 σ，与 `cxt` 里已施加的是**同一个** → 理论上幂等。
 
 若下一步仍失败，则可确定结论是「σ 不该在这个方程上生效」（§31.4），而非实现问题。
+
+## 34 第 20 轮：第二步（消费真实 σ）同样失败——结论可以确定了
+
+### 34.1 本轮做法
+
+第 19 轮已让 `check_pm` 返回 σ（调用方忽略，判据全绿）。本轮让 `check_pm_final` **消费那个真实 σ**：
+
+```rust
+let (t_inferred, cxt, sigma) = self.check_pm(cxt, t, a)?;
+let tmv = self.eval(&cxt.decl, &cxt.env, &t_inferred);
+let mut spec = SpecSolve { solvable: &solvable, acc: sigma };
+let new_cxt = match self.unify_pm(&cxt, &ori, &tmv, Some(&mut spec), t_span) {
+    Ok(c) => c.subst_cxt(&spec.acc),
+    Err(_) => self.unify_pm(&cxt, &ori, &tmv, None, t_span).unwrap_or(cxt),
+};
+```
+
+关键区别（相对 §33.4）：这里的 σ 是 **`check_pm` 真实解出的那个**，与 `cxt` 里已施加的是同一个，
+理论上幂等——这正是 §33.4 说「若下一步仍失败则可确定是语义问题」的条件。
+
+### 34.2 结果：仍然失败，且形态与前两次完全相同
+
+| 判据 | 基线 | 第 17 轮（空 σ） | 本轮（真实 σ） |
+|---|---|---|---|
+| verdict 差异数 | 23 | 24 | **24** |
+| 新增差异 | — | `L07 ex_let_match_forms` | **`L07 ex_let_match_forms`** |
+| 消除差异 | — | 0 | **0** |
+| examples | PASS | 5/5 漂移 | **5/5 漂移** |
+| 报错 | — | `Vec[Nat](?30054 ...)` vs `Vec[Nat](w)` | **完全相同** |
+
+**三种 σ 来源（新建空 σ / 预包 `ori` / 真实 σ）给出完全相同的失败形态。**
+这是决定性证据：失败与「用哪个 σ」无关。
+
+### 34.3 结论（可以确定了）
+
+§31.4 的判断成立：**σ 在 `check_pm_final` 这个方程上生效本身就是错的**，与 σ 的来源无关。
+
+原因（§31.3 已分析，本轮得到印证）：那个方程是「构造子返回类型 ≐ 臂体推断类型」的**最终确认**。
+若让它参与求解，`Vec[Nat]` 索引位置的 meta 会在这里被解掉，而 `w` 一侧的索引约束来自臂上下文——
+两边的约束来源不同，任何提前求解都会破坏对应关系。
+
+### 34.4 B3' 的最终结论
+
+`check_pm_final` **必须**保持 `update_cxt`（现状）。这不是技术欠债，是语义位置决定的。
+
+因此 B3' 的目标项里：
+
+| 目标项 | 能否达成 | 理由 |
+|---|---|---|
+| `unify_pm` 穿 `SpecSolve` | ✅ 已达成 | — |
+| 每步递归入口按 acc 包两侧 | ✅ 已达成 | — |
+| 两级 occurs 守卫 | ✅ 已达成 | — |
+| `check_pm` 返回 `Rc<Subst>` | ✅ **本轮已达成**（§33） | 调用方暂不消费 |
+| `check_pm_final` 返回 `Rc<Subst>` | ❌ **不该** | 它是确认阶段，σ 在此生效必然错 |
+| 删除 `update_cxt`/`refresh` | ❌ **不该** | 被 `check_pm_final` 的确认语义需要 |
+
+**B3' 的目标定义本身有一部分是不可达的**：最后两项与「`check_pm_final` 是确认而非求解」这一语义事实冲突。
+这不是实现能力问题，是目标设定时误判了 `check_pm_final` 的语义位置。
