@@ -917,3 +917,62 @@ prelude elaboration failed: Error("can't unify
 
 ⇒ 正确的路径只有一条：把 σ 全面接管（探测期 + 臂上下文 + check_pm_final），
 也就是 B3' 剩下的三项一起做，不能再分步。
+
+## 26 B3' 规模实测（2026-11-26，第 12 轮）
+
+上一轮说「先统计规模再做决定」。数据如下。
+
+### 26.1 env / pruning / locals 的依赖点：105 处，但绝大多数无关载体
+
+| 文件 | 依赖点数 |
+|---|---:|
+| `elaboration.rs` | 64 |
+| `cxt.rs` | 30 |
+| `mod.rs` | 11 |
+
+按**角色**分类（以 `elaboration.rs` 的 64 处为例）：
+
+| 角色 | 数量 | 换载体后是否需要改 |
+|---|---:|---|
+| 把 `&cxt.env` 当求值环境传给 `eval` / `nf` | **57** | **否**——这些只是「在哪套环境里求值」，σ 不改变环境结构 |
+| 按槽取值（`env.iter().nth(...)`） | 6 | **是**——正是需要改成经 σ 展开的点 |
+| pruning 语义 | 1 | 是 |
+| locals 语义 | 0 | — |
+
+**结论**：真正需要改的是 **7 处**（在 `elaboration.rs` 内），不是 64 处。
+其余 57 处传 `&cxt.env` 的地方，σ 路线下照样传 env——`subst_cxt` 产出的 `Cxt` 里 env 已经包了 `VSub`，
+`eval` 读到 `VSub` 会经 `force` 展开，与 L12 的语义一致。
+
+### 26.2 其余三个数字
+
+| 项 | 数量 | 说明 |
+|---|---:|---|
+| `update_cxt` 调用点 | **7** | 全部在 `elaboration.rs` 的 `unify_pm` 与 `update_by_cxt` 内部 |
+| `refresh` / `fresh_val` 调用 | 6 | 全在 `cxt.rs` 内（`update_cxt` + `refresh` 自身递归） |
+| 相关函数体量 | `update_cxt` 约 45 行、`refresh` 约 25 行、`update_by_cxt` 约 36 行 | 合计约 106 行 |
+
+### 26.3 与 L12 的对照
+
+L12 的同名职责：
+
+- `Subst` 链 + `lookup_hit` + `frcs` —— 已在 L13 就位（B2 的两个提交）；
+- `SpecSolve { solvable, acc }` —— 已就位；
+- `Cxt::subst_cxt` —— 已就位；
+- `Cxt::bind_slots` —— 已就位；
+- `probe_accessible` / `ctor_accessible` 能读写 σ —— 已就位（第 10 轮方法化）。
+
+**缺的只有**：
+
+1. `Compiler::sub` 的写入（`pattern_match.rs:605` 的 `check_pm_final` 返回处）；
+2. `check_pm_final` 的方程两侧处于同一 σ 之下（§19 的 spine 不同源问题）；
+3. 删 `update_cxt` / `refresh` / `update_by_cxt`（约 106 行）；
+4. 改那 7 处按槽取值的读取点。
+
+### 26.4 修正上一轮的判断
+
+上一轮我写「这不是按 L12 形状改签名，而是把 `cxt.rs` 和 `elaboration.rs` 的精化面整体重写」。
+**数据不支持这个说法**：真正要改的是 7 处读取点 + 106 行旧载体删除 + 两个入口的返回值，
+其余 57 处 `&cxt.env` 的用法在 σ 路线下原样保留。
+
+⇒ B3' 的剩余工作量是**中等规模**（不是重写级），难点集中在 §19 的 spine 不同源问题——
+那是唯一一处需要新的语义设计（让 `ori` 与 `tmv` 处于同一 σ 下比较）的地方。
