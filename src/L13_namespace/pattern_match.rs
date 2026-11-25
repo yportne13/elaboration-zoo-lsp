@@ -142,6 +142,7 @@ impl Compiler {
         cxt: &Cxt,
         head_sum: &Rc<Val>,
         ctor: &Constructor,
+        sub: &Rc<super::Subst>,
     ) -> Walk {
         // TEMP-PROBE: 参考版可达性探测次数（与孪生同口径对比）。
         PROBE_COUNT.with(|c| c.set(c.get() + 1));
@@ -211,7 +212,7 @@ impl Compiler {
                         solvable: &solvable,
                         // probe_accessible has no `self`; a fresh empty chain keeps
                         // today's per-equation behaviour until sigma is threaded.
-                        acc: Rc::new(super::Subst::default()),
+                        acc: sub.clone(),
                     };
                     let res = Self::unify_indices(
                         infer,
@@ -284,11 +285,12 @@ impl Compiler {
         constrs: &[Constructor],
         memo: &mut [Option<Walk>],
         i: usize,
+        sub: &Rc<super::Subst>,
     ) -> Walk {
         match memo[i] {
             Some(w) => w,
             None => {
-                let w = Self::probe_accessible(infer, cxt, typ, &constrs[i]);
+                let w = Self::probe_accessible(infer, cxt, typ, &constrs[i], sub);
                 memo[i] = Some(w);
                 w
             }
@@ -543,7 +545,7 @@ impl Compiler {
                 .all(|c| arms.iter().any(|(pat, _)| covers(pat, c.data.as_str(), &ctor_names)));
         if !fully_covered {
             for (i, ctor) in constrs.iter().enumerate() {
-                if Self::ctor_accessible(infer, cxt, &typ, &constrs, &mut accessible, i)
+                if Self::ctor_accessible(infer, cxt, &typ, &constrs, &mut accessible, i, &self.sub)
                     == Walk::Matched
                     && !arms
                         .iter()
@@ -571,7 +573,7 @@ impl Compiler {
                     // 三态分流：Matched 才继续走查；Unreachable/Undecided 都
                     // 按产品既有口径跳过该臂（不落进 check_pm_final 报假特化
                     // 错误），但诊断变体分开——Undecided 不再伪装成结构矛盾。
-                    match Self::ctor_accessible(infer, cxt, &typ, &constrs, &mut accessible, i) {
+                    match Self::ctor_accessible(infer, cxt, &typ, &constrs, &mut accessible, i, &self.sub) {
                         Walk::Matched => {}
                         Walk::Undecided => {
                             unreachable.push(Warning::Undecided(body.clone()));
@@ -673,7 +675,7 @@ impl Compiler {
                 for ctor in ctor_cases {
                     // 覆盖结论同产品口径：只有 Matched 要求该位置覆盖；
                     // Undecided（判不出）与 Unreachable 一样不计义务。
-                    if Self::probe_accessible(infer, &nc.arm_cxt, &field_sum, &ctor)
+                    if Self::probe_accessible(infer, &nc.arm_cxt, &field_sum, &ctor, &self.sub)
                         != Walk::Matched
                     {
                         continue;
