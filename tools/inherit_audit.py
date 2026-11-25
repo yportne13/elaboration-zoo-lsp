@@ -176,6 +176,49 @@ def audit(prev_dir, next_dir, out_path):
     return rows
 
 
+def scan_exports(prev_path, next_text):
+    """宽松口径：上一章条目是否以**同名**出现在下一章任意文件里（跨文件搜索）。
+
+    严格口径（`audit`）要求同路径文件；层重建常常把条目移进别的模块，
+    此时严格口径会误报 missing。返回 (found: set, kind_hint: dict)。
+    """
+    found, kinds = set(), {}
+    for kind, name, s, e, ln in scan_items(prev_path):
+        if re.search(r"\b" + re.escape(name.split()[0]) + r"\b", next_text):
+            found.add(name)
+            kinds[name] = kind
+    return found, kinds
+
+
+def audit_loose(prev_dir, next_dir):
+    """跨文件口径的 keep：条目只要在下一章任意文件里同名出现就算继承。"""
+    rows = []
+    corpus, per_file = [], {}
+    for root, _, files in os.walk(next_dir):
+        for fn in sorted(files):
+            if not fn.endswith(".rs"):
+                continue
+            p = os.path.join(root, fn)
+            relf = os.path.relpath(p, next_dir).replace("\\", "/")
+            t = open(p, encoding="utf-8", errors="replace").read()
+            corpus.append(t)
+            per_file[relf] = t
+    whole = chr(10).join(corpus)
+    for root, _, files in os.walk(prev_dir):
+        for fn in sorted(files):
+            if not fn.endswith(".rs"):
+                continue
+            p = os.path.join(root, fn)
+            relf = os.path.relpath(p, prev_dir).replace("\\", "/")
+            for kind, name, s, e, ln in scan_items(p):
+                first = name.split()[0]
+                if first and re.search(r"\b" + re.escape(first) + r"\b", whole):
+                    rows.append([relf, kind, name, ln, 0, "present-anywhere", 1.0])
+                else:
+                    rows.append([relf, kind, name, ln, ln, "absent", 0.0])
+    return rows
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--prev", required=True)

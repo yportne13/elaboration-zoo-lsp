@@ -1,225 +1,224 @@
 # 继承门禁白名单（L13_namespace ← L12_canonical）
 # 每行：文件<TAB>条目<TAB>结论<TAB>理由
-# 结论取值：FEATURE(本章新特性) / RENAME(章名重命名) / PATH(路径改名) /
-#           FROZEN(孪生封印) / REPLACED(本章主动替换) / MOTION(合并移位)
-# 由 tools/gen_allow.py 从账本生成；条目消失或变 identical 时本行必须删除。
+# 结论：ARCH-DIVERGED(载体分叉) / FROZEN(孪生封印) / TEST-GAP(用例待回灌) / MORPHOSIS(同名不同形)
+# 由 tools/gen_allow.py 生成；条目消失或变 identical 时本行必须删除。
 bump_spine_iter/unify.rs	unify_iter	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-elaboration.rs	infer_owned	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-observe.rs	Infer	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-struct_eq.rs	eq_run	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+elaboration.rs	infer_owned	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+observe.rs	Infer	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+struct_eq.rs	eq_run	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 bump_spine_iter/machine.rs	infer_decl	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/machine.rs	infer_expr	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-unification.rs	unify	PATH	crate 路径/模块前缀改名（L0N_sum_type → L13_namespace），逻辑不变
-elaboration.rs	infer_expr	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-pattern_match.rs	walk_con	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+unification.rs	unify	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+elaboration.rs	infer_expr	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+pattern_match.rs	walk_con	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 bump_spine_iter/compiler.rs	walk_con	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/force.rs	force	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/force.rs	frcs	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-mod.rs	prim_reduce	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-pattern_match.rs	compile	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	prim_reduce	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+pattern_match.rs	compile	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 bump_spine_iter/prim.rs	prim_reduce	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-pretty.rs	go	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+pretty.rs	go	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 bump_spine_iter/compiler.rs	compile	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/machine.rs	check_universe	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/subst.rs	occurs_transitive	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-mod.rs	force	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	frcs	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	force	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	frcs	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 bump_spine_iter/machine.rs	trait_wrap	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-elaboration.rs	trait_wrap	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+elaboration.rs	trait_wrap	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 bump_spine_iter/quote.rs	quote_iter	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/struct_eq.rs	struct_val_eq_go	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-mod.rs	quote_arm	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	eval	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-unification.rs	rename_arm	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_basic	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	quote_arm	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	eval	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+unification.rs	rename_arm	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+tests.rs	test_basic	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 bump_spine_iter/machine.rs	prime_round	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-tests.rs	deep_value_iterative_under_default_stack	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	Infer	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	deep_value_iterative_under_default_stack	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+mod.rs	Infer	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 bump_spine_iter/force.rs	val_mentions_lvl	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/subst.rs	SubstV	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/subst.rs	mentions_level	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-cxt.rs	new	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	splice_transcriber	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	Infer	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+cxt.rs	new	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/mod.rs	splice_transcriber	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	Infer	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 bump_spine_iter/machine.rs	Machine	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/struct_eq.rs	struct_tm_eq_go	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/eval.rs	eval_iter	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-mod.rs	DEMO_SRC	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-elaboration.rs	check	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-unification.rs	frame_new	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	DEMO_SRC	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+elaboration.rs	check	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+unification.rs	frame_new	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 bump_spine_iter/machine.rs	solve_trait_ref	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-tests.rs	test_bits_adder	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_bits_adder	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 bump_spine_iter/quote.rs	shift_tm_bump	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/rename.rs	rename_iter	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-pattern_match.rs	probe_accessible	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+pattern_match.rs	probe_accessible	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 bump_spine_iter/compiler.rs	probe_accessible	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/quote.rs	prim_eta_quote	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-mod.rs	frame_new	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	shift_tm	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-observe.rs	tm_has_unsolved_meta	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_eq_add_comm	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-elaboration.rs	check_universe	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_lambda_calculus_and_strings	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-cxt.rs	Cxt	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_eq_mul_one_right	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_product_dependent	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-unification.rs	deep_rename_collector_under_default_stack	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-observe.rs	render_by_shape	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	frame_new	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	shift_tm	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+observe.rs	tm_has_unsolved_meta	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+tests.rs	test_eq_add_comm	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+elaboration.rs	check_universe	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+tests.rs	test_lambda_calculus_and_strings	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+cxt.rs	Cxt	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+tests.rs	test_eq_mul_one_right	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_product_dependent	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+unification.rs	deep_rename_collector_under_default_stack	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+observe.rs	render_by_shape	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 bump_spine_iter/eval.rs	eval_aux_case	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-mod.rs	tm_size_ref	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_unify_kind_separates_absurd_from_undecided	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-elaboration.rs	check_ctor_wf	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	p_decl	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_nested_match_pending_cannot_prove_false	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_generic_match	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_index	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	tm_size_ref	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+tests.rs	test_unify_kind_separates_absurd_from_undecided	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+elaboration.rs	check_ctor_wf	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/mod.rs	p_decl	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+tests.rs	test_nested_match_pending_cannot_prove_false	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_generic_match	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_index	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 bump_spine_iter/machine.rs	check_ctor_wf	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/struct_eq.rs	struct_env_eq_go	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/force.rs	force_deep	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-mod.rs	preprocess	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_product_generic	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_deep_pattern_fuel_budget_regression	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-unification.rs	Infer	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-unification.rs	frame_assemble	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	val_mentions_lvl	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	preprocess	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+tests.rs	test_product_generic	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_deep_pattern_fuel_budget_regression	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+unification.rs	Infer	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+unification.rs	frame_assemble	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	val_mentions_lvl	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 bump_spine_iter/typeclass.rs	v_to_val	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-tests.rs	test_hole_in_branch	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_product_basic	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_product_shadow	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	frame_assemble	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-pattern_match.rs	eval_aux_arm	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_eq_mul_zero_right	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_nested_pattern_outer_ref	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_nested_patterns	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-unification.rs	rename_deep	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_hole_in_branch	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_product_basic	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_product_shadow	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+mod.rs	frame_assemble	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+pattern_match.rs	eval_aux_arm	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+tests.rs	test_eq_mul_zero_right	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_nested_pattern_outer_ref	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_nested_patterns	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+unification.rs	rename_deep	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 bump_spine_iter/machine.rs	has_free_var	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-mod.rs	go	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	Subst	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	quote_deep	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	go	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	Subst	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	quote_deep	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 bump_spine_iter/entry.rs	export	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-tests.rs	test_eq_add_assoc	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_eq_add_succ_right	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_eq_add_zero_right	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	run_surface_impl	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	p_impl	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_index_equality	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_struct_eq_compares_match_pending_values	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-unification.rs	solve_trait	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_eq_add_assoc	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_eq_add_succ_right	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_eq_add_zero_right	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+mod.rs	run_surface_impl	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+parser/mod.rs	p_impl	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+tests.rs	test_index_equality	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_struct_eq_compares_match_pending_values	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+unification.rs	solve_trait	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 bump_spine_iter/machine.rs	fresh_meta	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-parser/mod.rs	parser_with_span	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-pattern_match.rs	Compiler	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_trait_outparam_add	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/mod.rs	parser_with_span	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+pattern_match.rs	Compiler	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+tests.rs	test_trait_outparam_add	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 bump_spine_iter/force.rs	vapp1	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/unify.rs	flex_flex_bump	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-mod.rs	check_with_surface	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_recursive_defs	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-cxt.rs	add_builtin	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-elaboration.rs	Infer	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	error_carries_pattern_span	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_product_field_err	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_stuck_match_equation_bounded	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	force_deep	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_eq_reasoning	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_product_new_dot_chain	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_stuck_match_unify	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	check_with_surface	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+tests.rs	test_recursive_defs	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+cxt.rs	add_builtin	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+elaboration.rs	Infer	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+tests.rs	error_carries_pattern_span	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_product_field_err	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_stuck_match_equation_bounded	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+mod.rs	force_deep	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+tests.rs	test_eq_reasoning	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_product_new_dot_chain	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_stuck_match_unify	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 bump_spine_iter/machine.rs	check	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-pattern_match.rs	unify_indices	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	force_arg_unwraps_nested_vsub	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_occurs_transitive_vsub_nested_is_documented_limitation	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	loose_string_requires_empty_spine	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	parse_error_carries_span	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+pattern_match.rs	unify_indices	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+tests.rs	force_arg_unwraps_nested_vsub	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_occurs_transitive_vsub_nested_is_documented_limitation	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	loose_string_requires_empty_spine	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	parse_error_carries_span	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 bump_spine_iter/compiler.rs	unify_indices	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/force.rs	force_arg	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-mod.rs	Val	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	subst_lookup_conditional_wrap	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_catch_all_mixed	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_stale_solvable_order_independent	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	visibility_boundary_decl_value_is_not_refined	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	Val	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+tests.rs	subst_lookup_conditional_wrap	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_catch_all_mixed	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_stale_solvable_order_independent	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	visibility_boundary_decl_value_is_not_refined	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 bump_spine_iter/machine.rs	solve_multi_trait_ref	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/machine.rs	unify_with	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-mod.rs	new	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-surface.rs	raw_span	PATH	crate 路径/模块前缀改名（L0N_sum_type → L13_namespace），逻辑不变
-tests.rs	test_stuck_match_nonrecursive_still_equal	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_trait_tostring_projection	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	new	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+surface.rs	raw_span	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+tests.rs	test_stuck_match_nonrecursive_still_equal	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_trait_tostring_projection	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 bump_spine_iter/machine.rs	Machine	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-tests.rs	test_empty_type_zero_arm_match_accepts_canonical_conflicts	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_stuck_match_applied_with_outer_binder	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-unification.rs	flex_flex	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-observe.rs	drain_check_issues	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	p_enum	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	p_struct	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-pattern_match.rs	Compiler	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_absurd_nested_pattern_not_missing_coverage	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_dependent_match_nested_eval	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_nested_pattern_refine_two_phase	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_product_dependent_check	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+tests.rs	test_empty_type_zero_arm_match_accepts_canonical_conflicts	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_stuck_match_applied_with_outer_binder	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+unification.rs	flex_flex	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+observe.rs	drain_check_issues	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+parser/mod.rs	p_enum	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/mod.rs	p_struct	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+pattern_match.rs	Compiler	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+tests.rs	test_absurd_nested_pattern_not_missing_coverage	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_dependent_match_nested_eval	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_nested_pattern_refine_two_phase	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_product_dependent_check	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 bump_spine_iter/compiler.rs	<'a> Compiler<'a>	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/compiler.rs	Compiler	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-mod.rs	Tm	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	bench_check_nf_impl	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	mentions_level	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	Tm	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	bench_check_nf_impl	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	mentions_level	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 bump_spine_iter/machine.rs	unify_catch	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/rename.rs	solve_with_pren_bump	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-raw_pretty.rs	go	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_dependent_match	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_fn_typed_index_slot_applied_after_refine	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_nested_coverage_gap3	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_occurs_check_transitive_chain	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_parse_error_span_matches_raw_source_with_unicode_comment	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_product_field_blank_lines	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_projection_typing	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+raw_pretty.rs	go	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+tests.rs	test_dependent_match	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_fn_typed_index_slot_applied_after_refine	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_nested_coverage_gap3	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_occurs_check_transitive_chain	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_parse_error_span_matches_raw_source_with_unicode_comment	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_product_field_blank_lines	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_projection_typing	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 bump_spine_iter/machine.rs	Cxt	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-mod.rs	project	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-observe.rs	local_binder_span	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_nested_coverage_gap	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_occurs_check_keeps_legit_refinement	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	project	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+observe.rs	local_binder_span	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+tests.rs	test_nested_coverage_gap	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_occurs_check_keeps_legit_refinement	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 bump_spine_iter/machine.rs	eval	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/subst.rs	compose	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-mod.rs	run	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	MacroExpansionInfo	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	subst_chain_semantics	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_gadt_unreachable_err	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_trait_blanket_say	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-typeclass.rs	consume	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-unification.rs	rename	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-unification.rs	solve_multi_trait	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	run	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/mod.rs	MacroExpansionInfo	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+tests.rs	subst_chain_semantics	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_gadt_unreachable_err	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_trait_blanket_say	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+typeclass.rs	consume	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+unification.rs	rename	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+unification.rs	solve_multi_trait	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 bump_spine_iter/force.rs	project	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/machine.rs	bind_slots	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/subst.rs	lookup_hit	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-mod.rs	unify_catch	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	v_app	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	p_macro_matcher_single	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	p_raw	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_ctor_wf_param_specialized	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_gadt_accessible	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_literal_equality	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_stuck_match_splice	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	unify_catch	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	v_app	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/mod.rs	p_macro_matcher_single	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/mod.rs	p_raw	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+tests.rs	test_ctor_wf_param_specialized	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_gadt_accessible	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_literal_equality	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_stuck_match_splice	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 bump_spine_iter/force.rs	frcs_env	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/prim.rs	prim_names_static	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/subst.rs	visit_rigid	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-cxt.rs	subst_cxt	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+cxt.rs	subst_cxt	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 bump_spine_iter/machine.rs	decl_insert	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/machine.rs	elab_all	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/machine.rs	wrap_types	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-surface.rs	failed_decl_names	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	cross_meta_cycle_force_is_bounded	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_decl_table_and_globals	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_file_io_builtins	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_macro_decl_expansion	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_shadowed_arm_err	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_string_builtins	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+surface.rs	failed_decl_names	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+tests.rs	cross_meta_cycle_force_is_bounded	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_decl_table_and_globals	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_file_io_builtins	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_macro_decl_expansion	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_shadowed_arm_err	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_string_builtins	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 bump_spine_iter/unify.rs	intersect_bump	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-mod.rs	quote	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	simpl_decl	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	many1_sep	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	p_trait_def	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/syntax.rs	Decl	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-pattern_match.rs	walk	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-pretty.rs	pretty_pattern	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_product_vs_plain_enum	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-unification.rs	prune_ty_go	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-unification.rs	prune_vflex	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-unification.rs	solve_with_pren	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	quote	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	simpl_decl	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/mod.rs	many1_sep	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/mod.rs	p_trait_def	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/syntax.rs	Decl	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+pattern_match.rs	walk	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+pretty.rs	pretty_pattern	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+tests.rs	test_product_vs_plain_enum	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+unification.rs	prune_ty_go	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+unification.rs	prune_vflex	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+unification.rs	solve_with_pren	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 bump_spine_iter/compiler.rs	walk	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/entry.rs	run_decls	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/machine.rs	wrap_names	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
@@ -228,73 +227,73 @@ bump_spine_iter/struct_eq.rs	struct_spine_eq_go	FROZEN	孪生引擎已封印（f
 bump_spine_iter/subst.rs	cons_all	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/subst.rs	env_slots	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/unify.rs	UItem	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-parser/syntax.rs	pretty	PATH	crate 路径/模块前缀改名（L0N_sum_type → L13_namespace），逻辑不变
-surface.rs	format_check_warning	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_missing_case_err	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-unification.rs	loose_string	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+parser/syntax.rs	pretty	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+surface.rs	format_check_warning	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+tests.rs	test_missing_case_err	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+unification.rs	loose_string	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 bump_spine_iter/quote.rs	quote_arg	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/subst.rs	wrap_sub	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/syntax.rs	XCell	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-mod.rs	fresh_meta	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	lookup_function_by_cases	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	p_let	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-pattern_match.rs	eval_aux	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-raw_pretty.rs	def_type_from_source	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_ctor_wf_external_ret	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_string_to_global_type	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_stuck_prim_not_unconditionally_equal	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-typeclass.rs	vals_eq_ground_impl	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-unification.rs	invert_go	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	fresh_meta	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	lookup_function_by_cases	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+parser/mod.rs	p_let	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+pattern_match.rs	eval_aux	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+raw_pretty.rs	def_type_from_source	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+tests.rs	test_ctor_wf_external_ret	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_string_to_global_type	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_stuck_prim_not_unconditionally_equal	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+typeclass.rs	vals_eq_ground_impl	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+unification.rs	invert_go	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 bump_spine_iter/machine.rs	bind_prefix_of_telescope	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/machine.rs	quote_memo	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/rename.rs	prune_ty_bump	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-cxt.rs	bind_slots	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-cxt.rs	unwind	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	lookup_hit	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	prof	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	p_def	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-surface.rs	span_union	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_registered_prim_not_loosely_string	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-unification.rs	FrameKind	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-unification.rs	prune_meta	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+cxt.rs	bind_slots	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+cxt.rs	unwind	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	lookup_hit	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	prof	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/mod.rs	p_def	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+surface.rs	span_union	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+tests.rs	test_registered_prim_not_loosely_string	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+unification.rs	FrameKind	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+unification.rs	prune_meta	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 bump_spine_iter/machine.rs	subst_cxt	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/subst.rs	simpl_decl	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-cxt.rs	Cxt	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	cons_all	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-observe.rs	push_ctor_hover	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	p_arg	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	p_new	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_parse_error_span_points_at_failing_token	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_stuck_prim_with_literal_arg_reflexive	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-unification.rs	prune_vflex_go	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-unification.rs	unify_sp	PATH	crate 路径/模块前缀改名（L0N_sum_type → L13_namespace），逻辑不变
+cxt.rs	Cxt	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	cons_all	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+observe.rs	push_ctor_hover	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/mod.rs	p_arg	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/mod.rs	p_new	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+tests.rs	test_parse_error_span_points_at_failing_token	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_stuck_prim_with_literal_arg_reflexive	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+unification.rs	prune_vflex_go	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+unification.rs	unify_sp	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 bump_spine_iter/bench_src.rs	struct_src	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/machine.rs	empty	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/machine.rs	quote	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/spine.rs	xcell_head_name	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-mod.rs	force_arg	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	v_app_pruning	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	v_applicable	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-observe.rs	peel_pi_collect	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-observe.rs	push_hover_decl	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	p_pattern	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	span_of	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	check_err	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-typeclass.rs	try_resolve	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-unification.rs	rename_sp	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+mod.rs	force_arg	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	v_app_pruning	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	v_applicable	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+observe.rs	peel_pi_collect	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+observe.rs	push_hover_decl	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/mod.rs	p_pattern	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/mod.rs	span_of	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+tests.rs	check_err	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+typeclass.rs	try_resolve	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+unification.rs	rename_sp	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 bump_spine_iter/eval.rs	W	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/machine.rs	str_pi	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/rename.rs	prune_vflex_bump	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-cxt.rs	DeclEntry	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-elaboration.rs	insert_until_go	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	quote_sp	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-observe.rs	push_inlay_hint	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/lex.rs	TokenKind	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	p_atom	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	p_decl_plain	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	splice_push	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/syntax.rs	name	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	chain	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+cxt.rs	DeclEntry	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+elaboration.rs	insert_until_go	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	quote_sp	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+observe.rs	push_inlay_hint	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/lex.rs	TokenKind	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/mod.rs	p_atom	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/mod.rs	p_decl_plain	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+parser/mod.rs	splice_push	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+parser/syntax.rs	name	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+tests.rs	chain	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
 bump_spine_iter/machine.rs	Machine	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/machine.rs	clear_round	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/machine.rs	types_names_list	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
@@ -304,36 +303,36 @@ bump_spine_iter/subst.rs	extend	FROZEN	孪生引擎已封印（feature 默认关
 bump_spine_iter/subst.rs	has	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/subst.rs	push_env	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/syntax.rs	Tm	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-cxt.rs	bind	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	FrameKind	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-observe.rs	surface	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	p_atom1	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/syntax.rs	Raw	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-pattern_match.rs	pat_span	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	nat_sum	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_demo	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_string_empty_and_escape	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-unification.rs	deep_rename_tests	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-unification.rs	nat_sum	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+cxt.rs	bind	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	FrameKind	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+observe.rs	surface	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/mod.rs	p_atom1	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/syntax.rs	Raw	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+pattern_match.rs	pat_span	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+tests.rs	nat_sum	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_demo	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_string_empty_and_escape	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+unification.rs	deep_rename_tests	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+unification.rs	nat_sum	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 bump_spine_iter/machine.rs	unify	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/struct_eq.rs	EqBudget	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/struct_eq.rs	pr_slots	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/subst.rs	vsub_reclaim	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/typeclass.rs	TraitState	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-cxt.rs	define	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-cxt.rs	empty	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	bench_check	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	meta_restore	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	with_first	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-observe.rs	render_typ_pretty	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-observe.rs	render_val	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	p_pi_binder	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	p_top	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-struct_eq.rs	EqBudget	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	check	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	struct_eq_vsub_pointer_identity	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_get_global_missing_stays_stuck	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-unification.rs	lams_go	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+cxt.rs	define	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+cxt.rs	empty	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	bench_check	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	meta_restore	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	with_first	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+observe.rs	render_typ_pretty	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+observe.rs	render_val	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+parser/mod.rs	p_pi_binder	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/mod.rs	p_top	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+struct_eq.rs	EqBudget	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+tests.rs	check	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	struct_eq_vsub_pointer_identity	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	test_get_global_missing_stays_stuck	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+unification.rs	lams_go	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 bump_spine_iter/bench_src.rs	natadd_src	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/eval.rs	eval_aux	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/force.rs	vapp_ok	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
@@ -344,18 +343,18 @@ bump_spine_iter/machine.rs	reclaim	FROZEN	孪生引擎已封印（feature 默认
 bump_spine_iter/machine.rs	unwind_names	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/rename.rs	invert_bump	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/rename.rs	solve_bump	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-cxt.rs	tm_pi	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	extend	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	lvl2ix	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	simpl_decl_cached	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	borrowed_tokens_to_string	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	brace	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	p_match	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	p_pi_impl_binder	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-struct_eq.rs	val_eq	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-surface.rs	LspSurface	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-typeclass.rs	val_match	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-unification.rs	unlift	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+cxt.rs	tm_pi	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	extend	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	lvl2ix	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	simpl_decl_cached	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+parser/mod.rs	borrowed_tokens_to_string	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+parser/mod.rs	brace	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/mod.rs	p_match	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/mod.rs	p_pi_impl_binder	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+struct_eq.rs	val_eq	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+surface.rs	LspSurface	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+typeclass.rs	val_match	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+unification.rs	unlift	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
 bump_spine_iter/compiler.rs	NestedCheck	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/compiler.rs	covers	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/compiler.rs	is_catch_all	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
@@ -370,77 +369,77 @@ bump_spine_iter/quote.rs	QJob	FROZEN	孪生引擎已封印（feature 默认关�
 bump_spine_iter/struct_eq.rs	spend	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/subst.rs	SubEntryV	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/unify.rs	unify_sp_lockstep	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-cxt.rs	Decls	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-elaboration.rs	insert_go	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	DeclTm	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	Error	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	SubEntry	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	burn_match_cmp_budget	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	has	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	pop	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	run_with_surface_at	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-observe.rs	hover_entry_at	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-observe.rs	note_failed_decl	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-observe.rs	push_hover	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	p_pi_impl_binder_option	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-pattern_match.rs	Walk	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-pretty.rs	go_ix	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-pretty.rs	prepend_pattern_ns	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-pretty.rs	sum_head_name	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-struct_eq.rs	EqTask	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-struct_eq.rs	spend	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-surface.rs	inlay_label	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-surface.rs	pattern_span	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-syntax.rs	close_ty	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	succ_of	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-unification.rs	Frame	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+cxt.rs	Decls	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+elaboration.rs	insert_go	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	DeclTm	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	Error	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	SubEntry	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	burn_match_cmp_budget	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	has	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	pop	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	run_with_surface_at	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+observe.rs	hover_entry_at	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+observe.rs	note_failed_decl	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+observe.rs	push_hover	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/mod.rs	p_pi_impl_binder_option	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+pattern_match.rs	Walk	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+pretty.rs	go_ix	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+pretty.rs	prepend_pattern_ns	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+pretty.rs	sum_head_name	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+struct_eq.rs	EqTask	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+struct_eq.rs	spend	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+surface.rs	inlay_label	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+surface.rs	pattern_span	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+syntax.rs	close_ty	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+tests.rs	succ_of	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+unification.rs	Frame	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 bump_spine_iter/compiler.rs	sum_case_names	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/machine.rs	<K, T, S> ReclaimOnClear for std::collections::HashMap<K, T, S> where K: std::hash::Hash + Eq, S: std::hash::BuildHasher,	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/machine.rs	<T, S> ReclaimOnClear for std::collections::HashSet<T, S> where T: std::hash::Hash + Eq, S: std::hash::BuildHasher,	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/machine.rs	bind_name	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/machine.rs	define_name	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/prim.rs	burn	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-cxt.rs	NameState	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-cxt.rs	st2g_app	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-cxt.rs	str_pi	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	Frame	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	burn	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	push	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	run_with_surface_query	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	v_app_sp	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-observe.rs	push_hover_rendered	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-observe.rs	push_inlay_label	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-observe.rs	push_println_span	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	p_lam_binder	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	p_raw_plain	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	test_leftover_located	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-pattern_match.rs	matched	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-shape.rs	match_to_decl	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-shape.rs	peel	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+cxt.rs	NameState	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+cxt.rs	st2g_app	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+cxt.rs	str_pi	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	Frame	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	burn	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	push	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	run_with_surface_query	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	v_app_sp	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+observe.rs	push_hover_rendered	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+observe.rs	push_inlay_label	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+observe.rs	push_println_span	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+parser/mod.rs	p_lam_binder	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/mod.rs	p_raw_plain	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+parser/mod.rs	test_leftover_located	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+pattern_match.rs	matched	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+shape.rs	match_to_decl	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+shape.rs	peel	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 bump_spine_iter/bench_src.rs	strchain_src	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/machine.rs	TCons	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/machine.rs	insert_until_name	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/subst.rs	Drop for SubEntryV	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-cxt.rs	NameState	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-cxt.rs	decl_insert_mut	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	<T: Copy, const N: usize> InlineStack<T, N>	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	InlineStack	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	bench_check_nf_observe	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	meta_snapshot	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	report	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	wrap_sp	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	wrap_sub	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-observe.rs	span_from_name	PATH	crate 路径/模块前缀改名（L0N_sum_type → L13_namespace），逻辑不变
-parser/lex.rs	ident	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	p_print	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	test_whole_file_fail	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-pattern_match.rs	IndexUnify	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-pattern_match.rs	new	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-pretty.rs	pretty_tm	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-typeclass.rs	Synth	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-typeclass.rs	impl_trait_for	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-unification.rs	PartialRenaming	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-unification.rs	intersect	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+cxt.rs	NameState	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+cxt.rs	decl_insert_mut	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	<T: Copy, const N: usize> InlineStack<T, N>	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	InlineStack	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	bench_check_nf_observe	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	meta_snapshot	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	report	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	wrap_sp	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	wrap_sub	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+observe.rs	span_from_name	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+parser/lex.rs	ident	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/mod.rs	p_print	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/mod.rs	test_whole_file_fail	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+pattern_match.rs	IndexUnify	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+pattern_match.rs	new	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+pretty.rs	pretty_tm	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+typeclass.rs	Synth	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+typeclass.rs	impl_trait_for	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+unification.rs	PartialRenaming	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+unification.rs	intersect	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 bump_spine_iter/bench_src.rs	church_src	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/compiler.rs	new	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/entry.rs	NO_NAME_MAP	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
@@ -453,31 +452,31 @@ bump_spine_iter/machine.rs	restore_names	FROZEN	孪生引擎已封印（feature 
 bump_spine_iter/subst.rs	SpecSolve	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/syntax.rs	v_clo_of	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/syntax.rs	v_xcell_of	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-cxt.rs	new_binder	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-elaboration.rs	insert	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	Infer	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	compose	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	cover_at	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	frcs_env	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	nf	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	note_unify_kind	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	occurs_transitive	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	reset	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	v_meta	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/lex.rs	fmt	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	p_macro_def	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	test_ok	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/syntax.rs	Pattern	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-pattern_match.rs	NestedCheck	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-pattern_match.rs	is_catch_all	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-pattern_match.rs	sum_cases	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-shape.rs	shapes_for	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	test_macro_stringify_builtin	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-typeclass.rs	new_subgoal	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-unification.rs	intersect_go	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-unification.rs	invert	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-unification.rs	lift_in_place	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-unification.rs	prune_ty	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+cxt.rs	new_binder	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+elaboration.rs	insert	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	Infer	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	compose	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	cover_at	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	frcs_env	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	nf	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	note_unify_kind	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	occurs_transitive	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	reset	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	v_meta	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/lex.rs	fmt	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/mod.rs	p_macro_def	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/mod.rs	test_ok	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+parser/syntax.rs	Pattern	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+pattern_match.rs	NestedCheck	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+pattern_match.rs	is_catch_all	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+pattern_match.rs	sum_cases	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+shape.rs	shapes_for	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+tests.rs	test_macro_stringify_builtin	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+typeclass.rs	new_subgoal	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+unification.rs	intersect_go	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+unification.rs	invert	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+unification.rs	lift_in_place	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+unification.rs	prune_ty	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 bump_spine_iter/bench_src.rs	enum_src	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/bench_src.rs	globals_src	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/compiler.rs	Walk	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
@@ -497,59 +496,59 @@ bump_spine_iter/subst.rs	is_empty	FROZEN	孪生引擎已封印（feature 默认�
 bump_spine_iter/syntax.rs	v_pi_of	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/syntax.rs	v_u_of	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/typeclass.rs	span_of	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-cxt.rs	decl_insert	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-cxt.rs	has_src	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-cxt.rs	insert	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-cxt.rs	lookup_src	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-elaboration.rs	insert_until_name	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	MetaSnapshot	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	PatternDetail	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	UnifyKind	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	at	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	bind_count	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	bump	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	closure_apply	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	deref	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	env_slots	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	eq	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	eq	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	eq	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	extend	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	fmt	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	is_empty	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	lookup	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	lookup_meta	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	mentions_any_solved	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	mentions_level	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	meta_refuel	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	new	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	new	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	new_meta	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	overwrite_meta	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	push_blank	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	span	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	std::fmt::Debug for Error	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	tmspan	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	vspan	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-observe.rs	hover_wanted	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-observe.rs	inlay_wanted	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/lex.rs	lex	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/lex.rs	string	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	kw_is	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	p_macro_transcriber_single	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	p_spine	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	parser	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-pretty.rs	drop	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-pretty.rs	fresh	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-shape.rs	MatchShape	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-struct_eq.rs	env_eq	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-struct_eq.rs	tm_eq	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-typeclass.rs	synth	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-unification.rs	SpecSolve	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-unification.rs	drop	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-unification.rs	lift	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-unification.rs	skip	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-unification.rs	unify_no_arm	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+cxt.rs	decl_insert	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+cxt.rs	has_src	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+cxt.rs	insert	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+cxt.rs	lookup_src	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+elaboration.rs	insert_until_name	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	MetaSnapshot	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	PatternDetail	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	UnifyKind	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	at	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	bind_count	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	bump	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	closure_apply	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	deref	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	env_slots	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	eq	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	eq	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	eq	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	extend	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	fmt	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	is_empty	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	lookup	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	lookup_meta	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	mentions_any_solved	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	mentions_level	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	meta_refuel	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	new	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	new	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	new_meta	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	overwrite_meta	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	push_blank	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	span	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	std::fmt::Debug for Error	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	tmspan	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	vspan	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+observe.rs	hover_wanted	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+observe.rs	inlay_wanted	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/lex.rs	lex	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/lex.rs	string	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/mod.rs	kw_is	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/mod.rs	p_macro_transcriber_single	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/mod.rs	p_spine	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/mod.rs	parser	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+pretty.rs	drop	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+pretty.rs	fresh	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+shape.rs	MatchShape	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+struct_eq.rs	env_eq	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+struct_eq.rs	tm_eq	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+typeclass.rs	synth	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+unification.rs	SpecSolve	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+unification.rs	drop	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+unification.rs	lift	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+unification.rs	skip	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+unification.rs	unify_no_arm	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 bump_spine_iter/entry.rs	Tycker	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/entry.rs	drop	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/entry.rs	name	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
@@ -562,63 +561,63 @@ bump_spine_iter/spine.rs	flex_of	FROZEN	孪生引擎已封印（feature 默认�
 bump_spine_iter/spine.rs	head_kind	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/subst.rs	VSUB_REGS	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/typeclass.rs	unmatchable	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-cxt.rs	decl	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-cxt.rs	decl_get	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-cxt.rs	deref	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-cxt.rs	deref_mut	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-cxt.rs	fmt	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-cxt.rs	new	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-cxt.rs	next_decl_version	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-cxt.rs	unwind_names	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-elaboration.rs	check_ty	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-elaboration.rs	infer	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-elaboration.rs	insert_t	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	L12_DEBUG_ON	RENAME	章名重命名 L12_* → L13_*（调试开关随层改名）
-mod.rs	LOOP_DEBUG	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	MetaEntry	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	PartialEq for VSpan	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	PartialEq<Span<String>> for VSpan	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	PartialEq<VSpan> for Span<String>	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	Subst	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	VSpan	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	bench_check_nf	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	close_val	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	enable	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	fmt	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	fuel_exhausted	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	on	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	rc_take	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	reset_match_cmp_budget	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	run_with_surface	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	std::fmt::Debug for VSpan	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	std::ops::Deref for VSpan	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	take_trait_error	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	unify_kind	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	vmeta	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	vvar	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	p_bind	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	p_lam	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	p_pi	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/syntax.rs	Decl	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/syntax.rs	Pattern	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/syntax.rs	get_icit	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/syntax.rs	to_impl	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/syntax.rs	to_raw	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-pattern_match.rs	covers	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-pretty.rs	Drop for DepthGuard	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-pretty.rs	go_app_pruning	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-raw_pretty.rs	pattern	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-shape.rs	from_val	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-surface.rs	LspSurface	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-surface.rs	split_issue_lines	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-syntax.rs	Locals	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-typeclass.rs	Assertion	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-typeclass.rs	TableEntry	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-typeclass.rs	new_trait	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-typeclass.rs	vals_eq_ground	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-unification.rs	Drop for G	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-unification.rs	lams	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-unification.rs	solve	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+cxt.rs	decl	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+cxt.rs	decl_get	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+cxt.rs	deref	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+cxt.rs	deref_mut	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+cxt.rs	fmt	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+cxt.rs	new	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+cxt.rs	next_decl_version	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+cxt.rs	unwind_names	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+elaboration.rs	check_ty	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+elaboration.rs	infer	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+elaboration.rs	insert_t	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	L12_DEBUG_ON	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	LOOP_DEBUG	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	MetaEntry	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	PartialEq for VSpan	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	PartialEq<Span<String>> for VSpan	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	PartialEq<VSpan> for Span<String>	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	Subst	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	VSpan	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	bench_check_nf	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	close_val	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	enable	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	fmt	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	fuel_exhausted	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	on	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	rc_take	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	reset_match_cmp_budget	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	run_with_surface	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	std::fmt::Debug for VSpan	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	std::ops::Deref for VSpan	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	take_trait_error	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	unify_kind	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	vmeta	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	vvar	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/mod.rs	p_bind	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/mod.rs	p_lam	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/mod.rs	p_pi	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/syntax.rs	Decl	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/syntax.rs	Pattern	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/syntax.rs	get_icit	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/syntax.rs	to_impl	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/syntax.rs	to_raw	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+pattern_match.rs	covers	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+pretty.rs	Drop for DepthGuard	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+pretty.rs	go_app_pruning	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+raw_pretty.rs	pattern	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+shape.rs	from_val	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+surface.rs	LspSurface	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+surface.rs	split_issue_lines	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+syntax.rs	Locals	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+typeclass.rs	Assertion	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+typeclass.rs	TableEntry	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+typeclass.rs	new_trait	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+typeclass.rs	vals_eq_ground	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+unification.rs	Drop for G	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+unification.rs	lams	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+unification.rs	solve	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 bump_spine_iter.rs	struct_eq	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter.rs	subst	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter.rs	unify	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
@@ -657,88 +656,88 @@ bump_spine_iter/subst.rs	std	FROZEN	孪生引擎已封印（feature 默认关、
 bump_spine_iter/typeclass.rs	TraitAssertion	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/typeclass.rs	TraitInstance	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
 bump_spine_iter/unify.rs	NO_CONV_MEMO	FROZEN	孪生引擎已封印（feature 默认关、parity 编空、lib 零引用），只登记不回填
-cxt.rs	DECL_VERSION	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-cxt.rs	Decls	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-cxt.rs	PrimFunc	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-cxt.rs	Target	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-cxt.rs	go	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-cxt.rs	names	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-cxt.rs	std::fmt::Debug for PrimFunc	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-cxt.rs	std::ops::Deref for Decls	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-cxt.rs	std::ops::DerefMut for Decls	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	BUDGET	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	Env	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	Error	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	FILE_IO_LOCK	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	Lvl	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	NAMES	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	ON	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	Spine	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	Target	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	UnifyError	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	VSpan	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	VTy	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	Val	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	bump_spine_iter	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	cxt	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	elaboration	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	empty_span	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	fmt	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	observe	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	parser	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	pattern_match	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	pretty	PATH	crate 路径/模块前缀改名（L0N_sum_type → L13_namespace），逻辑不变
-mod.rs	raw_pretty	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	reset_unify_kind	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	shape	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	std::error::Error for Error	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	std::fmt::Display for Error	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	struct_eq	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	surface	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	syntax	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	tests	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	typeclass	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-mod.rs	unification	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/lex.rs	KEYWORD	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/lex.rs	OP	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/lex.rs	brace	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/lex.rs	op	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/lex.rs	std::fmt::Display for TokenKind	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/lex.rs	test	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/macros.rs	get_used_metavars	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/macros.rs	replace	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/macros.rs	to_parser	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	ErrMsg	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	ErrorProgress for IError	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	MacroState	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	ParseError	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	fun_or_spine	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	kw	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	lex	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	macros	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	owned_tokens_to_string	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/mod.rs	p_macro_group_matcher	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-parser/syntax.rs	Either	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-pattern_match.rs	Val	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-pattern_match.rs	Walk	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-pretty.rs	APPP	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-pretty.rs	ATP	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-pretty.rs	DEPTH	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-pretty.rs	DepthGuard	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-pretty.rs	LETP	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-pretty.rs	MAX_DEPTH	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-pretty.rs	PIP	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-pretty.rs	bracket	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-pretty.rs	paren	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-raw_pretty.rs	has_source_type	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-struct_eq.rs	EQ_BUDGET	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-struct_eq.rs	EqBudget	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-surface.rs	HoverEntry	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-surface.rs	MAX_LEN	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	N_EQ	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-tests.rs	N_OCCURS	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-typeclass.rs	ConsumerNode	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-typeclass.rs	Instance	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-unification.rs	G	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-unification.rs	N	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
-unification.rs	REN_DEPTH	FEATURE	生产层架构分叉：Span<SmolStr>/4 元 Sum/Val::Nat/update_cxt 载体/FUNC_PROF（见 L13-triage.md）
+cxt.rs	DECL_VERSION	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+cxt.rs	Decls	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+cxt.rs	PrimFunc	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+cxt.rs	Target	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+cxt.rs	go	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+cxt.rs	names	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+cxt.rs	std::fmt::Debug for PrimFunc	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+cxt.rs	std::ops::Deref for Decls	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+cxt.rs	std::ops::DerefMut for Decls	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	BUDGET	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	Env	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	Error	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	FILE_IO_LOCK	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	Lvl	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	NAMES	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	ON	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	Spine	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	Target	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	UnifyError	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	VSpan	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	VTy	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	Val	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	bump_spine_iter	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	cxt	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	elaboration	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	empty_span	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	fmt	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	observe	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	parser	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	pattern_match	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	pretty	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	raw_pretty	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	reset_unify_kind	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	shape	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	std::error::Error for Error	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	std::fmt::Display for Error	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	struct_eq	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	surface	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	syntax	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	tests	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	typeclass	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+mod.rs	unification	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/lex.rs	KEYWORD	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/lex.rs	OP	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/lex.rs	brace	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/lex.rs	op	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/lex.rs	std::fmt::Display for TokenKind	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/lex.rs	test	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/macros.rs	get_used_metavars	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/macros.rs	replace	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/macros.rs	to_parser	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/mod.rs	ErrMsg	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/mod.rs	ErrorProgress for IError	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/mod.rs	MacroState	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/mod.rs	ParseError	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+parser/mod.rs	fun_or_spine	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/mod.rs	kw	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/mod.rs	lex	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/mod.rs	macros	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/mod.rs	owned_tokens_to_string	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/mod.rs	p_macro_group_matcher	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+parser/syntax.rs	Either	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+pattern_match.rs	Val	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+pattern_match.rs	Walk	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+pretty.rs	APPP	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+pretty.rs	ATP	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+pretty.rs	DEPTH	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+pretty.rs	DepthGuard	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+pretty.rs	LETP	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+pretty.rs	MAX_DEPTH	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+pretty.rs	PIP	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+pretty.rs	bracket	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+pretty.rs	paren	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+raw_pretty.rs	has_source_type	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+struct_eq.rs	EQ_BUDGET	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+struct_eq.rs	EqBudget	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+surface.rs	HoverEntry	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+surface.rs	MAX_LEN	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+tests.rs	N_EQ	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+tests.rs	N_OCCURS	TEST-GAP	L12 的测试用例（22 个已回灌通过，其余受渲染口径/内部载体限制，见 L13-triage.md §5-§7）
+typeclass.rs	ConsumerNode	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+typeclass.rs	Instance	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+unification.rs	G	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+unification.rs	N	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
+unification.rs	REN_DEPTH	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
