@@ -142,3 +142,50 @@ keep 阈值 + 已登记偏差白名单；未来任何一层再漂立刻红灯。
 2. 每层 lib / 黑盒 / parity / 跨层套件全绿；L13 另加严格 parity + examples；
 3. `tests/chain_inheritance` 门禁可复跑，阈值与白名单入库；
 4. 各层 README 的"相对上一章增量"与 triage 表一致。
+
+## 8 执行状态（2026-11-25 更新）
+
+> 本节的数字都是**实测**（`tools/inherit_audit.py` + `cargo test`），不是计划值。
+
+### 8.1 六层账本（终态）
+
+| 转换 | identical | 非孪生 missing | line_keep | 门禁 |
+|---|---:|---:|---:|---|
+| L07→L08 | 713 | **0** | 0.9488 | lib 83 / bb 57+51 / lsp 88 |
+| L08→L09 | 721 | 2（RENAME + REPLACED） | 0.9881 | lib 83 / bb 60 / lsp 86 |
+| L09→L10 | 794 | 1（RENAME） | 0.9984 | lib 86 / bb 65 / lsp 89 |
+| L10→L11 | 839 | 1（RENAME） | 0.9990 | lib 88 / bb 67 / lsp 91 |
+| L11→L12 | 866 | 8（全为 REPLACED） | 0.9908 | lib 88 / bb 67 / lsp 91 |
+| L12→L13 | 156 | 393（125 ARCH-DIVERGED + 86 TEST-GAP + 其余 MORPHOSIS） | 0.5223 | lib 622 / parity 0(封印) |
+
+### 8.2 全仓门禁（2026-11-25 实测）
+
+| 套件 | 结果 |
+|---|---|
+| `cargo test --release --lib` | **1269 passed**, 13 ignored |
+| L08–L12 黑盒 + lsp 面（11 个套件） | 57+51+88 / 60+86 / 65+89 / 67+91 / 67+91，全绿 |
+| `chain_inheritance` | **2 passed**（新门禁） |
+| `l13_inherited_from_l12` | **22 passed**（新回灌） |
+| `l13_struct_eq_fastpath` | **2 passed** |
+| `l07_l13_known_diff` / `l13_diag_shape` | 3 / 2 passed |
+| 跨层：gadt_refine 265 / prim_identity 258 / audit_crosslayer 258 / backport3 174 | 全绿 |
+| `typort check examples/*.typort` | **5/5 exit=0** |
+| 孪生 parity（l08–l13） | 6 个套件全 0（feature 封印，符合预期） |
+
+### 8.3 与 §7 验收口径的偏差（诚实登记）
+
+| §7 原定 | 实测 | 说明 |
+|---|---|---|
+| L08 keep ≥ 0.99 | 0.9488 | 缺口全在**已封印的孪生**（22 missing / 54 changed），参考版已达 0 missing |
+| L09 ≥ 0.999 | 0.9881 | 63 项 changed 主要是 `Val::U`→`Val::U(u32)` 机械替换（宇宙层特性） |
+| L13 ≥ 0.95 | 0.5223 | **未达标**：125 项载体分叉（VSpan→Span<SmolStr> / σ→`update_cxt` / prof→`FUNC_PROF`） |
+
+⇒ 门禁阈值因此定在实际可达值（0.94 / 0.98 / 0.99 / 0.51），并把每条非 identical 显式登记。
+L13 的 0.95 只有在载体分叉收敛（路线 A 或 B）后才可能达到。
+
+### 8.4 待决策
+
+L13 剩余 125 项**全部**是载体分叉，见 `docs/inheritance/L13-triage.md` §1/§7.4：
+- 路线 A（登记制，1–2 天）：接受分叉、只补不冲突项；
+- 路线 B（载体升级，1–2 周）：把 `Subst`/`VSub`/`frcs` 移植进 L13，动生产内核；
+- 路线 C（整体重定基，3–4 周）：2026-11-17 已评估并选择不做。
