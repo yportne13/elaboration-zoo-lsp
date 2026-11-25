@@ -656,3 +656,46 @@ prelude elaboration failed: Error("can't unify for unsolved meta
 
 后者才是 B3' 的正解，但需要 `pattern_match` 的 `Compiler` 持有 σ 状态（L12 有 `sub: Rc<Subst>` 字段），
 这是比改 `check_pm_final` 大一圈的改造。
+
+## 20 第 6 轮：Compiler 加 `sub` 字段（B3' 第八步）
+
+### 20.1 本轮做了什么
+
+按 §19.4 的正解方向，给 `pattern_match::Compiler` 加 `sub: Rc<Subst>` 字段（L12 的 `Compiler` 就是这样持有 σ 的）。
+纯增量：字段 + 默认值就位，**无写入者**，当前精化仍走 `Cxt` 的 env 槽。
+
+验证：oracle PASS（binary 02:14:23 > src 02:10:54、examples 5/5、638 测试名一致）。
+
+### 20.2 为什么这一步要单独做
+
+§19.4 说 `check_pm_final` 的正解是「`pattern_match` 侧维护 σ、`check_pm_final` 接收并以它为种子」。
+但直接做那一步需要同时改 4 处（`Compiler` 字段、走查累积、`check_pm_final` 签名、臂上下文桥接），
+任何一处不对都会以同一种症状（spine 不同步）失败，无法归因。
+
+先把字段就位、单独验证零回归，是把这个改造拆成可定位的小步——这是本轮系列里一贯的方法（B1/B2/B3' 前七步都是）。
+
+### 20.3 剩余工作（B3' 目标 vs 现状）
+
+| 目标项 | 现状 |
+|---|---|
+| `unify_pm` 穿 `SpecSolve` | ✅ 已就位（`f117cd7b` `8879324d`） |
+| 每步递归入口按 acc 包两侧 | ✅ 已就位（`bb03431c`） |
+| 解入 acc 前两级 occurs 守卫 | ✅ 已就位 + 门禁修正（`0129496a`） |
+| pruning 清位（`update_cxt` 的第二职责） | ✅ 已修（`ef77fc97`） |
+| `check_pm` 走 σ | ✅ 已启用且全绿 |
+| **`check_pm_final` 走 σ** | ❌ 失败（spine 不同步），需 `Compiler::sub` 作种子 |
+| **`unify_pm` 返回 `Result<(), Error>`** | ❌ 仍是 `Result<Cxt, Error>` |
+| **两个入口返回 `Rc<Subst>`** | ❌ 仍返回 `Cxt` |
+| **删除 `update_cxt`/`refresh` 的 env 槽改写** | ❌ 未动 |
+| `Compiler::sub` 字段 | ✅ 刚就位（`b78cf996`，无写入者） |
+
+### 20.4 关键认知（写给继续做的人）
+
+`check_pm` 与 `check_pm_final` 的失败模式**不同构**，这是 B3' 最大的坑：
+
+- `check_pm` 的方程两侧都是**类型层面的值**，σ 可以直接替代 env 槽；
+- `check_pm_final` 的一侧（`tmv = eval(t_inferred)`）是**项值 eval 出来的**，带 spine（`t + 1`），
+  而另一侧 `ori` 是未包裹的构造子返回类型——spine 状态不同源。
+
+所以「统一改用 σ」这个方向本身对 `check_pm_final` 不成立，必须让 σ **在 `pattern_match` 里累积**
+（L12 的 `self.sub`），使 `ori` 与 `tmv` 都处于同一 σ 之下再比较。
