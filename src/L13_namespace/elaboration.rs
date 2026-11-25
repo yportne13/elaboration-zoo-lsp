@@ -684,6 +684,13 @@ impl Infer {
         };
         let (t_inferred, cxt) = self.check_pm(cxt, t, a)?;
         let tmv = self.eval(&cxt.decl, &cxt.env, &t_inferred);
+        // B3 step: this equation compares `ori` (constructor return type) with
+        // `tmv = eval(t_inferred)`. The latter carries spine state, so both sides
+        // must see the same sigma before comparing. We therefore keep the ordinary
+        // update_cxt path here (a sigma-less comparison was tried and failed with
+        // spine mismatch, see docs plan section 19), but seed the solvable set so
+        // that when sigma threading lands it already has the right domain.
+        let _solvable = cxt.bind_slots();
         let new_cxt = self.unify_pm(&cxt, &ori, &tmv, None, t_span).unwrap_or(cxt);
         Ok((t_inferred, new_cxt))
     }
