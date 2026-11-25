@@ -1118,3 +1118,62 @@ B3' 的改动现在可以这样评价：
 ⇒ B3' 的正确顺序不是「先改 check_pm_final」，而是**先把 check_pm 的 env 槽精化也换成 σ**
 （即 `check_pm` 不再返回被 `update_cxt` 修改过的 Cxt，而是返回 σ，由调用方 `subst_cxt` 生成臂上下文）。
 这样 `check_pm_final` 面对的就是「已被 σ 精化过的 env」，再套 σ 是幂等的。
+
+## 30 第 16 轮：核实一个决定性事实——L12 没有 `update_cxt`
+
+### 30.1 核实结果
+
+```
+L12_canonical/cxt.rs 里 fn update_cxt 的数量：0
+L13_namespace 里 check_pm 的调用点：3（elaboration.rs:685 / 778 / 789）
+```
+
+**L12 根本没有 `update_cxt`。** 它的臂上下文全部由 `subst_cxt(&self.sub)` 生成，
+`sub` 在 `pattern_match` 里累积（`self.sub = spec.acc`）。L13 的 `update_cxt` 是 L13 独立演进中
+新增的急切载体（L09–L13 的 `refresh` 血统），在 L12 里不存在对应物。
+
+### 30.2 这意味着什么
+
+§29.3 的结论「先把 check_pm 的 env 槽精化换成 σ」在 L13 里不是一个「局部替换」：
+
+`check_pm` 返回的 `Cxt` 被三处消费：
+
+| 调用点 | 消费方式 |
+|---|---|
+| `elaboration.rs:685` | `check_pm_final` 的臂特化 |
+| `elaboration.rs:778` | `infer_expr_pm` 的 App 递归（取 `cxt` 继续推断） |
+| `elaboration.rs:789` | `check_pm` 自身定义 |
+
+第 2 处是**递归链**：`check_pm → infer_expr_pm → (App) → check_pm → …`。要让 `check_pm` 只返回 σ，
+这条链上的每一环都得改成传 σ——也就是把 `infer_expr_pm` 的整条签名改掉。
+
+### 30.3 与目标定义的差距（诚实登记）
+
+B3' 的目标（本次 goal 的 objective）写的是：
+
+> `unify_pm` 穿 `SpecSolve`、每步递归入口按 acc 包两侧、解入 acc 前两级 occurs、
+> `check_pm/check_pm_final` 返回 `Rc<Subst>`、删除 `update_cxt/refresh` 的 env 槽改写
+
+已完成的部分：
+
+| 项 | 状态 |
+|---|---|
+| `unify_pm` 穿 `SpecSolve` | ✅ |
+| 递归入口按 acc 包两侧 | ✅ |
+| 两级 occurs 守卫 | ✅ |
+| `Subst` / `frcs` / `subst_cxt` / `bind_slots` | ✅ |
+| `probe_accessible` / `ctor_accessible` 读 σ | ✅ |
+| **`check_pm`/`check_pm_final` 返回 `Rc<Subst>`** | ❌ 三轮尝试失败 |
+| **删除 `update_cxt`/`refresh`** | ❌ 未动 |
+
+后两项互相锁死：要删 `update_cxt` 必须先让所有消费者接受 σ；要返回 σ 又必须先让所有消费者不再需要 `Cxt`。
+这是一个**同时生效**的改动，不能分步——而它的影响面是 `infer_expr_pm` 的整条递归链加 `pattern_match` 的臂循环。
+
+### 30.4 本轮的技术结论
+
+前 15 轮我一直在「分步启用 σ」，而 §30.2 说明这个方向在 L13 里**结构性不可分步**：
+`check_pm` 的返回类型是递归链的公共接口，改它等于改整条链。
+
+这不是「再试一次就能成」的问题，是「要么一次改完整条链、要么不动」的问题。
+一次改完整条链意味着：`infer_expr_pm` / `check_pm` / `check_pm_final` / `pattern_match::compile` 四处签名同时变，
+期间无法用「小步验证」降低风险——正是我在前 15 轮极力避免的那种改动。
