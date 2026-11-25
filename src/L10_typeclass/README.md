@@ -101,3 +101,16 @@ def four = two.add two
 
 - `../L09_mltt/README.md`：本层核心机（含 `Type N` 宇宙）的全部出处；
 - 旧 L10 文档在 git 标签 `pre-rearch-20261117` 可查（trait 求解算法与示例的来源）。
+
+## 增补（2026-11-25）：继承 L09 观察面（三方合并）
+
+本轮以"上一章完整继承"口径，把 L09 已从 L08 继承、而本层此前漏掉的观察面归位
+（`observe.rs` / `prof` / `check_with_surface` 等 37 项）：
+
+- 三方合并（base = 旧链 L09、ours = 新 L09、theirs = 本层），29/32 文件零冲突；
+- 新增 `observe.rs`；`mod.rs` 的 `Infer` 字段两侧都要（本层 4 个 trait 字段 + 观察字段）；
+- `elaboration.rs` 投影臂取新 L09 的观察接线，并补回本层需要的 `ty_orig` 绑定。
+
+账本：identical 762→**794**，missing 37→**1**（仅 `L09_DEBUG_ON` → `L10_DEBUG_ON` 章名重命名），
+line_keep 0.9984。门禁：lib 86、l10_blackbox 65+1 ignored、l10_lsp_surface 89，全绿。
+对账见 `docs/inheritance/L10-triage.md`。
