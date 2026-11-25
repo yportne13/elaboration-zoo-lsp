@@ -739,3 +739,48 @@ prelude elaboration failed: Error("can't unify for unsolved meta
 | `unify_pm` 返回 `()` | ❌ 仍是 `Cxt` |
 | 两入口返回 `Rc<Subst>` | ❌ 仍是 `Cxt` |
 | 删 `update_cxt`/`refresh` | ❌ 未动 |
+
+## 22 第 8 轮：σ 穿进探测期（B3' 第十步）
+
+### 22.1 解决 §21.2 的结构约束
+
+`probe_accessible` / `ctor_accessible` 都是关联函数（无 `self`），拿不到 `Compiler::sub`。
+本轮按 L12 的做法**显式传 `sub` 参数**（不改方法化，改动面最小）：
+
+```rust
+fn probe_accessible(infer, cxt, head_sum, ctor, sub: &Rc<Subst>) -> Walk
+fn ctor_accessible(infer, cxt, typ, constrs, memo, i, sub: &Rc<Subst>) -> Walk
+```
+
+内部构造 `SpecSolve` 时 `acc` 从 `sub.clone()` 取（此前是空链）。两个 `ctor_accessible` 调用点补 `&self.sub`。
+
+### 22.2 `Compiler::sub` 第一次被读
+
+此前加字段时它是「只写不读的死字段」。现在它第一次被读取——但因为还没有写入者，
+恒为空链，`Subst::lookup` 全不命中、`unify_pm` 的 σ 分支也不触发，**行为零变化**。
+
+这一步的价值是**把「探测期的 σ 来源」接通**：下一轮给 `Compiler::sub` 装写入者时，
+探测期立刻就能看到累积的 σ，无需再改签名。
+
+### 22.3 验证
+
+| 项 | 结果 |
+|---|---|
+| oracle | PASS（binary 02:53:59 > src 02:50:21、examples 5/5、638 测试名） |
+| L13 lib | **625 passed** / 13 ignored |
+| chain_inheritance | 2 passed |
+| l13_inherited_from_l12 | 22 passed |
+
+### 22.4 B3' 剩余工作（9 项 → 4 项）
+
+| 项 | 现状 |
+|---|---|
+| `check_pm` 走 σ | ✅ 全绿 |
+| `unify_pm` 穿 `SpecSolve` + acc 包裹 + 两级 occurs + pruning 清位 | ✅ 全部就位 |
+| `unify_indices` 穿 spec | ✅ 就位 |
+| `probe_accessible` / `ctor_accessible` 拿得到 σ | ✅ 显式传参（`145dc5a1`） |
+| `Compiler::sub` 被写入 | ❌ 仍无写入者 |
+| `check_pm_final` 走 σ | ❌ 需 `Compiler::sub` 作种子 |
+| `unify_pm` 返回 `()` | ❌ 仍是 `Cxt` |
+| 两入口返回 `Rc<Subst>` | ❌ 仍是 `Cxt` |
+| 删 `update_cxt`/`refresh` | ❌ 未动 |
