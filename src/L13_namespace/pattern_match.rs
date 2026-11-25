@@ -209,8 +209,9 @@ impl Compiler {
                     let solvable = probe_cxt.bind_slots();
                     let mut spec = super::unification::SpecSolve {
                         solvable: &solvable,
-                        // probe_accessible has no `self`; a fresh empty chain keeps
-                        // today's per-equation behaviour until sigma is threaded.
+                        // probe_accessible is now a method and could read self.sub; probing
+                        // stays read-only (L12 shape) -- a probe's sigma is discarded at
+                        // the probe boundary, never written back -- so seed from self.sub.
                         acc: self.sub.clone(),
                     };
                     let res = Self::unify_indices(
