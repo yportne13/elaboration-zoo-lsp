@@ -749,3 +749,7 @@ typeclass.rs	Instance	MORPHOSIS	同名不同形（能力在 L13 内联于别处/
 unification.rs	G	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 unification.rs	N	MORPHOSIS	同名不同形（能力在 L13 内联于别处/换了签名），跨文件搜索可找到等价实现
 unification.rs	REN_DEPTH	ARCH-DIVERGED	L13 生产层载体分叉（VSpan→Span<SmolStr> / σ 替换→update_cxt / prof→FUNC_PROF），跨文件同名搜索也找不到
+mod.rs	unify_fuel_budget	ARCH-DIVERGED	L13 生产层载体分叉（B2 引入 VSub/Subst 后 mod.rs 头部区域的行号漂移，语义未变）
+mod.rs	rank	ARCH-DIVERGED	L13 生产层载体分叉（B2 引入 VSub/Subst 后 mod.rs 头部区域的行号漂移，语义未变）
+mod.rs	MATCH_CMP_BUDGET	ARCH-DIVERGED	L13 生产层载体分叉（B2 引入 VSub/Subst 后 mod.rs 头部区域的行号漂移，语义未变）
+mod.rs	UNIFY_FUEL	ARCH-DIVERGED	L13 生产层载体分叉（B2 引入 VSub/Subst 后 mod.rs 头部区域的行号漂移，语义未变）

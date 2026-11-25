@@ -20,7 +20,7 @@ const CHAPTERS: &[(&str, &str, &str, f64, &str)] = &[
     ("L09_mltt", "L10_typeclass", "L09_mltt-to-L10_typeclass.tsv", 0.99, "allow-L10.tsv"),
     ("L10_typeclass", "L11_macro", "L10_typeclass-to-L11_macro.tsv", 0.99, "allow-L11.tsv"),
     ("L11_macro", "L12_canonical", "L11_macro-to-L12_canonical.tsv", 0.99, "allow-L12.tsv"),
-    ("L12_canonical", "L13_namespace", "L12_canonical-to-L13_namespace.tsv", 0.51, "allow-L13.tsv"),
+    (("L12_canonical", "L13_namespace", "L12_canonical-to-L13_namespace.tsv", 0.52, "allow-L13.tsv")),
 ];
 
 fn ledger_dir() -> std::path::PathBuf {

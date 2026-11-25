@@ -10,31 +10,31 @@ pattern_match.rs	fn	walk_con	246	221	missing	0.0
 bump_spine_iter/compiler.rs	fn	walk_con	236	210	missing	0.0
 bump_spine_iter/force.rs	fn	force	250	203	changed	0.188
 bump_spine_iter/force.rs	fn	frcs	206	200	missing	0.0
-mod.rs	fn	prim_reduce	222	197	missing	0.0
 pattern_match.rs	fn	compile	193	192	changed	0.0052
+mod.rs	fn	prim_reduce	222	189	missing	0.0
 bump_spine_iter/prim.rs	fn	prim_reduce	264	168	missing	0.0
 pretty.rs	fn	go	199	161	changed	0.191
 bump_spine_iter/compiler.rs	fn	compile	164	160	changed	0.0244
 bump_spine_iter/machine.rs	fn	check_universe	171	147	changed	0.1404
 bump_spine_iter/subst.rs	fn	occurs_transitive	119	119	missing-file	0.0
-mod.rs	fn	force	126	117	changed	0.0714
-mod.rs	fn	frcs	120	117	missing	0.0
-mod.rs	fn	quote_arm	123	116	missing	0.0
+mod.rs	fn	quote_arm	123	118	missing	0.0
+mod.rs	fn	frcs	120	117	changed	0.025
+mod.rs	fn	force	126	115	changed	0.0873
 bump_spine_iter/machine.rs	fn	trait_wrap	115	109	missing	0.0
 elaboration.rs	fn	trait_wrap	115	109	changed	0.0522
 bump_spine_iter/quote.rs	fn	quote_iter	435	108	changed	0.7517
 bump_spine_iter/struct_eq.rs	fn	struct_val_eq_go	108	108	missing-file	0.0
-mod.rs	fn	eval	114	106	changed	0.0702
-unification.rs	fn	rename_arm	127	100	missing	0.0
+mod.rs	fn	eval	114	105	changed	0.0789
+unification.rs	fn	rename_arm	127	100	changed	0.2126
 tests.rs	fn	test_basic	96	96	missing-file	0.0
 bump_spine_iter/machine.rs	fn	prime_round	98	95	missing	0.0
 tests.rs	fn	deep_value_iterative_under_default_stack	86	86	missing-file	0.0
-mod.rs	struct	Infer	85	85	changed	0.0
+mod.rs	struct	Infer	85	84	changed	0.0118
+mod.rs	impl	Infer	1259	82	changed	0.9349
 bump_spine_iter/force.rs	fn	val_mentions_lvl	84	80	missing	0.0
 bump_spine_iter/subst.rs	impl	SubstV	80	80	missing-file	0.0
 bump_spine_iter/subst.rs	fn	mentions_level	77	77	missing-file	0.0
 cxt.rs	fn	new	77	76	changed	0.013
-mod.rs	impl	Infer	1259	76	changed	0.9396
 parser/mod.rs	fn	splice_transcriber	78	75	missing	0.0
 bump_spine_iter/machine.rs	impl	Machine	2147	70	changed	0.9674
 bump_spine_iter/struct_eq.rs	fn	struct_tm_eq_go	70	70	missing-file	0.0
@@ -42,8 +42,8 @@ bump_spine_iter/eval.rs	fn	eval_iter	347	69	changed	0.8012
 mod.rs	const	DEMO_SRC	81	69	missing	0.0
 struct_eq.rs	fn	eq_run	319	68	changed	0.7868
 elaboration.rs	fn	check	88	65	changed	0.2614
-unification.rs	fn	frame_new	65	65	missing	0.0
 bump_spine_iter/machine.rs	fn	solve_trait_ref	64	64	missing	0.0
+mod.rs	fn	frame_new	63	63	missing	0.0
 tests.rs	fn	test_bits_adder	63	63	missing-file	0.0
 bump_spine_iter/quote.rs	fn	shift_tm_bump	62	62	missing	0.0
 bump_spine_iter/rename.rs	fn	rename_iter	314	60	changed	0.8089
@@ -56,7 +56,6 @@ tests.rs	fn	test_eq_add_comm	59	59	missing-file	0.0
 elaboration.rs	fn	check_universe	63	57	changed	0.0952
 tests.rs	fn	test_lambda_calculus_and_strings	57	57	missing-file	0.0
 cxt.rs	impl	Cxt	317	55	changed	0.8265
-mod.rs	fn	frame_new	63	55	missing	0.0
 tests.rs	fn	test_eq_mul_one_right	54	54	missing-file	0.0
 tests.rs	fn	test_product_dependent	54	54	missing-file	0.0
 unification.rs	fn	deep_rename_collector_under_default_stack	65	54	missing	0.0
@@ -74,28 +73,26 @@ bump_spine_iter/struct_eq.rs	fn	struct_env_eq_go	48	48	missing-file	0.0
 bump_spine_iter/force.rs	fn	force_deep	49	47	missing	0.0
 mod.rs	fn	preprocess	58	46	changed	0.2069
 tests.rs	fn	test_product_generic	46	46	missing-file	0.0
-unification.rs	fn	frame_assemble	46	46	missing	0.0
 tests.rs	fn	test_deep_pattern_fuel_budget_regression	45	45	missing-file	0.0
-unification.rs	impl	Infer	1281	44	changed	0.9657
+mod.rs	fn	go	52	43	changed	0.1731
 mod.rs	fn	val_mentions_lvl	46	43	missing	0.0
 bump_spine_iter/typeclass.rs	fn	v_to_val	54	42	missing	0.0
 tests.rs	fn	test_hole_in_branch	42	42	missing-file	0.0
 tests.rs	fn	test_product_basic	42	42	missing-file	0.0
 tests.rs	fn	test_product_shadow	42	42	missing-file	0.0
-unification.rs	fn	rename_deep	173	41	missing	0.0
+unification.rs	impl	Infer	1281	42	changed	0.9672
+mod.rs	fn	frame_assemble	43	40	missing	0.0
 pattern_match.rs	fn	eval_aux_arm	47	40	missing	0.0
 tests.rs	fn	test_eq_mul_zero_right	40	40	missing-file	0.0
 tests.rs	fn	test_nested_pattern_outer_ref	40	40	missing-file	0.0
 tests.rs	fn	test_nested_patterns	40	40	missing-file	0.0
 bump_spine_iter/machine.rs	fn	has_free_var	49	39	changed	0.2041
-mod.rs	fn	frame_assemble	43	39	missing	0.0
-mod.rs	fn	go	52	39	changed	0.25
-mod.rs	fn	quote_deep	167	38	missing	0.0
+mod.rs	impl	Subst	192	39	changed	0.7969
 bump_spine_iter/entry.rs	fn	export	162	37	changed	0.7716
+mod.rs	fn	quote_deep	167	37	missing	0.0
 tests.rs	fn	test_eq_add_assoc	37	37	missing-file	0.0
 tests.rs	fn	test_eq_add_succ_right	37	37	missing-file	0.0
 tests.rs	fn	test_eq_add_zero_right	37	37	missing-file	0.0
-mod.rs	impl	Subst	192	36	missing	0.0
 mod.rs	fn	run_surface_impl	40	36	missing	0.0
 parser/mod.rs	fn	p_impl	45	36	changed	0.2
 tests.rs	fn	test_index_equality	36	36	missing-file	0.0
@@ -112,6 +109,7 @@ mod.rs	fn	check_with_surface	39	34	missing	0.0
 tests.rs	fn	test_recursive_defs	34	34	missing-file	0.0
 cxt.rs	fn	add_builtin	34	33	changed	0.0294
 elaboration.rs	impl	Infer	1273	33	changed	0.9741
+mod.rs	fn	force_deep	33	33	missing	0.0
 tests.rs	fn	error_carries_pattern_span	33	33	missing-file	0.0
 tests.rs	fn	test_product_field_err	33	33	missing-file	0.0
 tests.rs	fn	test_stuck_match_equation_bounded	33	33	missing-file	0.0
@@ -120,10 +118,10 @@ tests.rs	fn	test_eq_reasoning	32	32	missing-file	0.0
 tests.rs	fn	test_product_new_dot_chain	32	32	missing-file	0.0
 tests.rs	fn	test_stuck_match_unify	32	32	missing-file	0.0
 bump_spine_iter/machine.rs	fn	check	103	31	changed	0.699
-mod.rs	fn	force_deep	33	31	missing	0.0
 pattern_match.rs	fn	unify_indices	42	31	changed	0.2619
 tests.rs	fn	force_arg_unwraps_nested_vsub	31	31	missing-file	0.0
 tests.rs	fn	test_occurs_transitive_vsub_nested_is_documented_limitation	31	31	missing-file	0.0
+mod.rs	fn	new	30	30	changed	0.0
 tests.rs	fn	loose_string_requires_empty_spine	30	30	missing-file	0.0
 tests.rs	fn	parse_error_carries_span	30	30	missing-file	0.0
 bump_spine_iter/compiler.rs	fn	unify_indices	38	29	changed	0.2368
@@ -134,7 +132,6 @@ tests.rs	fn	test_stale_solvable_order_independent	29	29	missing-file	0.0
 tests.rs	fn	visibility_boundary_decl_value_is_not_refined	29	29	missing-file	0.0
 bump_spine_iter/machine.rs	fn	solve_multi_trait_ref	33	28	missing	0.0
 bump_spine_iter/machine.rs	fn	unify_with	51	28	missing	0.0
-mod.rs	fn	new	30	28	changed	0.0667
 surface.rs	fn	raw_span	29	28	missing	0.0
 tests.rs	fn	test_stuck_match_nonrecursive_still_equal	28	28	missing-file	0.0
 tests.rs	fn	test_trait_tostring_projection	28	28	missing-file	0.0
@@ -142,6 +139,7 @@ bump_spine_iter/machine.rs	struct	Machine	45	26	changed	0.4222
 tests.rs	fn	test_empty_type_zero_arm_match_accepts_canonical_conflicts	26	26	missing-file	0.0
 tests.rs	fn	test_stuck_match_applied_with_outer_binder	26	26	missing-file	0.0
 unification.rs	fn	flex_flex	53	26	changed	0.5094
+mod.rs	fn	mentions_level	28	25	changed	0.1071
 observe.rs	fn	drain_check_issues	25	25	missing-file	0.0
 parser/mod.rs	fn	p_enum	28	25	changed	0.1071
 parser/mod.rs	fn	p_struct	25	25	changed	0.0
@@ -155,7 +153,6 @@ bump_spine_iter/compiler.rs	struct	Compiler	24	24	changed	0.0
 mod.rs	fn	bench_check_nf_impl	27	24	missing	0.0
 bump_spine_iter/machine.rs	fn	unify_catch	31	23	changed	0.2581
 bump_spine_iter/rename.rs	fn	solve_with_pren_bump	50	23	changed	0.54
-mod.rs	fn	mentions_level	28	23	missing	0.0
 raw_pretty.rs	fn	go	151	23	changed	0.8477
 tests.rs	fn	test_dependent_match	23	23	missing-file	0.0
 tests.rs	fn	test_fn_typed_index_slot_applied_after_refine	23	23	missing-file	0.0
@@ -167,19 +164,18 @@ tests.rs	fn	test_projection_typing	23	23	missing-file	0.0
 bump_spine_iter/machine.rs	struct	Cxt	23	22	changed	0.0435
 mod.rs	fn	project	25	22	missing	0.0
 mod.rs	fn	unify_catch	23	22	changed	0.0435
+mod.rs	fn	v_app	23	22	changed	0.0435
 observe.rs	fn	local_binder_span	22	22	missing-file	0.0
 tests.rs	fn	test_nested_coverage_gap	22	22	missing-file	0.0
 tests.rs	fn	test_occurs_check_keeps_legit_refinement	22	22	missing-file	0.0
 bump_spine_iter/machine.rs	fn	eval	39	21	changed	0.4615
 bump_spine_iter/subst.rs	fn	compose	21	21	missing-file	0.0
 mod.rs	fn	run	24	21	changed	0.125
-mod.rs	fn	v_app	23	21	changed	0.087
 parser/mod.rs	struct	MacroExpansionInfo	21	21	changed	0.0
 tests.rs	fn	subst_chain_semantics	21	21	missing-file	0.0
 tests.rs	fn	test_gadt_unreachable_err	21	21	missing-file	0.0
 tests.rs	fn	test_trait_blanket_say	21	21	missing-file	0.0
 typeclass.rs	fn	consume	38	21	changed	0.4474
-unification.rs	fn	rename	28	21	changed	0.25
 unification.rs	fn	solve_multi_trait	23	21	changed	0.087
 bump_spine_iter/force.rs	fn	project	22	20	changed	0.0909
 bump_spine_iter/machine.rs	fn	bind_slots	21	20	missing	0.0
@@ -204,6 +200,8 @@ tests.rs	fn	test_file_io_builtins	18	18	missing-file	0.0
 tests.rs	fn	test_macro_decl_expansion	18	18	missing-file	0.0
 tests.rs	fn	test_shadowed_arm_err	18	18	missing-file	0.0
 tests.rs	fn	test_string_builtins	18	18	missing-file	0.0
+unification.rs	fn	frame_assemble	46	18	changed	0.6087
+unification.rs	fn	frame_new	65	18	changed	0.7231
 bump_spine_iter/unify.rs	fn	intersect_bump	64	17	changed	0.7344
 mod.rs	fn	quote	17	17	changed	0.0
 mod.rs	fn	simpl_decl	18	17	changed	0.0556
@@ -215,6 +213,7 @@ pretty.rs	fn	pretty_pattern	20	17	missing	0.0
 tests.rs	fn	test_product_vs_plain_enum	17	17	missing-file	0.0
 unification.rs	fn	prune_ty_go	31	17	changed	0.4516
 unification.rs	fn	prune_vflex	41	17	changed	0.5854
+unification.rs	fn	rename	28	17	changed	0.3929
 unification.rs	fn	solve_with_pren	36	17	changed	0.5278
 bump_spine_iter/compiler.rs	fn	walk	22	16	missing	0.0
 bump_spine_iter/entry.rs	fn	run_decls	32	16	changed	0.5
@@ -242,21 +241,24 @@ tests.rs	fn	test_string_to_global_type	15	15	missing-file	0.0
 tests.rs	fn	test_stuck_prim_not_unconditionally_equal	15	15	missing-file	0.0
 typeclass.rs	fn	vals_eq_ground_impl	50	15	changed	0.7
 unification.rs	fn	invert_go	30	15	changed	0.5
+unification.rs	fn	rename_deep	173	15	changed	0.9133
 bump_spine_iter/machine.rs	fn	bind_prefix_of_telescope	17	14	missing	0.0
 bump_spine_iter/machine.rs	fn	quote_memo	55	14	changed	0.7455
 bump_spine_iter/rename.rs	fn	prune_ty_bump	59	14	changed	0.7627
 cxt.rs	fn	bind_slots	17	14	missing	0.0
 cxt.rs	fn	unwind	19	14	missing	0.0
+mod.rs	fn	lookup_hit	14	14	changed	0.0
 parser/mod.rs	fn	p_def	20	14	changed	0.3
 surface.rs	fn	span_union	15	14	missing	0.0
 tests.rs	fn	test_registered_prim_not_loosely_string	14	14	missing-file	0.0
-unification.rs	enum	FrameKind	14	14	missing	0.0
 unification.rs	fn	prune_meta	28	14	changed	0.5
 bump_spine_iter/machine.rs	fn	subst_cxt	38	13	missing	0.0
 bump_spine_iter/subst.rs	fn	simpl_decl	13	13	missing-file	0.0
 cxt.rs	struct	Cxt	13	13	changed	0.0
-mod.rs	fn	cons_all	13	13	missing	0.0
-mod.rs	fn	lookup_hit	14	13	missing	0.0
+mod.rs	enum	FrameKind	14	13	missing	0.0
+mod.rs	fn	force_arg	15	13	missing	0.0
+mod.rs	fn	v_app_pruning	15	13	changed	0.1333
+mod.rs	fn	v_applicable	13	13	missing	0.0
 observe.rs	fn	push_ctor_hover	13	13	missing-file	0.0
 parser/mod.rs	fn	p_arg	14	13	changed	0.0714
 parser/mod.rs	fn	p_new	18	13	changed	0.2778
@@ -268,10 +270,8 @@ bump_spine_iter/bench_src.rs	fn	struct_src	20	12	changed	0.4
 bump_spine_iter/machine.rs	fn	empty	12	12	changed	0.0
 bump_spine_iter/machine.rs	fn	quote	49	12	changed	0.7551
 bump_spine_iter/spine.rs	fn	xcell_head_name	12	12	missing	0.0
+mod.rs	fn	cons_all	13	12	changed	0.0769
 mod.rs	fn	cover_at	14	12	changed	0.1429
-mod.rs	fn	force_arg	15	12	missing	0.0
-mod.rs	fn	v_app_pruning	15	12	changed	0.2
-mod.rs	fn	v_applicable	13	12	missing	0.0
 observe.rs	fn	peel_pi_collect	12	12	missing-file	0.0
 observe.rs	fn	push_hover_decl	12	12	missing-file	0.0
 parser/mod.rs	fn	p_pattern	20	12	changed	0.4
@@ -283,7 +283,7 @@ bump_spine_iter/machine.rs	fn	str_pi	12	11	missing	0.0
 bump_spine_iter/rename.rs	fn	prune_vflex_bump	69	11	changed	0.8406
 cxt.rs	struct	DeclEntry	11	11	missing	0.0
 elaboration.rs	fn	insert_until_go	25	11	changed	0.56
-mod.rs	fn	quote_sp	13	11	changed	0.1538
+mod.rs	fn	meta_restore	11	11	missing	0.0
 observe.rs	fn	push_inlay_hint	11	11	missing-file	0.0
 parser/lex.rs	enum	TokenKind	55	11	changed	0.8
 parser/mod.rs	fn	p_atom	14	11	changed	0.2143
@@ -301,7 +301,7 @@ bump_spine_iter/subst.rs	fn	has	10	10	missing-file	0.0
 bump_spine_iter/subst.rs	fn	push_env	10	10	missing-file	0.0
 bump_spine_iter/syntax.rs	enum	Tm	36	10	changed	0.7222
 cxt.rs	fn	bind	17	10	changed	0.4118
-mod.rs	enum	FrameKind	14	10	missing	0.0
+mod.rs	fn	quote_sp	13	10	changed	0.2308
 observe.rs	fn	surface	10	10	missing-file	0.0
 parser/mod.rs	fn	p_atom1	12	10	changed	0.1667
 parser/syntax.rs	enum	Raw	18	10	changed	0.4444
@@ -319,7 +319,6 @@ bump_spine_iter/typeclass.rs	struct	TraitState	12	9	changed	0.25
 cxt.rs	fn	define	17	9	changed	0.4706
 cxt.rs	fn	empty	11	9	changed	0.1818
 mod.rs	fn	bench_check	11	9	changed	0.1818
-mod.rs	fn	meta_restore	11	9	missing	0.0
 observe.rs	fn	render_typ_pretty	9	9	missing-file	0.0
 observe.rs	fn	render_val	9	9	missing-file	0.0
 parser/mod.rs	fn	p_pi_binder	16	9	changed	0.4375
@@ -343,8 +342,8 @@ cxt.rs	fn	tm_pi	8	8	changed	0.0
 mod.rs	enum	DeclTm	9	8	changed	0.1111
 mod.rs	fn	extend	9	8	changed	0.1111
 mod.rs	fn	lvl2ix	10	8	changed	0.2
-mod.rs	fn	pop	10	8	changed	0.2
 mod.rs	fn	simpl_decl_cached	10	8	missing	0.0
+mod.rs	fn	with_first	9	8	changed	0.1111
 parser/mod.rs	fn	borrowed_tokens_to_string	17	8	missing	0.0
 parser/mod.rs	fn	brace	13	8	changed	0.3846
 parser/mod.rs	fn	p_match	15	8	changed	0.4667
@@ -368,13 +367,15 @@ bump_spine_iter/subst.rs	struct	SubEntryV	7	7	missing-file	0.0
 bump_spine_iter/unify.rs	fn	unify_sp_lockstep	55	7	changed	0.8727
 cxt.rs	struct	Decls	8	7	missing	0.0
 elaboration.rs	fn	insert_go	14	7	changed	0.5
-mod.rs	impl	Error	16	7	missing	0.0
-mod.rs	struct	SubEntry	7	7	missing	0.0
+mod.rs	struct	SubEntry	7	7	changed	0.0
+mod.rs	enum	UnifyKind	8	7	changed	0.125
 mod.rs	fn	bind_count	7	7	changed	0.0
+mod.rs	fn	burn	8	7	missing	0.0
 mod.rs	fn	burn_match_cmp_budget	9	7	changed	0.2222
-mod.rs	fn	has	10	7	missing	0.0
+mod.rs	fn	has	10	7	changed	0.3
+mod.rs	fn	pop	10	7	changed	0.3
 mod.rs	fn	run_with_surface_at	7	7	missing	0.0
-mod.rs	fn	with_first	9	7	changed	0.2222
+mod.rs	fn	unify_fuel_budget	9	7	changed	0.2222
 observe.rs	fn	hover_entry_at	7	7	missing-file	0.0
 observe.rs	fn	note_failed_decl	7	7	missing-file	0.0
 observe.rs	fn	push_hover	7	7	missing-file	0.0
@@ -387,7 +388,6 @@ surface.rs	fn	inlay_label	9	7	missing	0.0
 surface.rs	fn	pattern_span	8	7	missing	0.0
 syntax.rs	fn	close_ty	12	7	changed	0.4167
 tests.rs	fn	succ_of	7	7	missing-file	0.0
-unification.rs	struct	Frame	7	7	missing	0.0
 bump_spine_iter/compiler.rs	fn	sum_case_names	6	6	missing	0.0
 bump_spine_iter/machine.rs	impl	<K, T, S> ReclaimOnClear for std::collections::HashMap<K, T, S> where K: std::hash::Hash + Eq, S: std::hash::BuildHasher,	16	6	missing	0.0
 bump_spine_iter/machine.rs	impl	<T, S> ReclaimOnClear for std::collections::HashSet<T, S> where T: std::hash::Hash + Eq, S: std::hash::BuildHasher,	16	6	missing	0.0
@@ -398,7 +398,9 @@ cxt.rs	impl	NameState	31	6	missing	0.0
 cxt.rs	fn	st2g_app	7	6	missing	0.0
 cxt.rs	fn	str_pi	6	6	missing	0.0
 mod.rs	struct	Frame	7	6	missing	0.0
-mod.rs	fn	burn	8	6	missing	0.0
+mod.rs	fn	empty_span	8	6	changed	0.25
+mod.rs	fn	frcs_env	6	6	changed	0.0
+mod.rs	fn	meta_snapshot	6	6	missing	0.0
 mod.rs	fn	run_with_surface_query	7	6	missing	0.0
 mod.rs	fn	v_app_sp	9	6	changed	0.3333
 observe.rs	fn	push_hover_rendered	6	6	missing-file	0.0
@@ -410,6 +412,7 @@ parser/mod.rs	fn	test_leftover_located	7	6	missing	0.0
 pattern_match.rs	fn	matched	6	6	missing	0.0
 shape.rs	fn	match_to_decl	26	6	changed	0.7692
 shape.rs	fn	peel	17	6	changed	0.6471
+unification.rs	enum	FrameKind	14	6	changed	0.5714
 bump_spine_iter/bench_src.rs	fn	strchain_src	8	5	changed	0.375
 bump_spine_iter/machine.rs	struct	TCons	6	5	changed	0.1667
 bump_spine_iter/machine.rs	fn	insert_until_name	31	5	changed	0.8387
@@ -417,16 +420,15 @@ bump_spine_iter/subst.rs	impl	Drop for SubEntryV	5	5	missing-file	0.0
 cxt.rs	struct	NameState	5	5	missing	0.0
 cxt.rs	fn	decl_insert_mut	5	5	missing	0.0
 mod.rs	impl	<T: Copy, const N: usize> InlineStack<T, N>	37	5	changed	0.8649
-mod.rs	struct	InlineStack	5	5	changed	0.0
 mod.rs	enum	PosCover	5	5	changed	0.0
 mod.rs	fn	bench_check_nf_observe	6	5	missing	0.0
 mod.rs	fn	fmt_path	6	5	changed	0.1667
-mod.rs	fn	meta_snapshot	6	5	missing	0.0
 mod.rs	fn	nf	6	5	changed	0.1667
 mod.rs	fn	push	8	5	changed	0.375
+mod.rs	fn	rank	7	5	changed	0.2857
 mod.rs	fn	report	7	5	missing	0.0
-mod.rs	fn	wrap_sp	6	5	missing	0.0
-mod.rs	fn	wrap_sub	7	5	missing	0.0
+mod.rs	fn	v_meta	6	5	changed	0.1667
+mod.rs	fn	wrap_sub	7	5	changed	0.2857
 observe.rs	fn	span_from_name	5	5	missing-file	0.0
 parser/lex.rs	fn	ident	29	5	changed	0.8276
 parser/mod.rs	fn	p_print	5	5	changed	0.0
@@ -452,13 +454,16 @@ bump_spine_iter/syntax.rs	fn	v_clo_of	7	4	changed	0.4286
 bump_spine_iter/syntax.rs	fn	v_xcell_of	7	4	changed	0.4286
 cxt.rs	fn	new_binder	11	4	changed	0.6364
 elaboration.rs	fn	insert	6	4	changed	0.3333
+mod.rs	impl	Error	16	4	missing	0.0
 mod.rs	impl	Infer	15	4	changed	0.7333
+mod.rs	struct	InlineStack	5	4	changed	0.2
 mod.rs	enum	PatternDetail	5	4	changed	0.2
-mod.rs	fn	compose	18	4	missing	0.0
-mod.rs	fn	frcs_env	6	4	missing	0.0
+mod.rs	fn	compose	18	4	changed	0.7778
+mod.rs	fn	new_meta	4	4	changed	0.0
 mod.rs	fn	note_unify_kind	6	4	changed	0.3333
 mod.rs	fn	occurs_transitive	57	4	missing	0.0
-mod.rs	fn	v_meta	6	4	changed	0.3333
+mod.rs	impl	std::fmt::Debug for Error	8	4	changed	0.5
+mod.rs	fn	wrap_sp	6	4	changed	0.3333
 parser/lex.rs	fn	fmt	42	4	changed	0.9048
 parser/mod.rs	fn	p_macro_def	49	4	changed	0.9184
 parser/mod.rs	fn	test_ok	20	4	missing	0.0
@@ -499,7 +504,6 @@ cxt.rs	fn	lookup_src	4	3	missing	0.0
 elaboration.rs	fn	insert_until_name	8	3	changed	0.625
 mod.rs	enum	MetaEntry	4	3	changed	0.25
 mod.rs	struct	MetaSnapshot	4	3	missing	0.0
-mod.rs	enum	UnifyKind	8	3	changed	0.625
 mod.rs	fn	at	3	3	missing	0.0
 mod.rs	fn	bump	5	3	missing	0.0
 mod.rs	fn	closure_apply	4	3	changed	0.25
@@ -508,17 +512,20 @@ mod.rs	fn	eq	3	3	missing	0.0
 mod.rs	fn	eq	3	3	missing	0.0
 mod.rs	fn	extend	5	3	changed	0.4
 mod.rs	fn	fmt	3	3	changed	0.0
-mod.rs	fn	is_empty	3	3	missing	0.0
-mod.rs	fn	lookup	3	3	missing	0.0
+mod.rs	fn	fmt	3	3	changed	0.0
+mod.rs	fn	fuel_exhausted	3	3	changed	0.0
+mod.rs	fn	is_empty	3	3	changed	0.0
+mod.rs	fn	lookup	3	3	changed	0.0
+mod.rs	fn	lookup_meta	3	3	changed	0.0
+mod.rs	fn	mentions_any_solved	3	3	missing	0.0
+mod.rs	fn	mentions_level	34	3	changed	0.9118
 mod.rs	fn	meta_refuel	3	3	missing	0.0
 mod.rs	fn	new	3	3	changed	0.0
-mod.rs	fn	new_meta	4	3	changed	0.25
 mod.rs	fn	on	3	3	missing	0.0
 mod.rs	fn	overwrite_meta	4	3	missing	0.0
 mod.rs	fn	push_blank	5	3	missing	0.0
 mod.rs	fn	reset	5	3	missing	0.0
-mod.rs	fn	span	3	3	missing	0.0
-mod.rs	impl	std::fmt::Debug for Error	8	3	changed	0.625
+mod.rs	fn	reset_match_cmp_budget	3	3	changed	0.0
 mod.rs	fn	take_trait_error	3	3	missing	0.0
 observe.rs	fn	hover_wanted	3	3	missing-file	0.0
 observe.rs	fn	inlay_wanted	3	3	missing-file	0.0
@@ -562,7 +569,9 @@ elaboration.rs	fn	infer	3	2	changed	0.3333
 elaboration.rs	fn	insert_t	3	2	changed	0.3333
 mod.rs	static	L12_DEBUG_ON	2	2	missing	0.0
 mod.rs	static	LOOP_DEBUG	2	2	missing	0.0
-mod.rs	struct	Subst	3	2	missing	0.0
+mod.rs	struct	Subst	3	2	changed	0.3333
+mod.rs	impl	UnifyKind	9	2	changed	0.7778
+mod.rs	impl	Val	9	2	changed	0.7778
 mod.rs	fn	add	3	2	changed	0.3333
 mod.rs	fn	bench_check_nf	3	2	changed	0.3333
 mod.rs	fn	close_val	3	2	changed	0.3333
@@ -571,14 +580,11 @@ mod.rs	fn	env_slots	3	2	missing	0.0
 mod.rs	fn	eq	3	2	missing	0.0
 mod.rs	fn	fmt	3	2	changed	0.3333
 mod.rs	fn	fmt	3	2	changed	0.3333
-mod.rs	fn	fuel_exhausted	3	2	changed	0.3333
-mod.rs	fn	lookup_meta	3	2	changed	0.3333
-mod.rs	fn	mentions_any_solved	3	2	missing	0.0
-mod.rs	fn	mentions_level	34	2	missing	0.0
 mod.rs	fn	new	3	2	changed	0.3333
 mod.rs	fn	rc_take	3	2	missing	0.0
-mod.rs	fn	reset_match_cmp_budget	3	2	changed	0.3333
 mod.rs	fn	run_with_surface	3	2	missing	0.0
+mod.rs	fn	span	3	2	missing	0.0
+mod.rs	impl	std::fmt::Display for Error	5	2	missing	0.0
 mod.rs	fn	sub	3	2	changed	0.3333
 mod.rs	fn	tmspan	3	2	missing	0.0
 mod.rs	fn	unify_kind	3	2	changed	0.3333
@@ -606,6 +612,7 @@ typeclass.rs	struct	TableEntry	4	2	changed	0.5
 typeclass.rs	fn	new_trait	3	2	changed	0.3333
 typeclass.rs	fn	vals_eq_ground	3	2	changed	0.3333
 unification.rs	impl	Drop for G	5	2	missing	0.0
+unification.rs	struct	Frame	7	2	changed	0.7143
 unification.rs	fn	lams	3	2	changed	0.3333
 unification.rs	fn	solve	4	2	changed	0.5
 bump_spine_iter.rs	mod	struct_eq	1	1	missing	0.0
@@ -657,12 +664,14 @@ cxt.rs	impl	std::ops::Deref for Decls	6	1	missing	0.0
 cxt.rs	impl	std::ops::DerefMut for Decls	5	1	missing	0.0
 mod.rs	impl	Add<u32> for Lvl	6	1	changed	0.8333
 mod.rs	const	BUDGET	1	1	missing	0.0
+mod.rs	static	BUDGET	1	1	changed	0.0
 mod.rs	struct	Closure	1	1	changed	0.0
 mod.rs	type	Env	1	1	changed	0.0
 mod.rs	struct	Error	1	1	changed	0.0
 mod.rs	static	FILE_IO_LOCK	1	1	missing	0.0
 mod.rs	struct	Ix	1	1	changed	0.0
 mod.rs	struct	Lvl	1	1	changed	0.0
+mod.rs	const	MATCH_CMP_BUDGET	1	1	changed	0.0
 mod.rs	struct	MetaVar	1	1	changed	0.0
 mod.rs	const	NAMES	1	1	missing	0.0
 mod.rs	static	ON	1	1	missing	0.0
@@ -676,16 +685,14 @@ mod.rs	type	Spine	1	1	changed	0.0
 mod.rs	impl	Sub<u32> for Lvl	6	1	changed	0.8333
 mod.rs	type	Target	1	1	missing	0.0
 mod.rs	type	Ty	1	1	changed	0.0
+mod.rs	const	UNIFY_FUEL	1	1	changed	0.0
 mod.rs	struct	UnifyError	1	1	missing	0.0
 mod.rs	struct	VSpan	1	1	missing	0.0
 mod.rs	impl	VSpan	5	1	missing	0.0
 mod.rs	type	VTy	1	1	changed	0.0
-mod.rs	impl	Val	9	1	changed	0.8889
 mod.rs	mod	bump_spine_iter	1	1	changed	0.0
 mod.rs	mod	cxt	1	1	changed	0.0
 mod.rs	mod	elaboration	1	1	changed	0.0
-mod.rs	fn	empty_span	8	1	changed	0.875
-mod.rs	fn	fmt	3	1	changed	0.6667
 mod.rs	mod	observe	1	1	missing	0.0
 mod.rs	mod	parser	1	1	changed	0.0
 mod.rs	mod	pattern_match	1	1	changed	0.0
@@ -696,7 +703,6 @@ mod.rs	mod	shape	1	1	changed	0.0
 mod.rs	impl	std::error::Error for Error	1	1	missing	0.0
 mod.rs	impl	std::fmt::Debug for Closure	5	1	changed	0.8
 mod.rs	impl	std::fmt::Debug for VSpan	5	1	missing	0.0
-mod.rs	impl	std::fmt::Display for Error	5	1	missing	0.0
 mod.rs	impl	std::ops::Deref for VSpan	6	1	missing	0.0
 mod.rs	mod	struct_eq	1	1	changed	0.0
 mod.rs	mod	surface	1	1	changed	0.0
@@ -816,12 +822,6 @@ bump_spine_iter/syntax.rs	fn	v_tag	3	0	identical	1.0
 bump_spine_iter/syntax.rs	fn	v_u	3	0	identical	1.0
 bump_spine_iter/syntax.rs	fn	v_xcell	3	0	identical	1.0
 bump_spine_iter/unify.rs	const	MATCH_CMP_BUDGET	1	0	identical	1.0
-mod.rs	static	BUDGET	1	0	identical	1.0
-mod.rs	const	MATCH_CMP_BUDGET	1	0	identical	1.0
-mod.rs	const	UNIFY_FUEL	1	0	identical	1.0
-mod.rs	impl	UnifyKind	9	0	identical	1.0
-mod.rs	fn	rank	7	0	identical	1.0
-mod.rs	fn	unify_fuel_budget	9	0	identical	1.0
 parser/lex.rs	type	Token	1	0	identical	1.0
 parser/lex.rs	type	TokenNode	1	0	identical	1.0
 parser/lex.rs	fn	macro_ident	19	0	identical	1.0
