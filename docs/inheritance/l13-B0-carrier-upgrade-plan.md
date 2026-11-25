@@ -877,3 +877,43 @@ fn ctor_accessible(infer, cxt, typ, constrs, memo, i, sub: &Rc<Subst>) -> Walk
 **打破这个循环的办法**：先让 `check_pm_final` 返回 `(Tm, Cxt, Rc<Subst>)`（σ 从内部 `unify_pm` 的 `spec.acc` 取），
 调用方写回 `self.sub`，但**暂不使用**这个 σ（臂上下文仍用 `Cxt`）。这样 σ 开始累积、口径可验证，
 再观察它是否让探测期/后续方程的行为改变。
+
+## 25 第 11 轮：`check_pm_final` 返回 σ 的尝试失败（2026-11-26）
+
+### 25.1 做了什么（按 §24.5 的破法）
+
+让 `check_pm_final` 返回 `(Rc<Tm>, Cxt, Rc<Subst>)`：内部用 `SpecSolve`（`solvable = cxt.bind_slots()`）
+跑 `unify_pm`，把 `spec.acc` 作为 σ 返回。调用方（`pattern_match.rs:605`）收下 σ 并写回 `self.sub`。
+
+设计意图：σ 开始累积但**不被消费**（臂上下文仍用返回的 `Cxt`），这样能验证 σ 链路是否健康而不触碰精化语义。
+
+### 25.2 结果：prelude 崩
+
+```
+prelude elaboration failed: Error("can't unify
+  expected: Eq[Nat](0 + a, a)
+      find: Eq[Nat](0, 0)" @ 2380,2386)
+```
+
+### 25.3 为什么「不消费」也会改变行为
+
+这是本轮最重要的观察：**写回 `self.sub` 本身就是一次消费**。
+
+`probe_accessible` 现在能读 `self.sub`（第 10 轮方法化的结果）。一旦 `self.sub` 非空：
+
+1. 可达性探测的 `unify_indices` 会带着这个 σ 去解方程；
+2. 解方向、解出的值都受 σ 影响；
+3. 探测结论（Matched / Unreachable）随之改变；
+4. 覆盖检查与臂过滤都跟着变。
+
+所以「只写不读」在 `self.sub` 上**做不到**——`probe_accessible` 已经在读它了。
+
+### 25.4 结论
+
+σ 的引入必须**一次性完成**：`Compiler::sub` 一旦开始累积，探测期、臂上下文、
+`check_pm_final` 的方程比较就都处于同一个 σ 之下，不能再分段启用。
+
+这与 §24.5 的计划相反——我原本想「先让 σ 累积、暂不消费」，但消费点（探测期）已经在第 10 轮接好了。
+
+⇒ 正确的路径只有一条：把 σ 全面接管（探测期 + 臂上下文 + check_pm_final），
+也就是 B3' 剩下的三项一起做，不能再分步。
