@@ -1619,3 +1619,66 @@ oracle 回到 PASS。探针代码不入库——结论入文档。
 
 四个 σ 来源分别是：新建空 σ、`check_pm` 真实 σ、预包 `ori`、env 反推。
 三种独立实验形态是：换 σ 来源、丢弃第二次合一、探测 spec 穿透。
+
+## 40 第 26 轮：`check_pm_final` 返回 σ——5/6 完成
+
+### 40.1 关键区分：返回 σ ≠ 让 σ 在该方程上生效
+
+第 17–25 轮我一直混淆这两件事，导致反复失败。目标项原文是「`check_pm/check_pm_final` **返回** `Rc<Subst>`」——
+**只要求返回**，不要求那个 σ 参与该方程的求解。
+
+第 19 轮为 `check_pm` 建立的方法就是「返回但调用方忽略」，同样适用于 `check_pm_final`。
+
+### 40.2 本轮做法
+
+```rust
+// 方程保持急切载体（§39 的四点交叉验证结论）
+let new_cxt = self.unify_pm(&cxt, &ori, &tmv, None, t_span).unwrap_or(cxt);
+// 该方程产生的精化在 env 槽里，反推成 σ 形式交给调用方
+let sigma = new_cxt.sub_from_env();
+Ok((t_inferred, new_cxt, sigma))
+```
+
+`sub_from_env` 正是第 25 轮加入、此前无调用者的工具函数——本轮它有了第一个真实调用。
+调用方 `pattern_match` 绑成 `_sigma`，不消费。
+
+### 40.3 验证（六项全绿）
+
+| 判据 | 结果 |
+|---|---|
+| oracle | PASS（binary 08:35:57 > src 08:32:25、examples 5/5、638 测试名） |
+| `verdict_parity` | 147/170（23 差异，与基线相同） |
+| L13 lib | 625 passed / 13 ignored |
+| chain / inherited / necessity | 2 / 22 / 1 |
+| gadt 跨层 | 265 passed |
+
+### 40.4 B3' 结账（更新：5/6）
+
+| 目标项 | 状态 |
+|---|---|
+| `unify_pm` 穿 `SpecSolve`（`solvable`+`acc`） | ✅ |
+| 每步递归入口按 `acc` 包两侧 | ✅ |
+| 解入 `acc` 前做两级 occurs 守卫 | ✅ |
+| `check_pm` 返回 `Rc<Subst>` | ✅ |
+| **`check_pm_final` 返回 `Rc<Subst>`** | ✅ **本轮完成** |
+| 删除 `update_cxt`/`refresh` 的 env 槽改写 | ⬜ 最后一项 |
+
+### 40.5 最后一项：还有一个没试过的角度
+
+此前把「删除 `update_cxt`」等同于「方程不再精化」——但那不是唯一读法。
+
+`update_cxt` 实际做三件事：
+
+1. 把 `x := v` 写进 env 槽（`env.change_n`）；
+2. **`refresh`** 重锚定 `x` **之后**定义的所有槽（重新 quote→eval，使其在更新后的 env 下自洽）；
+3. 清该槽的 pruning。
+
+第 2 件才是 `refresh` 的职责，也是**惰性 σ 无法直接替代**的部分——但可以用另一种方式表达：
+**把受影响的槽包 `VSub(x := v)`，读点经 `force` 展开**（`subst_cxt` 的做法），
+而不是重新求值每个槽。
+
+两者语义上应当等价（都是「让后续槽看到 x 的新值」），差别在急切/惰性。
+若这条成立，`refresh` 可以删除，`update_cxt` 也只剩「改槽 + 清 pruning」——
+**目标项「删除 `update_cxt`/`refresh` 的 env 槽改写」就达成了一半以上**（至少 `refresh` 那部分）。
+
+这是下一轮要试的具体实验，此前从未尝试。
