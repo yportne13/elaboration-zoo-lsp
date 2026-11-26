@@ -6,6 +6,7 @@
 //! `VSpan`）。trait 身份不再进 Val/Tm（不设 `is_trait` 标记），改由
 //! `Infer::trait_out_param` 按名字判形——对 trait 层语义等价。
 
+use smol_str::SmolStr;
 use rustc_hash::FxHashMap as HashMap;
 
 use crate::list::List;
@@ -15,11 +16,11 @@ use super::{Val, Span, empty_span, tmspan};
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Typ {
     Any,
-    Val(Span<String>),
+    Val(Span<SmolStr>),
     Var(u32),
-    Construct(Span<String>, Vec<Typ>),
+    Construct(Span<SmolStr>, Vec<Typ>),
     Fn(Box<Typ>, Box<Typ>),
-    Trait(Span<String>),
+    Trait(Span<SmolStr>),
 }
 impl Val {
     /// 值 → `Typ`（trait 求解世界）。不可作类型的形态返回 None。
@@ -31,7 +32,7 @@ impl Val {
             Val::Obj(..) => None,
             Val::Lam(..) => None,
             Val::Pi(..) => None,
-            Val::U(x) => Some(Typ::Val(empty_span(format!("Type {x}")))),
+            Val::U(x) => Some(Typ::Val(empty_span(SmolStr::new(format!("Type {x}"))))),
             Val::LiteralType => None,
             Val::LiteralIntro(_) => None,
             Val::Decl(..) => None,
@@ -67,7 +68,7 @@ pub struct Assertion {
 pub struct Instance {
     pub assertion: Assertion,
     pub dependencies: List<Assertion>,
-    pub lvl: Span<String>,
+    pub lvl: Span<SmolStr>,
 }
 
 /// A node in the "search tree" that stores information about
@@ -86,7 +87,7 @@ pub struct GeneratorNode {
 pub struct ConsumerNode {
     goal: Assertion,
     subgoals: List<Assertion>,
-    lvl: Span<String>,
+    lvl: Span<SmolStr>,
 }
 
 /// A "deferred" node in the "search tree" that represents a
@@ -116,7 +117,7 @@ pub enum Waiter {
 #[derive(Debug, Clone)]
 pub struct TableEntry {
     waiters: Vec<Waiter>,
-    answers: Vec<(Assertion, Span<String>)>,
+    answers: Vec<(Assertion, Span<SmolStr>)>,
 }
 
 /// The state of the algorithm.
@@ -135,7 +136,7 @@ pub struct Synth {
     /// Information about each `subgoal` being solved.
     assertion_table: HashMap<Assertion, TableEntry>,
     /// The "final" answer for the algorithm.
-    root_answer: Option<Span<String>>,
+    root_answer: Option<Span<SmolStr>>,
 }
 
 fn uncons<T: Clone>(xs: &List<T>) -> Option<(T, List<T>)> {
@@ -169,7 +170,7 @@ impl Synth {
         subgoal == answer
     }
 
-    fn try_resolve(&mut self, goal: &Assertion, instance: &Instance) -> Option<(List<Assertion>, Span<String>)> {
+    fn try_resolve(&mut self, goal: &Assertion, instance: &Instance) -> Option<(List<Assertion>, Span<SmolStr>)> {
         // 名字必须匹配
         if goal.name != instance.assertion.name {
             return None;
@@ -197,7 +198,7 @@ impl Synth {
     }
 
     /// The entry point for the algorithm.
-    pub fn synth(&mut self, assertion: Assertion) -> Option<Span<String>> {
+    pub fn synth(&mut self, assertion: Assertion) -> Option<Span<SmolStr>> {
         // Insert the "root" goal to be solved.
         self.new_subgoal(&assertion, &Waiter::Root);
 

@@ -4,6 +4,7 @@
 //! 直接 token 拼接），适配新 L10 parser 基础设施（MacroState 元组、
 //! parser_lib_resilient 组合子）。
 
+use smol_str::SmolStr;
 use crate::parser_lib::ToSpan;
 use crate::{parser_lib::Span, parser_lib_resilient::Parser};
 
@@ -16,10 +17,10 @@ pub type OwnedTokenSlice = [Span<(String, TokenKind)>];
 #[derive(Clone, Debug)]
 pub enum MacroMatcher {
     // 普通 token 匹配
-    Token(TokenKind, Span<String>),
+    Token(TokenKind, Span<SmolStr>),
     // 变量捕获：$name:fragment
     Metavar {
-        name: Span<String>,
+        name: Span<SmolStr>,
         fragment: MacroFragment,
     },
     Many0(Box<MacroMatcher>),
@@ -65,27 +66,27 @@ impl MacroMatcher {
                 MacroMatcher::Metavar { name, fragment } => {
                     match fragment {
                         MacroFragment::Ident => string(TokenKind::Ident).parse(input, state)
-                            .map(|(i, _)| (i, vec![(name.data.clone(), input.get(0..1).unwrap().iter().map(|t| Span {
+                            .map(|(i, _)| (i, vec![(name.data.to_string(), input.get(0..1).unwrap().iter().map(|t| Span {
                                 data: (t.data.0.to_owned(), t.data.1),
                                 start_offset: t.start_offset,
                                 end_offset: t.end_offset,
                                 path_id: t.path_id,
                             }).collect())])),
                         MacroFragment::Raw => p_raw(input, state)
-                            .map(|(i, _)| (i, vec![(name.data.clone(), input.get(0..(input.len() - i.len())).unwrap().iter().map(|t| Span {
+                            .map(|(i, _)| (i, vec![(name.data.to_string(), input.get(0..(input.len() - i.len())).unwrap().iter().map(|t| Span {
                                 data: (t.data.0.to_owned(), t.data.1),
                                 start_offset: t.start_offset,
                                 end_offset: t.end_offset,
                                 path_id: t.path_id,
                             }).collect())])),
                         MacroFragment::Param => p_pi_binder.many1().parse(input, state)
-                            .map(|(i, _)| (i, vec![(name.data.clone(), input.get(0..(input.len() - i.len())).unwrap().iter().map(|t| Span {
+                            .map(|(i, _)| (i, vec![(name.data.to_string(), input.get(0..(input.len() - i.len())).unwrap().iter().map(|t| Span {
                                 data: (t.data.0.to_owned(), t.data.1),
                                 start_offset: t.start_offset,
                                 end_offset: t.end_offset,
                                 path_id: t.path_id,
                             }).collect())])),
-                        MacroFragment::Name(mname) => state.1.get(&mname.data).cloned().and_then(|x| x.iter()
+                        MacroFragment::Name(mname) => state.1.get(mname.data.as_str()).cloned().and_then(|x| x.iter()
                             .flat_map(|m| {
                                 m.matcher.to_parser().parse(input, state)
                                     .and_then(|(i, t)| {
@@ -124,7 +125,7 @@ impl MacroMatcher {
                                                 def_path_id: def_path,
                                             });
                                         }
-                                        Ok((i, vec![(name.data.clone(), t)]))
+                                        Ok((i, vec![(name.data.to_string(), t)]))
                                     })
                             }).next()).ok_or(IError {
                                 msg: name.to_span().map(|_| ErrMsg::Base(BaseMsg::Expect(TokenKind::RParen))),//TODO: err msg
@@ -223,7 +224,7 @@ pub enum MacroFragment {
     Ident,
     Raw,
     Param,
-    Name(Span<String>),
+    Name(Span<SmolStr>),
     //Expr,      // 表达式
     //Ident,     // 标识符
     //Ty,        // 类型
@@ -244,13 +245,13 @@ pub enum MacroTranscriber {
     // 普通 token 输出
     /*Token(TokenKind, Option<String>),  // TokenKind + 原始文本
     // 引用元变量：$name
-    MetavarRef(Span<String>),
+    MetavarRef(Span<SmolStr>),
     // 重复转写：$(...)* 等
     Repetition {
         inner: Box<MacroTranscriber>,
         separator: Option<TokenKind>,
         op: RepetitionOp,
-        metavar: Span<String>,  // 控制重复的元变量
+        metavar: Span<SmolStr>,  // 控制重复的元变量
     },
     // 分组
     Group(Delimiter, Vec<MacroTranscriber>),
