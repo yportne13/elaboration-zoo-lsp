@@ -54,8 +54,8 @@ mod l11 {
     pub use super::parser_lib::Span;
     use smol_str::SmolStr;
 
-    pub fn sp(s: &str) -> Span<String> {
-        Span { data: s.to_owned(), start_offset: 0, end_offset: 0, path_id: 0 }
+    pub fn sp(s: &str) -> Span<SmolStr> {
+        Span { data: SmolStr::new(s), start_offset: 0, end_offset: 0, path_id: 0 }
     }
     pub fn decl(s: &str) -> Tm {
         Tm::Decl(SmolStr::new(s))
@@ -75,7 +75,7 @@ mod l11 {
     pub fn pretty(tm: &Tm) -> String {
         pretty_tm(0, List::new(), tm)
     }
-    pub fn pretty_ns(ns: List<String>, tm: &Tm) -> String {
+    pub fn pretty_ns(ns: List<SmolStr>, tm: &Tm) -> String {
         pretty_tm(0, ns, tm)
     }
 }
@@ -89,8 +89,8 @@ mod l12 {
     pub use super::parser_lib::Span;
     use smol_str::SmolStr;
 
-    pub fn sp(s: &str) -> Span<String> {
-        Span { data: s.to_owned(), start_offset: 0, end_offset: 0, path_id: 0 }
+    pub fn sp(s: &str) -> Span<SmolStr> {
+        Span { data: SmolStr::new(s), start_offset: 0, end_offset: 0, path_id: 0 }
     }
     pub fn decl(s: &str) -> Tm {
         Tm::Decl(SmolStr::new(s))
@@ -110,7 +110,7 @@ mod l12 {
     pub fn pretty(tm: &Tm) -> String {
         pretty_tm(0, List::new(), tm)
     }
-    pub fn pretty_ns(ns: List<String>, tm: &Tm) -> String {
+    pub fn pretty_ns(ns: List<SmolStr>, tm: &Tm) -> String {
         pretty_tm(0, ns, tm)
     }
 }

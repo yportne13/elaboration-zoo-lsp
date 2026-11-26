@@ -39,7 +39,7 @@ mod L12_canonical;
 #[path = "../L13_namespace/mod.rs"]
 mod L13_namespace;
 
-#[path = "matchbench_src.rs"]
+#[path = "../matchbench_src.rs"]
 mod gen_src;
 
 use clap::Parser;

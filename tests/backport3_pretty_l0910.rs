@@ -68,9 +68,10 @@ mod l09 {
     pub use super::L09_mltt::Tm;
     pub use super::list::List;
     pub use super::parser_lib::Span;
+    pub use smol_str::SmolStr;
 
-    pub fn sp(s: &str) -> Span<String> {
-        Span { data: s.to_owned(), start_offset: 0, end_offset: 0, path_id: 0 }
+    pub fn sp(s: &str) -> Span<SmolStr> {
+        Span { data: SmolStr::new(s), start_offset: 0, end_offset: 0, path_id: 0 }
     }
     /// 原子项：Tm::Sum 无参数时 pretty 只打印名字（层外构造不了 Tm::Var）。
     pub fn atom(s: &str) -> Tm {
@@ -94,7 +95,7 @@ mod l09 {
     pub fn pretty(tm: &Tm) -> String {
         pretty_tm(0, List::new(), tm)
     }
-    pub fn pretty_ns(ns: List<String>, tm: &Tm) -> String {
+    pub fn pretty_ns(ns: List<SmolStr>, tm: &Tm) -> String {
         pretty_tm(0, ns, tm)
     }
 }
@@ -106,9 +107,10 @@ mod l10 {
     pub use super::L10_typeclass::Tm;
     pub use super::list::List;
     pub use super::parser_lib::Span;
+    pub use smol_str::SmolStr;
 
-    pub fn sp(s: &str) -> Span<String> {
-        Span { data: s.to_owned(), start_offset: 0, end_offset: 0, path_id: 0 }
+    pub fn sp(s: &str) -> Span<SmolStr> {
+        Span { data: SmolStr::new(s), start_offset: 0, end_offset: 0, path_id: 0 }
     }
     pub fn atom(s: &str) -> Tm {
         Tm::Sum(sp(s), vec![], vec![])
@@ -131,7 +133,7 @@ mod l10 {
     pub fn pretty(tm: &Tm) -> String {
         pretty_tm(0, List::new(), tm)
     }
-    pub fn pretty_ns(ns: List<String>, tm: &Tm) -> String {
+    pub fn pretty_ns(ns: List<SmolStr>, tm: &Tm) -> String {
         pretty_tm(0, ns, tm)
     }
 }
@@ -222,13 +224,13 @@ fn l09_implicit_syntax_uses_square_brackets() {
     // (d) AppPruning 两个槽位（?m 展开的实参显示）：f [y] / f y。
     let pr = List::new().prepend(Some(Icit::Impl));
     let pruning = l09::pruning(l09::atom("f"), pr);
-    let ns = List::new().prepend("y".to_owned());
+    let ns = List::new().prepend(smol_str::SmolStr::new("y"));
     assert_eq!(l09::pretty_ns(ns, &pruning), "f");
-    assert!(!l09::pretty_ns(List::new().prepend("y".to_owned()), &pruning).contains('{'));
+    assert!(!l09::pretty_ns(List::new().prepend(smol_str::SmolStr::new("y")), &pruning).contains('{'));
 
     let pr_expl = List::new().prepend(Some(Icit::Expl));
     let pruning_expl = l09::pruning(l09::atom("f"), pr_expl);
-    let ns2 = List::new().prepend("y".to_owned());
+    let ns2 = List::new().prepend(smol_str::SmolStr::new("y"));
     assert_eq!(l09::pretty_ns(ns2, &pruning_expl), "f");
 
     // 名字表短于掩码的降级臂（占位 @序号）也必须用 []。
@@ -266,13 +268,13 @@ fn l10_implicit_syntax_uses_square_brackets() {
     // AppPruning 两处（L10 本轮之前两处都还是 {...}）。
     let pr = List::new().prepend(Some(Icit::Impl));
     let pruning = l10::pruning(l10::atom("f"), pr);
-    let ns = List::new().prepend("y".to_owned());
+    let ns = List::new().prepend(smol_str::SmolStr::new("y"));
     assert_eq!(l10::pretty_ns(ns, &pruning), "f");
-    assert!(!l10::pretty_ns(List::new().prepend("y".to_owned()), &pruning).contains('{'));
+    assert!(!l10::pretty_ns(List::new().prepend(smol_str::SmolStr::new("y")), &pruning).contains('{'));
 
     let pr_expl = List::new().prepend(Some(Icit::Expl));
     let pruning_expl = l10::pruning(l10::atom("f"), pr_expl);
-    let ns2 = List::new().prepend("y".to_owned());
+    let ns2 = List::new().prepend(smol_str::SmolStr::new("y"));
     assert_eq!(l10::pretty_ns(ns2, &pruning_expl), "f");
 
     let pr_short = List::new().prepend(Some(Icit::Impl));
@@ -390,14 +392,14 @@ fn implicit_pretty_output_round_trips_through_parsers() {
     // (d) AppPruning 隐含位：f [y]
     let pr09 = List::new().prepend(Some(I09::Impl));
     let pruning09 = l09::pruning(l09::atom("f"), pr09);
-    let ns09 = List::new().prepend("y".to_owned());
+    let ns09 = List::new().prepend(smol_str::SmolStr::new("y"));
     let s09 = l09::pretty_ns(ns09, &pruning09);
     assert_eq!(s09, "f");
     assert_l09_reparses(&s09);
 
     let pr10 = List::new().prepend(Some(I10::Impl));
     let pruning10 = l10::pruning(l10::atom("f"), pr10);
-    let ns10 = List::new().prepend("y".to_owned());
+    let ns10 = List::new().prepend(smol_str::SmolStr::new("y"));
     let s10 = l10::pretty_ns(ns10, &pruning10);
     assert_eq!(s10, "f");
     assert_l10_reparses(&s10);
