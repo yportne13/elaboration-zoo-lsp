@@ -86,7 +86,7 @@ pub struct DeclEntry {
     /// builtin 的 η 展示壳（仅 quote/pretty 用；不求值、不参与应用）。
     pub eta: Option<Tm>,
     /// builtin 的 Π 参数名（partial application 的 η 展开显示用）。
-    pub prim_names: Option<Rc<Vec<Span<String>>>>,
+    pub prim_names: Option<Rc<Vec<Span<SmolStr>>>>,
 }
 
 /// 源码名表 + 撤销轨迹（L08 孪生 `bump_spine_iter.rs` 的 `name_map` +
@@ -104,9 +104,9 @@ pub struct DeclEntry {
 /// 地标识一个名字表版本。
 #[derive(Debug, Default)]
 pub struct NameState {
-    map: FxHashMap<String, Rc<(Lvl, VTy)>>,
+    map: FxHashMap<SmolStr, Rc<(Lvl, VTy)>>,
     /// (名字, 旧值)；旧值 `None` = 该名字此前不在表里。
-    trail: Vec<(String, Option<Rc<(Lvl, VTy)>>)>,
+    trail: Vec<(SmolStr, Option<Rc<(Lvl, VTy)>>)>,
 }
 
 impl NameState {
@@ -135,7 +135,7 @@ impl NameState {
     }
 
     /// 插入一条（名字, 层级, 类型），旧值入轨迹。
-    fn insert(&mut self, k: String, v: Rc<(Lvl, VTy)>) {
+    fn insert(&mut self, k: SmolStr, v: Rc<(Lvl, VTy)>) {
         let prev = self.map.insert(k.clone(), v);
         self.trail.push((k, prev));
     }
@@ -159,7 +159,7 @@ pub struct Cxt {
 /// `(name : dom) -> cod` 的 Tm 层 Π 链（builtin 注册期类型描述用）。
 fn tm_pi(name: &str, dom: Tm, cod: Tm) -> Tm {
     Tm::Pi(
-        empty_span(name.to_owned()),
+        empty_span(SmolStr::new(name)),
         Icit::Expl,
         Rc::new(dom),
         Rc::new(cod),
@@ -375,8 +375,8 @@ impl Cxt {
         cxt
     }
 
-    pub fn names(&self) -> List<String> {
-        fn go(locals: &Locals) -> List<String> {
+    pub fn names(&self) -> List<SmolStr> {
+        fn go(locals: &Locals) -> List<SmolStr> {
             match locals {
                 Locals::Here => List::new(),
                 Locals::Define(locals, name, _, _) => go(locals).prepend(name.data.clone()),
@@ -392,7 +392,7 @@ impl Cxt {
     /// `(名字 → 本层级/类型)` 并把旧值追加进轨迹；子上下文只带新的
     /// `name_mark`（= 轨迹长度）。语义等价于旧持久表（条目仍是共享 Rc，
     /// 无 `Val` 深拷贝），但不再每次 `Rc::make_mut` 深拷整张表。
-    pub fn bind(&self, x: Span<String>, a_quote: Tm, a: VTy) -> Self {
+    pub fn bind(&self, x: Span<SmolStr>, a_quote: Tm, a: VTy) -> Self {
         let name_mark = {
             let mut s = self.names.borrow_mut();
             s.unwind(self.name_mark);
@@ -411,7 +411,7 @@ impl Cxt {
     }
 
     /// 引入一个"编译器插入"的绑定器（非 λ 项 against 隐式 Π 时）：不进名字表。
-    pub fn new_binder(&self, x: Span<String>, a_quote: Tm) -> Self {
+    pub fn new_binder(&self, x: Span<SmolStr>, a_quote: Tm) -> Self {
         Cxt {
             env: self.env.prepend(Val::vvar(self.lvl)),
             lvl: self.lvl + 1,
@@ -424,7 +424,7 @@ impl Cxt {
     }
 
     /// let 绑定：env 压入定义的值，pruning 对应槽为 None（后续隐式插入不再经过它）。
-    pub fn define(&self, x: Span<String>, t: Tm, vt: Val, a: Ty, va: VTy) -> Self {
+    pub fn define(&self, x: Span<SmolStr>, t: Tm, vt: Val, a: Ty, va: VTy) -> Self {
         let name_mark = {
             let mut s = self.names.borrow_mut();
             s.unwind(self.name_mark);
@@ -458,7 +458,7 @@ impl Cxt {
         let name_mark = {
             let mut s = self.names.borrow_mut();
             s.unwind(self.name_mark);
-            let entries: Vec<(String, Rc<(Lvl, VTy)>)> =
+            let entries: Vec<(SmolStr, Rc<(Lvl, VTy)>)> =
                 s.map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
             for (k, e) in entries {
                 let new_e = Rc::new((e.0, wrap(&e.1)));

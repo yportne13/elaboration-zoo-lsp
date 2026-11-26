@@ -19,9 +19,9 @@ use smol_str::SmolStr;
 use crate::parser_lib::{Span, ToSpan};
 
 /// 从名字造一个零 span（显示用途：pretty 只需要 `data`）。
-fn span_from_name(name: &str) -> Span<String> {
-    let mut s: Span<String> = crate::L09_mltt::empty_span(String::new());
-    s.data = name.to_owned();
+fn span_from_name(name: &str) -> Span<SmolStr> {
+    let mut s: Span<SmolStr> = crate::L09_mltt::empty_span(SmolStr::new(""));
+    s.data = SmolStr::new(name);
     s
 }
 
@@ -68,7 +68,7 @@ impl Infer {
         loop {
             match t {
                 Val::Pi(name, _, dom, cod) => {
-                    binders.push((name.data.clone(), (*dom).clone()));
+                    binders.push((name.data.to_string(), (*dom).clone()));
                     let u = Val::vvar(l);
                     t = self.force(decl, self.closure_apply(decl, &cod, u));
                     l = l + 1;
@@ -100,7 +100,7 @@ impl Infer {
                             Rc::new(self.quote(decl, l, dom.clone())),
                             Rc::new(tm),
                         );
-                        names = names.prepend(bname.clone());
+                        names = names.prepend(SmolStr::new(&*bname));
                     }
                     let _ = names;
                     return Some(pretty_tm(0, cxt.names(), &tm));
@@ -341,7 +341,7 @@ impl Infer {
         let mut lvl = cxt.lvl;
         let mut peeled: Vec<String> = Vec::new();
         while let Val::Pi(name, _, _, cod) = t {
-            peeled.push(name.data.clone());
+            peeled.push(name.data.to_string());
             let u = Val::vvar(lvl);
             t = self.force(cxt.decl(), self.closure_apply(cxt.decl(), &cod, u));
             lvl = lvl + 1;
