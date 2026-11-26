@@ -1364,6 +1364,36 @@ impl Cxt {
             .collect()
     }
 
+    /// 从 env 推导「本上下文相对一个基线 env 的精化替换」。
+    ///
+    /// `check_pm_final` 需要一个 σ 来表达「臂上下文相对入口上下文多解出了什么」，
+    /// 但那个 σ 目前只存在于 env 槽里（`check_pm` 内部 `update_cxt` 写的）。
+    /// 本函数把它反向读出来：槽位 i 若**不是** self-reference `Rigid(lvl_i)`，
+    /// 就说明该层级被解成了该值——把它作为一条 Subst 条目。
+    ///
+    /// 用于把 env 载体桥接到 σ 载体，使同一批解可以两种形式通吃。
+    /// 顺序按层级升序（Subst 是链，后加的更靠前，读点 lookup 先命中近层）。
+    pub fn sub_from_env(&self) -> Rc<super::Subst> {
+        let n = self.lvl.0;
+        let mut entries: Vec<(Lvl, Rc<super::Val>)> = Vec::new();
+        for (i, v) in self.env.iter().enumerate() {
+            let mut raw: &super::Val = v.as_ref();
+            while let super::Val::VSub(inner, _) = raw {
+                raw = inner.as_ref();
+            }
+            let expect = Lvl((n - 1) - (i as u32)).into();
+            match raw {
+                super::Val::Rigid(l, sp) if sp.is_empty() && *l == expect => {}
+                _ => entries.push((expect, v.clone())),
+            }
+        }
+        let mut sub = Rc::new(super::Subst::default());
+        for (l, val) in entries {
+            sub = super::Subst::extend(&sub, l, val);
+        }
+        sub
+    }
+
     pub fn subst_cxt(&self, sub: &Rc<super::Subst>) -> Cxt {
         if sub.is_empty() {
             return self.clone();

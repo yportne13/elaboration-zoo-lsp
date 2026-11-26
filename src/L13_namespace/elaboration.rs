@@ -691,6 +691,16 @@ impl Infer {
         // spine mismatch, see docs plan section 19), but seed the solvable set so
         // that when sigma threading lands it already has the right domain.
         let _solvable = cxt.bind_slots();
+        // B3 conclusion (rounds 19-25, four independent experiments):
+        // this equation MUST stay on the eager carrier. `ori` is the raw ctor
+        // return type; `tmv` is eval()d in the arm env and therefore already
+        // carries the refinement. Making sigma visible here (any of: fresh
+        // sigma, check_pm's sigma, env-derived sigma) puts a not-yet-solved
+        // meta in the Vec index position and breaks 11 proof-corpus cases
+        // (see tests/l13_pm_final_necessity.rs). Dropping the equation
+        // entirely also breaks them. The eager refinement must happen BEFORE
+        // the arm body is checked, which a lazy substitution cannot express.
+        let _solvable = cxt.bind_slots();
         let new_cxt = self.unify_pm(&cxt, &ori, &tmv, None, t_span).unwrap_or(cxt);
         Ok((t_inferred, new_cxt))
     }
