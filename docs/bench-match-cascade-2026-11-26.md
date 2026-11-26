@@ -2,34 +2,23 @@
 
 ## 1. 语料与工具
 
-新增 `src/bin/matchbench_src.rs` + `src/bin/matchbench.rs`（bin 名 `matchbench`，
-`required-features = ["twins"]`）。
+`src/bin/matchbench_src.rs` + `src/bin/matchbench.rs`（bin 名 `matchbench`，`required-features = ["twins"]`）。
 
-生成器 `match_cascade_src(depth, copies, width)`，三个轴**都作用在 match 结构上**：
+`match_cascade_src(depth, copies, width)` 的三个轴**都作用在 match 结构上**：
 
-| 轴 | 含义 | 压的是 |
-|---|---|---|
-| `depth` | 嵌套层数（第 0 臂里再开一个 match） | 臂特化 / `check_pm` / 精化传播 |
-| `width` | **每个 match 的臂数**（被匹配 `enum Tag` 的构造子数） | 覆盖检查、可达性探测 |
-| `copies` | 级联条数 | 总量（线性，不改形态） |
+| 轴 | 含义 |
+|---|---|
+| `depth` | 嵌套层数（第 0 臂里再开一个 match） |
+| `width` | **每个 match 的臂数**（被匹配 `enum Tag` 的构造子数） |
+| `copies` | 级联条数（线性放大，不改形态） |
 
-结构（depth=3, width=4）：只让第 0 臂向下钻，其余臂直接给叶子，于是
-**match 块数 = depth，总臂数 = depth × width**——两个轴可独立调节，不会组合爆炸。
+只让第 0 臂向下钻，于是 match 块数 = `depth`、总臂数 = `depth × width`，两轴可独立调节。
 
 ```text
 cargo build --release --bin matchbench --features twins
 target_b13/release/matchbench.exe --width-sweep --depth 4 --copies 16 --max-width 128 --reps 7
 target_b13/release/matchbench.exe --sweep --copies 16 --reps 5
 ```
-
-输出 CSV：`RESULT,<chapter>,<depth>,<copies>,<width>,<bytes>,<ms>,<ok>`，每档取 reps 次最小值。
-
-### 1.1 第一版生成器有 bug（已修）
-
-初版生成器的 `width` 只增加 `enum Wide` 的**成员数**，每个 match 仍然只有 2 个臂
-（`case zero` / `case succ`），所以「宽度」根本没压到臂数上——初版测出的「L13 对宽度不敏感」
-是**伪结论**。现版已改为宽度直接决定臂数，并有单测 `arm_count_is_depth_times_width`
-（断言 `臂数 == depth × width`）与 `width_actually_creates_arms_not_just_enum_members` 锁定。
 
 ## 2. 宽度轴（depth=4, copies=16, reps=7，ms）
 
@@ -44,77 +33,86 @@ target_b13/release/matchbench.exe --sweep --copies 16 --reps 5
 | 64 | 247 702 | 77.604 | 77.794 | 76.617 | 76.805 | 76.234 | 77.260 | **24.463** | **0.32×** |
 | 128 | 497 586 | 304.309 | 305.633 | 318.137 | 325.998 | 315.226 | 321.712 | **97.629** | **0.32×** |
 
-### 2.1 增长阶（对 width 拟合 log-log 斜率，width 8…128）
-
-| 章 | 斜率 | 起点→终点 |
-|---|---:|---|
-| L07 | **1.67** | 2.96 ms → 304.3 ms |
-| L12 | **1.69** | 2.95 ms → 321.7 ms |
-| **L13** | **1.32** | 2.40 ms → 97.6 ms |
-
-**L07/L12 在臂宽上接近二次（1.67–1.69），L13 只有 1.32。**
-宽度 128 时 L13 比 L07 快 **3.1×**，实测 97.6 ms vs 304.3 ms。
-
-结论：**L13 的可达性 memo（`constrs[i]` 的 `accessible` 缓存）在臂宽上是决定性优势**——
-每个构造子只探测一次，宽度摊薄；L07/L12 没有这层缓存，臂数增加则反复探测。
+增长阶（log-log 斜率，width 8→128）：**L07 1.67 / L12 1.69 / L13 1.32**。
 
 ## 3. 深度轴（copies=16, reps=5，ms）
 
 | depth | width | L07 | L12 | **L13** | L13/L07 |
 |---:|---:|---:|---:|---:|---:|
 | 1 | 2 | 0.426 | 0.339 | **0.673** | 1.58× |
-| 2 | 2 | 0.441 | 0.415 | **0.740** | 1.68× |
-| 4 | 2 | 0.729 | 0.696 | **0.989** | 1.36× |
 | 8 | 2 | 1.343 | 1.308 | **1.477** | 1.10× |
-| 1 | 8 | 0.977 | 0.972 | **1.164** | 1.19× |
 | 4 | 8 | 2.915 | 2.884 | **2.307** | **0.79×** |
 | 8 | 8 | 5.823 | 5.745 | **4.059** | **0.70×** |
-| 1 | 32 | 6.201 | 6.848 | **3.221** | **0.52×** |
 | 4 | 32 | 22.317 | 22.116 | **8.982** | **0.40×** |
 | 8 | 32 | 45.156 | 45.091 | **17.206** | **0.38×** |
 
-### 3.1 深度边际成本（每加一层）
+## 4. 关键否定性实验：memo 不是差异来源
 
-| width | L07 每层增量 | L13 每层增量 | L13/L07 |
-|:-:|---:|---:|---:|
-| 2 | 0.14–0.22 ms | 0.04–0.21 ms | ≈0.5–1.0 |
-| 8 | 0.61–0.77 ms | 0.31–0.54 ms | **≈0.5–0.8** |
-| 32 | 3.46–7.68 ms | 1.79–2.24 ms | **≈0.23–0.64** |
+### 4.1 关掉 L13 的 memo（`ctor_accessible` 的 `accessible` 缓存）
 
-**L13 的每层增量稳定地比 L07/L12 小**（宽 match 上只有 1/3–1/2），且基本不随深度增长。
+| width | L13 有 memo | L13 无 memo | 收益 |
+|---:|---:|---:|---:|
+| 1 | 0.890 | 0.899 | 1.0% |
+| 8 | 2.399 | 2.398 | −0.0% |
+| 32 | 9.397 | 9.096 | −3.3% |
+| 64 | 24.463 | 25.399 | 3.7% |
+| 128 | 97.629 | 103.357 | 5.5% |
 
-## 4. 结论
+**memo 只在 width=128 上贡献 5.5%，中等宽度完全无收益。**
 
-### 4.1 L13 的形态：固定开销高，但扩展性全面更好
+### 4.2 给 L07 装上同款 memo
 
-| 场景 | L13 相对 L07/L12 |
-|---|---|
-| 极小负载（width≤4、depth≤2） | **慢 1.2–1.7×** |
-| 中等（width=8） | 与 L07/L12 持平 |
-| 宽 match（width≥16） | **快 1.7–3.1×** |
-| 深 match（每层增量的比值） | **0.2–0.8×**（越宽优势越大） |
+按 L13 的形状在 L07 的覆盖循环里加 `Vec<Option<bool>>` memo：
 
-所以「L13 整体慢 1.5–2×」只在**极小**负载成立。真实负载（臂数 ≥ 8）上 L13 更快。
+| width | L07 基线 | L07 加 memo |
+|---:|---:|---:|
+| 1 | 0.604 | 0.626 |
+| 32 | 22.445 | 22.823 |
+| 128 | 304.309 | 312.579 |
 
-### 4.2 这个结果和 B3' 的关系
+**L07 加 memo 后反而略慢。** 原因：语料是全覆盖的，`fully_covered` 短路了整轮探测——
+`probe_accessible` 根本没被调用，memo 只是白建一个 `Vec`。
 
-之前（用坏生成器的）我推断「`refresh` 的重锚定范围随槽数增长，嵌套越深越贵」，
-并预期 B3' 的 σ 化收益会出现在深度边际成本上。**现版数据不支持那个推断**：
+### 4.3 `covers` 调用次数完全相同
 
-- L13 的深度增量已经比 L07/L12 小，没有可拿的收益；
-- L13 的优势来自可达性 memo，那是 L13 独有的（`update_cxt` / `refresh` 不参与）；
-- L13 的劣势只在极小负载的**固定开销**上（本 bin 的 width=1–2 段）。
+给两章的 `covers` 加原子计数器，跑同一批宽度档：
 
-**结论：match 负载上不存在「改 σ 能显著提速」的空间。** B3' 的性能理由不成立——
-它的价值只在结构一致性（用与 L12 相同的载体），不在速度。
+| width | L07 covers | L13 covers |
+|---:|---:|---:|
+| 1 | 64 | 64 |
+| 8 | 3 200 | 3 200 |
+| 32 | 45 696 | 45 696 |
+| 128 | **707 200** | **707 200** |
 
-## 5. 复现
+**逐字节相同。** 但 L07 304 ms vs L13 98 ms——差别不在调用次数，在每次调用的**内部成本**：
+
+| 章 | `covers` 的比较方式 | `ctor_names` 元素 |
+|---|---|---|
+| L07 | `c.iter().any(|c| c == &name.data)` —— `String == &String` | `Vec<String>`（堆分配） |
+| L13 | `c.as_str() == name.data.as_str()` —— `&str == &str` | `Vec<SmolStr>`（内联/共享） |
+
+707 200 次 × 每次一次 `String` 堆比较 vs `SmolStr`（通常 22 字节内联、等长直接 memcmp），
+这是宽 match 上的主差异。
+
+## 5. 结论
+
+1. **L13 在宽 match 上快 2–3×**（width 128：98 ms vs 304 ms），增长阶更低（1.32 vs 1.67）。
+2. **memo 不是原因**：关掉 L13 memo 只慢 5.5%（width=128），给 L07 装 memo 反而略慢。
+3. **真正原因是字符串表示**：`covers` 调用次数两章完全相同（707 200），但 L07 用 `String` 比较、
+   L13 用 `SmolStr`。这是 L08 之后引入的表示差异，不是 match 逻辑差异。
+4. **L13 只在极小负载慢**（width ≤ 4：1.1–1.5×），来自固定开销（引擎初始化、prelude 前置）。
+
+### 对 B3' 的意义
+
+这条数据链否掉了「L07 升级 memo 能追上 L13」的想法：memo 在本语料上根本不触发，
+`fully_covered` 已经短路了探测。**要追上 L13 的宽度性能，该改的是 `String → SmolStr`，
+而那是 L08 就做的表示升级，不是 L07 的 match 逻辑问题。**
+
+同时也再次说明：match 负载上不存在「改 σ 能显著提速」的空间——L13 的宽度优势与 σ 无关。
+
+## 6. 复现
 
 ```text
-# 单档
-target_b13/release/matchbench.exe --depth 6 --copies 24 --width 32 --reps 3
-# 深度 × 宽度全扫描（24 档 × 7 章，约 3 分钟）
-target_b13/release/matchbench.exe --sweep --copies 16 --reps 5
-# 仅宽度轴（8 档 × 7 章，约 2 分钟）
 target_b13/release/matchbench.exe --width-sweep --depth 4 --copies 16 --max-width 128 --reps 7
+target_b13/release/matchbench.exe --sweep --copies 16 --reps 5
 ```
