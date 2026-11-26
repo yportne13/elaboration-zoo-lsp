@@ -5,6 +5,7 @@
 //! `Val::Sum` 3 字段、`VSpan` 名字、Match 第 4 字段为 pending）。参考版
 //! 与孪生共用同一求解算法（孪生侧为打平版镜像）。
 
+use smol_str::SmolStr;
 use rustc_hash::FxHashMap;
 
 use crate::list::List;
@@ -24,7 +25,7 @@ pub struct Assertion {
 pub struct Instance {
     pub assertion: Assertion,
     pub dependencies: List<Assertion>,
-    pub lvl: Span<String>,
+    pub lvl: Span<SmolStr>,
 }
 
 /// A node in the "search tree" that stores information about
@@ -43,7 +44,7 @@ pub struct GeneratorNode {
 pub struct ConsumerNode {
     goal: Assertion,
     subgoals: List<Assertion>,
-    lvl: Span<String>,
+    lvl: Span<SmolStr>,
 }
 
 /// A "deferred" node in the "search tree" that represents a
@@ -73,7 +74,7 @@ pub enum Waiter {
 #[derive(Debug, Clone)]
 pub struct TableEntry {
     waiters: Vec<Waiter>,
-    answers: Vec<(Assertion, Span<String>)>,
+    answers: Vec<(Assertion, Span<SmolStr>)>,
 }
 
 /// The state of the algorithm.
@@ -92,7 +93,7 @@ pub struct Synth {
     /// Information about each `subgoal` being solved.
     assertion_table: Vec<(Assertion, TableEntry)>,
     /// The "final" answer for the algorithm.
-    root_answer: Option<Span<String>>,
+    root_answer: Option<Span<SmolStr>>,
 }
 
 fn uncons<T: Clone>(xs: &List<T>) -> Option<(T, List<T>)> {
@@ -266,7 +267,7 @@ impl Synth {
         &mut self,
         goal: &Assertion,
         instance: &Instance,
-    ) -> Option<(List<Assertion>, Span<String>)> {
+    ) -> Option<(List<Assertion>, Span<SmolStr>)> {
         // Name must match
         if goal.name != instance.assertion.name {
             return None;
@@ -307,7 +308,7 @@ impl Synth {
     }
 
     /// The entry point for the algorithm.
-    pub fn synth(&mut self, assertion: Assertion) -> Option<Span<String>> {
+    pub fn synth(&mut self, assertion: Assertion) -> Option<Span<SmolStr>> {
         // Insert the "root" goal to be solved.
         self.new_subgoal(&assertion, &Waiter::Root);
 

@@ -131,13 +131,13 @@ pub enum Tm {
     /// 全局引用（def / enum / 构造子），求值时查 decl 表。
     Decl(SmolStr),
     /// `x.field` 投影。
-    Obj(Box<Tm>, Span<String>),
-    Lam(Span<String>, Icit, Rc<Tm>),
+    Obj(Box<Tm>, Span<SmolStr>),
+    Lam(Span<SmolStr>, Icit, Rc<Tm>),
     App(Box<Tm>, Box<Tm>, Icit),
     AppPruning(Box<Tm>, Pruning),
     U(u32),
-    Pi(Span<String>, Icit, Rc<Ty>, Rc<Ty>),
-    Let(Span<String>, Box<Ty>, Box<Tm>, Box<Tm>),
+    Pi(Span<SmolStr>, Icit, Rc<Ty>, Rc<Ty>),
+    Let(Span<SmolStr>, Box<Ty>, Box<Tm>, Box<Tm>),
     Meta(MetaVar),
     LiteralType,
     LiteralIntro(Span<String>),
@@ -145,13 +145,13 @@ pub enum Tm {
     Prim(SmolStr),
     /// enum 类型本体（enum 声明 λ 链的体）。params = (参数名, 值项, 值的类型, icit)，
     /// 声明处值项即参数自身；实例化（`Vec[Nat] 3`）后值槽携带当前实参。
-    Sum(Span<String>, Vec<(Span<String>, Tm, Ty, Icit)>, Vec<Span<String>>),
+    Sum(Span<SmolStr>, Vec<(Span<SmolStr>, Tm, Ty, Icit)>, Vec<Span<SmolStr>>),
     /// 构造子值：typ 求值后必须是其所属的（已实例化的）`Val::Sum`，
     /// datas = 构造子自身绑定器的值（隐式在前，声明序）。
     SumCase {
         typ: Box<Tm>,
-        case_name: Span<String>,
-        datas: Vec<(Span<String>, Tm, Icit)>,
+        case_name: Span<SmolStr>,
+        datas: Vec<(Span<SmolStr>, Tm, Icit)>,
     },
     /// 已编译的 match：分支体是检查过的项，运行时按模式首匹配。
     Match(Box<Tm>, Vec<(PatternDetail, Tm)>),
@@ -165,8 +165,8 @@ pub enum Tm {
 #[derive(Clone, Debug, PartialEq)]
 pub enum PatternDetail {
     Any(Span<()>),
-    Bind(Span<String>),
-    Con(Span<String>, Vec<PatternDetail>),
+    Bind(Span<SmolStr>),
+    Con(Span<SmolStr>, Vec<PatternDetail>),
 }
 
 impl PatternDetail {
@@ -201,7 +201,7 @@ pub(crate) fn cover_at(detail: &PatternDetail, path: &[(String, usize)]) -> PosC
     }
     match cur {
         PatternDetail::Any(_) | PatternDetail::Bind(_) => PosCover::All,
-        PatternDetail::Con(n, _) => PosCover::Ctor(n.data.clone()),
+        PatternDetail::Con(n, _) => PosCover::Ctor(n.data.to_string()),
     }
 }
 
@@ -253,17 +253,17 @@ impl std::fmt::Debug for Closure {
 /// 热路径）；twin `bump_spine_iter` 的 CTm 保持原表示，Debug 委托内层保证
 /// parity 误差正文逐字节不变。
 #[derive(Clone)]
-pub struct VSpan(pub Rc<Span<String>>);
+pub struct VSpan(pub Rc<Span<SmolStr>>);
 
 impl std::ops::Deref for VSpan {
-    type Target = Span<String>;
-    fn deref(&self) -> &Span<String> {
+    type Target = Span<SmolStr>;
+    fn deref(&self) -> &Span<SmolStr> {
         &self.0
     }
 }
 
 impl VSpan {
-    pub fn new(s: Span<String>) -> Self {
+    pub fn new(s: Span<SmolStr>) -> Self {
         VSpan(Rc::new(s))
     }
 }
@@ -276,12 +276,12 @@ impl std::fmt::Debug for VSpan {
     }
 }
 
-pub fn vspan(s: Span<String>) -> VSpan {
+pub fn vspan(s: Span<SmolStr>) -> VSpan {
     VSpan::new(s)
 }
 
 /// VSpan → Tm 侧 `Span<String>`（名字/显示/错误用；不在克隆热路径）。
-pub fn tmspan(s: &VSpan) -> Span<String> {
+pub fn tmspan(s: &VSpan) -> Span<SmolStr> {
     (*s.0).clone()
 }
 
@@ -291,12 +291,12 @@ impl PartialEq for VSpan {
         self.0.data == other.0.data
     }
 }
-impl PartialEq<Span<String>> for VSpan {
-    fn eq(&self, other: &Span<String>) -> bool {
+impl PartialEq<Span<SmolStr>> for VSpan {
+    fn eq(&self, other: &Span<SmolStr>) -> bool {
         self.0.data == other.data
     }
 }
-impl PartialEq<VSpan> for Span<String> {
+impl PartialEq<VSpan> for Span<SmolStr> {
     fn eq(&self, other: &VSpan) -> bool {
         self.data == other.0.data
     }
@@ -314,7 +314,7 @@ pub enum Val {
     Pi(VSpan, Icit, Rc<VTy>, Closure),
     U(u32),
     LiteralType,
-    LiteralIntro(VSpan),
+    LiteralIntro(Span<String>),
     /// 卡住的内建应用：名字 + 已收实参 spine（头 = 最后应用的实参）。
     /// 全部实参字面量时在 `force` 归约（目前仅 string_concat），否则保持
     /// 中性参与 unify / quote / rename（名字 + 实参不可丢——丢实参的单元
@@ -762,9 +762,9 @@ pub struct Infer {
     pub(crate) trait_definition: FxHashMap<
         String,
         (
-            Vec<(Span<String>, Raw, Icit)>,
+            Vec<(Span<SmolStr>, Raw, Icit)>,
             Vec<bool>,
-            Vec<(Span<String>, Vec<(Span<String>, Raw, Icit)>, Raw)>,
+            Vec<(Span<SmolStr>, Vec<(Span<SmolStr>, Raw, Icit)>, Raw)>,
         ),
     >,
     /// trait 名 → out 参数掩码（solve_trait 过滤 out 位；同时是“按名判 trait”的
@@ -1336,9 +1336,9 @@ impl Infer {
                     return None;
                 }
                 match (&args[0], &args[1]) {
-                    (Val::LiteralIntro(a), Val::LiteralIntro(b)) => Some(Val::LiteralIntro(vspan(
-                        tmspan(&a).map(|x| format!("{x}{}", b.data)),
-                    ))),
+                    (Val::LiteralIntro(a), Val::LiteralIntro(b)) => {
+                        Some(Val::LiteralIntro(a.clone().map(|_| format!("{}{}", a.data, b.data))))
+                    }
                     _ => None,
                 }
             }
@@ -1349,7 +1349,7 @@ impl Infer {
                 match (lit(&args[0]), lit(&args[1])) {
                     (Some(a), Some(b)) => {
                         let s = if a == b { "true" } else { "false" };
-                        Some(Val::LiteralIntro(vspan(empty_span(s.to_string()))))
+                        Some(Val::LiteralIntro(empty_span(s.to_string())))
                     }
                     _ => None,
                 }
@@ -1359,7 +1359,7 @@ impl Infer {
                     return None;
                 }
                 match lit(&args[0]) {
-                    Some(s) => Some(Val::LiteralIntro(vspan(empty_span(s.replace('\n', "\n  "))))),
+                    Some(s) => Some(Val::LiteralIntro(empty_span(s.replace('\n', "\n  ")))),
                     None => None,
                 }
             }
@@ -1384,7 +1384,7 @@ impl Infer {
                     } else {
                         format!("{}\n{}", existing, line)
                     };
-                    map.insert("CheckIssues".into(), Val::LiteralIntro(vspan(empty_span(next))));
+                    map.insert("CheckIssues".into(), Val::LiteralIntro(empty_span(next)));
                 }
                 Some(Val::U(0))
             }
@@ -1486,7 +1486,7 @@ impl Infer {
                 match lit(&args[0]) {
                     Some(path) => std::fs::read_to_string(&path)
                         .ok()
-                        .map(|content| Val::LiteralIntro(vspan(empty_span(content)))),
+                        .map(|content| Val::LiteralIntro(empty_span(content))),
                     None => None,
                 }
             }
@@ -1526,11 +1526,11 @@ impl Infer {
                 match lit(&args[0]) {
                     Some(path) => {
                         let exists = std::path::Path::new(&path).exists();
-                        Some(Val::LiteralIntro(vspan(empty_span(if exists {
+                        Some(Val::LiteralIntro(empty_span(if exists {
                             "true".to_string()
                         } else {
                             "false".to_string()
-                        }))))
+                        })))
                     }
                     None => None,
                 }
@@ -1662,7 +1662,7 @@ impl Infer {
             Tm::U(x) => Val::U(*x),
             Tm::Meta(m) => self.v_meta(*m),
             Tm::AppPruning(t, pr) => self.v_app_pruning(decl, env, self.eval(decl, env, t), pr),
-            Tm::LiteralIntro(x) => Val::LiteralIntro(vspan(x.clone())),
+            Tm::LiteralIntro(x) => Val::LiteralIntro(x.clone()),
             Tm::LiteralType => Val::LiteralType,
             Tm::Prim(name) => {
                 // 零元卡住头：实参一律经 App 到达（builtin 值的 λ 链体是
@@ -1989,7 +1989,7 @@ impl Infer {
                 Rc::new(self.quote(decl, l + 1, self.closure_apply(decl, &closure, Val::vvar(l)))),
             ),
             Val::U(x) => Tm::U(x),
-            Val::LiteralIntro(x) => Tm::LiteralIntro(tmspan(&x)),
+            Val::LiteralIntro(x) => Tm::LiteralIntro(x.clone()),
             Val::LiteralType => Tm::LiteralType,
             Val::Prim(name, sp) => self.quote_sp(decl, l, Tm::Prim(name), sp),
             Val::Sum(name, params, cases) => Tm::Sum(
@@ -2207,7 +2207,7 @@ fn val_mentions_lvl(v: &Val, x: Lvl) -> bool {
 
 /// `v.field` 的值级投影：Sum 取索引参数的值；SumCase 先查 typ 的参数（索引）再查构造子字段。
 /// 其余（Rigid / Flex / Decl / 卡住的 Obj / 函数……）返回 None → 卡住成 `Val::Obj`。
-fn project(v: &Val, name: &Span<String>) -> Option<Val> {
+fn project(v: &Val, name: &Span<SmolStr>) -> Option<Val> {
     match v {
         Val::Sum(_, params, _) => params
             .iter()
@@ -2600,7 +2600,7 @@ fn bench_check_nf_impl(
     let mut last: Option<String> = None;
     for d in decls {
         if let parser::syntax::Decl::Def { name, .. } = d {
-            last = Some(name.data.clone());
+            last = Some(name.data.to_string());
         }
         match infer.infer_owned(cxt, d.clone()) {
             Ok((_, _, nc)) => cxt = nc,
