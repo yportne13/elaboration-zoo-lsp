@@ -77,6 +77,14 @@ struct Cli {
     /// 跑 depth 1..=8 的完整扫描（覆盖 depth/copies/width 三个轴）
     #[arg(long)]
     sweep: bool,
+
+    /// 只扫宽度轴：width 固定取 1,2,4,8,16,32,64,128，depth 用 --depth
+    #[arg(long)]
+    width_sweep: bool,
+
+    /// 宽度轴的最大值（与 --width-sweep 配合，默认 128）
+    #[arg(long, default_value_t = 128)]
+    max_width: u32,
 }
 
 /// 一个章节的跑法：返回 (是否成功, 毫秒)。
@@ -117,7 +125,14 @@ fn main() {
     let cli = Cli::parse();
 
     let mut cases: Vec<(u32, u32, u32)> = Vec::new();
-    if cli.sweep {
+    if cli.width_sweep {
+        // 宽度轴：1,2,4,8,...,max_width；depth 固定。
+        let mut w = 1u32;
+        while w <= cli.max_width {
+            cases.push((cli.depth, cli.copies, w));
+            w *= 2;
+        }
+    } else if cli.sweep {
         for depth in 1..=8u32 {
             for width in [2u32, 8, 32] {
                 cases.push((depth, cli.copies, width));
