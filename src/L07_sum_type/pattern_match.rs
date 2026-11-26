@@ -29,6 +29,7 @@
 //! 逐臂（per-arm）下钻保持用户书写顺序，运行时首匹配 = 用户语义；
 //! 通配臂（`case x`）之后的所有臂不可达（**报「分支不可达」**）。
 
+use smol_str::SmolStr;
 use crate::parser_lib::Span;
 use std::rc::Rc;
 
@@ -154,7 +155,7 @@ impl Compiler {
             s @ Val::Sum(..) => s,
             _ => return Err(Error::new("match 的对象必须是和类型（enum）".to_owned())),
         };
-        let ctor_names: Vec<String> = match &head_sum {
+        let ctor_names: Vec<SmolStr> = match &head_sum {
             Val::Sum(_, _, cases) => cases.iter().map(|c| c.data.clone()).collect(),
             _ => unreachable!(),
         };
@@ -342,7 +343,7 @@ impl Compiler {
         cxt: &Cxt,
         lvl: Lvl,
         head_sum: &Val,
-        ctor: &Span<String>,
+        ctor: &Span<SmolStr>,
         init_sub: &Rc<Subst>,
         base_solvable: &[Lvl],
     ) -> bool {
@@ -478,7 +479,7 @@ impl Compiler {
             Pattern::Any(span, _) => {
                 let lvl = cxt.lvl;
                 let cxt = cxt.bind(
-                    span.map(|_| "_".to_owned()),
+                    span.map(|_| SmolStr::new("_")),
                     infer.quote(cxt.decl(), cxt.lvl, head_ty.clone()),
                     head_ty,
                 );
@@ -502,7 +503,7 @@ impl Compiler {
     fn walk_con(
         &mut self,
         infer: &mut Infer,
-        name: Span<String>,
+        name: Span<SmolStr>,
         subs: Vec<Pattern>,
         head_ty: Val,
         head_val: Val,
@@ -558,7 +559,7 @@ impl Compiler {
         // 同序同数。
         let lvl = cxt.lvl;
         let mut cxt = cxt.bind(
-            empty_span(format!("_{}", name.data)),
+            empty_span(SmolStr::new(format!("_{}", name.data))),
             infer.quote(cxt.decl(), cxt.lvl, head_ty.clone()),
             head_ty,
         );
@@ -616,7 +617,7 @@ impl Compiler {
                             let lvl = cxt.lvl;
                             let dom_v = wrap_sub(&self.sub, dom.clone());
                             let c = cxt.bind(
-                                super::tmspan(&bname).map(|n| format!("_{n}")),
+                                super::tmspan(&bname).map(|n| SmolStr::new(format!("_{n}"))),
                                 infer.quote(cxt.decl(), cxt.lvl, dom_v.clone()),
                                 dom_v,
                             );
@@ -627,7 +628,7 @@ impl Compiler {
                             let lvl = cxt.lvl;
                             let dom_v = wrap_sub(&self.sub, dom.clone());
                             let c = cxt.bind(
-                                span.map(|_| "_".to_owned()),
+                                span.map(|_| SmolStr::new("_")),
                                 infer.quote(cxt.decl(), cxt.lvl, dom_v.clone()),
                                 dom_v,
                             );
@@ -649,12 +650,12 @@ impl Compiler {
                                 self.pending_pos.push((
                                     {
                                         let mut p = self.cur_path.clone();
-                                        p.push((name.data.clone(), details.len()));
+                                        p.push((name.data.to_string(), details.len()));
                                         p
                                     },
                                     field_sum.clone(),
                                 ));
-                                self.cur_path.push((name.data.clone(), details.len()));
+                                self.cur_path.push((name.data.to_string(), details.len()));
                                 let walked =
                                     self.walk_con(infer, cn, csubs, dom.clone(), u.clone(), &cxt)?;
                                 self.cur_path.pop();
@@ -825,23 +826,23 @@ impl Compiler {
 }
 
 /// 顶层覆盖判定：通配 / 变量模式覆盖一切；Con 只覆盖同名构造子。
-fn covers(pat: &Pattern, ctor: &str, ctor_names: &[String]) -> bool {
+fn covers(pat: &Pattern, ctor: &str, ctor_names: &[SmolStr]) -> bool {
     match pat {
         Pattern::Any(..) => true,
-        Pattern::Con(name, _, _) => !ctor_names.iter().any(|c| c == &name.data) || name.data == ctor,
+        Pattern::Con(name, _, _) => !ctor_names.iter().any(|c| c.as_str() == name.data.as_str()) || name.data == ctor,
     }
 }
 
 /// 通配臂：覆盖所有取值的臂（其后的臂不可达 → 报「分支不可达」）。
-fn is_catch_all(pat: &Pattern, ctor_names: &[String]) -> bool {
+fn is_catch_all(pat: &Pattern, ctor_names: &[SmolStr]) -> bool {
     match pat {
         Pattern::Any(..) => true,
-        Pattern::Con(name, subs, _) => subs.is_empty() && !ctor_names.iter().any(|c| c == &name.data),
+        Pattern::Con(name, subs, _) => subs.is_empty() && !ctor_names.iter().any(|c| c.as_str() == name.data.as_str()),
     }
 }
 
 impl Val {
-    fn sum_cases(&self) -> Vec<Span<String>> {
+    fn sum_cases(&self) -> Vec<Span<SmolStr>> {
         match self {
             Val::Sum(_, _, cases) => cases.iter().map(super::tmspan).collect(),
             _ => vec![],

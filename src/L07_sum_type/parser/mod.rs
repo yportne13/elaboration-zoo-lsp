@@ -9,6 +9,7 @@ pub mod syntax;
 use TokenKind::*;
 
 use super::empty_span;
+use smol_str::SmolStr;
 
 #[derive(Debug, Clone, Copy)]
 pub enum BaseMsg {
@@ -233,6 +234,32 @@ fn kw<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [TokenNode<'a>], Span<()>, Ma
     }
 }
 
+/// 名字词法：与 `string` 同一匹配，但产出 `Span<SmolStr>`（名字用内联表示，
+/// 反复比较/克隆不再走堆）。字面量仍走 `string`——用户内容是任意长的 `String`。
+fn smolstr<'a: 'b, 'b>(
+    p: TokenKind,
+) -> impl Parser<&'b [TokenNode<'a>], Span<SmolStr>, MacroState, IError> {
+    move |input: &'b [TokenNode<'a>], _: &mut MacroState| match input.first() {
+        Some(x) => {
+            if x.data.1 == p {
+                input
+                    .get(1..)
+                    .map(|i| (i, x.map(|s| SmolStr::new(s.0))))
+                    .ok_or_else(|| IError {
+                        msg: x.map(|_| ErrMsg::Base(BaseMsg::Expect(p))),
+                    })
+            } else {
+                Err(IError {
+                    msg: x.map(|_| ErrMsg::Base(BaseMsg::Expect(p))),
+                })
+            }
+        }
+        _ => Err(IError {
+            msg: empty_span(ErrMsg::Base(BaseMsg::Expect(p))),
+        }),
+    }
+}
+
 fn string<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [TokenNode<'a>], Span<String>, MacroState, IError> {
     move |input: &'b [TokenNode<'a>], _: &mut MacroState| match input.first() {
         Some(x) => if x.data.1 == p {
@@ -297,7 +324,7 @@ where
 }
 
 fn p_atom1<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
-    string(Ident)
+    smolstr(Ident)
         .map(Raw::Var)
         .or(kw(UKeyword).map(|_| Raw::U))
         .or(kw(Hole).map(|_| Raw::Hole))
@@ -307,7 +334,7 @@ fn p_atom1<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IR
 }
 
 fn p_atom<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
-    (p_atom1, (kw(T![.]), string(Ident)).option())
+    (p_atom1, (kw(T![.]), smolstr(Ident)).option())
         .map(|(x, t)| match t {
             Some((_, t)) => Raw::Obj(Box::new(x), t),
             None => x,
@@ -326,7 +353,7 @@ fn p_atom<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
 fn p_arg<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Vec<(Either, Raw)>> {
     // 方括号内逗号分隔的隐式实参表：`f[A, B]` ≡ `f[A][B]`（L11 起同款，2026-09-19 回移植）
     let named_impl_arg = square_cut(
-        (string(Ident), Cut((kw(Eq), p_raw))).map(|(x, t)| (Either::Name(x), t.1.unwrap_or(Raw::Hole)))
+        (smolstr(Ident), Cut((kw(Eq), p_raw))).map(|(x, t)| (Either::Name(x), t.1.unwrap_or(Raw::Hole)))
             .or(p_raw.map(|t| (Either::Icit(Icit::Impl), t)))
             .many0_sep(kw(T![,]))
     ).map(|x| x.ok().unwrap_or_default());
@@ -349,18 +376,18 @@ fn p_spine<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IR
     Ok((input, result))
 }
 
-fn p_bind<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Span<String>> {
-    string(Ident).or(string(Hole)).parse(input, state)
+fn p_bind<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Span<SmolStr>> {
+    smolstr(Ident).or(smolstr(Hole)).parse(input, state)
 }
 
 fn p_lam_binder<'a: 'b, 'b>(
     input: &'b [TokenNode<'a>],
     state: &mut MacroState,
-) -> IResult<'a, 'b, (Span<String>, Either)> {
+) -> IResult<'a, 'b, (Span<SmolStr>, Either)> {
     let explicit_binder = p_bind.map(|x| (x, Either::Icit(Icit::Expl)));
     let implicit_binder = square(p_bind).map(|x| (x, Either::Icit(Icit::Impl)));
     let named_binder =
-        square((string(Ident), kw(Eq), p_bind)).map(|(x, _, y)| (y, Either::Name(x)));
+        square((smolstr(Ident), kw(Eq), p_bind)).map(|(x, _, y)| (y, Either::Name(x)));
 
     explicit_binder
         .or(implicit_binder)
@@ -383,7 +410,7 @@ fn p_lam<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
 fn p_pi_impl_binder<'a: 'b, 'b>(
     input: &'b [TokenNode<'a>],
     state: &mut MacroState,
-) -> IResult<'a, 'b, Vec<(Span<String>, Raw, Icit)>> {
+) -> IResult<'a, 'b, Vec<(Span<SmolStr>, Raw, Icit)>> {
     square(
         (
             p_bind,
@@ -401,7 +428,7 @@ fn p_pi_impl_binder<'a: 'b, 'b>(
 fn p_pi_binder<'a: 'b, 'b>(
     input: &'b [TokenNode<'a>],
     state: &mut MacroState,
-) -> IResult<'a, 'b, Vec<(Span<String>, Raw, Icit)>> {
+) -> IResult<'a, 'b, Vec<(Span<SmolStr>, Raw, Icit)>> {
     // 解析显式参数 (x : A)
     let explicit_binder = paren(
         (
@@ -433,7 +460,7 @@ fn fun_or_spine<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) 
     (p_spine, (kw(Arrow), p_raw).option())
         .map(|(sp, tail)| match tail {
             Some((kw, cod)) => Raw::Pi(
-                kw.map(|_| "_".to_owned()),
+                kw.map(|_| SmolStr::new("_")),
                 Icit::Expl,
                 Box::new(sp),
                 Box::new(cod),
@@ -446,7 +473,7 @@ fn fun_or_spine<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) 
 fn p_let<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
     (
         kw(LetKeyword),
-        string(Ident),
+        smolstr(Ident),
         (kw(Colon), p_raw).map(|(_, x)| x).option(),
         kw(Eq),
         p_raw,
@@ -467,7 +494,7 @@ fn p_let<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
 
 fn p_pattern<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Pattern> {
     (
-        string(Ident),
+        smolstr(Ident),
         paren(p_pattern.many0_sep(kw(T![,])))
             .or(square(p_pattern.map(|x| x.to_impl()).many0_sep(kw(T![,]))))
             .many0()
@@ -512,7 +539,7 @@ fn p_raw<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
 fn p_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Decl> {
     (
         kw(DefKeyword),
-        string(Ident),
+        smolstr(Ident),
         p_pi_binder
             .many0()
             .map(|x| x.into_iter().flatten().collect::<Vec<_>>()),
@@ -539,13 +566,13 @@ fn p_print<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IR
 fn p_enum<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Decl> {
     (
         kw(EnumKeyword),
-        string(Ident),
+        smolstr(Ident),
         p_pi_binder
             .many0()
             .map(|x| x.into_iter().flatten().collect::<Vec<_>>()),
         brace(
             (
-                string(Ident),
+                smolstr(Ident),
                 p_pi_binder
                     .many0()
                     .map(|x| x.into_iter().flatten().collect::<Vec<_>>()),

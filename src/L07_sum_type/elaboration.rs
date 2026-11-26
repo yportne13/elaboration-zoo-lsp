@@ -46,7 +46,7 @@ impl Infer {
     fn insert_until_go(
         &mut self,
         cxt: &Cxt,
-        name: Span<String>,
+        name: Span<SmolStr>,
         t: Tm,
         va: Val,
     ) -> Result<(Tm, Val), Error> {
@@ -72,7 +72,7 @@ impl Infer {
     fn insert_until_name(
         &mut self,
         cxt: &Cxt,
-        name: Span<String>,
+        name: Span<SmolStr>,
         act: Result<(Tm, Val), Error>,
     ) -> Result<(Tm, Val), Error> {
         act.and_then(|(t, va)| self.insert_until_go(cxt, name, t, va))
@@ -324,7 +324,7 @@ impl Infer {
                             if !self.tm_has_unsolved_meta(&q) {
                                 let mut names = cxt.names();
                                 for pn in peeled.iter().rev() {
-                                    names = names.prepend(pn.clone());
+                                    names = names.prepend(SmolStr::new(&*pn));
                                 }
                                 let label = surface::inlay_label(&pretty_tm(0, names, &q));
                                 self.push_inlay_label(pos, label);
@@ -358,7 +358,7 @@ impl Infer {
                 // 即报 can't unify。语言定义上方括号参数就是类型参数（任意
                 // 类型的索引留给圆括号），钉 U 从声明处消除该 meta；用户
                 // 显式标注的域（`[A : Nat]`）与显式参数（索引）不动。
-                let params: Vec<(Span<String>, Raw, Icit)> = params
+                let params: Vec<(Span<SmolStr>, Raw, Icit)> = params
                     .into_iter()
                     .map(|(n, a, i)| {
                         let a = if i == Icit::Impl && matches!(a, Raw::Hole) {
@@ -599,7 +599,7 @@ impl Infer {
                             if let Some(v) = enum_val {
                                 if let Val::Sum(_, _, cases) = self.force(decl, v) {
                                     for c in cases.iter() {
-                                        self.completion_table.push((n.to_span(), c.data.clone()));
+                                        self.completion_table.push((n.to_span(), c.data.to_string()));
                                     }
                                 }
                             }
@@ -619,12 +619,12 @@ impl Infer {
                     match &ty_forced {
                         Val::Sum(_, params, _) => {
                             for (n, ..) in params.iter() {
-                                self.completion_table.push((recv_span, n.data.clone()));
+                                self.completion_table.push((recv_span, n.data.to_string()));
                             }
                         }
                         Val::SumCase { datas, .. } => {
                             for (n, _, _) in datas.iter() {
-                                self.completion_table.push((recv_span, n.data.clone()));
+                                self.completion_table.push((recv_span, n.data.to_string()));
                             }
                         }
                         _ => {}
@@ -761,7 +761,7 @@ impl Infer {
                             Rc::new(self.fresh_meta(
                                 decl,
                                 &cxt.bind(
-                                    empty_span("x".to_string()),
+                                    empty_span(SmolStr::new("x")),
                                     self.quote(decl, cxt.lvl, a.clone()),
                                     a.clone(),
                                 ),
@@ -772,7 +772,7 @@ impl Infer {
                             decl,
                             cxt,
                             Val::Pi(
-                                super::vspan(empty_span("x".to_string())),
+                                super::vspan(empty_span(SmolStr::new("x"))),
                                 i,
                                 Rc::new(a.clone()),
                                 b_closure.clone(),

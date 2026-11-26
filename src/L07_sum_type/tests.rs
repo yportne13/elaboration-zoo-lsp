@@ -8,6 +8,7 @@
 //!   `test_nested_patterns` / `test_missing_case_err` / `test_index_equality_err`：
 //!   针对 L07/L07a 已知 bug 的回归测试（见 README.md 的"修了什么"一节）。
 
+use smol_str::SmolStr;
 use super::*;
 
 /// 测试在 64MB 栈的线程里跑：类型检查的递归深度（依赖匹配的精化合一链）
@@ -1767,7 +1768,7 @@ fn subst_lookup_conditional_wrap() {
     // 解值引用藏在**闭包 env 槽**里（mentions_level 区别于 val_mentions_lvl
     // 的分界情形）：λ 捕获 env 引用已解层级 3 ⇒ 也要包裹
     let lam = Val::Lam(
-        vspan(empty_span("a".to_owned())),
+        vspan(empty_span(SmolStr::new("a"))),
         Icit::Expl,
         Closure(List::new().prepend(Val::vvar(Lvl(3))), Rc::new(Tm::Var(Ix(0)))),
     );
@@ -1916,25 +1917,25 @@ fn deep_value_iterative_under_default_stack() {
 
     fn nat_sum() -> Val {
         Val::Sum(
-            vspan(empty_span("Nat".to_string())),
+            vspan(empty_span(SmolStr::new("Nat"))),
             Rc::new(vec![]),
             Rc::new(vec![
-                vspan(empty_span("zero".to_string())),
-                vspan(empty_span("succ".to_string())),
+                vspan(empty_span(SmolStr::new("zero"))),
+                vspan(empty_span(SmolStr::new("succ"))),
             ]),
         )
     }
     fn succ_of(typ: &std::rc::Rc<Val>, prev: Val) -> Val {
         Val::SumCase {
             typ: std::rc::Rc::clone(typ),
-            case_name: vspan(empty_span("succ".to_string())),
-            datas: Rc::new(vec![(vspan(empty_span("x".to_string())), std::rc::Rc::new(prev), Icit::Expl)]),
+            case_name: vspan(empty_span(SmolStr::new("succ"))),
+            datas: Rc::new(vec![(vspan(empty_span(SmolStr::new("x"))), std::rc::Rc::new(prev), Icit::Expl)]),
         }
     }
     fn chain(nat: &std::rc::Rc<Val>, n: usize) -> Val {
         let mut v = Val::SumCase {
             typ: std::rc::Rc::clone(nat),
-            case_name: vspan(empty_span("zero".to_string())),
+            case_name: vspan(empty_span(SmolStr::new("zero"))),
             datas: Rc::new(vec![]),
         };
         for _ in 0..n {
