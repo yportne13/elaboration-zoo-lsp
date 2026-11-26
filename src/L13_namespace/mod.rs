@@ -408,6 +408,10 @@ pub mod phases {
     pub static WALK_NS: AtomicU64 = AtomicU64::new(0);
     pub static SUBCXT_NS: AtomicU64 = AtomicU64::new(0);
     pub static REANCHOR_NS: AtomicU64 = AtomicU64::new(0);
+    /// 重锚走 Flex 快路径的次数（`self.ret_type` 已是 Flex ⇒ O(1) clone）。
+    pub static RE_FLEX: AtomicU64 = AtomicU64::new(0);
+    /// 重锚走 quote→eval 的次数。
+    pub static RE_QE: AtomicU64 = AtomicU64::new(0);
     pub static HEADCK_NS: AtomicU64 = AtomicU64::new(0);
     pub static BODY_NS: AtomicU64 = AtomicU64::new(0);
     pub static COVERS: AtomicU64 = AtomicU64::new(0);
@@ -455,6 +459,8 @@ pub mod phases {
             ("WALK_NS", WALK_NS.load(Relaxed)),
             ("SUBCXT_NS", SUBCXT_NS.load(Relaxed)),
             ("REANCHOR_NS", REANCHOR_NS.load(Relaxed)),
+            ("RE_FLEX", RE_FLEX.load(Relaxed)),
+            ("RE_QE", RE_QE.load(Relaxed)),
             ("HEADCK_NS", HEADCK_NS.load(Relaxed)),
             ("BODY_NS", BODY_NS.load(Relaxed)),
             ("NEST_NS", NEST_NS.load(Relaxed)),

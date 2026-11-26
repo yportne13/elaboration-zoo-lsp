@@ -643,8 +643,12 @@ impl Compiler {
             drop(g_sub);
             let g_re = super::phases::enter(&super::phases::REANCHOR_NS);
             let ret_type = match self.ret_type.as_ref() {
-                Val::Flex(_, _) => self.ret_type.clone(),
+                Val::Flex(_, _) => {
+                    super::phases::RE_FLEX.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    self.ret_type.clone()
+                }
                 _ => {
+                    super::phases::RE_QE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     let q = infer.quote(&cxt_arm.decl, cxt_arm.lvl, &self.ret_type);
                     infer.eval(&cxt_arm.decl, &cxt_arm.env, &q)
                 }

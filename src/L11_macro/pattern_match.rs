@@ -865,7 +865,8 @@ fn is_catch_all(pat: &Pattern, ctor_names: &[SmolStr]) -> bool {
 impl Val {
     fn sum_cases(&self) -> Vec<Span<SmolStr>> {
         match self {
-            Val::Sum(_, _, cases) => cases.iter().map(super::tmspan).collect(),
+            // 名单已是内联 `Span<SmolStr>`：直接 clone。
+            Val::Sum(_, _, cases) => cases.iter().cloned().collect(),
             _ => vec![],
         }
     }

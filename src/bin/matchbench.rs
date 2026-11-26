@@ -208,6 +208,8 @@ impl ChapterProbe for ChL13 {
             ("WALK_NS", L13_namespace::phases::WALK_NS.load(Relaxed)),
             ("SUBCXT_NS", L13_namespace::phases::SUBCXT_NS.load(Relaxed)),
             ("REANCHOR_NS", L13_namespace::phases::REANCHOR_NS.load(Relaxed)),
+            ("RE_FLEX", L13_namespace::phases::RE_FLEX.load(Relaxed)),
+            ("RE_QE", L13_namespace::phases::RE_QE.load(Relaxed)),
             ("BODY_NS", L13_namespace::phases::BODY_NS.load(Relaxed)),
             ("NEST_NS", L13_namespace::phases::NEST_NS.load(Relaxed)),
             ("COVERS", L13_namespace::phases::COVERS.load(Relaxed)),

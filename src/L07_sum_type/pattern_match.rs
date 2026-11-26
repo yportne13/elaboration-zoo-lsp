@@ -878,7 +878,8 @@ impl Val {
         match self {
             Val::Sum(_, _, cases) => {
                 let _g = super::phases::enter(&super::phases::WC_CASES_NS);
-                cases.iter().map(super::tmspan).collect()
+                // 名单已是内联 `Span<SmolStr>`：直接 clone，不再逐个 `tmspan`。
+                cases.iter().cloned().collect()
             }
             _ => vec![],
         }

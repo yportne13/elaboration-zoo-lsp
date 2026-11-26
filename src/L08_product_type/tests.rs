@@ -1919,8 +1919,8 @@ fn deep_value_iterative_under_default_stack() {
             vspan(empty_span(SmolStr::new("Nat"))),
             Rc::new(vec![]),
             Rc::new(vec![
-                vspan(empty_span(SmolStr::new("zero"))),
-                vspan(empty_span(SmolStr::new("succ"))),
+                empty_span(SmolStr::new("zero")),
+                empty_span(SmolStr::new("succ")),
             ]),
         )
     }

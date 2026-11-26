@@ -383,7 +383,7 @@ impl Infer {
         enum FrameKind {
             Sum {
                 name: super::VSpan,
-                cases: Vec<super::VSpan>,
+                cases: super::Rc<Vec<super::Span<SmolStr>>>,
                 metas: Vec<(super::VSpan, Icit)>,
             },
             SumCase {
@@ -418,7 +418,7 @@ impl Infer {
                     Frame {
                         pending,
                         icits: Vec::new(),
-                        kind: FrameKind::Sum { name, cases: (*cases).clone(), metas },
+                        kind: FrameKind::Sum { name, cases, metas },
                         done: Vec::with_capacity(n_all),
                         idx: 0,
                     }
@@ -484,7 +484,7 @@ impl Infer {
                     Tm::Sum(
                         super::tmspan(&name),
                         params,
-                        cases.iter().map(super::tmspan).collect(),
+                        cases.iter().cloned().collect(),
                     )
                 }
                 FrameKind::SumCase {
@@ -1290,8 +1290,8 @@ mod deep_rename_tests {
                 super::super::vspan(super::super::empty_span(SmolStr::new("Nat"))),
                 std::rc::Rc::new(vec![]),
                 std::rc::Rc::new(vec![
-                    super::super::vspan(super::super::empty_span(SmolStr::new("zero"))),
-                    super::super::vspan(super::super::empty_span(SmolStr::new("succ"))),
+                    super::super::empty_span(SmolStr::new("zero")),
+                    super::super::empty_span(SmolStr::new("succ")),
                 ]),
             )
         }

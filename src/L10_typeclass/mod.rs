@@ -404,7 +404,11 @@ pub enum Val {
     Sum(
         VSpan,
         Rc<Vec<(VSpan, Rc<Val>, Rc<VTy>, Icit)>>, // (参数名, 实参值, 实参的类型, icit)
-        Rc<Vec<VSpan>>,
+        /// 构造子名单：**内联 `Span`**（不是 `VSpan`）。宽 enum（width=128）下
+        /// 每次 `eval`/`frcs`/`quote` 重建 `Val::Sum` 都要按名单长度分配 `Rc`——
+        /// 128 个/次。名单元素从不共享、只读、且 `Span<SmolStr>` 已是 `Clone`，
+        /// 内联存储不增加搬运成本。L13 从 L08 起就是这个表示。
+        Rc<Vec<Span<SmolStr>>>,
     ),
     SumCase {
         typ: Rc<Val>,
@@ -1333,7 +1337,8 @@ impl Infer {
                         })
                         .collect::<Vec<_>>(),
                 ),
-                Rc::new((*cases).clone()),
+                // 构造子名单只有**名字**，σ 永远影响不到它——直接共享 `Rc`。
+                cases,
             ),
             Val::SumCase {
                 typ,
@@ -1751,7 +1756,8 @@ impl Infer {
                 Val::Sum(
                     vspan(name.clone()),
                     Rc::new(new_params),
-                    Rc::new(cases.iter().map(|c| vspan(c.clone())).collect()),
+                    // 名单在项层就是 `Vec<Span<SmolStr>>`，直接共享克隆。
+                    Rc::new(cases.clone()),
                 )
             }
             Tm::SumCase {
@@ -1834,7 +1840,8 @@ impl Infer {
         enum FrameKind {
             Sum {
                 name: VSpan,
-                cases: Vec<VSpan>,
+                /// 构造子名单：直接持有 `Val::Sum` 的 `Rc`（名单不可变，无需重建）。
+                cases: Rc<Vec<Span<SmolStr>>>,
                 metas: Vec<(VSpan, Icit)>,
             },
             SumCase {
@@ -1866,7 +1873,7 @@ impl Infer {
                     Frame {
                         pending,
                         icits: Vec::new(),
-                        kind: FrameKind::Sum { name, cases: (*cases).clone(), metas },
+                        kind: FrameKind::Sum { name, cases, metas },
                         done: Vec::with_capacity(n_all),
                         idx: 0,
                     }
@@ -1927,7 +1934,7 @@ impl Infer {
                             (tmspan(&n), v, t, i)
                         })
                         .collect();
-                    Tm::Sum(tmspan(&name), params, cases.iter().map(tmspan).collect())
+                    Tm::Sum(tmspan(&name), params, cases.iter().cloned().collect())
                 }
                 FrameKind::SumCase {
                     case_name,
@@ -2063,7 +2070,7 @@ impl Infer {
                         )
                     })
                     .collect(),
-                cases.iter().map(tmspan).collect(),
+                cases.iter().cloned().collect(),
             ),
             Val::SumCase {
                 typ,
