@@ -56,7 +56,7 @@ pub mod prof {
         };
     }
 
-    counters!(FORCE, EVAL, QUOTE, VAPP, UNIFY, UNIFY_SP, MATCH_RUN, DECL_FORCE);
+    counters!(FORCE, EVAL, QUOTE, VAPP, UNIFY, UNIFY_SP, MATCH_RUN, DECL_FORCE, VSPAN_ALLOC, EVAL_SUM, QUOTE_SUM);
 
     #[inline]
     pub fn bump(c: &AtomicU64) {
@@ -79,6 +79,108 @@ pub mod prof {
             s.push_str(&format!("{}={} ", n.to_lowercase(), c.load(Ordering::Relaxed)));
         }
         s.trim_end().to_owned()
+    }
+}
+
+/// match 编译的**分阶段计时**（只在 `prof::enable()` 后累加）。
+///
+/// 用来回答「同一份 match 负载，各章的时间都落在哪个阶段」：覆盖检查
+/// （`fully_covered` + `covers` 扫描）、逐臂走查+体检查、嵌套覆盖检查。
+/// 计时点在每次 `compile` 各一次，开销可忽略；计数点（`COVERS`）每次
+/// `covers` 一次，只在探针打开时累加。
+pub mod phases {
+    use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+    use std::time::Instant;
+    /// 覆盖检查（`fully_covered` + `covers` 扫描 + 缺构造子探测）。
+    pub static COVER_NS: AtomicU64 = AtomicU64::new(0);
+    /// 逐臂循环整体（walk + 臂上下文重锚 + 体检查）。
+    pub static ARMS_NS: AtomicU64 = AtomicU64::new(0);
+    /// 嵌套位置的覆盖检查。
+    pub static NEST_NS: AtomicU64 = AtomicU64::new(0);
+    /// 臂内：`walk`（模式走查 + 特化方程）。
+    pub static WALK_NS: AtomicU64 = AtomicU64::new(0);
+    /// 臂内：臂上下文重锚（`subst_cxt` + 期望类型 quote→eval）。
+    pub static HEADCK_NS: AtomicU64 = AtomicU64::new(0);
+    /// 臂内：分支体 `check`。
+    pub static BODY_NS: AtomicU64 = AtomicU64::new(0);
+    /// 臂内：`subst_cxt`（σ 施加到上下文）。
+    pub static SUBCXT_NS: AtomicU64 = AtomicU64::new(0);
+    /// 臂内：期望类型重锚（force + quote + eval）。
+    pub static REANCHOR_NS: AtomicU64 = AtomicU64::new(0);
+    /// 重锚内部：`force(wrap_sub(σ, expected))`。
+    pub static RE_FORCE_NS: AtomicU64 = AtomicU64::new(0);
+    /// 重锚内部：`quote`（Val → Tm）。
+    pub static RE_QUOTE_NS: AtomicU64 = AtomicU64::new(0);
+    /// 重锚内部：`eval`（Tm → Val）。
+    pub static RE_EVAL_NS: AtomicU64 = AtomicU64::new(0);
+    /// 走查内部：`walk_con` 入口的 `force(wrap_sub(σ, head_ty))`。
+    pub static WC_FORCE_NS: AtomicU64 = AtomicU64::new(0);
+    /// 走查内部：`sum_cases()`（构造子名单展开）。
+    pub static WC_CASES_NS: AtomicU64 = AtomicU64::new(0);
+    /// `frcs` 里重建 `Val::Sum` / `Val::SumCase` 的耗时（逐节点 wrap 的分配）。
+    pub static FRCS_SUM_NS: AtomicU64 = AtomicU64::new(0);
+    /// `covers` 调用次数（不是时间）。
+    pub static COVERS: AtomicU64 = AtomicU64::new(0);
+
+    /// 阶段可嵌套（分支体里的嵌套 match 会再进一次 `compile`）：子阶段耗时
+    /// 已计入父阶段的墙钟，若不扣掉就会重复统计（实测 depth=4 时累加值可达
+    /// 墙钟的 2.3 倍）。这里用一条「子阶段已用时间」栈，退出时扣掉子阶段，
+    /// 得到**独占**时间——各阶段之和因此 ≈ 墙钟。
+    thread_local! {
+        static CHILD: std::cell::RefCell<Vec<u64>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    pub struct G {
+        ns: &'static AtomicU64,
+        t: Option<Instant>,
+    }
+
+    /// 进入一个阶段；探针关闭时是空操作（只是返回一个零成本守卫）。
+    pub fn enter(ns: &'static AtomicU64) -> G {
+        if !on() {
+            return G { ns, t: None };
+        }
+        CHILD.with(|c| c.borrow_mut().push(0));
+        G { ns, t: Some(Instant::now()) }
+    }
+
+    impl Drop for G {
+        fn drop(&mut self) {
+            let Some(t) = self.t else { return };
+            let e = t.elapsed().as_nanos() as u64;
+            let child = CHILD.with(|c| c.borrow_mut().pop()).unwrap_or(0);
+            self.ns.fetch_add(e.saturating_sub(child), Relaxed);
+            CHILD.with(|c| {
+                let mut c = c.borrow_mut();
+                if let Some(p) = c.last_mut() { *p += e; }
+            });
+        }
+    }
+
+    /// `(名字, 累计独占纳秒/次数)`；调用方按前后两次读数做差分。
+    pub fn report() -> Vec<(&'static str, u64)> {
+        vec![
+            ("COVER_NS", COVER_NS.load(Relaxed)),
+            ("ARMS_NS", ARMS_NS.load(Relaxed)),
+            ("WALK_NS", WALK_NS.load(Relaxed)),
+            ("SUBCXT_NS", SUBCXT_NS.load(Relaxed)),
+            ("REANCHOR_NS", REANCHOR_NS.load(Relaxed)),
+            ("RE_FORCE_NS", RE_FORCE_NS.load(Relaxed)),
+            ("RE_QUOTE_NS", RE_QUOTE_NS.load(Relaxed)),
+            ("RE_EVAL_NS", RE_EVAL_NS.load(Relaxed)),
+            ("WC_FORCE_NS", WC_FORCE_NS.load(Relaxed)),
+            ("WC_CASES_NS", WC_CASES_NS.load(Relaxed)),
+            ("FRCS_SUM_NS", FRCS_SUM_NS.load(Relaxed)),
+            ("HEADCK_NS", HEADCK_NS.load(Relaxed)),
+            ("BODY_NS", BODY_NS.load(Relaxed)),
+            ("NEST_NS", NEST_NS.load(Relaxed)),
+            ("COVERS", COVERS.load(Relaxed)),
+        ]
+    }
+    /// 探针总闸（各章 `prof::enable()` 置位）。
+    #[inline]
+    pub fn on() -> bool {
+        super::prof::on()
     }
 }
 
@@ -275,6 +377,7 @@ impl std::fmt::Debug for VSpan {
 }
 
 pub fn vspan(s: Span<SmolStr>) -> VSpan {
+    prof::bump(&prof::VSPAN_ALLOC);
     VSpan::new(s)
 }
 
@@ -1157,7 +1260,9 @@ impl Infer {
                 Closure(self.frcs_env(sub, &cl.0), cl.1),
             ),
             // Sum/SumCase 的槽位同样只包裹（旧 force 不进入这些结构）
-            Val::Sum(name, params, cases) => Val::Sum(
+            Val::Sum(name, params, cases) => {
+                let _g = phases::enter(&phases::FRCS_SUM_NS);
+                Val::Sum(
                 name,
                 Rc::new(
                     params
@@ -1173,7 +1278,8 @@ impl Infer {
                         .collect::<Vec<_>>(),
                 ),
                 Rc::new((*cases).clone()),
-            ),
+            )
+            }
             Val::SumCase {
                 typ,
                 case_name,
@@ -1576,6 +1682,7 @@ impl Infer {
                 Val::Prim(name.clone(), List::new())
             }
             Tm::Sum(name, params, cases) => {
+                prof::bump(&prof::EVAL_SUM);
                 let new_params = params
                     .iter()
                     .map(|(n, v, t, i)| {
@@ -1694,6 +1801,7 @@ impl Infer {
         fn frame_new(v: Val) -> Frame {
             match v {
                 Val::Sum(name, params, cases) => {
+                    prof::bump(&prof::QUOTE_SUM);
                     let mut pending = Vec::with_capacity(params.len() * 2);
                     let mut metas = Vec::with_capacity(params.len());
                     for (n, v, t, i) in params.iter() {

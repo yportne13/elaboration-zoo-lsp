@@ -241,6 +241,12 @@ thread_local! {
 
 static PRIM_VERSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// **消融开关**：置位后 `force` 绕过 `FORCE_MEMO`（仍走 `force_inner`，语义
+/// 不变，只是不再命中缓存）。供 bench 做「有/无 force memo」的单变量对照——
+/// 用来判定 L07–L12 与 L13 的剩余差距是不是这张表造成的。默认关闭。
+pub static FORCE_MEMO_DISABLED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Upper bound on memo entries; overflow clears the whole table (bounded
 /// memory for garbage-pin scenarios, at the price of re-walking once).
 const FORCE_MEMO_CAP: usize = 1 << 20;
@@ -387,6 +393,73 @@ pub fn prof_enter(ns: &'static std::sync::atomic::AtomicU64, n: &'static std::sy
         Some(ProfGuard { ns, n, t: std::time::Instant::now(), active: true })
     } else {
         None
+    }
+}
+
+/// match 编译的分阶段计时/计数（与 L07 `prof::phases` 同口径；L13 的探针
+/// 总闸是 `FUNC_PROF.enabled`）。用于跨章对照「同一份 match 负载的时间
+/// 落在覆盖检查 / 逐臂走查 / 嵌套覆盖哪一段」。
+pub mod phases {
+    use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+    use std::time::Instant;
+    pub static COVER_NS: AtomicU64 = AtomicU64::new(0);
+    pub static ARMS_NS: AtomicU64 = AtomicU64::new(0);
+    pub static NEST_NS: AtomicU64 = AtomicU64::new(0);
+    pub static WALK_NS: AtomicU64 = AtomicU64::new(0);
+    pub static SUBCXT_NS: AtomicU64 = AtomicU64::new(0);
+    pub static REANCHOR_NS: AtomicU64 = AtomicU64::new(0);
+    pub static HEADCK_NS: AtomicU64 = AtomicU64::new(0);
+    pub static BODY_NS: AtomicU64 = AtomicU64::new(0);
+    pub static COVERS: AtomicU64 = AtomicU64::new(0);
+
+    /// 阶段可嵌套：子阶段耗时扣掉后才计入父阶段（见 L07 `prof::phases` 注）。
+    thread_local! {
+        static CHILD: std::cell::RefCell<Vec<u64>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    pub struct G {
+        ns: &'static AtomicU64,
+        t: Option<Instant>,
+    }
+
+    #[inline]
+    pub fn on() -> bool {
+        super::FUNC_PROF.enabled.load(Relaxed)
+    }
+
+    pub fn enter(ns: &'static AtomicU64) -> G {
+        if !on() {
+            return G { ns, t: None };
+        }
+        CHILD.with(|c| c.borrow_mut().push(0));
+        G { ns, t: Some(Instant::now()) }
+    }
+
+    impl Drop for G {
+        fn drop(&mut self) {
+            let Some(t) = self.t else { return };
+            let e = t.elapsed().as_nanos() as u64;
+            let child = CHILD.with(|c| c.borrow_mut().pop()).unwrap_or(0);
+            self.ns.fetch_add(e.saturating_sub(child), Relaxed);
+            CHILD.with(|c| {
+                let mut c = c.borrow_mut();
+                if let Some(p) = c.last_mut() { *p += e; }
+            });
+        }
+    }
+
+    pub fn report() -> Vec<(&'static str, u64)> {
+        vec![
+            ("COVER_NS", COVER_NS.load(Relaxed)),
+            ("ARMS_NS", ARMS_NS.load(Relaxed)),
+            ("WALK_NS", WALK_NS.load(Relaxed)),
+            ("SUBCXT_NS", SUBCXT_NS.load(Relaxed)),
+            ("REANCHOR_NS", REANCHOR_NS.load(Relaxed)),
+            ("HEADCK_NS", HEADCK_NS.load(Relaxed)),
+            ("BODY_NS", BODY_NS.load(Relaxed)),
+            ("NEST_NS", NEST_NS.load(Relaxed)),
+            ("COVERS", COVERS.load(Relaxed)),
+        ]
     }
 }
 
@@ -3200,6 +3273,9 @@ impl Infer {
                 let _g = prof_enter(&FUNC_PROF.force_leaves.0, &FUNC_PROF.force_leaves.1);
                 return self.force_inner(decl, t);
             }
+        }
+        if FORCE_MEMO_DISABLED.load(std::sync::atomic::Ordering::Relaxed) {
+            return self.force_inner(decl, t);
         }
         let key = Rc::as_ptr(t) as usize;
         let ver = PRIM_VERSION.load(std::sync::atomic::Ordering::Relaxed);

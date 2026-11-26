@@ -247,3 +247,140 @@ L07 升级前后对比：
 不影响：`chain_inheritance` 门禁、各章 lib 测试、`matchbench`（已去掉 twins 依赖）。
 
 **未解决，需要决策**：要么同步升级孪生树（改 FROZEN 区），要么接受它只在无 twins 时可用。
+
+## 9. 剩余差距的分阶段归因（2026-11-26 晚）
+
+第 8.6 节留下的 0.23 斜率差，这一节把它拆到具体代码路径。方法是给七章的
+`pattern_match::compile` 插**独占耗时探针**（子阶段耗时用一条线程本地栈扣掉，
+各阶段之和 ≈ 墙钟，实测覆盖 95%），再由 `matchbench --prof` 输出。
+
+### 9.1 探针与口径
+
+```text
+RESULT,<ch>,<depth>,<copies>,<width>,<bytes>,<ms>,<ok>
+PROFILE,<ch>,...,FORCE=.. EVAL=.. COVER_NS=.. WALK_NS=.. SUBCXT_NS=.. REANCHOR_NS=..
+                  RE_FORCE_NS=.. RE_QUOTE_NS=.. RE_EVAL_NS=.. BODY_NS=..
+```
+
+| 阶段 | 覆盖范围 |
+|---|---|
+| `COVER_NS` | `fully_covered` 的 `covers` 扫描 + 缺构造子探测 |
+| `ARMS_NS` | 臂循环自身（快照/回滚/判 `is_catch_all`），不含子阶段 |
+| `WALK_NS` | `walk`（模式走查 + 特化方程） |
+| `SUBCXT_NS` | `subst_cxt`（把 σ 施加到臂上下文） |
+| `REANCHOR_NS` | 期望类型重锚：`force` + `quote` + `eval` |
+| `RE_EVAL_NS` | 重锚内部的 `eval`（已从 `REANCHOR_NS` 独占扣除） |
+| `BODY_NS` | 分支体 `check` |
+| `NEST_NS` | 嵌套位置覆盖检查 |
+
+探针总闸：L07–L12 用 `prof::enable()`，L13 用 `FUNC_PROF.enabled`。关着时
+只是一次 `AtomicBool` 读，零行为变化。
+
+### 9.2 单次运行的完整账（depth=4, copies=16, width=128, reps=1，ms）
+
+| 阶段 | L07 | L13 | 差（L07−L13） |
+|---|---:|---:|---:|
+| **总计** | **177.7** | **114.7** | **+63.0** |
+| 覆盖检查 `COVER_NS` | 63.3 | 59.8 | +3.5 |
+| 臂循环 `ARMS_NS` | 2.7 | 5.7 | −3.0 |
+| 走查 `WALK_NS` | 27.8 | 5.3 | **+22.5** |
+| 　其中 `subst_cxt` | 11.5 | 12.3 | −0.8 |
+| 　其中 期望类型重锚 | 27.0 | 3.2 | **+23.8** |
+| 　　其中 `eval` | 28.1 | — | **+28.1** |
+| 　　其中 `quote` | 8.2 | — | +8.2 |
+| 分支体 `BODY_NS` | 17.2 | 15.1 | +2.1 |
+| 嵌套覆盖 `NEST_NS` | 0.01 | 0.005 | +0.005 |
+
+> 注：`RE_EVAL_NS` 与 `REANCHOR_NS` 是父子关系，表中「期望类型重锚」一行取
+> 父子之和的独占部分；`WALK_NS` 与 `REANCHOR_NS` 的嵌套关系同理由探针的
+> 子耗时栈扣除，故各行可直接相加（合计 169.1 ms / 177.7 ms = 95.2%）。
+
+### 9.3 结论：差距几乎全在「期望类型重锚」这一条路径
+
+**覆盖检查两边一样**（63.3 vs 59.8 ms）。这否掉了第 4.3 节的老结论——
+那时光看 `covers` 调用次数相同就推断「差别在每次调用的内部成本」，
+但升级 SmolStr 之后两边连内部成本也基本对齐了（192 万次 `covers`，
+差 3.5 ms = 1.8 ns/次）。
+
+**真正的差距是 63 ms 里的 22.5 ms 走查 + 28.1 ms 重锚 eval。** 具体形态：
+
+| | L07 | L13 |
+|---|---|---|
+| 臂上下文载体 | `Cxt` + env 槽 | `Cxt` + env 槽（**同一形态**） |
+| 期望类型重锚 | `force(wrap_sub σ expected)` → `quote` → `eval` | 只 `force`（flex 之外才 quote→eval） |
+| `Val::Sum.cases` | `Rc<Vec<VSpan>>`，`VSpan = Rc<Span<SmolStr>>` | `Rc<Vec<Span<SmolStr>>>` |
+
+两条机制叠加，都落在同一条读点上：
+
+1. **L07 的 `Val::Sum` 构造子名单是「每个名字一个 `Rc`」**（`VSpan`），
+   L13 是内联 `Span<SmolStr>`。一次 `eval` 重建 `Val::Sum` 要分配
+   `1 + cases.len() + 4*params.len()` 个 `Rc`；width=128 时每次 eval 光
+   构造子名单就是 128 次分配。实测 `VSPAN_ALLOC = 1 059 120`（每次 run）。
+2. **L07 每臂都无条件做 quote→eval 重锚**，L13 的 `ret_type` 已经在
+   `Compiler::new` 时以值形态持有（`self.ret_type`），重锚退化成一次
+   `force` + 极少数 flex 分支。
+
+把这两条分开量化（width=128，reps=1，ms）：
+
+| 项目 | L07 | L13 |
+|---|---:|---:|
+| `quote` 调用次数 | 16 416 | 14 768 |
+| `eval` 调用次数 | 9 120 | 21 347 |
+| **`eval` 在重锚里的耗时** | **28.1** | ~0 |
+| `quote` 在重锚里的耗时 | 8.2 | ~0 |
+| `frcs` 重建 `Val::Sum`/`SumCase` | 2.95 | 0 |
+| `sum_cases()` 展开 | 0.006 | 0 |
+
+L07 的 `eval` 次数反而**比 L13 少**（9 120 vs 21 347），但每次更贵——
+因为它的 `Val::Sum` 重建要付 `VSpan` 分配，而且重锚路径每臂都跑。
+
+### 9.4 斜率差的来源
+
+宽度从 8 涨到 128 时：
+
+| width | L07 重锚 | L07 总计 | L13 总计 | 占比 |
+|---:|---:|---:|---:|---:|
+| 8 | 0.089 | 3.39 | 2.41 | 2.6% |
+| 32 | 0.340 | 14.69 | 13.14 | 2.3% |
+| 64 | 0.742 | 46.06 | 31.85 | 1.6% |
+| 128 | 1.67 | 190.3 | 111.9 | 0.9% |
+
+重锚本身的**独占**时间随宽度只涨 18.7×（0.089 → 1.67），远低于总时间的
+56×——它是 O(n) 的固定每臂开销，不是超线性的来源。**斜率差来自它内部
+的 `eval`：`eval` 在重锚里 0.247 → 34.9 ms，涨 141×，与宽度超线性。**
+因为 `eval` 每层都要重建 `Val::Sum`，而构造子名单长度 = width，于是
+单次 eval 是 O(width)，每层 match 一次 → 总量 O(width · depth · copies)。
+
+### 9.5 三条可验证的修法（按预期收益排序）
+
+| 修法 | 预期 | 风险 |
+|---|---|---|
+| ①`Val::Sum.cases` 改内联 `Span<SmolStr>`（去 `VSpan`） | 直接砍掉每次 eval 的 128 次分配 | 动 L07–L12 的值层表示，牵涉 `VSpan` 的全部比较/显示代码 |
+| ②期望类型缓存在 `Compiler` 上做值级持有（学 L13 的 `self.ret_type`） | 砍掉每臂的 quote→eval 往返 | 中等；需确认 quote 重锚的语义必要性（见 pattern_match.rs 的注释论证） |
+| ③`eval` 对无 σ 引用的 `Sum` 走「复用原 `Rc`」 | 拦掉大部分重建 | 低；即 `eval` 里的 `Val::Sum(..)` 臂先查 `mentions_level` |
+
+### 9.6 探针的零开销校验
+
+探针必须默认零成本，否则测出来的账就是它自己造的。同一台机器、同一档
+（depth=4, copies=16, width=128, reps=5，ms）：
+
+| | L07 | L08 | L09 | L10 | L11 | L12 | L13 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 插桩前（`git stash` 干净树） | 178.8 | 173.3 | 174.9 | 169.0 | 167.5 | 167.6 | 102.4 |
+| 插桩后、探针关闭 | 175.8 | 170.4 | 170.5 | 171.2 | 170.7 | 171.7 | 102.9 |
+
+两行之差在连杆抖动带内（±2–3%），**探针关闭时确实是零成本**：每个探针
+只是一次 `AtomicBool` 读（`phases::on()`），守卫结构在关闭路径上直接返回
+`G { t: None }`，`Drop` 里第一个 `let Some(t) = self.t else { return }` 就退出。
+
+另有一个**消融开关** `--no-memo`（`L13::FORCE_MEMO_DISABLED`），用来回答
+「剩余差距是不是 force memo 造成的」：关掉 L13 的 memo 后 width=128 是
+98.7 ms，开着是 98.1 ms——**0.6%，方向相反且在噪声内**。memo 不是原因
+（与第 4 节的老结论一致，这里换了一种更直接的口径复核）。
+
+### 9.7 复现
+
+```text
+target_b13/release/matchbench.exe --prof --chapter all --depth 4 --copies 16 --width 128 --reps 1
+target_b13/release/matchbench.exe --prof --chapter all --depth 4 --copies 16 --width 64 --reps 3
+```

@@ -538,6 +538,8 @@ impl Compiler {
         // 特化方程 + meta 快照）是纯浪费。判据与循环体完全同源（同一个
         // `covers`），不改变判定。L07 同款实测：manydefs −34~−64%、
         // match k13 −10.7%；L13 的 match/enum 收益见 L13-AUDIT.md。
+        let ph_on = super::phases::on();
+        let g_cover = super::phases::enter(&super::phases::COVER_NS);
         let fully_covered = !constrs.is_empty()
             && constrs
                 .iter()
@@ -553,7 +555,10 @@ impl Compiler {
                     self.warnings.push(Warning::Unmatched(ctor.data.clone()));
                 }
             }
-        }        let mut unreachable: Vec<Warning> = Vec::new();
+        }
+        drop(g_cover);
+        let _g_arms = super::phases::enter(&super::phases::ARMS_NS);
+        let mut unreachable: Vec<Warning> = Vec::new();
         let mut shadowed = false;
         for (pat, body) in arms {
             if shadowed {
@@ -585,7 +590,10 @@ impl Compiler {
                     }
                 }
             }
-            let (detail, cxt_walk) = match self.walk_pat(infer, cxt, pat, &typ) {
+            let g_walk = super::phases::enter(&super::phases::WALK_NS);
+            let walked = self.walk_pat(infer, cxt, pat, &typ);
+            drop(g_walk);
+            let (detail, cxt_walk) = match walked {
                 Ok(x) => x,
                 Err(e) => {
                     // 走查失败臂的嵌套记账一并丢弃
@@ -602,6 +610,7 @@ impl Compiler {
             // `Vec[A] ?m` 各说各话（实测 can't unify for unsolved meta）。
             // 用户写法、子模式形态仍原样保留在 detail 里。
             let raw = detail_to_raw(&detail);
+            let g_sub = super::phases::enter(&super::phases::SUBCXT_NS);
             let cxt_arm = match infer.check_pm_final(
                 &cxt_walk,
                 raw,
@@ -631,6 +640,8 @@ impl Compiler {
                     arm_cxt: cxt_arm.clone(),
                 });
             }
+            drop(g_sub);
+            let g_re = super::phases::enter(&super::phases::REANCHOR_NS);
             let ret_type = match self.ret_type.as_ref() {
                 Val::Flex(_, _) => self.ret_type.clone(),
                 _ => {
@@ -638,7 +649,11 @@ impl Compiler {
                     infer.eval(&cxt_arm.decl, &cxt_arm.env, &q)
                 }
             };
-            match infer.check::<false>(&cxt_arm, body.clone(), &ret_type) {
+            drop(g_re);
+            let g_body = super::phases::enter(&super::phases::BODY_NS);
+            let checked = infer.check::<false>(&cxt_arm, body.clone(), &ret_type);
+            drop(g_body);
+            match checked {
                 Ok(ret) => self.pats.push((detail, ret)),
                 Err(e) => {
                     self.errors.push(e);
@@ -652,6 +667,8 @@ impl Compiler {
         if !self.errors.is_empty() {
             Err(std::mem::take(&mut self.errors))
         } else {
+            drop(_g_arms);
+            let _g_nest = super::phases::enter(&super::phases::NEST_NS);
             let mut out: Vec<Warning> = unreachable
                 .into_iter()
                 .chain(std::mem::take(&mut self.warnings))
@@ -695,6 +712,7 @@ impl Compiler {
                     }
                 }
             }
+            drop(_g_nest);
             Ok(out)
         }
     }
@@ -823,6 +841,9 @@ fn detail_to_raw(d: &PatternDetail) -> Raw {
 
 /// 臂是否（结构上）覆盖构造子 `ctor`（L07 `covers` 同款）。
 fn covers(pat: &Pattern, ctor: &str, ctor_names: &[SmolStr]) -> bool {
+    if super::phases::on() {
+        super::phases::COVERS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
     match pat {
         Pattern::Any(..) => true,
         Pattern::Con(name, _, _) => {

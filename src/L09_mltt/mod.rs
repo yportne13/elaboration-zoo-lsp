@@ -80,6 +80,88 @@ pub mod prof {
         s.trim_end().to_owned()
     }
 }
+/// match 编译的**分阶段计时**（只在 `prof::enable()` 后累加）。
+///
+/// 与 L07 `prof::phases` 同口径（逐章重放升级时一起复制下来）：用来回答
+/// 「同一份 match 负载，各章的时间都落在哪个阶段」——覆盖检查
+/// （`fully_covered` + `covers` 扫描）、逐臂走查+体检查、嵌套覆盖检查。
+pub mod phases {
+    use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+    use std::time::Instant;
+    /// 覆盖检查（`fully_covered` + `covers` 扫描 + 缺构造子探测）。
+    pub static COVER_NS: AtomicU64 = AtomicU64::new(0);
+    /// 逐臂循环整体（walk + 臂上下文重锚 + 体检查）。
+    pub static ARMS_NS: AtomicU64 = AtomicU64::new(0);
+    /// 嵌套位置的覆盖检查。
+    pub static NEST_NS: AtomicU64 = AtomicU64::new(0);
+    /// 臂内：`walk`（模式走查 + 特化方程）。
+    pub static WALK_NS: AtomicU64 = AtomicU64::new(0);
+    /// 臂内：臂上下文重锚（`subst_cxt` + 期望类型 quote→eval）。
+    pub static HEADCK_NS: AtomicU64 = AtomicU64::new(0);
+    /// 臂内：分支体 `check`。
+    pub static BODY_NS: AtomicU64 = AtomicU64::new(0);
+    /// 臂内：`subst_cxt`（σ 施加到上下文）。
+    pub static SUBCXT_NS: AtomicU64 = AtomicU64::new(0);
+    /// 臂内：期望类型重锚（force + quote + eval）。
+    pub static REANCHOR_NS: AtomicU64 = AtomicU64::new(0);
+    /// `covers` 调用次数（不是时间）。
+    pub static COVERS: AtomicU64 = AtomicU64::new(0);
+
+    /// 阶段可嵌套（分支体里的嵌套 match 会再进一次 `compile`）：子阶段耗时
+    /// 已计入父阶段的墙钟，若不扣掉就会重复统计（实测 depth=4 时累加值可达
+    /// 墙钟的 2.3 倍）。这里用一条「子阶段已用时间」栈，退出时扣掉子阶段，
+    /// 得到**独占**时间——各阶段之和因此 ≈ 墙钟。
+    thread_local! {
+        static CHILD: std::cell::RefCell<Vec<u64>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    pub struct G {
+        ns: &'static AtomicU64,
+        t: Option<Instant>,
+    }
+
+    /// 进入一个阶段；探针关闭时是空操作（只是返回一个零成本守卫）。
+    pub fn enter(ns: &'static AtomicU64) -> G {
+        if !on() {
+            return G { ns, t: None };
+        }
+        CHILD.with(|c| c.borrow_mut().push(0));
+        G { ns, t: Some(Instant::now()) }
+    }
+
+    impl Drop for G {
+        fn drop(&mut self) {
+            let Some(t) = self.t else { return };
+            let e = t.elapsed().as_nanos() as u64;
+            let child = CHILD.with(|c| c.borrow_mut().pop()).unwrap_or(0);
+            self.ns.fetch_add(e.saturating_sub(child), Relaxed);
+            CHILD.with(|c| {
+                let mut c = c.borrow_mut();
+                if let Some(p) = c.last_mut() { *p += e; }
+            });
+        }
+    }
+
+    /// `(名字, 累计独占纳秒/次数)`；调用方按前后两次读数做差分。
+    pub fn report() -> Vec<(&'static str, u64)> {
+        vec![
+            ("COVER_NS", COVER_NS.load(Relaxed)),
+            ("ARMS_NS", ARMS_NS.load(Relaxed)),
+            ("WALK_NS", WALK_NS.load(Relaxed)),
+            ("SUBCXT_NS", SUBCXT_NS.load(Relaxed)),
+            ("REANCHOR_NS", REANCHOR_NS.load(Relaxed)),
+            ("HEADCK_NS", HEADCK_NS.load(Relaxed)),
+            ("BODY_NS", BODY_NS.load(Relaxed)),
+            ("NEST_NS", NEST_NS.load(Relaxed)),
+            ("COVERS", COVERS.load(Relaxed)),
+        ]
+    }
+    /// 探针总闸（各章 `prof::enable()` 置位）。
+    #[inline]
+    pub fn on() -> bool {
+        super::prof::on()
+    }
+}
 
 use cxt::{Cxt, DeclEntry, Decls};
 use pretty::pretty_tm;

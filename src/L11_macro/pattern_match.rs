@@ -172,6 +172,8 @@ impl Compiler {
         // 不可能产生任何错误，整轮探测（每 ctor 一次 decl 表快照 + meta 快照 +
         // 特化方程）纯属浪费，直接跳过。判据与循环体完全同源（同一个 `covers`），
         // 不改变判定。
+        let ph_on = super::phases::on();
+        let g_cover = super::phases::enter(&super::phases::COVER_NS);
         let ctors = head_sum.sum_cases();
         let fully_covered = !ctors.is_empty()
             && ctors
@@ -189,6 +191,8 @@ impl Compiler {
                 }
             }
         }
+        drop(g_cover);
+        let _g_arms = super::phases::enter(&super::phases::ARMS_NS);
         // 逐臂下钻。一旦出现通配臂（覆盖所有取值），后续臂运行时永远不会被
         // 选中——保持用户顺序的首匹配语义，且被遮蔽的臂报「分支不可达」。
         let mut shadowed = false;
@@ -206,7 +210,10 @@ impl Compiler {
             }
             let sub_snap = self.sub.clone();
             let solvable_snap = self.solvable.clone();
-            match self.walk(infer, pat.clone(), scrut_ty.clone(), head_val.clone(), cxt)? {
+            let g_walk = super::phases::enter(&super::phases::WALK_NS);
+            let walked = self.walk(infer, pat.clone(), scrut_ty.clone(), head_val.clone(), cxt);
+            drop(g_walk);
+            match walked? {
                 Walk::Matched(detail, cxt_arm) => {
                     // 嵌套位置结算：此刻本臂全部特化方程已解出、σ 为终态，
                     // 字段 Sum 置于 σ 之下再探测才能看到索引精化（如
@@ -225,13 +232,17 @@ impl Compiler {
                     // 上下文先置于精化之下（dpm-nbe `subst sub ctx`）：env 槽
                     // 与名字表类型包 VSub，lvl/locals/pruning 不动——
                     // 槽位布局（= 运行时布局）永不漂移，读点 force 展开。
+                    let g_headck = super::phases::enter(&super::phases::HEADCK_NS);
+                    let g_sub = super::phases::enter(&super::phases::SUBCXT_NS);
                     let cxt_arm = cxt_arm.subst_cxt(&self.sub);
+                    drop(g_sub);
                     // 期望类型**重锚**到臂上下文：quote → eval 把其中所有
                     // rigid 引用重定向到臂 env（quote 时 VSub 全部推开——
                     // 精化等式一并烘焙进去）。语义上不重锚也正确（force 惰性
                     // 推开），但值层面只有重锚后，期望里的卡住 match 与
                     // meta 解物化出来的副本才有同样的 env 布局——unify 的
                     // 结构快路径（val_eq）才能命中，否则双方逐层展开不收敛。
+                    let g_re = super::phases::enter(&super::phases::REANCHOR_NS);
                     let ret_type = match infer.force(cxt_arm.decl(), wrap_sub(&self.sub, expected.clone())) {
                         t @ Val::Flex(..) => t,
                         t => {
@@ -239,7 +250,11 @@ impl Compiler {
                             infer.eval(cxt_arm.decl(), &cxt_arm.env, &tm)
                         }
                     };
-                    let tm = infer.check(&cxt_arm, body.clone(), ret_type)?;
+                    drop(g_re);
+                    let g_body = super::phases::enter(&super::phases::BODY_NS);
+                    let tm = infer.check(&cxt_arm, body.clone(), ret_type);
+                    drop(g_body);
+                    let tm = tm?;
                     self.pats.push((detail, tm));
                     if is_catch_all(pat, &ctor_names) {
                         shadowed = true;
@@ -282,6 +297,8 @@ impl Compiler {
             self.solvable = solvable_snap;
             self.cur_path.clear();
         }
+        drop(_g_arms);
+        let _g_nest = super::phases::enter(&super::phases::NEST_NS);
         // 嵌套位置的覆盖检查（沿模式下钻逐节点）：每条记账在记录臂的
         // 实例化（σ/solvable/lvl 快照）下探测字段 Sum 的可达构造子；
         // 覆盖集 = 已走查臂的 PatternDetail 沿路径的结构贡献（var/Any =
@@ -323,6 +340,7 @@ impl Compiler {
                 }
             }
         }
+        drop(_g_nest);
         if self.errors.is_empty() {
             Ok(())
         } else {
@@ -827,6 +845,9 @@ impl Compiler {
 
 /// 顶层覆盖判定：通配 / 变量模式覆盖一切；Con 只覆盖同名构造子。
 fn covers(pat: &Pattern, ctor: &str, ctor_names: &[SmolStr]) -> bool {
+    if super::prof::on() {
+        super::phases::COVERS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
     match pat {
         Pattern::Any(..) => true,
         Pattern::Con(name, _, _) => !ctor_names.iter().any(|c| c.as_str() == name.data.as_str()) || name.data == ctor,
