@@ -1526,3 +1526,44 @@ sigma branch hits over 170 files: 57
 
 三个文件（`elaboration.rs` / `mod.rs` / `l12_l13_verdict_parity.rs`）已 `git checkout` 恢复，
 oracle 回到 PASS。探针代码不入库——结论入文档。
+
+## 38 第 24 轮：目标项「每步递归入口按 acc 包两侧」收口
+
+### 38.1 本轮填的缺口
+
+目标文本要求「每步递归入口按 `acc` 包两侧」。此前这条只在 `unify_pm` 的**函数入口**生效（`bb03431c`）。
+但 `pattern_match::unify_indices` 虽然接了 `spec` 参数（`e0ca87f5`），它内部的方程仍传 `None`——
+也就是说**探测期的方程实际上没有进入累积 σ**。
+
+本步改为 `Some(spec)`（`734feb7a`）。
+
+### 38.2 验证
+
+| 判据 | 结果 |
+|---|---|
+| oracle | PASS（binary 07:57:00 > src 07:53:31、examples 5/5、638 测试名） |
+| `verdict_parity` | 147/170（23 差异，与基线**完全相同**） |
+| L13 lib | 625 passed / 13 ignored |
+| chain / inherited / necessity | 2 / 22 / 1 全部 passed |
+
+### 38.3 为什么零变化（不是「没生效」）
+
+第 23 轮的探针已证明 σ 分支在 170 语料上触发 57 次，所以这里不是「分支没跑」。
+零变化的正确解释是：**探测期的 `acc` 只影响本子句内方程之间的可见性，不写回 `Compiler::sub`**（§24.2 的只读约定），
+而本子句内方程的先后顺序在现有语料上不产生可观测差异。
+
+这与 §37 的「σ 路径等价于急切路径」一致：σ 在 L13 里能安全承载解，但它的**传播边界**
+（哪里可写、哪里只读）决定了可观测行为。
+
+### 38.4 B3' 目标项逐条结账
+
+| 目标项 | 状态 | 证据 |
+|---|---|---|
+| `unify_pm` 穿 `SpecSolve`（`solvable`+`acc`） | ✅ | `f117cd7b` `8879324d` |
+| **每步递归入口按 `acc` 包两侧** | ✅ | `bb03431c` + **本轮 `734feb7a`** |
+| 解入 `acc` 前做两级 occurs 守卫 | ✅ | `0129496a`（`mentions_lvl` + `occurs_transitive`） |
+| `check_pm` 返回 `Rc<Subst>` | ✅ | `6f1be218`，且 §37 证明与急切路径等价 |
+| `check_pm_final` 返回 `Rc<Subst>` | ❌ | 三条路实测否决（§31/§34/§35） |
+| 删除 `update_cxt`/`refresh` 的 env 槽改写 | ❌ | 与语义冲突，§36 红绿对照锁定 |
+
+**4/6 已完成，2 项经充分实验证明不可行。**
