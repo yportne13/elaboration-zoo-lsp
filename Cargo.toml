@@ -88,6 +88,12 @@ required-features = ["twins"]
 test = false
 
 [[bin]]
+name = "matchbench"
+path = "src/bin/matchbench.rs"
+required-features = ["twins"]
+test = false
+
+[[bin]]
 name = "l13bench"
 path = "src/bin/l13bench.rs"
 test = false

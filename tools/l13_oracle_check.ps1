@@ -58,8 +58,15 @@ if ($LASTEXITCODE -ne 0) {
 }
 if (-not (Test-Path $bin)) { Write-Host 'FAIL: binary missing' -ForegroundColor Red; exit 1 }
 $binTime = (Get-Item $bin).LastWriteTime
-$srcTime = (Get-ChildItem (Join-Path $root 'src') -Recurse -Filter *.rs |
-    Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime
+# Only sources typort actually depends on: the lib tree plus src/bin/cli.rs.
+# Other bins (bench harnesses) are separate compilation units -- their edits do
+# not rebuild typort, so counting them here gives false 'stale binary' alarms.
+$srcFiles = @(
+    Get-ChildItem (Join-Path $root 'src') -Recurse -Filter *.rs |
+        Where-Object { $_.DirectoryName -ne (Join-Path $root 'src/bin') }
+    Get-Item (Join-Path $root 'src/bin/cli.rs')
+)
+$srcTime = ($srcFiles | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime
 if ($binTime -lt $srcTime) {
     Write-Host ('FAIL: binary ' + $binTime.ToString('HH:mm:ss') + ' older than source ' + $srcTime.ToString('HH:mm:ss')) -ForegroundColor Red
     exit 1
