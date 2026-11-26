@@ -610,7 +610,9 @@ impl Compiler {
             ) {
                 // L13 的 check_pm_final 返回**精化后的 Cxt**（update_cxt 血统，
                 // 不是 σ）——直接当臂上下文用。
-                Ok((_, cxt)) => cxt,
+                // sigma is recovered from the refined env but NOT consumed here --
+                // the arm context keeps using the eager Cxt (see elaboration notes).
+                Ok((_, cxt, _sigma)) => cxt,
                 Err(e) => {
                     // 荒谬臂（特化失败）：其嵌套位置不产生覆盖义务——臂本身
                     // 的特化错误已承担语义（L07 荒谬臂 clear pending 同款）

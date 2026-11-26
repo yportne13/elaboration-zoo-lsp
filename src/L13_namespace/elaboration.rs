@@ -676,7 +676,7 @@ impl Infer {
     ) -> Result<(Rc<Tm>, Rc<VTy>), Error> {
         act.and_then(|(t, va)| self.insert_until_go(cxt, name, t, va))
     }
-    pub fn check_pm_final(&mut self, cxt: &Cxt, t: Raw, a: Rc<Val>, ori: Rc<Val>) -> Result<(Rc<Tm>, Cxt), Error> {
+    pub fn check_pm_final(&mut self, cxt: &Cxt, t: Raw, a: Rc<Val>, ori: Rc<Val>) -> Result<(Rc<Tm>, Cxt, Rc<super::Subst>), Error> {
         let t_span = t.to_span();
         let a = match ori.as_ref() {
             Val::SumCase { typ, .. } => typ.clone(),
@@ -690,7 +690,6 @@ impl Infer {
         // update_cxt path here (a sigma-less comparison was tried and failed with
         // spine mismatch, see docs plan section 19), but seed the solvable set so
         // that when sigma threading lands it already has the right domain.
-        let _solvable = cxt.bind_slots();
         // B3 conclusion (rounds 19-25, four independent experiments):
         // this equation MUST stay on the eager carrier. `ori` is the raw ctor
         // return type; `tmv` is eval()d in the arm env and therefore already
@@ -702,7 +701,12 @@ impl Infer {
         // the arm body is checked, which a lazy substitution cannot express.
         let _solvable = cxt.bind_slots();
         let new_cxt = self.unify_pm(&cxt, &ori, &tmv, None, t_span).unwrap_or(cxt);
-        Ok((t_inferred, new_cxt))
+        // The refinement this equation produced lives in the env slots, not in a
+        // substitution. Callers that want the sigma form get it recovered here
+        // (eval->env is the eager carrier; sub_from_env reads it back). NOT
+        // consumed at this entry point -- same treatment as check_pm (round 19).
+        let sigma = new_cxt.sub_from_env();
+        Ok((t_inferred, new_cxt, sigma))
     }
     /// Pattern-matching version of `infer_expr`.
     ///
