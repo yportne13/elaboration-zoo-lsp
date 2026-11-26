@@ -633,7 +633,7 @@ impl Infer {
             }
             Val::U(x) => Ok(Tm::U(x)),
             Val::LiteralType => Ok(Tm::LiteralType),
-            Val::LiteralIntro(x) => Ok(Tm::LiteralIntro(super::tmspan(&x))),
+            Val::LiteralIntro(x) => Ok(Tm::LiteralIntro(x.clone())),
             Val::Prim(name, sp) => self.rename_sp(decl, pren, Tm::Prim(name), &sp),
             Val::Match(val, env, cases, pending) => {
                 // 分支体是裸 Tm：先在"捕获 env + fresh rigid 槽"下重新求值
@@ -788,7 +788,7 @@ impl Infer {
                 .collect();
             self.trait_solver.clean();
             if let Some(instance_name) = self.trait_solver.synth(Assertion {
-                name: name.data.clone(),
+                name: name.data.to_string(),
                 arguments: args.clone(),
             }) {
                 let ret = self.infer_expr(cxt, Raw::Var(instance_name));
@@ -1377,11 +1377,11 @@ mod deep_rename_tests {
         const N: usize = 10_000;
         fn nat_sum() -> Val {
             Val::Sum(
-                super::super::vspan(super::super::empty_span("Nat".to_string())),
+                super::super::vspan(super::super::empty_span(SmolStr::new("Nat"))),
                 std::rc::Rc::new(vec![]),
                 std::rc::Rc::new(vec![
-                    super::super::vspan(super::super::empty_span("zero".to_string())),
-                    super::super::vspan(super::super::empty_span("succ".to_string())),
+                    super::super::vspan(super::super::empty_span(SmolStr::new("zero"))),
+                    super::super::vspan(super::super::empty_span(SmolStr::new("succ"))),
                 ]),
             )
         }
@@ -1389,7 +1389,7 @@ mod deep_rename_tests {
         let mut keep: Vec<std::rc::Rc<Val>> = Vec::with_capacity(N);
         let mut v = Val::SumCase {
             typ: std::rc::Rc::clone(&nat),
-            case_name: super::super::vspan(super::super::empty_span("zero".to_string())),
+            case_name: super::super::vspan(super::super::empty_span(SmolStr::new("zero"))),
             datas: std::rc::Rc::new(vec![]),
         };
         for _ in 0..N {
@@ -1397,9 +1397,9 @@ mod deep_rename_tests {
             keep.push(std::rc::Rc::clone(&inner));
             v = Val::SumCase {
                 typ: std::rc::Rc::clone(&nat),
-                case_name: super::super::vspan(super::super::empty_span("succ".to_string())),
+                case_name: super::super::vspan(super::super::empty_span(SmolStr::new("succ"))),
                 datas: std::rc::Rc::new(vec![(
-                    super::super::vspan(super::super::empty_span("x".to_string())),
+                    super::super::vspan(super::super::empty_span(SmolStr::new("x"))),
                     inner,
                     Icit::Expl,
                 )]),

@@ -107,7 +107,8 @@ pub(crate) fn span_union(a: Span<()>, b: Span<()>) -> Span<()> {
 /// Raw 的源码区间（折叠到能拿到的最外叶子）。只依赖 AST 结构。
 pub(crate) fn raw_span(t: &Raw) -> Span<()> {
     match t {
-        Raw::Var(s) | Raw::LiteralIntro(s) => s.to_span(),
+        Raw::Var(s) => s.to_span(),
+        Raw::LiteralIntro(s) => s.to_span(),
         Raw::Obj(x, f) => span_union(raw_span(x), f.to_span()),
         Raw::Lam(x, _, body) => span_union(x.to_span(), raw_span(body)),
         Raw::App(f, a, _) => span_union(raw_span(f), raw_span(a)),
@@ -160,9 +161,9 @@ pub(crate) fn inlay_label(rendered: &str) -> String {
 /// decl 表键一致）；println 无名。
 pub(crate) fn failed_decl_names(t: &Decl) -> Vec<String> {
     match t {
-        Decl::Def { name, .. } => vec![name.data.clone()],
+        Decl::Def { name, .. } => vec![name.data.to_string()],
         Decl::Enum { name, cases, .. } => {
-            let mut v = vec![name.data.clone()];
+            let mut v = vec![name.data.to_string()];
             v.extend(cases.iter().map(|(c, _, _)| format!("{}.{}", name.data, c.data)));
             v
         }
@@ -170,7 +171,7 @@ pub(crate) fn failed_decl_names(t: &Decl) -> Vec<String> {
         // L10+ 的 trait 声明（方法集 / 实例）：失败 decl 记 trait 名 + 方法名，
         // 与 decl 表里的限定键口径一致（T.m）。
         Decl::TraitDecl { name, methods, .. } => {
-            let mut v = vec![name.data.clone()];
+            let mut v = vec![name.data.to_string()];
             v.extend(methods.iter().map(|(m, _, _)| format!("{}.{}", name.data, m.data)));
             v
         }

@@ -1,3 +1,4 @@
+use smol_str::SmolStr;
 use std::rc::Rc;
 
 use crate::{list::List, parser_lib::Span};
@@ -15,8 +16,8 @@ pub type Pruning = List<Option<Icit>>;
 #[derive(Debug, Clone)]
 pub enum Locals {
     Here,
-    Define(Rc<Locals>, Span<String>, Ty, Tm),
-    Bind(Rc<Locals>, Span<String>, Ty),
+    Define(Rc<Locals>, Span<SmolStr>, Ty, Tm),
+    Bind(Rc<Locals>, Span<SmolStr>, Ty),
 }
 
 use super::Tm;
