@@ -1,3 +1,4 @@
+use smol_str::SmolStr;
 use crate::parser_lib::Span;
 
 #[derive(Clone, Debug, Copy, PartialEq, Eq, Hash)]
@@ -8,14 +9,14 @@ pub enum Icit {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Either {
-    Name(Span<String>),
+    Name(Span<SmolStr>),
     Icit(Icit),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Pattern {
     Any(Span<()>, Icit),
-    Con(Span<String>, Vec<Pattern>, Icit),
+    Con(Span<SmolStr>, Vec<Pattern>, Icit),
 }
 
 impl Pattern {
@@ -34,7 +35,7 @@ impl Pattern {
         match self {
             Pattern::Any(..) => "_".to_owned(),
             Pattern::Con(name, subs, _) => {
-                let mut s = name.data.clone();
+                let mut s = name.data.to_string();
                 if !subs.is_empty() {
                     s.push('(');
                     for (i, sub) in subs.iter().enumerate() {
@@ -73,37 +74,37 @@ impl Pattern {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Raw {
-    Var(Span<String>),
-    Obj(Box<Raw>, Span<String>),
-    Lam(Span<String>, Either, Box<Raw>),
+    Var(Span<SmolStr>),
+    Obj(Box<Raw>, Span<SmolStr>),
+    Lam(Span<SmolStr>, Either, Box<Raw>),
     App(Box<Raw>, Box<Raw>, Either),
     U,
-    Pi(Span<String>, Icit, Box<Raw>, Box<Raw>),
-    Let(Span<String>, Box<Raw>, Box<Raw>, Box<Raw>),
+    Pi(Span<SmolStr>, Icit, Box<Raw>, Box<Raw>),
+    Let(Span<SmolStr>, Box<Raw>, Box<Raw>, Box<Raw>),
     Hole,
     LiteralIntro(Span<String>),
     Match(Box<Raw>, Vec<(Pattern, Raw)>),
-    Sum(Span<String>, Vec<(Span<String>, Icit, Raw)>, Vec<Span<String>>),
+    Sum(Span<SmolStr>, Vec<(Span<SmolStr>, Icit, Raw)>, Vec<Span<SmolStr>>),
     SumCase {
         typ: Box<Raw>,
-        case_name: Span<String>,
-        datas: Vec<(Span<String>, Raw, Icit)>,
+        case_name: Span<SmolStr>,
+        datas: Vec<(Span<SmolStr>, Raw, Icit)>,
     },
 }
 
 #[derive(Clone, Debug)]
 pub enum Decl {
     Def {
-        name: Span<String>,
-        params: Vec<(Span<String>, Raw, Icit)>,
+        name: Span<SmolStr>,
+        params: Vec<(Span<SmolStr>, Raw, Icit)>,
         ret_type: Raw,
         body: Raw,
     },
     Println(Raw),
     Enum {
-        name: Span<String>,
-        params: Vec<(Span<String>, Raw, Icit)>,
-        cases: Vec<(Span<String>, Vec<(Span<String>, Raw, Icit)>, Option<Raw>)>,
+        name: Span<SmolStr>,
+        params: Vec<(Span<SmolStr>, Raw, Icit)>,
+        cases: Vec<(Span<SmolStr>, Vec<(Span<SmolStr>, Raw, Icit)>, Option<Raw>)>,
     },
 }
 
@@ -111,7 +112,7 @@ impl Decl {
     /// 声明名（调试用）
     pub fn name(&self) -> String {
         match self {
-            Decl::Def { name, .. } | Decl::Enum { name, .. } => name.data.clone(),
+            Decl::Def { name, .. } | Decl::Enum { name, .. } => name.data.to_string(),
             Decl::Println(_) => "<println>".to_owned(),
         }
     }

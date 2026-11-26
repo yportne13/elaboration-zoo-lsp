@@ -4,6 +4,7 @@
 //! 值——因此 `def g(n: Nat): T n` 显示 `(n: Nat) → T n` 而不是展开的 `match n { … }`。
 //! 无注解（`ret_type == Hole`）仍走值渲染（那里没有源码可打）。
 
+use smol_str::SmolStr;
 use super::parser::syntax::{Decl, Either, Icit, Pattern, Raw};
 
 const ATP: u8 = 3; // atom
@@ -163,7 +164,7 @@ fn pattern(p: &Pattern) -> String {
 
 /// 从 def 的签名（params + ret_type）拼出源码形态的类型串。
 pub fn def_type_from_source(
-    params: &[(crate::parser_lib::Span<String>, Raw, Icit)],
+    params: &[(crate::parser_lib::Span<SmolStr>, Raw, Icit)],
     ret: &Raw,
 ) -> String {
     let mut out = String::new();

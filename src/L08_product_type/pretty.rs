@@ -3,6 +3,7 @@
 //! 打印出完整的分支结构。相比 L07a 修复：`AppPruning` 不再 `todo!()`，
 //! `SumCase.typ` 不是展开的 `Tm::Sum` 时也不再 panic（沿 App 链找头名）。
 
+use smol_str::SmolStr;
 use crate::list::List;
 
 use super::{parser::syntax::Icit, Tm};
@@ -41,18 +42,18 @@ fn paren(f: String) -> String {
     format!("({f})")
 }
 
-fn fresh(ns: List<String>, suggested: &str) -> String {
+fn fresh(ns: List<SmolStr>, suggested: &str) -> SmolStr {
     if suggested == "_" {
-        return "_".to_string();
+        return SmolStr::new("_");
     }
     let mut candidate = suggested.to_string();
-    while ns.iter().any(|x| *x == candidate) {
+    while ns.iter().any(|x| x.as_str() == candidate.as_str()) {
         candidate = format!("{candidate}'");
     }
-    candidate
+    SmolStr::new(&candidate)
 }
 
-fn go_ix(ns: List<String>, ix: u32) -> String {
+fn go_ix(ns: List<SmolStr>, ix: u32) -> String {
     let mut current_ix = ix;
     let mut current_ns = ns.iter();
     while let Some(name) = current_ns.next() {
@@ -70,7 +71,7 @@ fn go_ix(ns: List<String>, ix: u32) -> String {
 
 /// `AppPruning` 只显示内核（它几乎总是 fresh_meta 的 `?m` 包装，
 /// pruning 只表示"元变量取哪些可见参数"，对显示无益）。
-fn go_app_pruning(prec: i32, ns: List<String>, t: &Tm) -> String {
+fn go_app_pruning(prec: i32, ns: List<SmolStr>, t: &Tm) -> String {
     pretty_tm(prec, ns, t)
 }
 
@@ -78,7 +79,7 @@ fn go_app_pruning(prec: i32, ns: List<String>, t: &Tm) -> String {
 /// 旧实现逐节点 `format!` 从子串拼新串——深度 d 处的字符串上下文 O(d)，
 /// 嵌套链全链 O(n²) 字节复制（perf-debt 剩余机会 9，同 L11/L12 P3 模板）。
 /// 输出与旧实现逐字节一致。
-fn go(prec: i32, ns: List<String>, tm: &Tm, out: &mut String) {
+fn go(prec: i32, ns: List<SmolStr>, tm: &Tm, out: &mut String) {
     // 显示层定深截断：深值不爆栈（见 `MAX_DEPTH`）
     let depth = DEPTH.with(|d| d.get());
     if depth >= MAX_DEPTH {
@@ -145,7 +146,7 @@ fn go(prec: i32, ns: List<String>, tm: &Tm, out: &mut String) {
             if is_anonymous {
                 go(APPP, ns.clone(), a, out);
                 out.push_str(" → ");
-                go(PIP, ns.prepend("_".to_owned()), b, out);
+                go(PIP, ns.prepend(SmolStr::new("_")), b, out);
             } else {
                 let x = fresh(ns.clone(), &name_span.data);
                 let new_ns = ns.prepend(x.clone());
@@ -214,8 +215,8 @@ fn go(prec: i32, ns: List<String>, tm: &Tm, out: &mut String) {
             // L08：struct 脱糖产生的构造子名自带 `{类型名}.mk` 前缀——已含
             // 头名时不再叠 `::`，显示与源码写法 `Point.mk(...)` 对齐。
             let head = sum_head_name(typ);
-            let ctor = if case_name.data.starts_with(&format!("{head}.")) {
-                case_name.data.clone()
+            let ctor: String = if case_name.data.starts_with(&format!("{head}.")) {
+                case_name.data.to_string()
             } else {
                 format!("{head}::{}", case_name.data)
             };
@@ -263,7 +264,7 @@ fn go(prec: i32, ns: List<String>, tm: &Tm, out: &mut String) {
     }
 }
 
-pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {
+pub fn pretty_tm(prec: i32, ns: List<SmolStr>, tm: &Tm) -> String {
     let mut out = String::with_capacity(64);
     go(prec, ns, tm, &mut out);
     out
@@ -273,7 +274,7 @@ pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {
 /// 沿 App 链找头部的 Sum/Decl 名字；找不到就显示 `?`。
 fn sum_head_name(tm: &Tm) -> String {
     match tm {
-        Tm::Sum(name, _, _) => name.data.clone(),
+        Tm::Sum(name, _, _) => name.data.to_string(),
         Tm::Decl(name) => name.to_string(),
         Tm::App(f, _, _) => sum_head_name(f),
         _ => "?".to_owned(),
@@ -283,10 +284,10 @@ fn sum_head_name(tm: &Tm) -> String {
 fn pretty_pattern(pat: &super::PatternDetail) -> String {
     match pat {
         super::PatternDetail::Any(_) => "_".to_owned(),
-        super::PatternDetail::Bind(name) => name.data.clone(),
+        super::PatternDetail::Bind(name) => name.data.to_string(),
         super::PatternDetail::Con(name, subs) => {
             if subs.is_empty() {
-                name.data.clone()
+                name.data.to_string()
             } else {
                 format!(
                     "{}({})",
@@ -302,12 +303,12 @@ fn pretty_pattern(pat: &super::PatternDetail) -> String {
 }
 
 /// 分支体的显示名字表：按 bind_count 前置哑名（Con 自身占一槽，名字未知用 `_`）。
-fn prepend_pattern_ns(ns: List<String>, pat: &super::PatternDetail) -> List<String> {
+fn prepend_pattern_ns(ns: List<SmolStr>, pat: &super::PatternDetail) -> List<SmolStr> {
     match pat {
-        super::PatternDetail::Any(_) => ns.prepend("_".to_owned()),
+        super::PatternDetail::Any(_) => ns.prepend(SmolStr::new("_")),
         super::PatternDetail::Bind(name) => ns.prepend(name.data.clone()),
         super::PatternDetail::Con(_, subs) => {
-            let ns = ns.prepend("_".to_owned());
+            let ns = ns.prepend(SmolStr::new("_"));
             subs.iter().rev().fold(ns, |ns, sub| prepend_pattern_ns(ns, sub))
         }
     }
