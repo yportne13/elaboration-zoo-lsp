@@ -90,7 +90,6 @@ test = false
 [[bin]]
 name = "matchbench"
 path = "src/bin/matchbench.rs"
-required-features = ["twins"]
 test = false
 
 [[bin]]
