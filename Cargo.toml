@@ -92,6 +92,13 @@ name = "matchbench"
 path = "src/bin/matchbench.rs"
 test = false
 
+# 非 match 语料基准（church / strchain / global / enum / natadd）：同样只跑
+# 参考版，不需要孪生引擎。与 matchbench 配对，覆盖「改前改后」的全部负载面。
+[[bin]]
+name = "workbench"
+path = "src/bin/workbench.rs"
+test = false
+
 [[bin]]
 name = "l13bench"
 path = "src/bin/l13bench.rs"
