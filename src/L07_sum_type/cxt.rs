@@ -392,7 +392,10 @@ impl Cxt {
     /// `(名字 → 本层级/类型)` 并把旧值追加进轨迹；子上下文只带新的
     /// `name_mark`（= 轨迹长度）。语义等价于旧持久表（条目仍是共享 Rc，
     /// 无 `Val` 深拷贝），但不再每次 `Rc::make_mut` 深拷整张表。
-    pub fn bind(&self, x: Span<SmolStr>, a_quote: Tm, a: VTy) -> Self {
+    ///
+    /// `a_quote` 是 `Rc<Tm>` 而不是裸 `Tm`：它在每个臂上被 clone 进 `Locals`，
+    /// 裸 `Tm` 的 clone 是深拷（宽 `Sum` 类型有 O(width) 个构造子名）。
+    pub fn bind(&self, x: Span<SmolStr>, a_quote: Rc<Tm>, a: VTy) -> Self {
         let name_mark = {
             let mut s = self.names.borrow_mut();
             s.unwind(self.name_mark);
@@ -411,7 +414,7 @@ impl Cxt {
     }
 
     /// 引入一个"编译器插入"的绑定器（非 λ 项 against 隐式 Π 时）：不进名字表。
-    pub fn new_binder(&self, x: Span<SmolStr>, a_quote: Tm) -> Self {
+    pub fn new_binder(&self, x: Span<SmolStr>, a_quote: Rc<Tm>) -> Self {
         Cxt {
             env: self.env.prepend(Val::vvar(self.lvl)),
             lvl: self.lvl + 1,
@@ -424,7 +427,7 @@ impl Cxt {
     }
 
     /// let 绑定：env 压入定义的值，pruning 对应槽为 None（后续隐式插入不再经过它）。
-    pub fn define(&self, x: Span<SmolStr>, t: Tm, vt: Val, a: Ty, va: VTy) -> Self {
+    pub fn define(&self, x: Span<SmolStr>, t: Rc<Tm>, vt: Val, a: Rc<Ty>, va: VTy) -> Self {
         let name_mark = {
             let mut s = self.names.borrow_mut();
             s.unwind(self.name_mark);

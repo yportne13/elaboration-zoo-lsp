@@ -952,7 +952,7 @@ impl Infer {
                     // 对不上时 go_ix 有 `@i` 兜底。
                     &cxt.bind(
                         super::tmspan(x),
-                        self.quote(decl, l, (**a).clone()),
+                        Rc::new(self.quote(decl, l, (**a).clone())),
                         (**a).clone(),
                     ),
 

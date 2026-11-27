@@ -16,8 +16,8 @@ pub type Pruning = List<Option<Icit>>;
 #[derive(Debug, Clone)]
 pub enum Locals {
     Here,
-    Define(Rc<Locals>, Span<SmolStr>, Ty, Tm),
-    Bind(Rc<Locals>, Span<SmolStr>, Ty),
+    Define(Rc<Locals>, Span<SmolStr>, Rc<Ty>, Rc<Tm>),
+    Bind(Rc<Locals>, Span<SmolStr>, Rc<Ty>),
 }
 
 use super::Tm;
@@ -26,11 +26,11 @@ pub fn close_ty(mcl: Locals, b: Ty) -> Ty {
     match mcl {
         Locals::Here => b,
         Locals::Bind(mcl, x, a) => {
-            close_ty(mcl.as_ref().clone(), Tm::Pi(x, Icit::Expl, Rc::new(a), Rc::new(b)))
+            close_ty(mcl.as_ref().clone(), Tm::Pi(x, Icit::Expl, a, Rc::new(b)))
         }
         Locals::Define(mcl, x, a, t) => close_ty(
             mcl.as_ref().clone(),
-            Tm::Let(x, Box::new(a), Box::new(t), Box::new(b)),
+            Tm::Let(x, Box::new(Rc::unwrap_or_clone(a)), Box::new(Rc::unwrap_or_clone(t)), Box::new(b)),
         ),
     }
 }

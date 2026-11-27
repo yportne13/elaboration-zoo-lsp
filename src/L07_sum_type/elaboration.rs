@@ -79,6 +79,7 @@ impl Infer {
     }
 
     pub fn check(&mut self, cxt: &Cxt, t: Raw, a: Val) -> Result<Tm, Error> {
+        let _g_check = super::phases::enter(&super::phases::CHECK_NS);
         let decl = cxt.decl();
         match (t, self.force(decl, a)) {
             // λ 检查：命名隐式 `[x = e]` 对准同名隐式 Π；显式对显式
@@ -87,7 +88,7 @@ impl Infer {
                     || i == Either::Icit(i_t) =>
             {
                 let body = self.check(
-                    &cxt.bind(x.clone(), self.quote(decl, cxt.lvl, (*a).clone()), (*a).clone()),
+                    &cxt.bind(x.clone(), Rc::new(self.quote(decl, cxt.lvl, (*a).clone())), (*a).clone()),
                     *t,
                     self.closure_apply(decl, &b_closure, Val::vvar(cxt.lvl)),
                 )?;
@@ -96,7 +97,7 @@ impl Infer {
             // 非 λ 项 against 隐式 Π：插入一个隐式绑定器
             (t, Val::Pi(x, Icit::Impl, a, b_closure)) => {
                 let body = self.check(
-                    &cxt.new_binder(super::tmspan(&x), self.quote(decl, cxt.lvl, (*a).clone())),
+                    &cxt.new_binder(super::tmspan(&x), Rc::new(self.quote(decl, cxt.lvl, (*a).clone()))),
                     t,
                     self.closure_apply(decl, &b_closure, Val::vvar(cxt.lvl)),
                 )?;
@@ -126,7 +127,7 @@ impl Infer {
                     (a_checked, va, t_checked, vt)
                 };
                 let u_checked = self.check(
-                    &cxt.define(x.clone(), t_checked.clone(), vt, a_checked.clone(), va),
+                    &cxt.define(x.clone(), Rc::new(t_checked.clone()), vt, Rc::new(a_checked.clone()), va),
                     *u,
                     a_prime,
                 )?;
@@ -216,7 +217,7 @@ impl Infer {
                 // `t` 已经按值传入，直接 move `a`/`b`，语义不变。
                 let a_checked = self.check(cxt, *a, Val::U)?;
                 let a_eval = self.eval(cxt.decl(), &cxt.env, &a_checked);
-                let cxt2 = cxt.bind(x.clone(), self.quote(cxt.decl(), cxt.lvl, a_eval.clone()), a_eval);
+                let cxt2 = cxt.bind(x.clone(), Rc::new(self.quote(cxt.decl(), cxt.lvl, a_eval.clone())), a_eval);
                 self.ty_precheck(&cxt2, &b)?;
                 let b_checked = self.check(&cxt2, *b, Val::U)?;
                 Ok(Tm::Pi(x, i, Rc::new(a_checked), Rc::new(b_checked)))
@@ -715,7 +716,7 @@ impl Infer {
             Raw::Lam(x, Either::Icit(i), t) => {
                 let new_meta = self.fresh_meta(decl, cxt, Val::U);
                 let a = self.eval(decl, &cxt.env, &new_meta);
-                let new_cxt = cxt.bind(x.clone(), self.quote(decl, cxt.lvl, a.clone()), a.clone());
+                let new_cxt = cxt.bind(x.clone(), Rc::new(self.quote(decl, cxt.lvl, a.clone())), a.clone());
                 let infered = self.infer_expr(&new_cxt, *t);
                 let (t_inferred, b) = self.insert(&new_cxt, infered)?;
                 let b_closure = self.close_val(decl, cxt, b);
@@ -762,7 +763,7 @@ impl Infer {
                                 decl,
                                 &cxt.bind(
                                     empty_span(SmolStr::new("x")),
-                                    self.quote(decl, cxt.lvl, a.clone()),
+                                    Rc::new(self.quote(decl, cxt.lvl, a.clone())),
                                     a.clone(),
                                 ),
                                 Val::U,
@@ -795,7 +796,7 @@ impl Infer {
                 let a_checked = self.check_ty(cxt, *a)?;
                 let a_eval = self.eval(decl, &cxt.env, &a_checked);
                 let b_checked = self.check_ty(
-                    &cxt.bind(x.clone(), self.quote(decl, cxt.lvl, a_eval.clone()), a_eval),
+                    &cxt.bind(x.clone(), Rc::new(self.quote(decl, cxt.lvl, a_eval.clone())), a_eval),
                     *b,
                 )?;
                 Ok((
@@ -812,9 +813,9 @@ impl Infer {
                 let (u_inferred, b) = self.infer_expr(
                     &cxt.define(
                         x.clone(),
-                        t_checked.clone(),
+                        Rc::new(t_checked.clone()),
                         vt.clone(),
-                        a_checked.clone(),
+                        Rc::new(a_checked.clone()),
                         va,
                     ),
                     *u,

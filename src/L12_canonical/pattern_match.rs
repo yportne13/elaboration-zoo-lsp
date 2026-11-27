@@ -72,6 +72,11 @@ pub struct Compiler {
     /// 第一条臂级错误对应的源码位置（P10）：`errors` 一次报全，位置取首条，
     /// 供 LSP 把诊断指到出问题的模式上。
     first_span: Option<Span<()>>,
+    /// 头部 scrutinee 类型的 `quote` 缓存（**每 match 一次**；按构造子名单的
+    /// `Rc` 地址索引）。`walk_con` 给 head 槽绑定时要一个 `a_quote: Rc<Tm>`，
+    /// 但同一 match 的所有臂共享同一 `head_ty`——宽 `Sum` 的 quote 是 O(width)，
+    /// 逐臂重算会把总量放大成 O(width²)。
+    head_ty_quote: Option<(usize, Rc<Tm>)>,
 }
 
 /// 取模式的源码位置（用于错误定位）：`Any` 用自身 span，`Con` 用构造子名 span。
@@ -134,6 +139,7 @@ impl Compiler {
             pending_pos: Vec::new(),
             cur_path: Vec::new(),
             first_span: None,
+            head_ty_quote: None,
         }
     }
 
@@ -498,7 +504,7 @@ impl Compiler {
                 let lvl = cxt.lvl;
                 let cxt = cxt.bind(
                     span.map(|_| SmolStr::new("_")),
-                    infer.quote(cxt.decl(), cxt.lvl, head_ty.clone()),
+                    Rc::new(infer.quote(cxt.decl(), cxt.lvl, head_ty.clone())),
                     head_ty,
                 );
                 self.solvable.push(lvl);
@@ -540,7 +546,7 @@ impl Compiler {
                 let lvl = cxt.lvl;
                 let cxt = cxt.bind(
                     name.clone(),
-                    infer.quote(cxt.decl(), cxt.lvl, head_ty.clone()),
+                    Rc::new(infer.quote(cxt.decl(), cxt.lvl, head_ty.clone())),
                     head_ty,
                 );
                 self.solvable.push(lvl);
@@ -563,7 +569,7 @@ impl Compiler {
             let lvl = cxt.lvl;
             let cxt = cxt.bind(
                 name.clone(),
-                infer.quote(cxt.decl(), cxt.lvl, head_ty.clone()),
+                Rc::new(infer.quote(cxt.decl(), cxt.lvl, head_ty.clone())),
                 head_ty,
             );
             self.solvable.push(lvl);
@@ -576,9 +582,21 @@ impl Compiler {
         // prepend 进 env，三方（编译期绑定 / 运行时 prepend / bind_count）
         // 同序同数。
         let lvl = cxt.lvl;
+        // head 槽的 `a_quote` 只被 `fresh_meta` 的 `close_ty` 消费（多数走查一次都
+        // 用不到），但它是急求值的；同一 match 的所有臂共享同一 `head_ty`，
+        // 按构造子名单的 `Rc` 地址缓存一次即可（宽 `Sum` 的 quote 是 O(width)）。
+        let key = Rc::as_ptr(cases) as usize;
+        let head_quote = match &self.head_ty_quote {
+            Some((k, tm)) if *k == key => Rc::clone(tm),
+            _ => {
+                let tm = Rc::new(infer.quote(cxt.decl(), cxt.lvl, head_ty.clone()));
+                self.head_ty_quote = Some((key, Rc::clone(&tm)));
+                tm
+            }
+        };
         let mut cxt = cxt.bind(
             empty_span(SmolStr::new(format!("_{}", name.data))),
-            infer.quote(cxt.decl(), cxt.lvl, head_ty.clone()),
+            head_quote,
             head_ty,
         );
         self.solvable.push(lvl);
@@ -636,7 +654,7 @@ impl Compiler {
                             let dom_v = wrap_sub(&self.sub, dom.clone());
                             let c = cxt.bind(
                                 super::tmspan(&bname).map(|n| SmolStr::new(format!("_{n}"))),
-                                infer.quote(cxt.decl(), cxt.lvl, dom_v.clone()),
+                                Rc::new(infer.quote(cxt.decl(), cxt.lvl, dom_v.clone())),
                                 dom_v,
                             );
                             self.solvable.push(lvl);
@@ -647,7 +665,7 @@ impl Compiler {
                             let dom_v = wrap_sub(&self.sub, dom.clone());
                             let c = cxt.bind(
                                 span.map(|_| SmolStr::new("_")),
-                                infer.quote(cxt.decl(), cxt.lvl, dom_v.clone()),
+                                Rc::new(infer.quote(cxt.decl(), cxt.lvl, dom_v.clone())),
                                 dom_v,
                             );
                             self.solvable.push(lvl);
@@ -693,7 +711,7 @@ impl Compiler {
                                 let dom_v = wrap_sub(&self.sub, dom.clone());
                                 let c = cxt.bind(
                                     cn.clone(),
-                                    infer.quote(cxt.decl(), cxt.lvl, dom_v.clone()),
+                                    Rc::new(infer.quote(cxt.decl(), cxt.lvl, dom_v.clone())),
                                     dom_v,
                                 );
                                 self.solvable.push(lvl);

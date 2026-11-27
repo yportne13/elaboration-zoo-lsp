@@ -414,6 +414,8 @@ pub mod phases {
     pub static RE_QE: AtomicU64 = AtomicU64::new(0);
     pub static HEADCK_NS: AtomicU64 = AtomicU64::new(0);
     pub static BODY_NS: AtomicU64 = AtomicU64::new(0);
+    /// `check` 内部（与 L07 的 `CHECK_NS` 同一口径，同一条子耗时栈）。
+    pub static CHECK_NS: AtomicU64 = AtomicU64::new(0);
     pub static COVERS: AtomicU64 = AtomicU64::new(0);
 
     /// 阶段可嵌套：子阶段耗时扣掉后才计入父阶段（见 L07 `prof::phases` 注）。
@@ -463,6 +465,7 @@ pub mod phases {
             ("RE_QE", RE_QE.load(Relaxed)),
             ("HEADCK_NS", HEADCK_NS.load(Relaxed)),
             ("BODY_NS", BODY_NS.load(Relaxed)),
+            ("CHECK_NS", CHECK_NS.load(Relaxed)),
             ("NEST_NS", NEST_NS.load(Relaxed)),
             ("COVERS", COVERS.load(Relaxed)),
         ]

@@ -72,6 +72,19 @@ pub struct Compiler {
     /// 第一条臂级错误对应的源码位置（P10）：`errors` 一次报全，位置取首条，
     /// 供 LSP 把诊断指到出问题的模式上。
     first_span: Option<Span<()>>,
+    /// 头部 scrutinee 类型的 `quote` 缓存（**每 match 一次**）。
+    ///
+    /// 形成原因：`walk_con` 给 head 槽绑定时的 `a_quote` 参数只是 `Locals` 里
+    /// 记录类型用的 Tm，真正消费它的是 `fresh_meta` 里的 `close_ty`——本次走查
+    /// 通常一次也用不到。但它是**急求值**的：每个臂都 `infer.quote(head_ty)`，
+    /// 而 `head_ty` 是 `Val::Sum`，`quote` 要按构造子名单长度重建 Tm。
+    /// width=128 的 enum 于是每次 bind 都是 O(width)（实测 width=128 时
+    /// `WC_SETUP_NS` 独占 23.9 ms / 8192 臂，是整个 walk 的 89%）。
+    /// 同一个 match 的所有臂共享同一个 `head_ty`，所以按 `Rc` 地址缓存一次即可。
+    ///
+    /// 正确性：`head_ty` 在 `compile` 内是不变的值（`scrut_ty.clone()` 逐臂传入，
+    /// 内容相同）；把 `Tm` 缓存下来只是省掉重复的 `quote`，产出逐字节相同。
+    head_ty_quote: Option<(usize, Rc<Tm>)>,
 }
 
 /// 取模式的源码位置（用于错误定位）：`Any` 用自身 span，`Con` 用构造子名 span。
@@ -134,6 +147,7 @@ impl Compiler {
             pending_pos: Vec::new(),
             cur_path: Vec::new(),
             first_span: None,
+            head_ty_quote: None,
         }
     }
 
@@ -506,7 +520,7 @@ impl Compiler {
                 let lvl = cxt.lvl;
                 let cxt = cxt.bind(
                     span.map(|_| SmolStr::new("_")),
-                    infer.quote(cxt.decl(), cxt.lvl, head_ty.clone()),
+                    Rc::new(infer.quote(cxt.decl(), cxt.lvl, head_ty.clone())),
                     head_ty,
                 );
                 self.solvable.push(lvl);
@@ -551,7 +565,7 @@ impl Compiler {
                 let lvl = cxt.lvl;
                 let cxt = cxt.bind(
                     name.clone(),
-                    infer.quote(cxt.decl(), cxt.lvl, head_ty.clone()),
+                    Rc::new(infer.quote(cxt.decl(), cxt.lvl, head_ty.clone())),
                     head_ty,
                 );
                 self.solvable.push(lvl);
@@ -562,6 +576,7 @@ impl Compiler {
             Val::Sum(name, params, cases) => (name, params, cases),
             _ => unreachable!(),
         };
+        let _g_setup = super::phases::enter(&super::phases::WC_SETUP_NS);
         let is_ctor = cases.iter().any(|c| c.data == name.data);
         if !is_ctor {
             // 不是该类型的构造子 → 变量绑定
@@ -574,25 +589,45 @@ impl Compiler {
             let lvl = cxt.lvl;
             let cxt = cxt.bind(
                 name.clone(),
-                infer.quote(cxt.decl(), cxt.lvl, head_ty.clone()),
+                Rc::new(infer.quote(cxt.decl(), cxt.lvl, head_ty.clone())),
                 head_ty,
             );
             self.solvable.push(lvl);
             return Ok(Walk::Matched(PatternDetail::Bind(name), cxt));
         }
+        let _g_decl = super::phases::enter(&super::phases::WC_DECL_NS);
         let entry = cxt
             .decl_get(&format!("{}.{}", sum_name.data, name.data))
             .ok_or_else(|| Error::new(format!("找不到构造子 {}.{}", sum_name.data, name.data)))?;
+        drop(_g_decl);
         // head 槽：Con 模式自身占一槽。运行时 eval_aux 的 Con 路径把被匹配值
         // prepend 进 env，三方（编译期绑定 / 运行时 prepend / bind_count）
         // 同序同数。
         let lvl = cxt.lvl;
+        // head 槽的 `a_quote` 只是 `Locals` 的类型记录（只有 `fresh_meta` 的
+        // `close_ty` 会消费它，多数走查一次都不用）。但 quote 一个宽 `Sum` 是
+        // O(width)，而同一 match 的所有臂共享同一 `head_ty`——缓存一次即可。
+        // 键取构造子名单的 `Rc` 地址：逐臂传入的 `head_ty` 是同一个值的 clone，
+        // `Val::Sum` 的 `cases` 字段是 `Rc`，因此地址跨臂稳定、内容必然相同。
+        let key = Rc::as_ptr(cases) as usize;
+        let head_quote = match &self.head_ty_quote {
+            Some((k, tm)) if *k == key => Rc::clone(tm),
+            _ => {
+                let tm = Rc::new(infer.quote(cxt.decl(), cxt.lvl, head_ty.clone()));
+                self.head_ty_quote = Some((key, Rc::clone(&tm)));
+                tm
+            }
+        };
+        let hq = Rc::clone(&head_quote);
+        let _g_bind = super::phases::enter(&super::phases::WC_BIND_NS);
         let mut cxt = cxt.bind(
             empty_span(SmolStr::new(format!("_{}", name.data))),
-            infer.quote(cxt.decl(), cxt.lvl, head_ty.clone()),
+            hq,
             head_ty,
         );
+        drop(_g_bind);
         self.solvable.push(lvl);
+        let _g_pi = super::phases::enter(&super::phases::WC_PICHAIN_NS);
         let mut ty = entry.ty.clone();
         let impl_vals: Vec<Val> = sum_params
             .iter()
@@ -647,7 +682,7 @@ impl Compiler {
                             let dom_v = wrap_sub(&self.sub, dom.clone());
                             let c = cxt.bind(
                                 super::tmspan(&bname).map(|n| SmolStr::new(format!("_{n}"))),
-                                infer.quote(cxt.decl(), cxt.lvl, dom_v.clone()),
+                                Rc::new(infer.quote(cxt.decl(), cxt.lvl, dom_v.clone())),
                                 dom_v,
                             );
                             self.solvable.push(lvl);
@@ -658,7 +693,7 @@ impl Compiler {
                             let dom_v = wrap_sub(&self.sub, dom.clone());
                             let c = cxt.bind(
                                 span.map(|_| SmolStr::new("_")),
-                                infer.quote(cxt.decl(), cxt.lvl, dom_v.clone()),
+                                Rc::new(infer.quote(cxt.decl(), cxt.lvl, dom_v.clone())),
                                 dom_v,
                             );
                             self.solvable.push(lvl);
@@ -704,7 +739,7 @@ impl Compiler {
                                 let dom_v = wrap_sub(&self.sub, dom.clone());
                                 let c = cxt.bind(
                                     cn.clone(),
-                                    infer.quote(cxt.decl(), cxt.lvl, dom_v.clone()),
+                                    Rc::new(infer.quote(cxt.decl(), cxt.lvl, dom_v.clone())),
                                     dom_v,
                                 );
                                 self.solvable.push(lvl);
@@ -720,6 +755,7 @@ impl Compiler {
                 ret => break ret,
             }
         };
+        drop(_g_pi);
         if !sub_queue.is_empty() {
             return Err(Error::new(format!(
                 "构造子 {} 的模式多了 {} 个子模式",
@@ -739,6 +775,8 @@ impl Compiler {
                 )))
             }
         };
+        drop(_g_setup);
+        let _g_unify = super::phases::enter(&super::phases::WC_UNIFY_NS);
         let mut spec = SpecSolve {
             solvable: &self.solvable,
             acc: self.sub.clone(),
@@ -755,6 +793,8 @@ impl Compiler {
             // 内部不变量错误：原样上报
             Err(IndexUnify::Msg(m)) => return Err(Error::new(m)),
         }
+        drop(_g_unify);
+        let _g_refine = super::phases::enter(&super::phases::WC_REFINE_NS);
         // 头部精化（无条件）：被匹配变量本身写入精化替换。`V a`、`add a zero`
         // 这类依赖被匹配变量的类型，要等 a := zero / a := succ t 之后才能
         // 归约——force 在读点推进 VSub（σ 链逐层推开）。只对"本子句里尚未

@@ -1117,6 +1117,7 @@ impl Infer {
     }
     pub fn check<const CANONICAL: bool>(&mut self, cxt: &Cxt, t: Raw, a: &Rc<Val>) -> Result<Rc<Tm>, Error> {
         let _g = super::prof_enter(&super::FUNC_PROF.check.0, &super::FUNC_PROF.check.1);
+        let _g_chk = super::phases::enter(&super::phases::CHECK_NS);
         //println!("{} {:?} {} {:?}", "check".blue(), t, "==".blue(), a);
         let a = self.force(&cxt.decl, a);
         // Pre-checked value (class Phase-B reuse): the term was fully checked

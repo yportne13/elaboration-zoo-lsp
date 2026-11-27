@@ -199,6 +199,7 @@ impl ChapterProbe for ChL13 {
             ("VAPP", L13_namespace::FUNC_PROF.v_app.1.load(Relaxed)),
             ("UNIFY", L13_namespace::FUNC_PROF.unify.1.load(Relaxed)),
             ("CHECK", L13_namespace::FUNC_PROF.check.1.load(Relaxed)),
+            ("CHECK_NS", L13_namespace::phases::CHECK_NS.load(Relaxed)),
             ("INFER_EXPR", L13_namespace::FUNC_PROF.infer_expr.1.load(Relaxed)),
             ("FORCE_HITS", L13_namespace::FUNC_PROF.force_hits.1.load(Relaxed)),
             ("FORCE_MISSES", L13_namespace::FUNC_PROF.force_misses.1.load(Relaxed)),

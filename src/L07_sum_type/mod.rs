@@ -103,6 +103,23 @@ pub mod phases {
     pub static HEADCK_NS: AtomicU64 = AtomicU64::new(0);
     /// 臂内：分支体 `check`。
     pub static BODY_NS: AtomicU64 = AtomicU64::new(0);
+    /// 分支体 `check` **内部**（连 `infer_expr`/`unify` 一起计入；用于与 L13 的
+    /// `FUNC_PROF.check` 同口径对照）。
+    pub static CHECK_NS: AtomicU64 = AtomicU64::new(0);
+    /// `walk_con` 的前段：force 头类型 + decl 查构造子 + 绑 head 槽 + 构造子 Pi 链。
+    pub static WC_SETUP_NS: AtomicU64 = AtomicU64::new(0);
+    /// setup 细项：构造子限定名 `format!` + decl 查表。
+    pub static WC_DECL_NS: AtomicU64 = AtomicU64::new(0);
+    /// setup 细项：head 槽 `cxt.bind`。
+    pub static WC_BIND_NS: AtomicU64 = AtomicU64::new(0);
+    /// setup 细项：head 槽 `a_quote` 的 `Tm` 克隆（缓存命中也仍是**深拷**）。
+    pub static WC_CLONE_NS: AtomicU64 = AtomicU64::new(0);
+    /// setup 细项：构造子 Pi 链（`force` + `closure_apply`）。
+    pub static WC_PICHAIN_NS: AtomicU64 = AtomicU64::new(0);
+    /// `walk_con` 中段：索引方程 `unify_indices`。
+    pub static WC_UNIFY_NS: AtomicU64 = AtomicU64::new(0);
+    /// `walk_con` 末段：头部精化（构造 SumCase + 写 σ）。
+    pub static WC_REFINE_NS: AtomicU64 = AtomicU64::new(0);
     /// 臂内：`subst_cxt`（σ 施加到上下文）。
     pub static SUBCXT_NS: AtomicU64 = AtomicU64::new(0);
     /// 臂内：期望类型重锚（force + quote + eval）。
@@ -173,6 +190,14 @@ pub mod phases {
             ("FRCS_SUM_NS", FRCS_SUM_NS.load(Relaxed)),
             ("HEADCK_NS", HEADCK_NS.load(Relaxed)),
             ("BODY_NS", BODY_NS.load(Relaxed)),
+            ("CHECK_NS", CHECK_NS.load(Relaxed)),
+            ("WC_SETUP_NS", WC_SETUP_NS.load(Relaxed)),
+            ("WC_DECL_NS", WC_DECL_NS.load(Relaxed)),
+            ("WC_BIND_NS", WC_BIND_NS.load(Relaxed)),
+            ("WC_CLONE_NS", WC_CLONE_NS.load(Relaxed)),
+            ("WC_PICHAIN_NS", WC_PICHAIN_NS.load(Relaxed)),
+            ("WC_UNIFY_NS", WC_UNIFY_NS.load(Relaxed)),
+            ("WC_REFINE_NS", WC_REFINE_NS.load(Relaxed)),
             ("NEST_NS", NEST_NS.load(Relaxed)),
             ("COVERS", COVERS.load(Relaxed)),
         ]
